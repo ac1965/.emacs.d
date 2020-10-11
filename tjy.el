@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2020/08/15 23:15:34 $
+;; $Lastupdate: 2020/10/11 19:50:03 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -41,6 +41,7 @@
                          "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
                    (replace-match tostr nil t)))))
   :config
+
   (if (not (memq 'my:save-buffer-wrapper before-save-hook))
       (setq before-save-hook
             (cons 'my:save-buffer-wrapper before-save-hook)))
