@@ -31,7 +31,7 @@
 
 
 (eval-when-compile (require 'cl-lib nil t))
-(setq debug-on-error t)
+(setq debug-on-error nil)
 
 (defvar emacs-d
   (file-name-directory
