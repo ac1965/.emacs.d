@@ -33,13 +33,13 @@
 (eval-when-compile (require 'cl-lib nil t))
 (setq debug-on-error nil)
 
+(defvar cfg--file-name-handler-alist file-name-handler-alist)
 (defvar emacs-d
   (file-name-directory
    (file-chase-links load-file-name))
   "The giant turtle on which the world rests.")
 
 (defvar my:d:cache (concat emacs-d "cache/"))
-(defvar my:d:config (concat emacs-d "config/"))
 
 (let ((minver 26)
       (recver 27))
@@ -52,22 +52,92 @@
                "I cannot guarantee it. Recommended version of Emacs is v%s")
        minver recver))))
 
-(setq gc-cons-threshold (* 8 1024 1024)
-      gc-cons-percentage 0.6
-      garbage-collection-messages nil
-      file-name-handler-alist nil)
-
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
 
 (when (boundp 'load-prefer-newer)
   (setq load-prefer-newer t))
 
+;; straight installation
+(setq nsm-settings-file (concat my:d:cache "network-security.data"))
+(setq network-security-level 'high)
+
+(setq straight-repository-branch "develop"
+      straight-base-dir my:d:cache
+      straight-check-for-modifications '(check-on-save-find-when-checking))
+
+(defvar bootstrap-version)
+(let ((bootstrap-file
+       (expand-file-name "straight/repos/straight.el/bootstrap.el" my:d:cache))
+      (bootstrap-version 5))
+  (unless (file-exists-p bootstrap-file)
+    (with-current-buffer
+        (url-retrieve-synchronously
+         "https://raw.githubusercontent.com/raxod502/straight.el/develop/install.el"
+         'silent 'inhibit-cookies)
+      (goto-char (point-max))
+      (eval-print-last-sexp)))
+  (load bootstrap-file nil 'nomessage))
+
+(require 'straight-x)
+
+;; Removes in-build version from the `load-path'
+(when-let (orglib (locate-library "org" nil load-path))
+   (setq-default load-path (delete (substring (file-name-directory orglib) 0 -1)
+                                  load-path)))
+(straight-use-package
+ '(org-plus-contrib
+   :repo "https://code.orgmode.org/bzg/org-mode.git"
+   :local-repo "org"
+   :files (:defaults "contrib/lisp/*.el")
+   :includes (org)))
+
+;; leaf installation
+(straight-use-package 'leaf)
+(straight-use-package 'leaf-keywords)
+
+(leaf leaf
+  :require t
+  :url "https://github.com/conao3/leaf.el"
+  :init
+  (leaf leaf-keywords
+    :emacs> 24.4
+    :require t
+    :config
+    (leaf-keywords-init)))
+
+(leaf diminish
+  :straight t
+  :require t)
+
+(leaf async
+  :straight t
+  :leaf-defer nil
+  :setq (async-bytecomp-package-mode . t))
+
+(leaf gcmh
+  :straight t
+  :require t
+  :config
+  (setq gcmh-low-cons-threshold 300000000
+        read-process-output-max (* 1024 1024))
+  (gcmh-mode 1))
+
+(leaf literate-elisp
+  :straight t
+  :require t)
+
 (when (version<= "9.2" (org-version))
-    (require 'org-tempo))
+  (require 'org-tempo))
 (require 'org-install)
-(when (file-exists-p (expand-file-name "init.org" my:d:config))
-   (org-babel-load-file (expand-file-name "init.org" my:d:config)))
 
+(when (file-exists-p (expand-file-name "README.org" emacs-d))
+  (literate-elisp-load (expand-file-name "README.org" emacs-d)))
 
+;; Use a hook so the message doesn't get clobbered by other messages.
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setq file-name-handler-alist cfg--file-name-handler-alist)))
+
+(provide 'init)
 ;;; init.el ends here
