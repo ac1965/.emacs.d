@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2020/10/11 19:50:03 $
+;; $Lastupdate: 2020/11/03 10:12:00 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -90,6 +90,43 @@
                (unless (member "*scratch*" (my:buffer-name-list))
                  (my:make-scratch 1))))))
   )
+
+
+(defvar my-capture-blog-file "~/devel/src/github.com/ac1965/hugo-blog/all-posts.org")
+
+(leaf *ox-hugo--capture
+  :require org-capture
+  :defvar (org-capture-templates)
+  :config
+  (add-to-list 'org-capture-templates
+               '("b" "Create new blog post" entry
+                 (file+headline my-capture-blog-file "blog")
+                 "** TODO %?
+:PROPERTIES:
+:EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
+        (format-time-string \"%Y\")
+        (let ((sha1 (sha1 (shell-command-to-string \"head -c 1k /dev/urandom\"))))
+          (cl-loop for (a b c d) on (cdr (split-string sha1 \"\")) by #'cddddr repeat 2 collect (concat a b c d))))
+:EXPORT_DATE:
+:EXPORT_HUGO_TAGS:
+:EXPORT_HUGO_TAGS+:
+:EXPORT_HUGO_CATEGORIES:
+:EXPORT_HUGO_LASTMOD:
+:END:
+"))
+  (add-to-list 'org-capture-templates
+               '("p" "Create new package post" entry
+                 (file+headline my-capture-blog-file "emacs")
+                 "** TODO %?
+:PROPERTIES:
+:EXPORT_FILE_NAME:
+:EXPORT_DATE:
+:EXPORT_HUGO_TAGS: emacs
+:EXPORT_HUGO_TAGS+: emacs
+:EXPORT_HUGO_CATEGORIES: emacs
+:EXPORT_HUGO_LASTMOD:
+:END:
+")))
 
 
 (provide 'tjy)
