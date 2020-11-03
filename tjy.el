@@ -109,7 +109,6 @@
           (cl-loop for (a b c d) on (cdr (split-string sha1 \"\")) by #'cddddr repeat 2 collect (concat a b c d))))
 :EXPORT_DATE:
 :EXPORT_HUGO_TAGS:
-:EXPORT_HUGO_TAGS+:
 :EXPORT_HUGO_CATEGORIES:
 :EXPORT_HUGO_LASTMOD:
 :END:
@@ -122,7 +121,6 @@
 :EXPORT_FILE_NAME:
 :EXPORT_DATE:
 :EXPORT_HUGO_TAGS: emacs
-:EXPORT_HUGO_TAGS+: emacs
 :EXPORT_HUGO_CATEGORIES: emacs
 :EXPORT_HUGO_LASTMOD:
 :END:
