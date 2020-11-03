@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2020/11/03 10:12:00 $
+;; $Lastupdate: 2020/11/03 13:05:46 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -105,7 +105,7 @@
 :PROPERTIES:
 :EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
         (format-time-string \"%Y\")
-        (let ((sha1 (sha1 (shell-command-to-string \"head -c 1k /dev/urandom\"))))
+        (let ((sha1 (sha1 (shell-command-to-string \"head -c 1024 /dev/urandom\"))))
           (cl-loop for (a b c d) on (cdr (split-string sha1 \"\")) by #'cddddr repeat 2 collect (concat a b c d))))
 :EXPORT_DATE:
 :EXPORT_HUGO_TAGS:
