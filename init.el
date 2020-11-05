@@ -83,7 +83,7 @@
 
 ;; Removes in-build version from the `load-path'
 (when-let (orglib (locate-library "org" nil load-path))
-   (setq-default load-path (delete (substring (file-name-directory orglib) 0 -1)
+  (setq-default load-path (delete (substring (file-name-directory orglib) 0 -1)
                                   load-path)))
 (straight-use-package
  '(org-plus-contrib

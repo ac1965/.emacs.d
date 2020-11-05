@@ -80,15 +80,15 @@
   ;;
   (defun my:buffer-name-list ()
     (mapcar (function buffer-name) (buffer-list))
-  :hook  ((kill-buffer-query-functions
-           . (lambda ()
-               (if (string= "*scratch*" (buffer-name))
-                   (progn (my:make-scratch 0) nil)
-                 t)))
-          (after-save-hook
-           . (lambda ()
-               (unless (member "*scratch*" (my:buffer-name-list))
-                 (my:make-scratch 1))))))
+    :hook  ((kill-buffer-query-functions
+             . (lambda ()
+                 (if (string= "*scratch*" (buffer-name))
+                     (progn (my:make-scratch 0) nil)
+                   t)))
+            (after-save-hook
+             . (lambda ()
+                 (unless (member "*scratch*" (my:buffer-name-list))
+                   (my:make-scratch 1))))))
   )
 
 
