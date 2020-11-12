@@ -33,14 +33,6 @@
 (eval-when-compile (require 'cl-lib nil t))
 (setq debug-on-error nil)
 
-(defvar cfg--file-name-handler-alist file-name-handler-alist)
-(defvar emacs-d
-  (file-name-directory
-   (file-chase-links load-file-name))
-  "The giant turtle on which the world rests.")
-
-(defvar my:d:cache (concat emacs-d "cache/"))
-
 (let ((minver 26)
       (recver 27))
   (if (< emacs-major-version minver)
@@ -51,6 +43,14 @@
        (concat "You are probably fine with Emacs v%s for this init-file, but "
                "I cannot guarantee it. Recommended version of Emacs is v%s")
        minver recver))))
+
+(defvar cfg--file-name-handler-alist file-name-handler-alist)
+(defvar emacs-d
+  (file-name-directory
+   (file-chase-links load-file-name))
+  "The giant turtle on which the world rests.")
+
+(defvar my:d:cache (concat emacs-d "cache/"))
 
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
