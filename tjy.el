@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2020/11/03 13:05:46 $
+;; $Lastupdate: 2020/11/15  8:45:12 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -92,7 +92,7 @@
   )
 
 
-(defvar my-capture-blog-file "~/devel/src/github.com/ac1965/hugo-blog/all-posts.org")
+(defvar my-capture-blog-file "~/devel/repos/hugo-blog/all-posts.org")
 
 (leaf *ox-hugo--capture
   :require org-capture
