@@ -30,8 +30,11 @@
 ;;; Code:
 
 
-(eval-when-compile (require 'cl-lib nil t))
 (setq debug-on-error nil)
+(setq gc-cons-threshold most-positive-fixnum)
+
+(eval-when-compile (require 'cl-lib nil t))
+(setq byte-compile-warnings '(not cl-functions obsolete))
 
 (let ((minver 26)
       (recver 27))
