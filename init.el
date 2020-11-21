@@ -3,7 +3,7 @@
 ;; Copyright (C) 2014-2020  YAMASHITA Takao
 
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; Version: 1.4
+;; Version: 1.5
 ;; Keywords: emacs.d
 
 ;; This file is not part of GNU Emacs.
@@ -30,12 +30,6 @@
 ;;; Code:
 
 
-(setq debug-on-error nil)
-(setq gc-cons-threshold most-positive-fixnum)
-
-(eval-when-compile (require 'cl-lib nil t))
-(setq byte-compile-warnings '(not cl-functions obsolete))
-
 (let ((minver 26)
       (recver 27))
   (if (< emacs-major-version minver)
@@ -46,6 +40,12 @@
        (concat "You are probably fine with Emacs v%s for this init-file, but "
                "I cannot guarantee it. Recommended version of Emacs is v%s")
        minver recver))))
+
+(setq debug-on-error nil)
+(setq gc-cons-threshold most-positive-fixnum)
+
+(eval-when-compile (require 'cl-lib nil t))
+(setq byte-compile-warnings '(not cl-functions obsolete))
 
 (defvar cfg--file-name-handler-alist file-name-handler-alist)
 (defvar emacs-d
