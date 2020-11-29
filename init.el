@@ -107,7 +107,12 @@
     :emacs> 24.4
     :require t
     :config
-    (leaf-keywords-init)))
+    (leaf-keywords-init))
+  (leaf leaf-convert :straight t)
+  (leaf leaf-tree
+    :straight t
+    :custom ((imenu-list-size . 30)
+             (imenu-list-posion . 'left))))
 
 (leaf diminish
   :straight t
