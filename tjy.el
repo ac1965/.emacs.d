@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2020/12/04  0:22:45 $
+;; $Lastupdate: 2020/12/05 14:11:31 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -26,9 +26,7 @@
   (when window-system
     (progn
       (font-setup)
-      (set-frame-parameter nil 'fullscreen 'fullboth)))
-
-  )
+      (set-frame-parameter nil 'fullscreen 'fullboth))))
 
 ;; $Lastupdate: yyyy/mm/dd hh:mm:ss $
 (leaf *lastupdate
@@ -57,8 +55,7 @@
   :config
   (if (not (memq 'my:delete-file-if-no-contents after-save-hook))
       (setq after-save-hook
-            (cons 'my:delete-file-if-no-contents after-save-hook)))
-  )
+            (cons 'my:delete-file-if-no-contents after-save-hook))))
 
 (leaf *keepscratchbuffer
   :preface
@@ -93,6 +90,25 @@
 
 
 (defvar my-capture-blog-file "~/devel/repos/hugo-blog/all-posts.org")
+
+(defun tmp ()
+  (interactive)
+  (mapcar #'(lambda (mode)
+              (insert (s-concat "\n*** " mode))
+              (mapcar #'(lambda (file)
+                          (insert
+                           (s-concat
+                            "\n**** " file
+                            "\n#+BEGIN_SRC snippet\n"
+                            (f-read-text (f-join "~/.emacs.d/snippets" mode file))
+                            "\n#+END_SRC")))
+                      (directory-files (f-join "~/.emacs.d/snippets" mode) nil "[^.]")))
+          (directory-files "~/.emacs.d/snippets" nil "[^.]")))
+
+(leaf org-generate
+  :straight t
+  :custom
+  (org-generate-file . `,(locate-user-emacs-file "yasnippets.org")))
 
 (leaf *ox-hugo--capture
   :require org-capture
