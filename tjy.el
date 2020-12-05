@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2020/12/05 14:11:31 $
+;; $Lastupdate: 2020/12/06  0:04:40 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -39,11 +39,9 @@
                          "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
                    (replace-match tostr nil t)))))
   :config
-
   (if (not (memq 'my:save-buffer-wrapper before-save-hook))
       (setq before-save-hook
-            (cons 'my:save-buffer-wrapper before-save-hook)))
-  )
+            (cons 'my:save-buffer-wrapper before-save-hook))))
 
 ;; https://uwabami.github.io/cc-env/Emacs.html
 (leaf *delete-file-if-no-contents
@@ -85,8 +83,7 @@
             (after-save-hook
              . (lambda ()
                  (unless (member "*scratch*" (my:buffer-name-list))
-                   (my:make-scratch 1))))))
-  )
+                   (my:make-scratch 1)))))))
 
 
 (defvar my-capture-blog-file "~/devel/repos/hugo-blog/all-posts.org")
@@ -149,8 +146,7 @@
 	    (or (and (cdr dired-subdir-alist)
 		         (dired-goto-subdir file))
 	        (dired file))
-      (view-file-other-window file)
-      )))
+      (view-file-other-window file))))
 
 (define-key dired-mode-map (kbd "z") 'dired-view-file-other-window)
 
