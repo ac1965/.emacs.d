@@ -41,13 +41,14 @@
                "I cannot guarantee it. Recommended version of Emacs is v%s")
        minver recver))))
 
+(defvar cfg--file-name-handler-alist file-name-handler-alist)
+
 (setq debug-on-error nil)
 (setq gc-cons-threshold most-positive-fixnum)
 
 (eval-when-compile (require 'cl-lib nil t))
 (setq byte-compile-warnings '(not cl-functions obsolete))
 
-(defvar cfg--file-name-handler-alist file-name-handler-alist)
 (defvar emacs-d
   (file-name-directory
    (file-chase-links load-file-name))
@@ -95,49 +96,17 @@
    :files (:defaults "contrib/lisp/*.el")
    :includes (org)))
 
-;; leaf installation
-(straight-use-package 'leaf)
-(straight-use-package 'leaf-keywords)
 
-(leaf leaf
-  :require t
-  :url "https://github.com/conao3/leaf.el"
-  :init
-  (leaf leaf-keywords
-    :emacs> 24.4
-    :require t
-    :config
-    (leaf-keywords-init))
-  (leaf leaf-convert :straight t)
-  (leaf leaf-tree
-    :straight t
-    :custom ((imenu-list-size . 30)
-             (imenu-list-posion . 'left))))
+(straight-use-package 'gcmh)
+(require 'gcmh)
 
-(leaf diminish
-  :straight t
-  :require t)
+(setq gcmh-low-cons-threshold 300000000
+      read-process-output-max (* 1024 1024))
 
-(leaf async
-  :straight t
-  :leaf-defer nil
-  :setq (async-bytecomp-package-mode . t))
+(gcmh-mode 1)
 
-(leaf gcmh
-  :straight t
-  :require t
-  :config
-  (setq gcmh-low-cons-threshold 300000000
-        read-process-output-max (* 1024 1024))
-  (gcmh-mode 1))
-
-(leaf literate-elisp
-  :straight t
-  :require t)
-
-(when (version<= "9.2" (org-version))
-  (require 'org-tempo))
-(require 'org-install)
+(straight-use-package 'literate-elisp)
+(require 'literate-elisp)
 
 (when (file-exists-p (expand-file-name "README.org" emacs-d))
   (literate-elisp-load (expand-file-name "README.org" emacs-d)))
