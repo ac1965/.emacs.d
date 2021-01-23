@@ -17,7 +17,7 @@
         user-mail-address "tjy1965@gmail.com")
 
   (setq conf:font-name "HackGen35"
-        conf:font-size 16
+        conf:font-size 14
         inhibit-compacting-font-caches t)
 
   (if (daemonp)
