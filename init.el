@@ -116,5 +116,6 @@
           (lambda ()
             (setq file-name-handler-alist cfg--file-name-handler-alist)))
 
+
 (provide 'init)
 ;;; init.el ends here
