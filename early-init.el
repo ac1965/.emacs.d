@@ -1,6 +1,6 @@
 ;; early-init.el --- Early Init File for >= Emacs 27.
 
-;; Copyright (c) 2020 YAMASHITA Takao <tjy1965@gmail.com>
+;; Copyright (c) 2021 YAMASHITA Takao <tjy1965@gmail.com>
 ;;
 ;; This file is free software: you can redistribute it and/or modify it
 ;; under the terms of the GNU General Public License as published by the
@@ -17,20 +17,29 @@
 
 ;;; Commentary:
 
-;; Prior to Emacs 27, the `init.el' was supposed to handle the
-;; initialisation of the package manager, by means of calling
-;; `package-initialize'.  Starting with Emacs 27, the default
-;; behaviour is to start the package manager before loading the init
-;; file.  This can create unexpected results with existing
-;; configuration files.  I prefer the old behaviour so I defer the
-;; process to `init.el'.
-;;
-;; See my dotfiles: https://gitlab.com/protesilaos/dotfiles
-
 ;;; Code:
+
+;; Define GC
+(setq gc-cons-threshold 100000000)
 
 ;; Do not initialise the package manager.  This is done in `init.el'.
 (setq package-enable-at-startup nil)
 
+;; Do not set FNHA
+(defvar file-name-handler-alist-original file-name-handler-alist)
+(setq file-name-handler-alist nil)
+
+;; Do not set SRF
+(setq site-run-file nil)
+
 ;; Do not resize the frame at this early stage.
 (setq frame-inhibit-implied-resize t)
+
+;; GUI elements
+(menu-bar-mode 1)
+(unless (and (display-graphic-p) (eq system-type 'darwin))
+  (push '(menu-bar-lines . 1) default-frame-alist))
+(push '(tool-bar-lines . 0) default-frame-alist)
+(push '(vertical-scroll-bars) default-frame-alist)
+
+;; early-init.el ends here

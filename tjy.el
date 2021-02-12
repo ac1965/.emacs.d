@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2020/12/06  0:04:40 $
+;; $Lastupdate: 2021/02/13  0:33:06 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -25,8 +25,7 @@
 
   (when window-system
     (progn
-      (font-setup)
-      (set-frame-parameter nil 'fullscreen 'fullboth))))
+      (font-setup))))
 
 ;; $Lastupdate: yyyy/mm/dd hh:mm:ss $
 (leaf *lastupdate
@@ -148,7 +147,7 @@
 	        (dired file))
       (view-file-other-window file))))
 
-(define-key dired-mode-map (kbd "z") 'dired-view-file-other-window)
+;; (define-key dired-mode-map (kbd "z") 'dired-view-file-other-window)
 
 (provide 'tjy)
 
