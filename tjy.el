@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/13 22:21:42 $
+;; $Lastupdate: 2021/02/13 22:55:51 $
 ;;
 ;; This file is not part of GNU Emacs.
 
