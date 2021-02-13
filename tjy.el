@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/13  0:33:06 $
+;; $Lastupdate: 2021/02/13  9:16:38 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -138,16 +138,6 @@
 :END:
 ")))
 
-(defun dired-view-file-other-window ()
-  (interactive)
-  (let ((file (dired-get-file-for-visit)))
-    (if (file-directory-p file)
-	    (or (and (cdr dired-subdir-alist)
-		         (dired-goto-subdir file))
-	        (dired file))
-      (view-file-other-window file))))
-
-;; (define-key dired-mode-map (kbd "z") 'dired-view-file-other-window)
 
 (provide 'tjy)
 
