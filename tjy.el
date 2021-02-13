@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/13  9:16:38 $
+;; $Lastupdate: 2021/02/13 22:21:42 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -17,7 +17,7 @@
         user-mail-address "tjy1965@gmail.com")
 
   (setq conf:font-name "HackGen35"
-        conf:font-size 14
+        conf:font-size 16
         inhibit-compacting-font-caches t)
 
   (if (daemonp)
