@@ -85,6 +85,10 @@
 
 (require 'straight-x)
 
+(straight-use-package 'async)
+(require 'async)
+(setq async-bytecomp-package-mode t)
+
 ;; Removes in-build version from the `load-path'
 (when-let (orglib (locate-library "org" nil load-path))
   (setq-default load-path (delete (substring (file-name-directory orglib) 0 -1)
