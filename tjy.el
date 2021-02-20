@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/13 22:55:51 $
+;; $Lastupdate: 2021/02/20 15:48:44 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -105,6 +105,18 @@
   :straight t
   :custom
   (org-generate-file . `,(locate-user-emacs-file "yasnippets.org")))
+
+(leaf ox-hugo
+  :straight t
+  :require t
+  :after ox
+  :custom ((org-hugo-front-matter-format . "yaml"))
+  :config
+  (defun c/ox-hugo-add-lastmod nil
+    "Add `lastmod' property with the current time."
+    (interactive)
+    (org-set-property "EXPORT_HUGO_LASTMOD"
+                      (format-time-string "[%Y-%m-%d %a %H:%M]"))))
 
 (leaf *ox-hugo--capture
   :require org-capture
