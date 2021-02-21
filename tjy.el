@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/20 15:48:44 $
+;; $Lastupdate: 2021/02/21 15:09:14 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -19,6 +19,11 @@
   (setq conf:font-name "HackGen35"
         conf:font-size 16
         inhibit-compacting-font-caches t)
+
+  (setq load-path
+        (append
+         (list (expand-file-name "~/.elisp/"))
+         load-path))
 
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'font-setup-frame))
@@ -149,6 +154,23 @@
 :EXPORT_HUGO_LASTMOD:
 :END:
 ")))
+
+(leaf mew
+  :require t
+  :config
+  (autoload 'mew "mew" nil t)
+  (autoload 'mew-send "mew" nil t)
+  (setq read-mail-command 'mew)
+  (autoload 'mew-user-agent-compose "mew" nil t)
+  (if (boundp 'mail-user-agent)
+      (setq mail-user-agent 'mew-user-agent))
+  (if (fboundp 'define-mail-user-agent)
+      (define-mail-user-agent
+        'mew-user-agent
+        'mew-user-agent-compose
+        'mew-draft-send-message
+        'mew-draft-kill
+        'mew-send-hook)))
 
 
 (provide 'tjy)
