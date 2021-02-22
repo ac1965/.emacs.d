@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/21 15:09:14 $
+;; $Lastupdate: 2021/02/22 13:13:25 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -156,7 +156,7 @@
 ")))
 
 (leaf mew
-  :require t
+  :require nil t
   :config
   (autoload 'mew "mew" nil t)
   (autoload 'mew-send "mew" nil t)
