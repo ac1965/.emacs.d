@@ -29,6 +29,7 @@
 
 ;;; Code:
 
+(setq debug-on-error nil)
 
 (let ((minver 26)
       (recver 27))
@@ -41,20 +42,18 @@
                "I cannot guarantee it. Recommended version of Emacs is v%s")
        minver recver))))
 
-(defvar cfg--file-name-handler-alist file-name-handler-alist)
+(defconst emacs-d
+  (file-name-directory
+   (file-chase-links load-file-name))
+  "The giant turtle on which the world rests.")
+(defconst my:d:cache (concat emacs-d "cache/"))
 
-(setq debug-on-error nil)
-(setq gc-cons-threshold most-positive-fixnum)
+(defvar cfg--file-name-handler-alist file-name-handler-alist)
 
 (eval-when-compile (require 'cl-lib nil t))
 (setq byte-compile-warnings '(not cl-functions obsolete))
 
-(defvar emacs-d
-  (file-name-directory
-   (file-chase-links load-file-name))
-  "The giant turtle on which the world rests.")
-
-(defvar my:d:cache (concat emacs-d "cache/"))
+(setq gc-cons-threshold most-positive-fixnum)
 
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
