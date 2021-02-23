@@ -84,16 +84,23 @@
 
 (require 'straight-x)
 
-(straight-use-package 'async)
-(require 'async)
-(setq async-bytecomp-package-mode t)
-
 (straight-use-package 'gcmh)
 (require 'gcmh)
 
 (setq gcmh-low-cons-threshold 300000000
       read-process-output-max (* 1024 1024))
 (gcmh-mode 1)
+
+;; Removes in-build version from the `load-path'
+(when-let (orglib (locate-library "org" nil load-path))
+  (setq-default load-path (delete (substring (file-name-directory orglib) 0 -1)
+                                  load-path)))
+(straight-use-package
+ '(org-plus-contrib
+   :repo "https://code.orgmode.org/bzg/org-mode.git"
+   :local-repo "org"
+   :files (:defaults "contrib/lisp/*.el")
+   :includes (org)))
 
 (straight-use-package 'literate-elisp)
 (require 'literate-elisp)
