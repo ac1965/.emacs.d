@@ -46,7 +46,7 @@
   (file-name-directory
    (file-chase-links load-file-name))
   "The giant turtle on which the world rests.")
-(defconst my:d:cache (concat emacs-d "cache/"))
+(defconst my:d:cache (concat emacs-d ".cache/"))
 
 (defvar cfg--file-name-handler-alist file-name-handler-alist)
 
