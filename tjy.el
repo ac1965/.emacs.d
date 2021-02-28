@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/24  6:28:28 $
+;; $Lastupdate: 2021/02/28 15:38:43 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -20,10 +20,13 @@
         conf:font-size 16
         inhibit-compacting-font-caches t)
 
-  (setq load-path
-        (append
-         (list (expand-file-name "~/.elisp/"))
-         load-path))
+  (defconst my-elisp-directory "~/.elisp")
+  (dolist (dir (let ((dir (expand-file-name my-elisp-directory)))
+                 (list dir (format "%s%d" dir emacs-major-version))))
+    (when (and (stringp dir) (file-directory-p dir))
+      (let ((default-directory dir))
+        (add-to-list 'load-path default-directory)
+        (normal-top-level-add-subdirs-to-load-path))))
 
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'font-setup-frame))
@@ -157,6 +160,7 @@
 
 (leaf mew
   :require nil t
+  :bind ("C-c C-." . mew-case-set)
   :config
   (autoload 'mew "mew" nil t)
   (autoload 'mew-send "mew" nil t)
