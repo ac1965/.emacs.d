@@ -160,7 +160,6 @@
 
 (leaf mew
   :require nil t
-  :bind ("C-c C-." . mew-case-set)
   :config
   (autoload 'mew "mew" nil t)
   (autoload 'mew-send "mew" nil t)
