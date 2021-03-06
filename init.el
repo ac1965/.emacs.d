@@ -95,8 +95,8 @@
    :files (:defaults "contrib/lisp/*.el")
    :includes (org)))
 
-     (straight-use-package 'leaf)
-     (straight-use-package 'leaf-keywords)
+(straight-use-package 'leaf)
+(straight-use-package 'leaf-keywords)
 
 (leaf leaf
   :require t
