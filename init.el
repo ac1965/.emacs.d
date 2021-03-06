@@ -1,4 +1,4 @@
-;;; init.el --- Emacs.d -*- lexical-binding: t; -*-
+2;;; init.el --- Emacs.d -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2014-2021  YAMASHITA Takao
 
@@ -95,18 +95,42 @@
    :files (:defaults "contrib/lisp/*.el")
    :includes (org)))
 
-(straight-use-package 'gcmh)
-(require 'gcmh)
+     (straight-use-package 'leaf)
+     (straight-use-package 'leaf-keywords)
 
-(setq gcmh-low-cons-threshold 300000000
-      read-process-output-max (* 1024 1024))
-(gcmh-mode 1)
+(leaf leaf
+  :require t
+  :init
+  (leaf leaf-keywords
+    :emacs> 24.4
+    :require t
+    :init
+    (leaf-keywords-init)))
 
-(straight-use-package 'literate-elisp)
-(require 'literate-elisp)
+(leaf diminish
+  :straight t
+  :require t)
 
-(when (file-exists-p (expand-file-name "README.org" emacs-d))
-  (literate-elisp-load (expand-file-name "README.org" emacs-d)))
+(leaf async
+  :straight t
+  :leaf-defer nil
+  :setq (async-bytecomp-package-mode . t))
+
+(leaf gcmh
+  :straight t
+  :straight t
+  :require t
+  :config
+  (setq gcmh-low-cons-threshold  300000000
+	read-process-output-max (* 1024 1024))
+  (gcmh-mode 1))
+
+(leaf literate-elisp
+  :straight t
+  :require t
+  :config
+  (when (file-exists-p (expand-file-name "README.org" emacs-d))
+    (literate-elisp-load (expand-file-name "README.org" emacs-d))))
 
 ;; Use a hook so the message doesn't get clobbered by other messages.
 (add-hook 'emacs-startup-hook
