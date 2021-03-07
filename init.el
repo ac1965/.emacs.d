@@ -1,4 +1,4 @@
-2;;; init.el --- Emacs.d -*- lexical-binding: t; -*-
+;;; init.el --- Emacs.d -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2014-2021  YAMASHITA Takao
 
