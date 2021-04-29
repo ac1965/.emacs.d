@@ -29,7 +29,8 @@
 
 ;;; Code:
 
-(setq debug-on-error nil)
+;;(setq debug-on-error nil)
+(setq debug-on-error t)
 
 (let ((minver 26)
       (recver 27))

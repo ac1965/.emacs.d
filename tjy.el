@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2021/02/28 15:38:43 $
+;; $Lastupdate: 2021/04/29  9:50:04 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -94,6 +94,13 @@
 
 
 (defvar my-capture-blog-file "~/devel/repos/hugo-blog/all-posts.org")
+(defvar yt-iframe-format
+  ;; You may want to change your width and height.
+  (concat "<iframe width=\"440\""
+          " height=\"335\""
+          " src=\"https://www.youtube.com/embed/%s\""
+          " frameborder=\"0\""
+          " allowfullscreen>%s</iframe>"))
 
 (defun tmp ()
   (interactive)
@@ -157,6 +164,19 @@
 :EXPORT_HUGO_LASTMOD:
 :END:
 ")))
+
+(org-add-link-type
+ "yt"
+ (lambda (handle)
+   (browse-url
+    (concat "https://www.youtube.com/embed/"
+            handle)))
+ (lambda (path desc backend)
+   (cl-case backend
+     (html (format yt-iframe-format
+                   path (or desc "")))
+     (latex (format "\href{%s}{%s}"
+                    path (or desc "video"))))))
 
 (leaf mew
   :require nil t
