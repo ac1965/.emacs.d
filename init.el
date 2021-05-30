@@ -118,11 +118,10 @@
 
 (leaf gcmh
   :straight t
-  :straight t
   :require t
   :config
   (setq gcmh-low-cons-threshold  300000000
-	read-process-output-max (* 1024 1024))
+	    read-process-output-max (* 1024 1024))
   (gcmh-mode 1))
 
 (leaf literate-elisp
