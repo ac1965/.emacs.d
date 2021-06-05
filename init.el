@@ -50,7 +50,7 @@
 
 (defgroup my nil "My custom group" :group 'configuration)
 (defconst my:d:cache (concat emacs-d ".cache/"))
-(unless (file-exists-p my:d:cache)
+(unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
 
 (eval-when-compile (require 'cl-lib nil t))
