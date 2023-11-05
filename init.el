@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/11/05 10:48:03 $
+;; $Lastupdate: 2023/11/05 15:19:45 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -46,17 +46,6 @@
 ;; (profiler-start 'cpu)
 
 (setq debug-on-error nil)
-
-(let ((minver 26)
-      (recver 27))
-  (if (< emacs-major-version minver)
-      (error "Your Emacs is too old -- this config requires v%s or higher"
-             minver)
-    (when (< emacs-major-version recver)
-      (format-message
-       (concat "You are probably fine with Emacs v%s for this init-file, but "
-               "I cannot guarantee it. Recommended version of Emacs is v%s")
-       minver recver))))
 
 (defgroup my nil "My custom group" :group 'configuration)
 
