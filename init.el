@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/11/04 11:48:59 $
+;; $Lastupdate: 2023/11/05 10:48:03 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -118,6 +118,11 @@
   (eval-and-compile
     (straight-use-package 'leaf)
     (straight-use-package 'leaf-keywords)
+    (straight-use-package 'leaf-convert)
+    (straight-use-package 'leaf-tree)
+    (straight-use-package '(tree-sitter :type git :host github :repo "emacs-tree-sitter/elisp-tree-sitter" :branch "master"))
+    (straight-use-package '(tree-sitter-langs :type git :host github :repo "emacs-tree-sitter/tree-sitter-langs" :branch "master"))
+    (straight-use-package 'exec-path-from-shell)
     (leaf-keywords-init))
 
   (leaf leaf
@@ -127,12 +132,6 @@
       :straight t)
     (leaf leaf-tree
       :straight t))
-
-  (leaf blackout
-    :leaf-defer
-    :straight t
-    :config
-    (leaf eldoc :blackout t))
 
   (leaf dash
     :straight t
@@ -146,6 +145,24 @@
     :straight t
     :leaf-defer nil
     :setq (async-bytecomp-package-mode . t))
+
+  (leaf tree-sitter
+    :straight t
+    :require t
+    :config
+    (add-hook 'tree-sitter-after-on-hook #'tree-sitter-hl-mode))
+
+  ;; macOS
+  (leaf exec-path-from-shell
+    :straight t
+    :if (memq window-system '(mac ns))
+    :commands (exec-path-from-shell-getenvs
+               exec-path-from-shell-setenv)
+    :init
+    (exec-path-from-shell-initialize)
+    (when (member system-type '(darwin))
+      (let ((gls "/usr/local/bin/gls")) ;; brew install coreutils
+        (if (file-exists-p gls) (setq insert-directory-program gls)))))
 
   (leaf gcmh
     :straight t

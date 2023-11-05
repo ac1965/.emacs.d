@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2023/10/09  0:29:39 $
+;; $Lastupdate: 2023/11/04 21:45:23 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -17,7 +17,7 @@
         user-mail-address "tjy1965@gmail.com")
 
   (setq conf:font-name "FiraCode Nerd Font Mono" ; FiraCode Nerd Font Mono
-        conf:font-size 14
+        conf:font-size 15
         inhibit-compacting-font-caches t)
 
   (defconst my-elisp-directory "~/.elisp")
