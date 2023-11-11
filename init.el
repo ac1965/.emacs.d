@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/11/05 15:19:45 $
+;; $Lastupdate: 2023/11/07 22:46:25 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -173,3 +173,4 @@
 
 (provide 'init)
 ;;; init.el ends here
+(put 'dired-find-alternate-file 'disabled nil)
