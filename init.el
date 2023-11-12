@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/11/07 22:46:25 $
+;; $Lastupdate: 2023/11/12 15:47:12 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -109,10 +109,9 @@
     (straight-use-package 'leaf-keywords)
     (straight-use-package 'leaf-convert)
     (straight-use-package 'leaf-tree)
-    (straight-use-package '(tree-sitter :type git :host github :repo "emacs-tree-sitter/elisp-tree-sitter" :branch "master"))
-    (straight-use-package '(tree-sitter-langs :type git :host github :repo "emacs-tree-sitter/tree-sitter-langs" :branch "master"))
     (straight-use-package 'exec-path-from-shell)
     (leaf-keywords-init))
+
 
   (leaf leaf
     :require t
@@ -134,12 +133,6 @@
     :straight t
     :leaf-defer nil
     :setq (async-bytecomp-package-mode . t))
-
-  (leaf tree-sitter
-    :straight t
-    :require t
-    :config
-    (add-hook 'tree-sitter-after-on-hook #'tree-sitter-hl-mode))
 
   ;; macOS
   (leaf exec-path-from-shell
