@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/11/12 15:47:12 $
+;; $Lastupdate: 2023/11/12 16:22:17 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -153,6 +153,15 @@
     (setq gcmh-low-cons-threshold  300000000
           read-process-output-max (* 1024 1024))
     (gcmh-mode 1))
+
+  ;; no-littering
+  (setq no-littering-etc-directory
+        (expand-file-name ".config/" emacs-d))
+  (setq no-littering-var-directory
+        (expand-file-name ".data/" emacs-d))
+  (leaf no-littering
+    :straight t
+    :require t)
 
   (setq vc-follow-symlinks t)
 
