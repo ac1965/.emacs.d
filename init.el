@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/11/12 16:22:17 $
+;; $Lastupdate: 2023/11/16 21:39:50 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -62,12 +62,12 @@
           (lambda ()
             (setq gc-cons-threshold my:gc-cons-threshold)))
 
-(defconst emacs-d
+(defconst my:d
   (file-name-directory
    (file-chase-links load-file-name))
   "The giant turtle on which the world rests.")
 
-(defconst my:d:cache (concat emacs-d ".cache/"))
+(defconst my:d:cache (concat my:d ".cache/"))
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
 
@@ -156,9 +156,9 @@
 
   ;; no-littering
   (setq no-littering-etc-directory
-        (expand-file-name ".config/" emacs-d))
+        (expand-file-name ".config/" my:d))
   (setq no-littering-var-directory
-        (expand-file-name ".data/" emacs-d))
+        (expand-file-name ".data/" my:d))
   (leaf no-littering
     :straight t
     :require t)
@@ -169,7 +169,7 @@
   (when (file-exists-p custom-file)
     (load custom-file 'noerror))
 
-  (setq startup-file (expand-file-name "README.org" emacs-d))
+  (setq startup-file (expand-file-name "README.org" my:d))
   (when (file-exists-p startup-file)
     (org-babel-load-file startup-file)))
 
