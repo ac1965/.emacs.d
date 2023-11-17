@@ -27,7 +27,7 @@ Inspired dot emacs. :raised_hands:
 
      ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
      ;; Keywords: emacs.d
-     ;; $Lastupdate: 2023/11/16 21:40:18 $
+     ;; $Lastupdate: 2023/11/18  1:32:22 $
 
      ;; This file is not part of GNU Emacs.
 
@@ -672,25 +672,35 @@ Vertico with orderless and marginali
 #+begin_src emacs-lisp
   (leaf *completion
     :config
+    ;; corfu
     (leaf corfu
       :straight t
       :init
-      (global-corfu-mode)
-      (setq corfu-cycle t
-            corfu-auto t
-            corfu-quit-no-match 'separator
-            corfu-quit-at-boundary nil
-            corfu-scroll-margin 2))
+      (setq completion-cycle-threshold 3)
+      (setq tab-always-indent 'complete)
+      :global-minor-mode (global-corfu-mode))
 
+    ;; vertio
     (leaf vertico
-      :straight t
-      :custom
-      (vertico-count . 20)
+      :straight (vertico :files (:defaults "extensions/*")
+                         :includes (vertico-directory)
+                         )
       :init
       (vertico-mode)
-      (setq vertico-resize t
-            vertico-cycle t))
+      (setq vertico-count 15)
+      :config
+      ;; vertico-directory
+      (leaf vertico-directory
+        :straight t
+        :config
+        (define-key vertico-map (kbd "C-l") #'vertico-directory-up)
+        (define-key vertico-map "RET" #'vertico-directory-enter)  ;; enter dired
+        (define-key vertico-map "DEL" #'vertico-directory-delete-char)
+        (define-key vertico-map "M-DEL" #'vertico-directory-delete-word)
+        :hook
+        (rfn-eshadow-update-overlay-hook . vertico-directory-tidy)))
 
+    ;; orderless
     (leaf orderless
       :straight t
       :init
@@ -698,14 +708,48 @@ Vertico with orderless and marginali
             completion-category-defaults nil
             completion-category-overrides '((file (styles partial-completion)))))
 
+    ;; marginalia
     (leaf marginalia
       :straight t
+      :global-minor-mode marginalia-mode
       :after vertico
       :custom
       (marginalia-annotators '(marginalia-annotators-heavy marginalia-annotators-light nil))
       :init
-      (marginalia-mode))
+      (define-key minibuffer-local-map (kbd "C-M-a") #'marginalia-cycle))
 
+    ;;: all-the-icons-completion
+    (leaf all-the-icons-completion
+      :after (marginalia all-the-icons)
+      :straight t
+      :hook (marginalia-mode . all-the-icons-completion-marginalia-setup)
+      :global-minor-mode all-the-icons-completion-mode)
+
+    ;; cape
+    (leaf cape
+      :straight t
+      :config
+      (add-to-list 'completion-at-point-functions #'cape-file)
+      (add-to-list 'completion-at-point-functions #'cape-tex)
+      ;; (add-to-list 'completion-at-point-functions #'cape-dabbrev)
+      (add-to-list 'completion-at-point-functions #'cape-keyword)
+      (add-to-list 'completion-at-point-functions #'cape-abbrev)
+      (add-to-list 'completion-at-point-functions #'cape-ispell)
+      (add-to-list 'completion-at-point-functions #'cape-symbol)
+      ;; Silence the pcomplete capf, no errors or messages!
+      (advice-add 'pcomplete-completions-at-point :around #'cape-wrap-silent)
+      ;; Ensure that pcomplete does not write to the buffer
+      ;; and behaves as a pure `completion-at-point-function'.
+      (advice-add 'pcomplete-completions-at-point :around #'cape-wrap-purify))
+
+    ;; kind-icon
+    (leaf kind-icon
+      :straight t
+      :config
+      (setq kind-icon-default-face 'corfu-default)
+      (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
+
+    ;; embark
     (leaf embark
       :straight t
       :bind
@@ -719,8 +763,26 @@ Vertico with orderless and marginali
       (add-to-list 'display-buffer-alist
                    '("\\`\\*Embark Collect \\(Live\\|Completions\\)\\*"
                      nil
-                     (window-parameters (mode-line-format . none)))))
+                     (window-parameters (mode-line-format . none))))
+      (leaf embark-consult
+        :straight t
+        :hook
+        (embark-collect-mode . consult-preview-at-point-mode)))
 
+    ;; affe
+    (leaf affe
+      :straight t
+      :after consult
+      :config
+      (consult-customize affe-grep :preview-key (kbd "M-."))
+      (defvar affe-orderless-regexp "")
+      (defun affe-orderless-regexp-compiler (input _type)
+        (setq affe-orderless-regexp (orderless-pattern-compiler input))
+        (cons affe-orderless-regexp
+              (lambda (str) (orderless--highlight affe-orderless-regexp str))))
+      (setq affe-regexp-compiler #'affe-orderless-regexp-compiler))
+
+    ;; consult
     (leaf consult
       :straight t
       :init
@@ -732,7 +794,26 @@ Vertico with orderless and marginali
        ("C-c i" . consult-imenu)
        ("C-c I" . consult-imenu-multi)
        ("C-c r" . consult-recent-file)
+       ("C-c g" . consult-goto-line)
+       ("M-g o" . consult-outline)
        ))
+
+    (leaf init_hook
+      :preface
+      (defun after-init-hook nil
+        (vertico-mode)
+        (marginalia-mode)
+        (savehist-mode))
+      :hook ((after-init-hook . after-init-hook)))
+
+    ;; https://naoking158.pages.dev/posts/meow/
+    (leaf meow
+      :straight t
+      :config
+      (defun meow-setup nil
+        "https://github.com/meow-edit/meow/blob/master/GET_STARTED.org#set-up-command-layout")
+      (meow-setup)
+      (meow-global-mode 1))
     )
    #+end_src
 

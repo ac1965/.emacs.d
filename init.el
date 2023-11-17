@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/11/16 21:39:50 $
+;; $Lastupdate: 2023/11/18  1:37:03 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -109,9 +109,7 @@
     (straight-use-package 'leaf-keywords)
     (straight-use-package 'leaf-convert)
     (straight-use-package 'leaf-tree)
-    (straight-use-package 'exec-path-from-shell)
     (leaf-keywords-init))
-
 
   (leaf leaf
     :require t
