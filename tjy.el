@@ -218,24 +218,6 @@
       (org-set-property "EXPORT_HUGO_LASTMOD"
                         (format-time-string "[%Y-%m-%d %a %H:%M]"))))
 
-  ;; APopulates only the EXPORT_FILE_NAME property in the inserted headline.
-  (with-eval-after-load 'org-capture
-    (defun org-hugo-new-subtree-post-capture-template ()
-	  "Returns `org-capture' template string for new Hugo post.
-See `org-capture-templates' for more information."
-	  (let* ((title (read-from-minibuffer "Post Title: ")) ;Prompt to enter the post title
-             (fname (org-hugo-slug title)))
-	    (mapconcat #'identity
-                   `(
-                     ,(concat "*** TODO " title)
-                     ":PROPERTIES:"
-                     ,(concat ":EXPORT_FILE_NAME: " fname)
-		             ":EXPORT_HUGO_CUSTOM_FRONT_MATTER: :share true :featured false :slug :image "
-		             ":EXPORT_DESCRIPTION: "
-                     ":END:"
-                     "%?\n")          ;Place the cursor here finally
-                   "\n"))))
-
   ;; ox-hugo-capture
   (leaf *ox-hugo--capture
     :require org-capture
