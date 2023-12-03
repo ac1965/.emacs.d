@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/12/03  9:55:47 $
+;; $Lastupdate: 2023/12/03 16:13:59 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -164,7 +164,7 @@
 
   (setq vc-follow-symlinks t)
 
-  (setq custom-file (expand-file-name "custom.el" no-littering-etc-directory))
+  (setq custom-file (expand-file-name "custom.el" no-littering-var-directory))
   (when (file-exists-p custom-file)
     (load custom-file 'noerror))
 

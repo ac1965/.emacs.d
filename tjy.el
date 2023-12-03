@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2023/12/02 10:13:08 $
+;; $Lastupdate: 2023/12/03 17:23:38 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -20,8 +20,8 @@
         conf:font-size 15
         inhibit-compacting-font-caches t)
 
-  (defconst my-cloud-directory "~/Documents")
-  (defconst my-blog-directory (concat my-cloud-directory "devel/repos/hugo-blog"))
+  (defconst my-cloud-directory "~/Documents/")
+  (defconst my-blog-directory (concat my-cloud-directory "devel/repos/hugo-blog/"))
   (defconst my-capture-blog-file (expand-file-name "all-posts.org" my-blog-directory))
 
   (defconst my-elisp-directory "~/.elisp")
@@ -209,14 +209,9 @@
   ;; ox-hugo
   (leaf ox-hugo
     :straight t
+    :require t
     :after ox
-    :custom ((org-hugo-front-matter-format . "yaml"))
-    :config
-    (defun c/ox-hugo-add-lastmod nil
-      "Add `lastmod' property with the current time."
-      (interactive)
-      (org-set-property "EXPORT_HUGO_LASTMOD"
-                        (format-time-string "[%Y-%m-%d %a %H:%M]"))))
+    :custom ((org-hugo-front-matter-format . "yaml")))
 
   ;; ox-hugo-capture
   (leaf *ox-hugo--capture
