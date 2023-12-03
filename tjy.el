@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2023/11/19 20:44:29 $
+;; $Lastupdate: 2023/12/02 10:13:08 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -21,6 +21,8 @@
         inhibit-compacting-font-caches t)
 
   (defconst my-cloud-directory "~/Documents")
+  (defconst my-blog-directory (concat my-cloud-directory "devel/repos/hugo-blog"))
+  (defconst my-capture-blog-file (expand-file-name "all-posts.org" my-blog-directory))
 
   (defconst my-elisp-directory "~/.elisp")
   (dolist (dir (let ((dir (expand-file-name my-elisp-directory)))
@@ -122,10 +124,8 @@
 	         "* TODO %?\n %i\n %a")
             ("n" "Note" entry (file+headline "notes.org" "Notes")
 	         "* %?\nEntered on %U\n %i\n %a")
-            ("j" "Journal" entry (function org-journal-find-location)
-	         "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-	        ("h" "Hugo post" entry (file+olp "jamhattaorg.org" "Blog Ideas")
-             (function org-hugo-new-subtree-post-capture-template))
+            ;; ("j" "Journal" entry (function org-journal-find-location)
+	        ;;  "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
 	        ))
     )
 
@@ -237,6 +237,7 @@
 :EXPORT_HUGO_CATEGORIES:
 :EXPORT_HUGO_LASTMOD:
 :END:
+
 "
                    )))
 
@@ -306,7 +307,7 @@
     )
   )
 
-(defvar my-capture-blog-file "~/devel/repos/hugo-blog/all-posts.org")
+
 (defvar yt-iframe-format
   ;; You may want to change your width and height.
   (concat "<iframe width=\"440\""
