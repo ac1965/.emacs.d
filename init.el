@@ -1,11 +1,11 @@
 ;;; -- Emacs.d -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2014-2023 YAMASHITA Takao
+;; Copyright (C) 2014-2024 YAMASHITA Takao
 
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2023/12/03 16:13:59 $
+;; $Lastupdate: 2024/02/03  9:19:47 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -92,7 +92,7 @@
   (defvar bootstrap-version)
   (let ((bootstrap-file
 	     (expand-file-name "straight/repos/straight.el/bootstrap.el" my:d:cache))
-	    (bootstrap-version 6))
+	    (bootstrap-version 7))
     (unless (file-exists-p bootstrap-file)
       (with-current-buffer
           (url-retrieve-synchronously
