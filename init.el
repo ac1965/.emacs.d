@@ -5,7 +5,7 @@
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Version: 1.9
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/02/03  9:19:47 $
+;; $Lastupdate: 2024/02/11 11:56:46 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -46,6 +46,11 @@
 ;; (profiler-start 'cpu)
 
 (setq debug-on-error nil)
+
+;; Make native compilation silent and prune its cache.
+(when (native-comp-available-p)
+  (setq native-comp-async-report-warnings-errors 'silent) ; Emacs 28 with native compilation
+  (setq native-compile-prune-cache t)) ; Emacs 29
 
 (defgroup my nil "My custom group" :group 'configuration)
 
