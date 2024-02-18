@@ -1,6 +1,6 @@
 ;; early-init.el --- Early Init File for >= Emacs 27.
 
-;; Copyright (c) 2021-2023 YAMASHITA Takao <tjy1965@gmail.com>
+;; Copyright (c) 2021-2024 YAMASHITA Takao <tjy1965@gmail.com>
 ;;
 ;; This file is free software: you can redistribute it and/or modify it
 ;; under the terms of the GNU General Public License as published by the
@@ -45,5 +45,18 @@
   (push '(fullscreen . maximized) default-frame-alist))
 (push '(tool-bar-lines . 0) default-frame-alist)
 (push '(vertical-scroll-bars) default-frame-alist)
+
+;; This code configures the native compiler and is in preparation for 28.1.
+;; - Move eln files to a cache dir
+;; - Don't bombard the user with warnings
+;; - Compile packages on install, not at runtime
+(unless (version-list-<
+         (version-to-list emacs-version)
+         '(28 0 1 0))
+  (when (boundp 'native-comp-eln-load-path)
+    (add-to-list 'native-comp-eln-load-path
+                 (concat "~/.cache/emacs/" "eln-cache/"))
+    (setq native-comp-async-report-warnings-errors 'silent
+          native-comp-deferred-compilation t)))
 
 ;; early-init.el ends here
