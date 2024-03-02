@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/02/04 14:23:15 $
+;; $Lastupdate: 2024/02/28 23:24:13 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -16,7 +16,7 @@
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "tjy1965@gmail.com")
 
-  (setq conf:font-name "FiraCode Nerd Font Mono" ; FiraCode Nerd Font Mono
+  (setq conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
         inhibit-compacting-font-caches t)
 
