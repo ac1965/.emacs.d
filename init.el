@@ -4,7 +4,7 @@
 
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/02/18 10:13:51 $
+;; $Lastupdate: 2024/03/02 13:16:39 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -69,6 +69,8 @@
 (defconst my:d:cache (concat my:d ".cache/"))
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
+(add-to-list 'native-comp-eln-load-path
+             (concat my:d:cache "eln-cache/"))
 
 (setq package-enable-at-startup nil)
 (eval-when-compile (require 'cl-lib nil t))
