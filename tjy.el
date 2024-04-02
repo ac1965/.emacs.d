@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/03/30 14:33:12 $
+;; $Lastupdate: 2024/04/02 23:55:08 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -206,12 +206,16 @@
     (define-key markdown-mode-map (kbd "\C-c\C-o") 'toc-org-markdown-follow-thing-at-point)
     )
 
+  ;; tomelr
+  (leaf tomelr
+    :straight t)
+
   ;; ox-hugo
   (leaf ox-hugo
     :straight t
     :require t
     :after ox
-    :custom ((org-hugo-front-matter-format . "yaml")))
+    :custom ((org-hugo-front-matter-format . "toml")))
 
   ;; ox-hugo-capture
   (leaf *ox-hugo--capture
