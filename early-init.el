@@ -53,7 +53,7 @@
 (unless (version-list-<
          (version-to-list emacs-version)
          '(28 0 1 0))
-  (when (boundp 'native-comp-eln-load-path)
+  (when (featurep 'native-compile)
     (add-to-list 'native-comp-eln-load-path
                  (concat "~/.cache/emacs/" "eln-cache/"))
     (setq native-comp-async-report-warnings-errors 'silent
