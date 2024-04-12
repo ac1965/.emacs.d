@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/04/02 23:55:08 $
+;; $Lastupdate: 2024/04/03 23:13:19 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -235,6 +235,7 @@
 :EXPORT_HUGO_TAGS:
 :EXPORT_HUGO_CATEGORIES:
 :EXPORT_HUGO_LASTMOD:
+:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
 :END:
 \n
 "
