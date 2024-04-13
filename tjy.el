@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/04/03 23:13:19 $
+;; $Lastupdate: 2024/04/13 16:43:19 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -21,7 +21,7 @@
         inhibit-compacting-font-caches t)
 
   (defconst my-cloud-directory "~/Documents/")
-  (defconst my-blog-directory (concat my-cloud-directory "devel/repos/ac1965.github.io/"))
+  (defconst my-blog-directory (concat my-cloud-directory "devel/repos/mysite/"))
   (defconst my-capture-blog-file (expand-file-name "all-posts.org" my-blog-directory))
 
   (defconst my-elisp-directory "~/.elisp")
