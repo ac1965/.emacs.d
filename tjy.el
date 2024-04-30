@@ -209,12 +209,12 @@
   ;; tomelr
   (leaf tomelr
     :doc "Emacs-Lisp Library for converting S-expressions to TOML"
-    :straight (tomelr :type git :host github :repo "kaushalmodi/tomelr" :branch "master"))
+    :straight t)
 
   ;; ox-hugo
   (leaf ox-hugo
     :doc "A carefully crafted Org exporter back-end for Hugo https://ox-hugo.scripter.co"
-    :straight (ox-hugo :type git :host github :repo "kaushalmodi/ox-hugo" :branch "master")
+    :straight t
     :require t
     :after ox tomelr
     :custom ((org-hugo-front-matter-format . "toml")))
