@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/04/13 20:26:15 $
+;; $Lastupdate: 2024/04/30 13:19:50 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -208,13 +208,15 @@
 
   ;; tomelr
   (leaf tomelr
-    :straight t)
+    :doc "Emacs-Lisp Library for converting S-expressions to TOML"
+    :straight (tomelr :type git :host github :repo "kaushalmodi/tomelr" :branch "master"))
 
   ;; ox-hugo
   (leaf ox-hugo
-    :straight t
+    :doc "A carefully crafted Org exporter back-end for Hugo https://ox-hugo.scripter.co"
+    :straight (ox-hugo :type git :host github :repo "kaushalmodi/ox-hugo" :branch "master")
     :require t
-    :after ox
+    :after ox tomelr
     :custom ((org-hugo-front-matter-format . "toml")))
 
   ;; ox-hugo-capture
@@ -246,30 +248,6 @@
     :after ox
     :straight t
     :require t
-    )
-
-  ;; org2blog
-  (leaf org2blog
-    :after org
-    ;; the latest version doesn't work
-    :straight (org2blog :type git :host github :repo "sachac/org2blog")
-    :leaf-autoload org2blog-autoloads
-    :commands org2blog-user-login
-    :config
-    (setq org2blog/wp-use-sourcecode-shortcode t)
-    (setq org2blog/wp-blog-alist
-          `(("wp"
-	         :url "https://www.example.org/xmlrpc.php" ;; CHANGEME
-             :username ,(car (auth-source-user-and-password "wordpress")) ;; CHANGEME
-             :password ,(cadr (auth-source-user-and-password "wordpress")) ;; CHANGEME
-	         )
-	        ))
-    (setq org2blog/wp-buffer-template
-	      "#+TITLE:
-#+CATEGORY:
-#+TAGS:
-#+OPTIONS:
-#+PERMALINK: \n")
     )
 
   ;; org-roam
