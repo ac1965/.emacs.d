@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/04/30 13:19:50 $
+;; $Lastupdate: 2024/04/13 20:26:15 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -208,15 +208,13 @@
 
   ;; tomelr
   (leaf tomelr
-    :doc "Emacs-Lisp Library for converting S-expressions to TOML"
     :straight t)
 
   ;; ox-hugo
   (leaf ox-hugo
-    :doc "A carefully crafted Org exporter back-end for Hugo https://ox-hugo.scripter.co"
     :straight t
     :require t
-    :after ox tomelr
+    :after ox
     :custom ((org-hugo-front-matter-format . "toml")))
 
   ;; ox-hugo-capture
