@@ -69,8 +69,9 @@
 (defconst my:d:cache (concat my:d ".cache/"))
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
-(add-to-list 'native-comp-eln-load-path
-             (concat my:d:cache "eln-cache/"))
+(when (featurep 'native-compile)
+  (add-to-list 'native-comp-eln-load-path
+               (concat my:d:cache "eln-cache/")))
 
 (setq package-enable-at-startup nil)
 (eval-when-compile (require 'cl-lib nil t))
