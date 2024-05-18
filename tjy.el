@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/04/13 20:26:15 $
+;; $Lastupdate: 2024/05/18  9:27:13 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -318,7 +318,18 @@
      (latex (format "\href{%s}{%s}"
                     path (or desc "video"))))))
 
-;; Https://takaxp.github.io/utility.html
+;;
+(defun open-by-vscode ()
+  (interactive)
+  (shell-command
+   (format "code -r -g %s:%d:%d"
+           (buffer-file-name)
+           (line-number-at-pos)
+           (current-column))))
+
+(define-key global-map (kbd "C-c C-v") 'open-by-vscode)
+
+;; https://takaxp.github.io/utility.html
 (defun my-print-build-info ()
   (interactive)
   (switch-to-buffer (get-buffer-create "*Build info*"))
