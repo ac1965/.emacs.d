@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/05/18  9:27:13 $
+;; $Lastupdate: 2024/06/01 17:17:48 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -241,13 +241,6 @@
 "
                    )))
 
-  ;; ox-qmd
-  (leaf ox-qmd
-    :after ox
-    :straight t
-    :require t
-    )
-
   ;; org-roam
   (leaf org-roam
     :straight t
@@ -281,6 +274,33 @@
           org-roam-ui-update-on-save t
           org-roam-ui-open-on-start t)
     )
+
+  ;; (leaf org-modern
+  ;;   :straight t
+  ;;   :after org
+  ;;   :init
+  ;;   (setq org-auto-align-tags nil
+  ;;         org-tags-column 0
+  ;;         org-fold-catch-invisible-edits 'show-and-error
+  ;;         org-special-ctrl-a/e t
+  ;;         org-insert-heading-respect-content t
+
+  ;;         ;; Org styling, hide markup etc.
+  ;;         org-hide-emphasis-markers t
+  ;;         org-pretty-entities t
+  ;;         org-ellipsis "…"
+
+  ;;         ;; Agenda styling
+  ;;         org-agenda-tags-column 0
+  ;;         org-agenda-block-separator ?─
+  ;;         org-agenda-time-grid
+  ;;         '((daily today require-timed)
+  ;;           (800 1000 1200 1400 1600 1800 2000)
+  ;;           " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+  ;;         org-agenda-current-time-string
+  ;;         "⭠ now ─────────────────────────────────────────────────")
+  ;;   :config
+  ;;   (global-org-modern-mode +1))
   )
 
 
