@@ -4,7 +4,7 @@
 
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/03/02 13:16:39 $
+;; $Lastupdate: 2024/07/06 13:44:01 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -55,11 +55,13 @@
             (setq file-name-handler-alist my:file-name-handler-alist)))
 
 (defconst my:gc-cons-threshold gc-cons-threshold)
-(setq gc-cons-threshold most-positive-fixnum)
-(run-with-idle-timer 60.0 t #'garbage-collect)
+(setq gc-cons-threshold most-positive-fixnum
+      gc-cons-percentage 0.2
+      garbage-collection-messages t)
 (add-hook 'emacs-startup-hook
           (lambda ()
             (setq gc-cons-threshold my:gc-cons-threshold)))
+(add-hook 'focus-out-hook #'garbage-collect)
 
 (defconst my:d
   (file-name-directory
@@ -146,14 +148,6 @@
     (when (member system-type '(darwin))
       (let ((gls "/usr/local/bin/gls")) ;; brew install coreutils
         (if (file-exists-p gls) (setq insert-directory-program gls)))))
-
-  (leaf gcmh
-    :straight t
-    :require t
-    :config
-    (setq gcmh-low-cons-threshold  300000000
-          read-process-output-max (* 1024 1024))
-    (gcmh-mode 1))
 
   ;; no-littering
   (setq no-littering-etc-directory
