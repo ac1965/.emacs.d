@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/06/01 17:17:48 $
+;; $Lastupdate: 2024/06/23 11:48:58 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -314,15 +314,15 @@
 
 
 ;;
-;; (leaf *chatgpt
-;;   :config
-;;   (leaf openai :straight (openai :type git :host github :repo "emacs-openai"))
-;;   (leaf chatgpi :straight (chatgpi :type git :host github :repo "emacs-openai/chatgpt"))
-;;   (leaf codegpt :straight (codegpi :type git :host github :repo "emacs-openai/codegpt"))
-;;   (leaf dall-e :straight (dall-e :type git :host github :repo "emacs-openai/dall-e"))
-;;   :init
-;;   (if (file-exists-p (expand-file-name ".env.el" emacs-d))
-;;       (load (expand-file-name ".env.el" emacs-d))))
+(leaf *chatgpt
+  :config
+  (leaf openai :straight (openai :host github :repo "emacs-openai/openai"))
+  (leaf chatgpi :straight (chatgpi :host github :repo "emacs-openai/chatgpt"))
+  (leaf codegpt :straight (codegpi :host github :repo "emacs-openai/codegpt"))
+  (leaf dall-e :straight (dall-e :host github :repo "emacs-openai/dall-e"))
+  :init
+  (if (file-exists-p (expand-file-name ".env.el" my:d))
+      (load (expand-file-name ".env.el" my:d))))
 
 ;;
 (org-add-link-type
