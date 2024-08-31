@@ -66,9 +66,13 @@
          (version-to-list emacs-version)
          '(28 0 1 0))
   (when (featurep 'native-compile)
-    (add-to-list 'native-comp-eln-load-path
-                 (concat "~/.cache/emacs/" "eln-cache/"))
+    (when (boundp 'native-comp-eln-load-path)
+      (startup-redirect-eln-cache (expand-file-name "~/.cache/emacs/")))
     (setq native-comp-async-report-warnings-errors 'silent
-          native-comp-deferred-compilation t)))
+          native-comp-deferred-compilation t)
+    (with-eval-after-load 'comp
+      (setopt native-comp-async-jobs-number 8
+              native-comp-speed 1
+              native-comp-always-compile t))))
 
 ;; early-init.el ends here
