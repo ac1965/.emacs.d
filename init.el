@@ -4,7 +4,7 @@
 
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/08/31  9:56:01 $
+;; $Lastupdate: 2024/09/07  7:44:14 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -45,8 +45,6 @@
 ;; (profiler-start 'cpu)
 
 (setq debug-on-error nil)
-
-(defgroup my nil "My custom group" :group 'configuration)
 
 (defconst  my:file-name-handler-alist file-name-handler-alist)
 ;; Use a hook so the message doesn't get clobbered by other messages.

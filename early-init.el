@@ -68,6 +68,7 @@
   (when (featurep 'native-compile)
     (when (boundp 'native-comp-eln-load-path)
       (startup-redirect-eln-cache (expand-file-name "~/.cache/emacs/")))
+    (add-to-list 'native-comp-eln-load-path (expand-file-name "~/.cache/emacs/"))
     (setq native-comp-async-report-warnings-errors 'silent
           native-comp-deferred-compilation t)
     (with-eval-after-load 'comp
