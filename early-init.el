@@ -1,6 +1,6 @@
 ;; early-init.el --- Early Init File for >= Emacs 27.
 
-;; Copyright (c) 2021-2024 YAMASHITA Takao <tjy1965@gmail.com>
+;; Copyright (c) 2021-2024 YAMASHITA Takao <ac1965@ty07.net>
 ;;
 ;; This file is free software: you can redistribute it and/or modify it
 ;; under the terms of the GNU General Public License as published by the
@@ -20,17 +20,51 @@
 ;;; Code:
 
 ;; Define GC
-;; (setq gc-cons-threshold 20000000)
-(setq gc-cons-threshold most-positive-fixnum)
 
-;; Do not initialise the package manager.  This is done in `init.el'.
 (setq package-enable-at-startup nil)
+(setq inhibit-default-init nil)
 
-;; Do not set SRF
-(setq site-run-file nil)
+(defconst my:d
+  (file-name-directory
+   (file-chase-links load-file-name))
+  "The giant turtle on which the world rests.")
 
-;; Do not resize the frame at this early stage.
-(setq frame-inhibit-implied-resize t)
+(defconst my:d:cache (concat my:d ".cache/"))
+(unless (file-exists-p my:d:cache)
+  (make-directory my:d:cache))
+
+(when (featurep 'native-compile)
+  (setq native-comp-async-report-warnings-errors nil))
+
+(when (and (fboundp 'startup-redirect-eln-cache)
+           (fboundp 'native-comp-available-p)
+           (native-comp-available-p))
+  (startup-redirect-eln-cache
+   (convert-standard-filename
+    (expand-file-name  "eln-cache/" my:d:cache))))
+
+(defvar default-file-name-handler-alist file-name-handler-alist)
+(setq file-name-handler-alist nil)
+
+(setq gc-cons-threshold most-positive-fixnum
+      gc-cons-percentage 1)
+
+(defun +gc-after-focus-change ()
+  "Run GC when frame loses focus."
+  (run-with-idle-timer
+   5 nil
+   (lambda () (unless (frame-focus-state) (garbage-collect)))))
+
+(defun +reset-init-values ()
+  (run-with-idle-timer
+   1 nil
+   (lambda ()
+     (setq file-name-handler-alist default-file-name-handler-alist
+           gc-cons-percentage 0.1
+           gc-cons-threshold 100000000)
+     (message "gc-cons-threshold & file-name-handler-alist restored")
+     (when (boundp 'after-focus-change-function)
+       (add-function :after after-focus-change-function #'+gc-after-focus-change)))))
 
 ;; Found on `https://github.com/miklos1/dotemacs/blob/master/early-init.el'.
 ;; Ignore X resources; its settings would be redundant with the other settings
@@ -58,22 +92,5 @@
 (push '(tool-bar-lines . 0) default-frame-alist)
 (push '(vertical-scroll-bars) default-frame-alist)
 
-;; This code configures the native compiler and is in preparation for 28.1.
-;; - Move eln files to a cache dir
-;; - Don't bombard the user with warnings
-;; - Compile packages on install, not at runtime
-(unless (version-list-<
-         (version-to-list emacs-version)
-         '(28 0 1 0))
-  (when (featurep 'native-compile)
-    (when (boundp 'native-comp-eln-load-path)
-      (startup-redirect-eln-cache (expand-file-name "~/.cache/emacs/")))
-    (add-to-list 'native-comp-eln-load-path (expand-file-name "~/.cache/emacs/"))
-    (setq native-comp-async-report-warnings-errors 'silent
-          native-comp-deferred-compilation t)
-    (with-eval-after-load 'comp
-      (setopt native-comp-async-jobs-number 8
-              native-comp-speed 1
-              native-comp-always-compile t))))
-
-;; early-init.el ends here
+(provide 'early-init)
+;;; early-init.el ends here

@@ -46,32 +46,6 @@
 
 (setq debug-on-error nil)
 
-(defconst  my:file-name-handler-alist file-name-handler-alist)
-;; Use a hook so the message doesn't get clobbered by other messages.
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (setq file-name-handler-alist my:file-name-handler-alist)))
-
-(defconst my:gc-cons-threshold gc-cons-threshold)
-(setq gc-cons-threshold most-positive-fixnum
-      gc-cons-percentage 0.2
-      garbage-collection-messages t)
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (setq gc-cons-threshold my:gc-cons-threshold)))
-(add-hook 'focus-out-hook #'garbage-collect)
-
-(defconst my:d
-  (file-name-directory
-   (file-chase-links load-file-name))
-  "The giant turtle on which the world rests.")
-
-(defconst my:d:cache (concat my:d ".cache/"))
-(unless (file-exists-p my:d:cache)
-  (make-directory my:d:cache))
-
-(setq package-enable-at-startup nil)
-(eval-when-compile (require 'cl-lib nil t))
 (setq byte-compile-warnings '(not cl-functions obsolete))
 (when (boundp 'load-prefer-newer)
   (setq load-prefer-newer t))
