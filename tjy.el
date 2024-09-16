@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/09/16 17:13:09 $
+;; $Lastupdate: 2024/09/16 18:15:37 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -16,7 +16,7 @@
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "tjy1965@gmail.com")
 
-  (setq conf:font-name "Roboto Mono" ;; "HackGen35" ; "FiraCode Nerd Font Mono"
+  (setq conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
         inhibit-compacting-font-caches t)
 
@@ -215,25 +215,17 @@
     :straight t
     :require t
     :after ox
-    :custom ((org-hugo-front-matter-format . "toml"))
-    :config
-    (defun c/ox-hugo-add-lastmod nil
-      "Add `lastmod' property with the current time."
-      (interactive)
-      (org-set-property "EXPORT_HUGO_LASTMOD"
-                        (format-time-string "[%Y-%m-%d %a %H:%M]")))
+    :custom ((org-hugo-front-matter-format . "toml")))
 
-    ;; https://pxaka.tokyo/blog/2018/44febe88-04a5-9bc4-6bfb-678a8477a0ed/
-    ;; https://conao3.com/blog/2020-1049-5b91/
-    ;; ox-hugo-capture
-    (leaf *ox-hugo--capture
-      :require org-capture
-      :defvar (org-capture-templates)
-      :config
-      (add-to-list 'org-capture-templates
-                   '("b" "Create new blog post" entry
-                     (file+headline my-capture-blog-file "blog")
-                     "** TODO %?
+  ;; ox-hugo-capture
+  (leaf *ox-hugo--capture
+    :require org-capture
+    :defvar (org-capture-templates)
+    :config
+    (add-to-list 'org-capture-templates
+                 '("b" "Create new blog post" entry
+                   (file+headline my-capture-blog-file "blog")
+                   "** TODO %?
 :PROPERTIES:
 :EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
 (format-time-string \"%Y\")
@@ -245,7 +237,8 @@
 :EXPORT_HUGO_LASTMOD:
 :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
 :END:
-"))))
+\n
+")))
 
   ;; org-roam
   (leaf org-roam
