@@ -2,9 +2,9 @@
 
 ;; Copyright (C) 2014-2024 YAMASHITA Takao
 
-;; Author: YAMASHITA Takao <tjy1965@gmail.com>
+;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/09/07  7:44:14 $
+;; $Lastupdate: 2024/09/16 17:38:10 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -45,16 +45,13 @@
 ;; (profiler-start 'cpu)
 
 (setq debug-on-error nil)
+(setq gc-cons-threshold most-positive-fixnum)
 
 (setq byte-compile-warnings '(not cl-functions obsolete))
 (when (boundp 'load-prefer-newer)
   (setq load-prefer-newer t))
 
 (eval-and-compile
-  ;; If `native-comp' is available use `gcc -O3' instead of `gcc -O2'.
-  (when (ignore-errors (native-comp-available-p))
-    (setq comp-speed 3))
-
   (setq nsm-settings-file (concat my:d:cache "network-security.data"))
   (setq network-security-level 'high)
 
@@ -76,9 +73,11 @@
     (load bootstrap-file nil 'nomessage))
   (require 'straight-x)
   ;; Bootstrap ends here
+  (setq vc-follow-symlinks t)
 
   (eval-and-compile
     (straight-use-package 'leaf)
+    (straight-use-package 'hydra)
     (straight-use-package 'leaf-keywords)
     (straight-use-package 'leaf-convert)
     (straight-use-package 'leaf-tree)
@@ -88,10 +87,11 @@
   (leaf leaf
     :require t
     :init
-    (leaf leaf-convert
-      :straight t)
-    (leaf leaf-tree
-      :straight t))
+    (leaf leaf-convert :straight t)
+    (leaf leaf-tree :straight t)
+    (leaf transient-dwim
+      :straight t
+      :bind (("M-=" . transient-dwim-dispatch))))
 
   (leaf dash
     :straight t
@@ -127,7 +127,7 @@
     :straight t
     :require t)
 
-  (setq vc-follow-symlinks t)
+
 
   (setq custom-file (expand-file-name "custom.el" no-littering-var-directory))
   (when (file-exists-p custom-file)
