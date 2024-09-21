@@ -129,9 +129,8 @@
 
 
 
-  (setq custom-file (expand-file-name "custom.el" my:d)
-  (when (file-exists-p custom-file)
-    (load custom-file 'noerror))
+  (setq custom-file (expand-file-name "custom.el" my:d))
+  (load custom-file 'noerror)
 
   (setq startup-file (expand-file-name "README.org" my:d))
   (when (file-exists-p startup-file)
