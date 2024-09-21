@@ -4,7 +4,7 @@
 
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/09/21 17:11:17 $
+;; $Lastupdate: 2024/09/21 18:25:22 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -124,8 +124,6 @@
   (leaf no-littering
     :straight t
     :require t)
-
-
 
   (setq custom-file (expand-file-name "custom.el" my:d))
   (load custom-file 'noerror)
