@@ -4,7 +4,7 @@
 
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/09/16 17:38:10 $
+;; $Lastupdate: 2024/09/21 17:11:17 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -77,10 +77,8 @@
 
   (eval-and-compile
     (straight-use-package 'leaf)
-    (straight-use-package 'hydra)
     (straight-use-package 'leaf-keywords)
-    (straight-use-package 'leaf-convert)
-    (straight-use-package 'leaf-tree)
+    (straight-use-package 'hydra)
     (straight-use-package 'org)
     (leaf-keywords-init))
 
