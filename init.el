@@ -129,7 +129,7 @@
 
 
 
-  (setq custom-file (expand-file-name "custom.el" no-littering-var-directory))
+  (setq custom-file (expand-file-name "custom.el" my:d)
   (when (file-exists-p custom-file)
     (load custom-file 'noerror))
 
