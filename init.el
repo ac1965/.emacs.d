@@ -4,7 +4,7 @@
 
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/09/21 18:55:12 $
+;; $Lastupdate: 2024/09/22 10:04:41 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -40,6 +40,8 @@
 ;;; License: GPLv3
 
 ;;; Code:
+
+;; ref:https://ayatakesi.github.io
 
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
