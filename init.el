@@ -47,8 +47,6 @@
 ;; (profiler-start 'cpu)
 
 (setq package-user-dir (concat my:d:cache "elpa"))
-(setq nsm-settings-file (concat my:d:cache "network-security.data"))
-(setq network-security-level 'high)
 
 (eval-and-compile
   (customize-set-variable
