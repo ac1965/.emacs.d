@@ -1,10 +1,10 @@
 ;;; -- Emacs.d -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2014-2024 YAMASHITA Takao
+;; Copyright (C) 2024 YAMASHITA Takao
 
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/09/22 10:04:41 $
+;; $Lastupdate: 2024/09/25 21:27:48 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -46,93 +46,27 @@
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
 
-(setq debug-on-error nil)
-(setq gc-cons-threshold most-positive-fixnum)
-
-(setq byte-compile-warnings '(not cl-functions obsolete))
-(when (boundp 'load-prefer-newer)
-  (setq load-prefer-newer t))
+(setq package-user-dir (concat my:d:cache "elpa"))
+(setq nsm-settings-file (concat my:d:cache "network-security.data"))
+(setq network-security-level 'high)
 
 (eval-and-compile
-  (setq nsm-settings-file (concat my:d:cache "network-security.data"))
-  (setq network-security-level 'high)
+  (customize-set-variable
+   'package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
+                       ("melpa" . "https://melpa.org/packages/")))
+  (package-initialize)
+  (use-package leaf :ensure t)
 
-  (setq straight-repository-branch "develop"
-	    straight-base-dir my:d:cache
-	    straight-check-for-modifications '(check-on-save-find-when-checking))
-
-  (defvar bootstrap-version)
-  (let ((bootstrap-file
-	     (expand-file-name "straight/repos/straight.el/bootstrap.el" my:d:cache))
-	    (bootstrap-version 7))
-    (unless (file-exists-p bootstrap-file)
-      (with-current-buffer
-          (url-retrieve-synchronously
-           "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-           'silent 'inhibit-cookies)
-	    (goto-char (point-max))
-	    (eval-print-last-sexp)))
-    (load bootstrap-file nil 'nomessage))
-  (require 'straight-x)
-  ;; Bootstrap ends here
-  (setq vc-follow-symlinks t)
-
-  (eval-and-compile
-    (straight-use-package 'leaf)
-    (straight-use-package 'leaf-keywords)
-    (straight-use-package 'hydra)
-    (straight-use-package 'org)
-    (leaf-keywords-init))
-
-  (leaf leaf
-    :require t
+  (leaf leaf-keywords
+    :ensure t
     :init
-    (leaf leaf-convert :straight t)
-    (leaf leaf-tree :straight t)
-    (leaf transient-dwim
-      :straight t
-      :bind (("M-=" . transient-dwim-dispatch))))
+    (leaf blackout :ensure t)
+    :config
+    (leaf-keywords-init)))
 
-  (leaf dash
-    :straight t
-    :leaf-defer t)
-
-  (leaf diminish
-    :straight t
-    :require t)
-
-  (leaf async
-    :straight t
-    :leaf-defer nil
-    :setq (async-bytecomp-package-mode . t))
-
-  ;; macOS
-  (leaf exec-path-from-shell
-    :straight t
-    :if (memq window-system '(mac ns))
-    :commands (exec-path-from-shell-getenvs
-               exec-path-from-shell-setenv)
-    :init
-    (exec-path-from-shell-initialize)
-    (when (member system-type '(darwin))
-      (let ((gls "/usr/local/bin/gls")) ;; brew install coreutils
-        (if (file-exists-p gls) (setq insert-directory-program gls)))))
-
-  ;; no-littering
-  (setq no-littering-etc-directory
-        (expand-file-name ".config/" my:d))
-  (setq no-littering-var-directory
-        (expand-file-name ".data/" my:d))
-  (leaf no-littering
-    :straight t
-    :require t)
-
-  (setq custom-file (expand-file-name "custom.el" my:d))
-  (load custom-file 'noerror)
-
-  (setq startup-file (expand-file-name "README.org" my:d))
-  (when (file-exists-p startup-file)
-    (org-babel-load-file startup-file)))
+(setq startup-file (expand-file-name "README.org" my:d))
+(when (file-exists-p startup-file)
+  (org-babel-load-file startup-file))
 
 (provide 'init)
 ;;; init.el ends here

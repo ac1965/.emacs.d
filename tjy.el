@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/09/16 18:15:37 $
+;; $Lastupdate: 2024/09/25 21:38:23 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -148,7 +148,7 @@
   ;; org-superstar
   (leaf org-superstar
     :after org
-    :straight t
+    :ensure t
     :custom
     (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷" "" ""))
     :hook
@@ -158,7 +158,7 @@
   ;; org-journal
   (leaf org-journal
     :after org
-    :straight t
+    :ensure t
     :config
     (setq org-journal-dir (concat org-directory "/journal")
 	      org-journal-enable-agenda-integration t)
@@ -175,7 +175,7 @@
   ;; org-cliplink
   (leaf org-cliplink
     :after org
-    :straight t
+    :ensure t
     :bind
     ("C-x p i" . org-cliplink)
     )
@@ -183,7 +183,7 @@
   ;; org-download
   (leaf org-download
     :after org
-    :straight t
+    :ensure t
     :config
     (setq-default org-download-image-dir (concat org-directory "/pictures"))
     )
@@ -191,13 +191,13 @@
   ;; org-web-tools
   (leaf org-web-tools
     :after org
-    :straight t
+    :ensure t
     )
 
   ;; toc-org
   (leaf toc-org
     :after org markdown-mode
-    :straight t
+    :ensure t
     ;;:commands toc-org-enable
     :config
     (add-hook 'org-mode-hook 'toc-org-enable)
@@ -208,11 +208,11 @@
 
   ;; tomelr
   (leaf tomelr
-    :straight t)
+    :ensure t)
 
   ;; ox-hugo
   (leaf ox-hugo
-    :straight t
+    :ensure t
     :require t
     :after ox
     :custom ((org-hugo-front-matter-format . "toml")))
@@ -238,71 +238,9 @@
 :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
 :END:
 \n
-")))
+"))))
 
-  ;; org-roam
-  (leaf org-roam
-    :straight t
-    :after org
-    :bind
-    ("C-c n l" . org-roam-buffer-toggle)
-    ("C-c n f" . org-roam-node-find)
-    ("C-c n g" . org-roam-graph)
-    ("C-c n i" . org-roam-node-insert)
-    ("C-c n c" . org-roam-capture)
-    ;; Dailies
-    ("C-c n j" . org-roam-dailies-capture-today)
-    :config
-    (setq org-roam-directory (concat org-directory "/org-roam"))
-    (unless (file-exists-p org-directory)
-      (make-directory org-roam-directory))
-    ;; If you're using a vertical completion framework, you might want a more informative completion interface
-    (setq org-roam-node-display-template (concat "${title:*} " (propertize "${tags:10}" 'face 'org-tag)))
-    (org-roam-db-autosync-mode)
-    ;; If using org-roam-protocol
-    (require 'org-roam-protocol)
-    )
-
-  ;; org-roam-ui
-  (leaf org-roam-ui
-    :straight (org-roam-ui :host github :repo "org-roam/org-roam-ui" :branch "main" :files ("*.el" "out"))
-    :after org-roam
-    :config
-    (setq org-roam-ui-sync-theme t
-          org-roam-ui-follow t
-          org-roam-ui-update-on-save t
-          org-roam-ui-open-on-start t)
-    )
-
-  ;; (leaf org-modern
-  ;;   :straight t
-  ;;   :after org
-  ;;   :init
-  ;;   (setq org-auto-align-tags nil
-  ;;         org-tags-column 0
-  ;;         org-fold-catch-invisible-edits 'show-and-error
-  ;;         org-special-ctrl-a/e t
-  ;;         org-insert-heading-respect-content t
-
-  ;;         ;; Org styling, hide markup etc.
-  ;;         org-hide-emphasis-markers t
-  ;;         org-pretty-entities t
-  ;;         org-ellipsis "…"
-
-  ;;         ;; Agenda styling
-  ;;         org-agenda-tags-column 0
-  ;;         org-agenda-block-separator ?─
-  ;;         org-agenda-time-grid
-  ;;         '((daily today require-timed)
-  ;;           (800 1000 1200 1400 1600 1800 2000)
-  ;;           " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
-  ;;         org-agenda-current-time-string
-  ;;         "⭠ now ─────────────────────────────────────────────────")
-  ;;   :config
-  ;;   (global-org-modern-mode +1))
-  )
-
-
+  
 (defvar yt-iframe-format
   ;; You may want to change your width and height.
   (concat "<iframe width=\"440\""
@@ -313,15 +251,23 @@
 
 
 ;;
-(leaf *chatgpt
-  :config
-  (leaf openai :straight (openai :host github :repo "emacs-openai/openai"))
-  (leaf chatgpi :straight (chatgpi :host github :repo "emacs-openai/chatgpt"))
-  (leaf codegpt :straight (codegpi :host github :repo "emacs-openai/codegpt"))
-  (leaf dall-e :straight (dall-e :host github :repo "emacs-openai/dall-e"))
-  :init
-  (if (file-exists-p (expand-file-name ".env.el" my:d))
-      (load (expand-file-name ".env.el" my:d))))
+;; (leaf *chatgpt
+;;   :config
+;;   (leaf openai
+;;     :ensure t
+;;     :vc ( :uri "https://github.com/emacs-openai/openai"))
+;;   (leaf chatgpi
+;;     :ensure t
+;;     :vc ( :uri "https://github.com/emacs-openai/chatgpt"))
+;;   (leaf codegpt
+;;     :ensure t
+;;     :vc ( :uri "https://github.com/emacs-openai/codegpt"))
+;;   (leaf dall-e
+;;     :ensure t
+;;     :vc ( :uri "https://github.com/emacs-openai/ydall-e"))
+;;   :init
+;;   (if (file-exists-p (expand-file-name ".env.el" my:d))
+;;       (load (expand-file-name ".env.el" my:d))))
 
 ;;
 (org-add-link-type
