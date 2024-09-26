@@ -16,7 +16,7 @@
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "tjy1965@gmail.com")
 
-  (setq conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
+  (setq conf:font-name "Source Code Pro" ; "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
         inhibit-compacting-font-caches t)
 
