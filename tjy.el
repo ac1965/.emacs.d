@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/27 14:02:50 $
+;; $Lastupdate: 2024/09/27 18:22:51 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -55,6 +55,10 @@
         'mew-draft-send-message
         'mew-draft-kill
         'mew-send-hook)))
+
+;; request.el
+(use-package request
+  :ensure t)
 
 ;; org-mode
 (leaf Org-mode
