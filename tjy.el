@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/27 10:37:51 $
+;; $Lastupdate: 2024/09/27 14:02:50 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -39,21 +39,6 @@
     (progn
       (font-setup))))
 
-;; $Lastupdate: yyyy/mm/dd hh:mm:ss $
-(leaf *lastupdate
-  :preface (defun my/save-buffer-wrapper ()
-             (interactive)
-             (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %k:%M:%S") " $")))
-               (save-excursion
-                 (goto-char (point-min))
-                 (while (re-search-forward
-                         "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
-                   (replace-match tostr nil t)))))
-  :config
-  (if (not (memq 'my/save-buffer-wrapper before-save-hook))
-      (setq before-save-hook
-            (cons 'my/save-buffer-wrapper before-save-hook))))
-
 (leaf mew
   :require nil t
   :config
@@ -70,7 +55,6 @@
         'mew-draft-send-message
         'mew-draft-kill
         'mew-send-hook)))
-
 
 ;; org-mode
 (leaf Org-mode
