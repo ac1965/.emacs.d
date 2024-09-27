@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/26 23:43:19 $
+;; $Lastupdate: 2024/09/27  9:38:21 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -41,7 +41,7 @@
 
 ;; $Lastupdate: yyyy/mm/dd hh:mm:ss $
 (leaf *lastupdate
-  :preface (defun my:save-buffer-wrapper ()
+  :preface (defun my/save-buffer-wrapper ()
              (interactive)
              (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %k:%M:%S") " $")))
                (save-excursion
@@ -50,9 +50,9 @@
                          "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
                    (replace-match tostr nil t)))))
   :config
-  (if (not (memq 'my:save-buffer-wrapper before-save-hook))
+  (if (not (memq 'my/save-buffer-wrapper before-save-hook))
       (setq before-save-hook
-            (cons 'my:save-buffer-wrapper before-save-hook))))
+            (cons 'my/save-buffer-wrapper before-save-hook))))
 
 (leaf mew
   :require nil t
@@ -283,8 +283,37 @@
      (latex (format "\href{%s}{%s}"
                     path (or desc "video"))))))
 
+;; Generate a cheat sheet of key bindings for the current major and minor modes.
+(defun my/describe-bindings-cheatsheet ()
+  "Generate a cheat sheet of key bindings for the current major and minor modes."
+  (interactive)
+  (let ((buffer (get-buffer-create "*Keybindings Cheat Sheet*")))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert (format "Keybindings Cheat Sheet for %s\n\n" major-mode))
+      (insert "Global keybindings:\n")
+      (insert (substitute-command-keys "\\{global-map}"))
+      (insert "\n\n")
+      (insert (format "Keybindings for %s:\n" major-mode))
+      (let ((major-mode-map (current-local-map)))
+        (if major-mode-map
+            (insert (substitute-command-keys (format "\\{%s}" (symbol-name major-mode))))
+          (insert "No local keybindings for this mode.\n")))
+      (insert "\n\nMinor mode keybindings:\n")
+      (dolist (mode minor-mode-list)
+        (when (and (boundp mode) (symbol-value mode))
+          (let* ((mode-name (symbol-name mode))
+                 (mode-map (or (cdr (assq mode minor-mode-map-alist))
+                               (when (boundp mode) (symbol-value mode)))))
+            (insert (format "Keybindings for minor mode: %s\n" mode-name))
+            (if mode-map
+                (insert (substitute-command-keys (format "\\{%s}" mode-map)))
+              (insert "No keybindings for this mode.\n")))))
+      (goto-char (point-min)))
+    (pop-to-buffer buffer)))
+
 ;;
-(defun open-by-vscode ()
+(defun my/open-by-vscode ()
   (interactive)
   (shell-command
    (format "code -r -g %s:%d:%d"
@@ -292,10 +321,10 @@
            (line-number-at-pos)
            (current-column))))
 
-(define-key global-map (kbd "C-c C-v") 'open-by-vscode)
+(define-key global-map (kbd "C-c C-v") ',y/open-by-vscode)
 
 ;; https://takaxp.github.io/utility.html
-(defun my-print-build-info ()
+(defun my/print-build-info ()
   (interactive)
   (switch-to-buffer (get-buffer-create "*Build info*"))
   (let ((buffer-read-only nil))
@@ -318,7 +347,7 @@
   (view-mode))
 
 ;;
-(defun add-org-task-to-reminder ()
+(defun my/add-org-task-to-reminder ()
   (interactive)
   (when (eq major-mode 'org-mode)
     (setq reminder-list-name "リマインダー")
