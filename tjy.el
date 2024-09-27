@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/27  9:38:21 $
+;; $Lastupdate: 2024/09/27 10:37:51 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -94,9 +94,8 @@
 	        (message "%s" file))
 	    (find-file (concat org-directory "/" file))))
     :bind
-    (("\C-ca" . org-agenda)
-     ("\C-cc" . org-capture)
-     ("\C-ch" . org-store-link)
+    (("C-c a" . org-agenda)
+     ("C-c h" . org-store-link)
      ("C-M--" . #'(lambda () (interactive)
 		            (show-org-buffer "gtd.org")))
      ("C-M-^" . #'(lambda () (interactive)
