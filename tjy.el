@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/27 18:22:51 $
+;; $Lastupdate: 2024/09/28 15:40:58 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -15,15 +15,12 @@
   :config
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "tjy1965@gmail.com")
-
   (setq conf:font-name "Source Code Pro" ; "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
         inhibit-compacting-font-caches t)
-
   (defconst my-cloud-directory "~/Documents/")
   (defconst my-blog-directory (concat my-cloud-directory "devel/repos/mysite/"))
   (defconst my-capture-blog-file (expand-file-name "all-posts.org" my-blog-directory))
-
   (defconst my-elisp-directory "~/.elisp")
   (dolist (dir (let ((dir (expand-file-name my-elisp-directory)))
                  (list dir (format "%s%d" dir emacs-major-version))))
@@ -31,10 +28,17 @@
       (let ((default-directory dir))
         (add-to-list 'load-path default-directory)
         (normal-top-level-add-subdirs-to-load-path))))
+  
+  (load custom-file)
+  (if (file-exists-p (expand-file-name ".env.el" my:d))
+      (load (expand-file-name ".env.el" my:d)))
+
+  (require 'epa-file)
+  (epa-file-enable)
+  (setq epa-pinentry-mode 'loopback)
 
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'font-setup-frame))
-
   (when window-system
     (progn
       (font-setup))))
@@ -227,34 +231,32 @@
 \n
 "))))
 
-  
-(defvar yt-iframe-format
-  ;; You may want to change your width and height.
-  (concat "<iframe width=\"440\""
-          " height=\"335\""
-          " src=\"https://www.youtube.com/embed/%s\""
-          " frameborder=\"0\""
-          " allowfullscreen>%s</iframe>"))
-
+;; (defvar yt-iframe-format
+;;   ;; You may want to change your width and height.
+;;   (concat "<iframe width=\"440\""
+;;           " height=\"335\""
+;;           " src=\"https://www.youtube.com/embed/%s\""
+;;           " frameborder=\"0\""
+;;           " allowfullscreen>%s</iframe>"))
 
 ;;
-;; (leaf *chatgpt
-;;   :config
-;;   (leaf openai
-;;     :ensure t
-;;     :vc ( :uri "https://github.com/emacs-openai/openai"))
-;;   (leaf chatgpi
-;;     :ensure t
-;;     :vc ( :uri "https://github.com/emacs-openai/chatgpt"))
-;;   (leaf codegpt
-;;     :ensure t
-;;     :vc ( :uri "https://github.com/emacs-openai/codegpt"))
-;;   (leaf dall-e
-;;     :ensure t
-;;     :vc ( :uri "https://github.com/emacs-openai/ydall-e"))
-;;   :init
-;;   (if (file-exists-p (expand-file-name ".env.el" my:d))
-;;       (load (expand-file-name ".env.el" my:d))))
+(leaf *chatgpt
+  :config
+  (leaf openai
+    :vc ( :url "https://github.com/emacs-openai/openai"))
+  (leaf chatgpi
+    :vc ( :url "https://github.com/emacs-openai/chatgpt"))
+  (leaf codegpt
+    :vc ( :url "https://github.com/emacs-openai/codegpt"))
+  (leaf dall-e
+    :vc ( :url "https://github.com/emacs-openai/dall-e"))
+  (leaf org-ai
+    :vc ( :url "https://github.com/rksm/org-ai")
+    :require t
+    :config
+    ;; (setq org-ai-openai-api-key openai-key)
+    (setq org-ai-openai-api-token openai-key)
+    (add-hook 'org-mode-hook #'org-ai-mode))) 
 
 ;;
 (org-add-link-type
@@ -345,5 +347,4 @@
 
 
 (provide 'tjy)
-
 ;;; tjy.el ends here
