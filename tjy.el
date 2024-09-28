@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/28 15:40:58 $
+;; $Lastupdate: 2024/09/28 23:42:56 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -335,15 +335,28 @@
     )
   (view-mode))
 
-;;
-(defun my/add-org-task-to-reminder ()
-  (interactive)
-  (when (eq major-mode 'org-mode)
-    (setq reminder-list-name "リマインダー")
-    (setq element (org-element-at-point))              ;; カーソル位置のタスク(エレメント)を取得する
-    (setq title (org-element-property :title element)) ;; そのタスク(エレメント)から名前を取得する
-    (setq command (format "reminders add %s %s" reminder-list-name title))
-    (shell-command-to-string command)))
+;; Ignore specific windows during switching.
+(defun my/ignore-window ()
+  "Ignore specific windows during switching."
+  (let ((excluded-buffers '("*Help*" "*Calendar*")))
+    (when (member (buffer-name) excluded-buffers)
+      (setq this-command 'ignore))))
+
+(add-hook 'window-configuration-change-hook 'my/ignore-window)
+
+;; Save window configuration
+(global-set-key (kbd "C-c s") 
+  (lambda () 
+    (interactive) 
+    (message "Save window configuration") 
+    (setq my-window-config (current-window-configuration))))
+
+;; Restore window configuration
+(global-set-key (kbd "C-c i") 
+  (lambda () 
+    (interactive) 
+    (message "Restore window configuration") 
+    (set-window-configuration my-window-config)))
 
 
 (provide 'tjy)
