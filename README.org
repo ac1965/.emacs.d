@@ -174,7 +174,7 @@
 
      ;; Author: YAMASHITA Takao <ac1965@ty07.com>
      ;; Keywords: emacs.d
-     ;; $Lastupdate: 2024/09/30  0:24:59 $
+     ;; $Lastupdate: 2024/09/30  0:35:09 $
 
      ;; This file is not part of GNU Emacs.
 
@@ -327,30 +327,43 @@
            nil))
 
        (defun font-exists-p (font)
-         "Check if a font FONT Exists. Code partially taken from https://redd.it/1xe7vr"
+         "Check if a font FONT exists. Code partially taken from https://redd.it/1xe7vr."
          (let ((font-list (or (font-family-list) (fc-list))))
-           (if (member font font-list)
-               t
-             nil)))
+           (when (cl-member font font-list :test 'equal)
+             t)))
 
        (defun font-pt-to-height (pt)
-         "Transforms a height in PT points to the height of `face-attribute '."
-         ;; the value is 1 / 10pt, therefore 100 would be equivalent to 10pt, etc.
-         (truncate (* pt 10)))
+         "Convert a height in PT points to the height used by `face-attribute`.
+     The conversion factor is that 1 PT is equal to 10 units for internal height representation."
+         (let ((conversion-factor 10))
+           (truncate (* pt conversion-factor))))
+
+       (defun set-unicode-fonts ()
+         "Set the unicode fonts for various icon families."
+         (let ((fonts '("nerd-icons"
+                        "file-icons"
+                        "Material Icons"
+                        "github-octicons"
+                        "FontAwesome"
+                        "Weather Icons")))
+           (dolist (font fonts)
+             (set-fontset-font t 'unicode (font-spec :family font) nil 'append))))
 
        (defun font-setup (&optional frame)
-         (cond ((font-exists-p conf:font-name)
-                (set-face-attribute 'default frame :height (font-pt-to-height conf:font-size) :font conf:font-name)
-                (when (featurep 'nerd-icons)
-                  (set-fontset-font t 'unicode (font-spec :family "nerd-icons") nil 'append)
-                  (set-fontset-font t 'unicode (font-spec :family "file-icons") nil 'append)
-                  (set-fontset-font t 'unicode (font-spec :family "Material Icons") nil 'append)
-                  (set-fontset-font t 'unicode (font-spec :family "github-octicons") nil 'append)
-                  (set-fontset-font t 'unicode (font-spec :family "FontAwesome") nil 'append)
-                  (set-fontset-font t 'unicode (font-spec :family "Weather Icons") nil 'append)))))
+         "Set up the default font and related icon fonts for the given FRAME.
+     If FRAME is nil, the default frame is used."
+         (when (font-exists-p conf:font-name)
+           ;; Set the default font with specified size
+           (set-face-attribute 'default frame
+                               :height (font-pt-to-height conf:font-size)
+                               :font conf:font-name)
+           ;; Set unicode fonts if 'nerd-icons' feature is available
+           (when (featurep 'nerd-icons)
+             (set-unicode-fonts))))
 
        (defun font-setup-frame (frame)
-         "set the font for each new FRAME frame created."
+         "Set the font for each newly created FRAME.
+     If the display is graphic, call `font-setup` for the FRAME."
          (select-frame frame)
          (when (display-graphic-p)
            (font-setup frame)))
@@ -366,15 +379,17 @@
          :config
          (add-hook 'dired-mode-hook #'nerd-icons-dired-mode))
 
-       (leaf *emoji
-         :config
-         (leaf emojify
-           :ensure t
-           :hook (org-mode-hook . emojify-mode)))
+       ;; emoji support
+       (leaf emojify
+         :ensure t
+         :hook (org-mode-hook . emojify-mode))
 
-       (if (daemonp)
-           (add-hook 'after-make-frame-functions #'font-setup-frame)
-         (font-setup)))
+       ;; Font setup based on frame creation
+       (defun setup-fonts ()
+         "Setup fonts for Emacs."
+         (if (daemonp)
+             (add-hook 'after-make-frame-functions #'font-setup-frame)
+           (font-setup))))
    #+end_src
 *** Keybind
   #+begin_src emacs-lisp
