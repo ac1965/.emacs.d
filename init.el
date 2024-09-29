@@ -4,7 +4,6 @@
 
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/09/27 18:12:51 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -45,22 +44,6 @@
 
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
-
-(setq package-user-dir (concat my:d:cache "elpa"))
-
-(eval-and-compile
-  (customize-set-variable
-   'package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
-                       ("melpa" . "https://melpa.org/packages/")))
-  (package-initialize)
-  (use-package leaf :ensure t)
-
-  (leaf leaf-keywords
-    :ensure t
-    :init
-    (leaf blackout :ensure t)
-    :config
-    (leaf-keywords-init)))
 
 (setq startup-file (expand-file-name "README.org" my:d))
 (when (file-exists-p startup-file)
