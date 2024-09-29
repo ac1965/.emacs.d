@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/28 23:42:56 $
+;; $Lastupdate: 2024/09/29 17:41:56 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -28,7 +28,25 @@
       (let ((default-directory dir))
         (add-to-list 'load-path default-directory)
         (normal-top-level-add-subdirs-to-load-path))))
-  
+
+  ;; coding-system
+  (set-coding-system-priority 'utf-8)
+  (when (member system-type '(darwin))
+    (set-terminal-coding-system 'utf-8-unix)
+    (set-keyboard-coding-system 'utf-8-unix)
+    (setq-default default-process-coding-system '(utf-8 . utf-8))
+    (setq-default buffer-file-coding-system 'utf-8-auto-unix
+                  x-select-request-type '(UTF8_STRING COMPOUND_TEXT TEXT STRING)))
+
+  ;; narrowing
+  (put 'narrow-to-defun 'disabled nil)
+  (put 'narrow-to-page 'disabled nil)
+  (put 'narrow-to-region 'disabled nil)
+  (put 'upcase-region 'disabled nil)
+  (put 'set-goal-column 'disabled nil)
+
+  (if (fboundp 'normal-erase-is-backspace-mode)
+      (normal-erase-is-backspace-mode 0))
   (load custom-file)
   (if (file-exists-p (expand-file-name ".env.el" my:d))
       (load (expand-file-name ".env.el" my:d)))
@@ -256,7 +274,7 @@
     :config
     ;; (setq org-ai-openai-api-key openai-key)
     (setq org-ai-openai-api-token openai-key)
-    (add-hook 'org-mode-hook #'org-ai-mode))) 
+    (add-hook 'org-mode-hook #'org-ai-mode)))
 
 ;;
 (org-add-link-type
@@ -302,6 +320,13 @@
     (pop-to-buffer buffer)))
 
 ;;
+(defun my/open-my-file ()
+  "Open file command"
+  (interactive)
+  (find-file my-capture-blog-file))
+(define-key global-map (kbd "C-c b") 'my/open-my-file)
+
+;;
 (defun my/open-by-vscode ()
   (interactive)
   (shell-command
@@ -309,8 +334,7 @@
            (buffer-file-name)
            (line-number-at-pos)
            (current-column))))
-
-(define-key global-map (kbd "C-c C-v") ',y/open-by-vscode)
+(define-key global-map (kbd "C-c C-v") 'my/open-by-vscode)
 
 ;; https://takaxp.github.io/utility.html
 (defun my/print-build-info ()
@@ -345,18 +369,18 @@
 (add-hook 'window-configuration-change-hook 'my/ignore-window)
 
 ;; Save window configuration
-(global-set-key (kbd "C-c s") 
-  (lambda () 
-    (interactive) 
-    (message "Save window configuration") 
+(global-set-key (kbd "C-c s")
+  (lambda ()
+    (interactive)
+    (message "Save window configuration")
     (setq my-window-config (current-window-configuration))))
 
 ;; Restore window configuration
-(global-set-key (kbd "C-c i") 
-  (lambda () 
-    (interactive) 
-    (message "Restore window configuration") 
-    (set-window-configuration my-window-config)))
+(global-set-key (kbd "C-c i")
+                (lambda ()
+                  (interactive)
+                  (message "Restore window configuration")
+                  (set-window-configuration my-window-config)))
 
 
 (provide 'tjy)
