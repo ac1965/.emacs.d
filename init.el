@@ -40,8 +40,6 @@
 
 ;;; Code:
 
-;; ref:https://ayatakesi.github.io
-
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
 
