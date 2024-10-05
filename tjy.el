@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/09/28 23:42:56 $
+;; $Lastupdate: 2024/09/30  9:06:03 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -15,7 +15,7 @@
   :config
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "tjy1965@gmail.com")
-  (setq conf:font-name "Source Code Pro" ; "HackGen35" ; FiraCode Nerd Font Mono
+  (setq conf:font-name "HackGen35" ; "Source Code Pro" ; "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
         inhibit-compacting-font-caches t)
   (defconst my-cloud-directory "~/Documents/")
@@ -28,10 +28,27 @@
       (let ((default-directory dir))
         (add-to-list 'load-path default-directory)
         (normal-top-level-add-subdirs-to-load-path))))
-  
+
+  ;; Coding system configuration
+  (set-coding-system-priority 'utf-8)
+  (when (eq system-type 'darwin)
+    (set-terminal-coding-system 'utf-8-unix)
+    (set-keyboard-coding-system 'utf-8-unix)
+    (setq-default default-process-coding-system '(utf-8 . utf-8)
+                  buffer-file-coding-system 'utf-8-auto-unix
+                  x-select-request-type '(UTF8_STRING COMPOUND_TEXT TEXT STRING)))
+
+  ;; Enable disabled commands
+  (dolist (cmd '(narrow-to-defun
+                 narrow-to-page
+                 narrow-to-region
+                 upcase-region
+                 set-goal-column))
+    (put cmd 'disabled nil))
+
+  (if (fboundp 'normal-erase-is-backspace-mode)
+      (normal-erase-is-backspace-mode 0))
   (load custom-file)
-  (if (file-exists-p (expand-file-name ".env.el" my:d))
-      (load (expand-file-name ".env.el" my:d)))
 
   (require 'epa-file)
   (epa-file-enable)
@@ -240,23 +257,22 @@
 ;;           " allowfullscreen>%s</iframe>"))
 
 ;;
-(leaf *chatgpt
-  :config
-  (leaf openai
-    :vc ( :url "https://github.com/emacs-openai/openai"))
-  (leaf chatgpi
-    :vc ( :url "https://github.com/emacs-openai/chatgpt"))
-  (leaf codegpt
-    :vc ( :url "https://github.com/emacs-openai/codegpt"))
-  (leaf dall-e
-    :vc ( :url "https://github.com/emacs-openai/dall-e"))
-  (leaf org-ai
-    :vc ( :url "https://github.com/rksm/org-ai")
-    :require t
-    :config
-    ;; (setq org-ai-openai-api-key openai-key)
-    (setq org-ai-openai-api-token openai-key)
-    (add-hook 'org-mode-hook #'org-ai-mode))) 
+;; (leaf *chatgpt
+;;   :config
+;;   (when (file-exists-p (expand-file-name ".env.el" my:d))
+;;     (dolist (package '((openai . "https://github.com/emacs-openai/openai")
+;;                        (chatgpt . "https://github.com/emacs-openai/chatgpt")
+;;                        (codegpt . "https://github.com/emacs-openai/codegpt")
+;;                        (dall-e . "https://github.com/emacs-openai/dall-e")
+;;                        (org-ai . "https://github.com/rksm/org-ai")))
+;;       (leaf (car package)
+;;         :vc (:url (cdr package))
+;;         :require (when (eq (car package) 'org-ai) t)
+;;         :config
+;;         (when (eq (car package) 'org-ai)
+;;           ;; (setq org-ai-openai-api-key openai-key)
+;;           (setq org-ai-openai-api-token openai-key)
+;;           (add-hook 'org-mode-hook #'org-ai-mode))))))
 
 ;;
 (org-add-link-type
@@ -272,34 +288,12 @@
      (latex (format "\href{%s}{%s}"
                     path (or desc "video"))))))
 
-;; Generate a cheat sheet of key bindings for the current major and minor modes.
-(defun my/describe-bindings-cheatsheet ()
-  "Generate a cheat sheet of key bindings for the current major and minor modes."
+;;
+(defun my/open-my-file ()
+  "Open file command"
   (interactive)
-  (let ((buffer (get-buffer-create "*Keybindings Cheat Sheet*")))
-    (with-current-buffer buffer
-      (erase-buffer)
-      (insert (format "Keybindings Cheat Sheet for %s\n\n" major-mode))
-      (insert "Global keybindings:\n")
-      (insert (substitute-command-keys "\\{global-map}"))
-      (insert "\n\n")
-      (insert (format "Keybindings for %s:\n" major-mode))
-      (let ((major-mode-map (current-local-map)))
-        (if major-mode-map
-            (insert (substitute-command-keys (format "\\{%s}" (symbol-name major-mode))))
-          (insert "No local keybindings for this mode.\n")))
-      (insert "\n\nMinor mode keybindings:\n")
-      (dolist (mode minor-mode-list)
-        (when (and (boundp mode) (symbol-value mode))
-          (let* ((mode-name (symbol-name mode))
-                 (mode-map (or (cdr (assq mode minor-mode-map-alist))
-                               (when (boundp mode) (symbol-value mode)))))
-            (insert (format "Keybindings for minor mode: %s\n" mode-name))
-            (if mode-map
-                (insert (substitute-command-keys (format "\\{%s}" mode-map)))
-              (insert "No keybindings for this mode.\n")))))
-      (goto-char (point-min)))
-    (pop-to-buffer buffer)))
+  (find-file my-capture-blog-file))
+(define-key global-map (kbd "C-c b") 'my/open-my-file)
 
 ;;
 (defun my/open-by-vscode ()
@@ -309,8 +303,7 @@
            (buffer-file-name)
            (line-number-at-pos)
            (current-column))))
-
-(define-key global-map (kbd "C-c C-v") ',y/open-by-vscode)
+(define-key global-map (kbd "C-c C-v") 'my/open-by-vscode)
 
 ;; https://takaxp.github.io/utility.html
 (defun my/print-build-info ()
@@ -335,6 +328,41 @@
     )
   (view-mode))
 
+;; Generate a cheat sheet of key bindings for the current major and minor modes.
+(defun my/describe-bindings-cheatsheet ()
+  "Generate a cheat sheet of key bindings for the current major and minor modes."
+  (interactive)
+  (let ((buffer (get-buffer-create "*Keybindings Cheat Sheet*")))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert (format "Keybindings Cheat Sheet for %s\n\n" major-mode))
+
+      ;; Global keybindings
+      (insert "Global keybindings:\n")
+      (insert (substitute-command-keys "\\{global-map}\n\n"))
+
+      ;; Major mode keybindings
+      (insert (format "Keybindings for %s:\n" major-mode))
+      (let ((major-mode-map (current-local-map)))
+        (if major-mode-map
+            (insert (substitute-command-keys (format "\\{%s}\n" (symbol-name major-mode))))
+          (insert "No local keybindings for this mode.\n\n")))
+
+      ;; Minor mode keybindings
+      (insert "Minor mode keybindings:\n")
+      (dolist (mode minor-mode-list)
+        (when (and (boundp mode) (symbol-value mode))
+          (let ((mode-name (symbol-name mode)))
+            (insert (format "Keybindings for minor mode: %s:\n" mode-name))
+            (let ((mode-map (or (cdr (assq mode minor-mode-map-alist))
+                                (when (boundp mode) (symbol-value mode)))))
+              (if mode-map
+                  (insert (substitute-command-keys (format "\\{%s}\n" mode-map)))
+                (insert "No keybindings for this mode.\n"))))))
+      (goto-char (point-min)))
+    (pop-to-buffer buffer)))
+
+
 ;; Ignore specific windows during switching.
 (defun my/ignore-window ()
   "Ignore specific windows during switching."
@@ -345,18 +373,18 @@
 (add-hook 'window-configuration-change-hook 'my/ignore-window)
 
 ;; Save window configuration
-(global-set-key (kbd "C-c s") 
-  (lambda () 
-    (interactive) 
-    (message "Save window configuration") 
+(global-set-key (kbd "C-c s")
+  (lambda ()
+    (interactive)
+    (message "Save window configuration")
     (setq my-window-config (current-window-configuration))))
 
 ;; Restore window configuration
-(global-set-key (kbd "C-c i") 
-  (lambda () 
-    (interactive) 
-    (message "Restore window configuration") 
-    (set-window-configuration my-window-config)))
+(global-set-key (kbd "C-c i")
+                (lambda ()
+                  (interactive)
+                  (message "Restore window configuration")
+                  (set-window-configuration my-window-config)))
 
 
 (provide 'tjy)
