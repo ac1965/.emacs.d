@@ -175,7 +175,7 @@
 
      ;; Author: YAMASHITA Takao <ac1965@ty07.com>
      ;; Keywords: emacs.d
-     ;; $Lastupdate: 2024/10/06 11:08:01 $
+     ;; $Lastupdate: 2024/10/06 11:51:07 $
 
      ;; This file is not part of GNU Emacs.
 
@@ -437,34 +437,29 @@
               (replace-match tostr nil t)))))
       :hook (before-save-hook . my/save-buffer-wrapper))
 
-    ;; no-littering settings
+    ;; no-littering: Keep Emacs clean by organizing config and cache files
     (setq no-littering-etc-directory (expand-file-name ".etc/" my:d))
     (setq no-littering-var-directory (expand-file-name ".var/" my:d))
     (leaf no-littering
       :ensure t
       :require t)
 
+    ;; macOS specific settings for shell integration
     (leaf exec-path-from-shell
       :ensure t
       :if (memq window-system '(mac ns))
       :commands (exec-path-from-shell-getenvs exec-path-from-shell-setenv)
-      :init
+      :config
       (exec-path-from-shell-initialize)
       (when (member system-type '(darwin))
         (let ((gls "/usr/local/bin/gls")) ;; brew install coreutils
           (if (file-exists-p gls) (setq insert-directory-program gls)))))
 
+    ;; Customize basic Emacs behaviors
     (leaf cus-edit
-      :doc "tools for customizing Emacs and Lisp packages"
       :custom `((custom-file . ,(concat no-littering-etc-directory "custom.el"))))
 
     (leaf cus-start
-      :doc "define customization properties of builtins"
-      :preface
-      (defun +redraw-frame nil
-        (interactive)
-        (redraw-frame))
-      :bind (("M-ESC ESC" . +redraw-frame))
       :custom '((create-lockfiles . nil)
                 (tab-width . 4)
                 (debug-on-error . nil)
@@ -489,48 +484,33 @@
                 (scroll-bar-mode . nil)
                 (indent-tabs-mode . nil)
                 (tab-bar-mode . t))
-      :config
-      (defalias 'yes-or-no-p 'y-or-n-p)
-      (keyboard-translate ?\C-h ?\C-?))
+      :bind (("M-ESC ESC" . +redraw-frame)))
 
-    (leaf editorconfig
-      :ensure t)
-
+    ;; Automatically revert buffers if file changes on disk
     (leaf autorevert
-      :doc "revert buffers when files on disk change"
       :global-minor-mode global-auto-revert-mode)
 
-    ;; show-paren-mode
+    ;; Paren matching highlighting
     (leaf paren
-      :doc "highlight matching paren"
-      :tag "builtin"
       :custom ((show-paren-delay . 0)
                (show-paren-style . 'expression))
       :global-minor-mode show-paren-mode
-      :init
+      :config
       (leaf puni
         :ensure t
-        :config
-        (puni-global-mode)))
+        :global-minor-mode puni-global-mode))
 
-    (leaf simple
-      :doc "basic editing commands for Emacs"
-      :custom ((kill-read-only-ok . t)
-               (kill-whole-line . t)
-               (eval-expression-print-length . nil)
-               (eval-expression-print-level . nil)))
-
+    ;; Auto save and backup settings
     (leaf files
-      :doc "file input and output commands for Emacs"
-      :global-minor-mode auto-save-visited-mode
       :custom `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup/") t)))
                 (backup-directory-alist . '((".*" . ,(concat no-littering-var-directory "backup"))
                                             (,tramp-file-name-regexp . nil)))
                 (version-control . t)
                 (delete-old-versions . t)
-                (auto-save-visited-interval . 1)))
+                (auto-save-visited-interval . 1))
+      :global-minor-mode auto-save-visited-mode)
 
-    ;; tramp
+    ;; Tramp: Remote file editing
     (leaf tramp
       :pre-setq `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
                   (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
@@ -549,82 +529,46 @@
                                                 t)
                                                ".*:\0? *"))))
 
+    ;; Miscellaneous useful settings
     (leaf startup
-      :doc "process Emacs shell arguments"
       :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
 
     (leaf savehist
-      :doc "Save minibuffer history"
       :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
       :global-minor-mode t)
 
+    ;; Display keybindings in a popup
     (leaf which-key
-      :doc "Display available keybindings in popup"
       :ensure t
-      :global-minor-mode t
-      ;; :config
-      ;; (which-key-setup-side-window-right)
-      ;; (ffap-bindings)
-      )
+      :global-minor-mode t)
 
-    (leaf puni
-      :doc "Parentheses Universalistic"
-      :ensure t
-      :global-minor-mode puni-global-mode
-      :bind (puni-mode-map
-             ;; default mapping
-             ;; ("C-M-f" . puni-forward-sexp)
-             ;; ("C-M-b" . puni-backward-sexp)
-             ;; ("C-M-a" . puni-beginning-of-sexp)
-             ;; ("C-M-e" . puni-end-of-sexp)
-             ;; ("M-)" . puni-syntactic-forward-punct)
-             ;; ("C-M-u" . backward-up-list)
-             ;; ("C-M-d" . backward-down-list)
-             ("C-)" . puni-slurp-forward)
-             ("C-}" . puni-barf-forward)
-             ("M-(" . puni-wrap-round)
-             ("M-s" . puni-splice)
-             ("M-r" . puni-raise)
-             ("M-U" . puni-splice-killing-backward)
-             ("M-z" . puni-squeeze)))
-
-    ;; elec-pair
+    ;; Automatic parenthesis pairing
     (leaf elec-pair
-      :doc "Automatic parenthesis pairing"
       :global-minor-mode electric-pair-mode)
 
-    ;; tree-sitter
+    ;; Tree-sitter support for improved syntax highlighting and parsing
     (leaf tree-sitter
       :ensure t
-      :config
-      (leaf tree-sitter-langs
-        :ensure t)
-      (tree-sitter-require 'tsx)
       :hook
-      (go-mode-hook . tree-sitter-mode))
-
-    ;; utilties package
-    ;; visual-line-mode
-    (leaf visual-line-mode
+      (go-mode-hook . tree-sitter-mode)
       :config
-      (global-visual-line-mode t)
-      (diminish 'visual-line-mode nil))
+      (leaf tree-sitter-langs :ensure t)
+      (tree-sitter-require 'tsx))
 
-    ;; pbcopy (macOS)
+    ;;; Utilties Package Configuration
+
+    ;; Enable global visual-line-mode for better word wrapping
+    (leaf visual-line-mode
+      :global-minor-mode t)
+
+    ;; pbcopy integration for macOS clipboard support
     (leaf pbcopy
       :ensure t
       :if (memq window-system '(mac ns)))
 
-    ;; dired-filter
+    ;; Useful utilities for dired, expand-region, aggressive-indent, and delsel
     (leaf dired-filter
-      :doc "dired-filter"
       :ensure t)
-
-    ;; delsel
-    (leaf delsel
-      :doc "delete selection if you insert"
-      :tag "builtin"
-      :global-minor-mode delete-selection-mode)
 
     ;; expand-region
     (leaf expand-region
@@ -636,7 +580,12 @@
       :ensure t
       :global-minor-mode global-aggressive-indent-mode)
 
-    ;; rg
+    ;; delsel
+    (leaf delsel
+      :global-minor-mode delete-selection-mode)
+
+
+    ;; Search and jump utilities
     (leaf rg
       :ensure t)
 
@@ -644,10 +593,10 @@
     (leaf dumb-jump
       :ensure t
       :after rg
-      :custom ((dumb-jump-force-searcher . 'rg))
-      :hook ((xref-backend-functions . dumb-jump-xref-activate)))
+      :hook ((xref-backend-functions . dumb-jump-xref-activate))
+      :custom ((dumb-jump-force-searcher . 'rg)))
 
-    ;; multiple-cursors
+    ;; Multi-cursor editing
     (leaf multiple-cursors
       :ensure t
       :bind (("C-S-c C-S-c" . mc/edit-lines)
@@ -655,47 +604,44 @@
              ("C-<" . mc/mark-previous-like-this)
              ("C-c C-<" . mc/mark-all-like-this)))
 
-    ;; flymake
-    (leaf flymake
-      :ensure t
-      :global-minor-mode)
-
-    ;; flycheck
-    (leaf flycheck
-      :ensure t
-      :global-minor-mode t)
-
-    ;; flyspell
-    (leaf flyspell
-      :ensure t
-      :hook (text-mode . flyspell-mode)
-      :config
-      (setq ispell-program-name "aspell"))
-
-    ;; projectile
-    (leaf projectile
-      :ensure t
-      :global-minor-mode t)
-
-    ;; Yet another Snippet
-    (leaf yasnippet
-      :ensure t
-      :config
-      (yas-global-mode 1))
-
-    ;; magit
+    ;; Version control using Magit
     (leaf magit
       :ensure t
       :bind (("C-x g" . magit-status)))
 
-    ;;; tools
-    (defun  toggle-linum-lines () ;; ("C-c l"    . toggle-linum-lines)
-      "toggle display line number"
-      (interactive)
-      (display-line-numbers-mode
-       (if display-line-numbers-mode -1 1)))
+    ;; Flymake and Flycheck for on-the-fly syntax checking
+    (leaf flymake
+      :ensure t
+      :global-minor-mode)
 
-    (defun toggle-window-split () ;;("s-."      . toggle-window-split)
+    (leaf flycheck
+      :ensure t
+      :global-minor-mode t)
+
+    ;; Flyspell for spell checking
+    (leaf flyspell
+      :ensure t
+      :hook (text-mode . flyspell-mode)
+      :custom ((ispell-program-name . "aspell")))
+
+    ;; Projectile for project management
+    (leaf projectile
+      :ensure t
+      :global-minor-mode t)
+
+    ;; Yasnippet for snippet support
+    (leaf yasnippet
+      :ensure t
+      :global-minor-mode yas-global-mode)
+
+    ;; Miscellaneous helper functions
+    (defun toggle-linum-lines ()
+      "Toggle display line number."
+      (interactive)
+      (display-line-numbers-mode (if display-line-numbers-mode -1 1)))
+
+    (defun toggle-window-split ()
+      "Toggle window split between horizontal and vertical."
       (interactive)
       (if (= (count-windows) 2)
           (let* ((this-win-buffer (window-buffer))
@@ -721,7 +667,7 @@
               (select-window first-win)
               (if this-win-2nd (other-window 1))))))
 
-    (defun dired-view-file-other-window () ;; add-hook 'dired-load-hook
+    (defun dired-view-file-other-window ()
       (interactive)
       (let ((file (dired-get-file-for-visit)))
         (if (file-directory-p file)
@@ -730,10 +676,12 @@
                 (dired file))
           (view-file-other-window file))))
 
+    ;; Remove duplicate entries from kill-ring
     (defun my/no-kill-new-duplicate (yank)
       (setq kill-ring (delete yank kill-ring)))
     (advice-add 'kill-new :before #'my/no-kill-new-duplicate)
 
+    ;; Clean up whitespace before saving
     (add-hook 'before-save-hook 'delete-trailing-whitespace)
   #+end_src
 
