@@ -21,6 +21,8 @@
 
 ;; Define GC
 
+(setq debug-on-error nil)
+
 (setq package-enable-at-startup nil)
 (setq inhibit-default-init nil)
 
@@ -42,6 +44,10 @@
   (startup-redirect-eln-cache
    (convert-standard-filename
     (expand-file-name  "eln-cache/" my:d:cache))))
+
+(setq byte-compile-warnings '(not cl-functions obsolete))
+(when (boundp 'load-prefer-newer)
+  (setq load-prefer-newer t))
 
 (defvar default-file-name-handler-alist file-name-handler-alist)
 (setq file-name-handler-alist nil)
