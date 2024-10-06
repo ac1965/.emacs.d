@@ -4,7 +4,6 @@
 
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/10/07  2:01:25 $
 
 ;; This file is not part of GNU Emacs.
 

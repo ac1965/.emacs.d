@@ -28,6 +28,219 @@ Inspired dot emacs. :raised_hands:
 | straight-thaw-versions | Read version lockfiles and restore package versions to those listed. |
 
 * Configuration
+** Eary-init
+   #+begin_src emacs-lisp :tangle no
+     ;; early-init.el --- Early Init File for >= Emacs 27.
+
+     ;; Copyright (c) 2021-2024 YAMASHITA Takao <ac1965@ty07.net>
+     ;;
+     ;; This file is free software: you can redistribute it and/or modify it
+     ;; under the terms of the GNU General Public License as published by the
+     ;; Free Software Foundation, either version 3 of the License, or (at
+     ;; your option) any later version.
+     ;;
+     ;; This file is distributed in the hope that it will be useful, but
+     ;; WITHOUT ANY WARRANTY; without even the implied warranty of
+     ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+     ;; General Public License for more details.
+     ;;
+     ;; You should have received a copy of the GNU General Public License
+     ;; along with this file.  If not, see <http://www.gnu.org/licenses/>.
+
+     ;;; Commentary:
+
+     ;;; Code:
+
+     ;; Define GC
+
+     (setq debug-on-error nil)
+
+     (setenv "LIBRARY_PATH" "/usr/local/opt/gcc/lib/gcc/14:/usr/local/opt/libgccjit/lib/gcc/14:/usr/local/opt/gcc/lib/gcc/14/gcc/x86_64-apple-darwin23/14")
+
+     (setq package-enable-at-startup nil)
+     (setq inhibit-default-init nil)
+
+     (defconst my:d
+       (file-name-directory
+        (file-chase-links load-file-name))
+       "The giant turtle on which the world rests.")
+
+     (defconst my:d:cache (concat my:d ".cache/"))
+     (unless (file-exists-p my:d:cache)
+       (make-directory my:d:cache))
+
+     (when (featurep 'native-compile)
+       (setq native-comp-async-report-warnings-errors nil))
+
+     (when (and (fboundp 'startup-redirect-eln-cache)
+                (fboundp 'native-comp-available-p)
+                (native-comp-available-p))
+       (startup-redirect-eln-cache
+        (convert-standard-filename
+         (expand-file-name  "eln-cache/" my:d:cache))))
+
+     (setq byte-compile-warnings '(not cl-functions obsolete))
+     (when (boundp 'load-prefer-newer)
+       (setq load-prefer-newer t))
+
+     (defvar default-file-name-handler-alist file-name-handler-alist)
+     (setq file-name-handler-alist nil)
+
+     (setq gc-cons-threshold most-positive-fixnum
+           gc-cons-percentage 1)
+
+     (defun +gc-after-focus-change ()
+       "Run GC when frame loses focus."
+       (run-with-idle-timer
+        5 nil
+        (lambda () (unless (frame-focus-state) (garbage-collect)))))
+
+     (defun +reset-init-values ()
+       (run-with-idle-timer
+        1 nil
+        (lambda ()
+          (setq file-name-handler-alist default-file-name-handler-alist
+                gc-cons-percentage 0.1
+                gc-cons-threshold 100000000)
+          (message "gc-cons-threshold & file-name-handler-alist restored")
+          (when (boundp 'after-focus-change-function)
+            (add-function :after after-focus-change-function #'+gc-after-focus-change)))))
+
+     ;; Found on `https://github.com/miklos1/dotemacs/blob/master/early-init.el'.
+     ;; Ignore X resources; its settings would be redundant with the other settings
+     ;; in this file and can conflict with later config (particularly where the
+     ;; cursor color is concerned).
+     (advice-add #'x-apply-session-resources :override #'ignore)
+
+     ;; GUI elements
+     (setq frame-resize-pixelwise t
+           frame-inhibit-implied-resize t
+           frame-title-format '("%b")
+           ring-bell-function 'ignore
+           use-dialog-box t ; only for mouse events, which I seldom use
+           use-file-dialog nil
+           use-short-answers t
+           inhibit-splash-screen t
+           inhibit-startup-screen t
+           inhibit-x-resources t
+           inhibit-startup-echo-area-message user-login-name ; read the docstring
+           inhibit-startup-buffer-menu t)
+     (menu-bar-mode 1)
+     (unless (and (display-graphic-p) (eq system-type 'darwin))
+       (push '(menu-bar-lines . 1) default-frame-alist)
+       (push '(fullscreen . maximized) default-frame-alist))
+     (push '(tool-bar-lines . 0) default-frame-alist)
+     (push '(vertical-scroll-bars) default-frame-alist)
+
+     (provide 'early-init)
+     ;;; early-init.el ends here
+
+   #+end_src
+** Init
+   #+begin_src emacs-lisp :tangle no
+     ;;; -- Emacs.d -*- lexical-binding: t; -*-
+
+     ;; Copyright (C) 2014-2024 YAMASHITA Takao
+
+     ;; Author: YAMASHITA Takao <ac1965@ty07.net>
+     ;; Keywords: emacs.d
+
+     ;; This file is not part of GNU Emacs.
+
+     ;; This program is free software; you can redistribute it and/or modify it under
+     ;; the terms of the GNU General Public License as published by the Free Software
+     ;; Foundation; either version 3 of the License, or (at your option) any later
+     ;; version.
+
+     ;; This program is distributed in the hope that it will be useful, but WITHOUT
+     ;; ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+     ;; FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+     ;; details.
+
+     ;; You should have received a copy of the GNU General Public License along with
+     ;; GNU Emacs; see the file COPYING. If not, write to the Free Software
+     ;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+     ;; USA.
+
+     ;;; Commentary:
+
+     ;; This is the initialisation file for GNU/Emacs.  At the end of this
+     ;; file, it will call the proper configuration file written in
+     ;; `org-mode'.  Visit that document to see the proper / full
+     ;; documentation, code-snippets, and the idea behind it.
+     ;;
+     ;; The sole purpose of this file is to initialise loading the proper
+     ;; configuration file.  Everything else is out-of-scope.
+     ;;
+     ;; Although you will find some code that SHOULD belong in the
+     ;; `README.org', but I have put it here since it is important to be set
+     ;; at the beginning.
+
+     ;;; License: GPLv3
+
+     ;;; Code:
+
+     ;; ref:https://ayatakesi.github.io
+
+     ;; (require 'profiler)
+     ;; (profiler-start 'cpu)
+
+     (eval-and-compile
+       (setq nsm-settings-file (concat my:d:cache "network-security.data"))
+       (setq network-security-level 'high)
+
+       (setq straight-repository-branch "develop"
+     	    straight-base-dir my:d:cache
+     	    straight-check-for-modifications '(check-on-save-find-when-checking))
+
+       (defvar bootstrap-version)
+       (let ((bootstrap-file
+     	     (expand-file-name "straight/repos/straight.el/bootstrap.el" my:d:cache))
+     	    (bootstrap-version 7))
+         (unless (file-exists-p bootstrap-file)
+           (with-current-buffer
+               (url-retrieve-synchronously
+                "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+                'silent 'inhibit-cookies)
+     	    (goto-char (point-max))
+     	    (eval-print-last-sexp)))
+         (load bootstrap-file nil 'nomessage))
+       (require 'straight-x)
+       ;; Bootstrap ends here
+       (setq vc-follow-symlinks t)
+
+       (eval-and-compile
+         (straight-use-package 'org)
+         (straight-use-package 'leaf-keywords)
+         (leaf-keywords-init))
+
+       (leaf leaf
+         :require t
+         :config
+         (leaf leaf-convert :straight t)
+         (leaf leaf-tree :straight t)))
+
+     (leaf dash
+       :straight t
+       :leaf-defer t)
+
+     (leaf diminish
+       :straight t
+       :require t)
+
+     (leaf async
+       :straight t
+       :leaf-defer nil
+       :setq (async-bytecomp-package-mode . t))
+
+     (setq startup-file (expand-file-name "README.org" my:d))
+     (when (file-exists-p startup-file)
+       (org-babel-load-file startup-file))
+
+     (provide 'init)
+     ;;; init.el ends here
+
+   #+end_src
 ** Header
    #+begin_src emacs-lisp
      ;;; README.el --- Emacs.d -*- lexical-binding: t; -*-
@@ -36,7 +249,7 @@ Inspired dot emacs. :raised_hands:
 
      ;; Author: YAMASHITA Takao <ac1965@ty07.com>
      ;; Keywords: emacs.d
-     ;; $Lastupdate: 2024/10/07  2:02:17 $
+     ;; $Lastupdate: 2024/10/07  2:22:51 $
 
      ;; This file is not part of GNU Emacs.
 
@@ -63,9 +276,6 @@ Inspired dot emacs. :raised_hands:
 
    #+end_src
 
-** Package Manager
-   #+begin_src emacs-lisp
-   #+end_src
 ** UI
    #+begin_src emacs-lisp
      ;;; UI Configurations
