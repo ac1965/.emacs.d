@@ -4,7 +4,7 @@
 
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; Keywords: emacs.d
-;; $Lastupdate: 2024/10/07  0:14:51 $
+;; $Lastupdate: 2024/10/07  2:01:25 $
 
 ;; This file is not part of GNU Emacs.
 
@@ -45,6 +45,54 @@
 
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
+
+(eval-and-compile
+  (setq nsm-settings-file (concat my:d:cache "network-security.data"))
+  (setq network-security-level 'high)
+
+  (setq straight-repository-branch "develop"
+	    straight-base-dir my:d:cache
+	    straight-check-for-modifications '(check-on-save-find-when-checking))
+
+  (defvar bootstrap-version)
+  (let ((bootstrap-file
+	     (expand-file-name "straight/repos/straight.el/bootstrap.el" my:d:cache))
+	    (bootstrap-version 7))
+    (unless (file-exists-p bootstrap-file)
+      (with-current-buffer
+          (url-retrieve-synchronously
+           "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+           'silent 'inhibit-cookies)
+	    (goto-char (point-max))
+	    (eval-print-last-sexp)))
+    (load bootstrap-file nil 'nomessage))
+  (require 'straight-x)
+  ;; Bootstrap ends here
+  (setq vc-follow-symlinks t)
+
+  (eval-and-compile
+    (straight-use-package 'org)
+    (straight-use-package 'leaf-keywords)
+    (leaf-keywords-init))
+
+  (leaf leaf
+    :require t
+    :config
+    (leaf leaf-convert :straight t)
+    (leaf leaf-tree :straight t)))
+
+(leaf dash
+  :straight t
+  :leaf-defer t)
+
+(leaf diminish
+  :straight t
+  :require t)
+
+(leaf async
+  :straight t
+  :leaf-defer nil
+  :setq (async-bytecomp-package-mode . t))
 
 (setq startup-file (expand-file-name "README.org" my:d))
 (when (file-exists-p startup-file)
