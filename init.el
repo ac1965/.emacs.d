@@ -46,7 +46,6 @@
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
 
-(require 'org)
 (setq startup-file (expand-file-name "README.org" my:d))
 (when (file-exists-p startup-file)
   (org-babel-load-file startup-file))
