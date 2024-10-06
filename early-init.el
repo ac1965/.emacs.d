@@ -23,6 +23,8 @@
 
 (setq debug-on-error nil)
 
+(setenv "LIBRARY_PATH" "/usr/local/opt/gcc/lib/gcc/14:/usr/local/opt/libgccjit/lib/gcc/14:/usr/local/opt/gcc/lib/gcc/14/gcc/x86_64-apple-darwin23/14")
+
 (setq package-enable-at-startup nil)
 (setq inhibit-default-init nil)
 
