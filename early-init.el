@@ -1,6 +1,6 @@
 ;; early-init.el --- Early Init File for >= Emacs 27.
 
-;; Copyright (c) 2024 YAMASHITA Takao <ac1965@ty07.net>
+;; Copyright (c) 2021-2024 YAMASHITA Takao <ac1965@ty07.net>
 ;;
 ;; This file is free software: you can redistribute it and/or modify it
 ;; under the terms of the GNU General Public License as published by the
@@ -20,6 +20,10 @@
 ;;; Code:
 
 ;; Define GC
+
+(setq debug-on-error nil)
+
+(setenv "LIBRARY_PATH" "/usr/local/opt/gcc/lib/gcc/14:/usr/local/opt/libgccjit/lib/gcc/14:/usr/local/opt/gcc/lib/gcc/14/gcc/x86_64-apple-darwin23/14")
 
 (setq package-enable-at-startup nil)
 (setq inhibit-default-init nil)
@@ -42,6 +46,10 @@
   (startup-redirect-eln-cache
    (convert-standard-filename
     (expand-file-name  "eln-cache/" my:d:cache))))
+
+(setq byte-compile-warnings '(not cl-functions obsolete))
+(when (boundp 'load-prefer-newer)
+  (setq load-prefer-newer t))
 
 (defvar default-file-name-handler-alist file-name-handler-alist)
 (setq file-name-handler-alist nil)

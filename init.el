@@ -45,6 +45,13 @@
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
 
+(setq debug-on-error nil)
+(setq gc-cons-threshold most-positive-fixnum)
+
+(setq byte-compile-warnings '(not cl-functions obsolete))
+(when (boundp 'load-prefer-newer)
+  (setq load-prefer-newer t))
+
 (setq startup-file (expand-file-name "README.org" my:d))
 (when (file-exists-p startup-file)
   (org-babel-load-file startup-file))
