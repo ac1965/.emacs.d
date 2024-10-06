@@ -120,9 +120,9 @@
 
   ;; no-littering
   (setq no-littering-etc-directory
-        (expand-file-name ".config/" my:d))
+        (expand-file-name ".etc/" my:d))
   (setq no-littering-var-directory
-        (expand-file-name ".data/" my:d))
+        (expand-file-name ".var/" my:d))
   (leaf no-littering
     :straight t
     :require t)
