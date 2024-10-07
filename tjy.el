@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
-;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; $Lastupdate: 2024/10/05 14:15:44 $
+;; Author: YAMASHITA Takao <tjy1965@gmail.com>
+;; $Lastupdate: 2024/10/07 20:13:56 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -15,12 +15,15 @@
   :config
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "tjy1965@gmail.com")
-  (setq conf:font-name "HackGen35" ; "Source Code Pro" ; "HackGen35" ; FiraCode Nerd Font Mono
+
+  (setq conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
         inhibit-compacting-font-caches t)
+
   (defconst my-cloud-directory "~/Documents/")
   (defconst my-blog-directory (concat my-cloud-directory "devel/repos/mysite/"))
   (defconst my-capture-blog-file (expand-file-name "all-posts.org" my-blog-directory))
+
   (defconst my-elisp-directory "~/.elisp")
   (dolist (dir (let ((dir (expand-file-name my-elisp-directory)))
                  (list dir (format "%s%d" dir emacs-major-version))))
@@ -29,36 +32,27 @@
         (add-to-list 'load-path default-directory)
         (normal-top-level-add-subdirs-to-load-path))))
 
-  ;; Coding system configuration
-  (set-coding-system-priority 'utf-8)
-  (when (eq system-type 'darwin)
-    (set-terminal-coding-system 'utf-8-unix)
-    (set-keyboard-coding-system 'utf-8-unix)
-    (setq-default default-process-coding-system '(utf-8 . utf-8)
-                  buffer-file-coding-system 'utf-8-auto-unix
-                  x-select-request-type '(UTF8_STRING COMPOUND_TEXT TEXT STRING)))
-
-  ;; Enable disabled commands
-  (dolist (cmd '(narrow-to-defun
-                 narrow-to-page
-                 narrow-to-region
-                 upcase-region
-                 set-goal-column))
-    (put cmd 'disabled nil))
-
-  (if (fboundp 'normal-erase-is-backspace-mode)
-      (normal-erase-is-backspace-mode 0))
-  (load custom-file)
-
-  (require 'epa-file)
-  (epa-file-enable)
-  (setq epa-pinentry-mode 'loopback)
-
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'font-setup-frame))
+
   (when window-system
     (progn
       (font-setup))))
+
+;; $Lastupdate: yyyy/mm/dd hh:mm:ss $
+(leaf *lastupdate
+  :preface (defun my:save-buffer-wrapper ()
+             (interactive)
+             (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %k:%M:%S") " $")))
+               (save-excursion
+                 (goto-char (point-min))
+                 (while (re-search-forward
+                         "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
+                   (replace-match tostr nil t)))))
+  :config
+  (if (not (memq 'my:save-buffer-wrapper before-save-hook))
+      (setq before-save-hook
+            (cons 'my:save-buffer-wrapper before-save-hook))))
 
 (leaf mew
   :require nil t
@@ -77,10 +71,6 @@
         'mew-draft-kill
         'mew-send-hook)))
 
-;; request.el
-(leaf request
-  :ensure t
-  :require t)
 
 ;; org-mode
 (leaf Org-mode
@@ -104,8 +94,9 @@
 	        (message "%s" file))
 	    (find-file (concat org-directory "/" file))))
     :bind
-    (("C-c a" . org-agenda)
-     ("C-c h" . org-store-link)
+    (("\C-ca" . org-agenda)
+     ("\C-cc" . org-capture)
+     ("\C-ch" . org-store-link)
      ("C-M--" . #'(lambda () (interactive)
 		            (show-org-buffer "gtd.org")))
      ("C-M-^" . #'(lambda () (interactive)
@@ -247,33 +238,89 @@
 :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
 :END:
 \n
-"))))
+")))
 
-;; (defvar yt-iframe-format
-;;   ;; You may want to change your width and height.
-;;   (concat "<iframe width=\"440\""
-;;           " height=\"335\""
-;;           " src=\"https://www.youtube.com/embed/%s\""
-;;           " frameborder=\"0\""
-;;           " allowfullscreen>%s</iframe>"))
+  ;; org-roam
+  (leaf org-roam
+    :ensure t
+    :after org
+    :bind
+    ("C-c n l" . org-roam-buffer-toggle)
+    ("C-c n f" . org-roam-node-find)
+    ("C-c n g" . org-roam-graph)
+    ("C-c n i" . org-roam-node-insert)
+    ("C-c n c" . org-roam-capture)
+    ;; Dailies
+    ("C-c n j" . org-roam-dailies-capture-today)
+    :config
+    (setq org-roam-directory (concat org-directory "/org-roam"))
+    (unless (file-exists-p org-directory)
+      (make-directory org-roam-directory))
+    ;; If you're using a vertical completion framework, you might want a more informative completion interface
+    (setq org-roam-node-display-template (concat "${title:*} " (propertize "${tags:10}" 'face 'org-tag)))
+    (org-roam-db-autosync-mode)
+    ;; If using org-roam-protocol
+    (require 'org-roam-protocol)
+    )
+
+  ;; org-roam-ui
+  (leaf org-roam-ui
+    :vc (:url "htts://github.com/org-roam/org-roam-ui")
+    :after org-roam
+    :config
+    (setq org-roam-ui-sync-theme t
+          org-roam-ui-follow t
+          org-roam-ui-update-on-save t
+          org-roam-ui-open-on-start t))
+
+  ;; (leaf org-modern
+  ;;   :ensure t
+  ;;   :after org
+  ;;   :init
+  ;;   (setq org-auto-align-tags nil
+  ;;         org-tags-column 0
+  ;;         org-fold-catch-invisible-edits 'show-and-error
+  ;;         org-special-ctrl-a/e t
+  ;;         org-insert-heading-respect-content t
+
+  ;;         ;; Org styling, hide markup etc.
+  ;;         org-hide-emphasis-markers t
+  ;;         org-pretty-entities t
+  ;;         org-ellipsis "…"
+
+  ;;         ;; Agenda styling
+  ;;         org-agenda-tags-column 0
+  ;;         org-agenda-block-separator ?─
+  ;;         org-agenda-time-grid
+  ;;         '((daily today require-timed)
+  ;;           (800 1000 1200 1400 1600 1800 2000)
+  ;;           " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+  ;;         org-agenda-current-time-string
+  ;;         "⭠ now ─────────────────────────────────────────────────")
+  ;;   :config
+  ;;   (global-org-modern-mode +1))
+  )
+
+
+(defvar yt-iframe-format
+  ;; You may want to change your width and height.
+  (concat "<iframe width=\"440\""
+          " height=\"335\""
+          " src=\"https://www.youtube.com/embed/%s\""
+          " frameborder=\"0\""
+          " allowfullscreen>%s</iframe>"))
+
 
 ;;
-;; (leaf *chatgpt
-;;   :config
-;;   (when (file-exists-p (expand-file-name ".env.el" my:d))
-;;     (dolist (package '((openai . "https://github.com/emacs-openai/openai")
-;;                        (chatgpt . "https://github.com/emacs-openai/chatgpt")
-;;                        (codegpt . "https://github.com/emacs-openai/codegpt")
-;;                        (dall-e . "https://github.com/emacs-openai/dall-e")
-;;                        (org-ai . "https://github.com/rksm/org-ai")))
-;;       (leaf (car package)
-;;         :vc (:url (cdr package))
-;;         :require (when (eq (car package) 'org-ai) t)
-;;         :config
-;;         (when (eq (car package) 'org-ai)
-;;           ;; (setq org-ai-openai-api-key openai-key)
-;;           (setq org-ai-openai-api-token openai-key)
-;;           (add-hook 'org-mode-hook #'org-ai-mode))))))
+(leaf *chatgpt
+  :config
+  (leaf openai :vc (:url "https://github.com/emacs-openai/openai"))
+  (leaf chatgpi :vc (:url "https://github.com/emacs-openai/chatgpt"))
+  (leaf codegpt :vc (:url "https://github.com/emacs-openai/codegpt"))
+  (leaf dall-e :vc (:url "https://github.com/emacs-openai/dall-e"))
+  :init
+  (if (file-exists-p (expand-file-name ".env.el" my:d))
+      (load (expand-file-name ".env.el" my:d))))
 
 ;;
 (org-add-link-type
@@ -290,24 +337,18 @@
                     path (or desc "video"))))))
 
 ;;
-(defun my/open-my-file ()
-  "Open file command"
-  (interactive)
-  (find-file my-capture-blog-file))
-(define-key global-map (kbd "C-c b") 'my/open-my-file)
-
-;;
-(defun my/open-by-vscode ()
+(defun open-by-vscode ()
   (interactive)
   (shell-command
    (format "code -r -g %s:%d:%d"
            (buffer-file-name)
            (line-number-at-pos)
            (current-column))))
-(define-key global-map (kbd "C-c C-v") 'my/open-by-vscode)
+
+(define-key global-map (kbd "C-c C-v") 'open-by-vscode)
 
 ;; https://takaxp.github.io/utility.html
-(defun my/print-build-info ()
+(defun my-print-build-info ()
   (interactive)
   (switch-to-buffer (get-buffer-create "*Build info*"))
   (let ((buffer-read-only nil))
@@ -329,64 +370,17 @@
     )
   (view-mode))
 
-;; Generate a cheat sheet of key bindings for the current major and minor modes.
-(defun my/describe-bindings-cheatsheet ()
-  "Generate a cheat sheet of key bindings for the current major and minor modes."
+;;
+(defun add-org-task-to-reminder ()
   (interactive)
-  (let ((buffer (get-buffer-create "*Keybindings Cheat Sheet*")))
-    (with-current-buffer buffer
-      (erase-buffer)
-      (insert (format "Keybindings Cheat Sheet for %s\n\n" major-mode))
-
-      ;; Global keybindings
-      (insert "Global keybindings:\n")
-      (insert (substitute-command-keys "\\{global-map}\n\n"))
-
-      ;; Major mode keybindings
-      (insert (format "Keybindings for %s:\n" major-mode))
-      (let ((major-mode-map (current-local-map)))
-        (if major-mode-map
-            (insert (substitute-command-keys (format "\\{%s}\n" (symbol-name major-mode))))
-          (insert "No local keybindings for this mode.\n\n")))
-
-      ;; Minor mode keybindings
-      (insert "Minor mode keybindings:\n")
-      (dolist (mode minor-mode-list)
-        (when (and (boundp mode) (symbol-value mode))
-          (let ((mode-name (symbol-name mode)))
-            (insert (format "Keybindings for minor mode: %s:\n" mode-name))
-            (let ((mode-map (or (cdr (assq mode minor-mode-map-alist))
-                                (when (boundp mode) (symbol-value mode)))))
-              (if mode-map
-                  (insert (substitute-command-keys (format "\\{%s}\n" mode-map)))
-                (insert "No keybindings for this mode.\n"))))))
-      (goto-char (point-min)))
-    (pop-to-buffer buffer)))
-
-
-;; Ignore specific windows during switching.
-(defun my/ignore-window ()
-  "Ignore specific windows during switching."
-  (let ((excluded-buffers '("*Help*" "*Calendar*")))
-    (when (member (buffer-name) excluded-buffers)
-      (setq this-command 'ignore))))
-
-(add-hook 'window-configuration-change-hook 'my/ignore-window)
-
-;; Save window configuration
-(global-set-key (kbd "C-c s")
-  (lambda ()
-    (interactive)
-    (message "Save window configuration")
-    (setq my-window-config (current-window-configuration))))
-
-;; Restore window configuration
-(global-set-key (kbd "C-c i")
-                (lambda ()
-                  (interactive)
-                  (message "Restore window configuration")
-                  (set-window-configuration my-window-config)))
+  (when (eq major-mode 'org-mode)
+    (setq reminder-list-name "リマインダー")
+    (setq element (org-element-at-point))              ;; カーソル位置のタスク(エレメント)を取得する
+    (setq title (org-element-property :title element)) ;; そのタスク(エレメント)から名前を取得する
+    (setq command (format "reminders add %s %s" reminder-list-name title))
+    (shell-command-to-string command)))
 
 
 (provide 'tjy)
+
 ;;; tjy.el ends here
