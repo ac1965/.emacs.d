@@ -14,7 +14,7 @@
 (leaf *personal-configuration
   :config
   (setq user-full-name "YAMASHITA Takao"
-        user-mail-address "tjy1965@gmail.com")
+        user-mail-address "ac1965@ty07.net")
 
   (setq conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
