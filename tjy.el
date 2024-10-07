@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/10/07 20:13:56 $
+;; $Lastupdate: 2024/10/07 20:28:50 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -263,15 +263,6 @@
     (require 'org-roam-protocol)
     )
 
-  ;; org-roam-ui
-  (leaf org-roam-ui
-    :vc (:url "htts://github.com/org-roam/org-roam-ui")
-    :after org-roam
-    :config
-    (setq org-roam-ui-sync-theme t
-          org-roam-ui-follow t
-          org-roam-ui-update-on-save t
-          org-roam-ui-open-on-start t))
 
   ;; (leaf org-modern
   ;;   :ensure t
