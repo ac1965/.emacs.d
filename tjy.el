@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
-;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/10/12  7:23:33 $
+;; Author: YAMASHITA Takao <ac1965@ty07.net>
+;; $Lastupdate: 2024/10/12  8:34:40 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -36,7 +36,6 @@
 
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'font-setup-frame))
-
   (when window-system
     (font-setup)))
 
@@ -260,7 +259,6 @@
           " frameborder=\"0\""
           " allowfullscreen>%s</iframe>"))
 
-;;
 (org-add-link-type
  "yt"
  (lambda (handle)
