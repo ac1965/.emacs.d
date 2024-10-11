@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/10/12  6:48:59 $
+;; $Lastupdate: 2024/10/12  7:23:33 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -11,19 +11,21 @@
 
 ;;; Code:
 
+;; Personal Information and General Configuratio
 (leaf *personal-configuration
   :config
   (setq user-full-name "YAMASHITA Takao"
-        user-mail-address "ac1965@ty07.net")
-
-  (setq conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
+        user-mail-address "ac1965@ty07.net"
+        conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
         conf:font-size 16
         inhibit-compacting-font-caches t)
 
+  ;; Define directories
   (defconst my-cloud-directory "~/Documents/")
   (defconst my-blog-directory (concat my-cloud-directory "devel/repos/mysite/"))
   (defconst my-capture-blog-file (expand-file-name "all-posts.org" my-blog-directory))
 
+  ;; Add custom elisp directories to load-path
   (defconst my-elisp-directory "~/.elisp")
   (dolist (dir (let ((dir (expand-file-name my-elisp-directory)))
                  (list dir (format "%s%d" dir emacs-major-version))))
@@ -36,24 +38,9 @@
       (add-hook 'after-make-frame-functions #'font-setup-frame))
 
   (when window-system
-    (progn
-      (font-setup))))
+    (font-setup)))
 
-;; $Lastupdate: yyyy/mm/dd hh:mm:ss $
-(leaf *lastupdate
-  :preface (defun my:save-buffer-wrapper ()
-             (interactive)
-             (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %k:%M:%S") " $")))
-               (save-excursion
-                 (goto-char (point-min))
-                 (while (re-search-forward
-                         "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
-                   (replace-match tostr nil t)))))
-  :config
-  (if (not (memq 'my:save-buffer-wrapper before-save-hook))
-      (setq before-save-hook
-            (cons 'my:save-buffer-wrapper before-save-hook))))
-
+;; Configure MEW Email Client
 (leaf mew
   :require nil t
   :config
@@ -72,7 +59,7 @@
         'mew-send-hook)))
 
 
-;; org-mode
+;; Org-mode Setup
 (leaf Org-mode
   :config
   (leaf org
@@ -94,9 +81,9 @@
 	        (message "%s" file))
 	    (find-file (concat org-directory "/" file))))
     :bind
-    (("\C-ca" . org-agenda)
-     ("\C-cc" . org-capture)
-     ("\C-ch" . org-store-link)
+    (("C-c a" . org-agenda)
+     ("C-c c" . org-capture)
+     ("C-c h" . org-store-link)
      ("C-M--" . #'(lambda () (interactive)
 		            (show-org-buffer "gtd.org")))
      ("C-M-^" . #'(lambda () (interactive)
@@ -251,36 +238,9 @@
     (org-roam-db-autosync-mode)
     ;; If using org-roam-protocol
     (require 'org-roam-protocol))
-
-  ;; (leaf org-modern
-  ;;   :ensure t
-  ;;   :after org
-  ;;   :init
-  ;;   (setq org-auto-align-tags nil
-  ;;         org-tags-column 0
-  ;;         org-fold-catch-invisible-edits 'show-and-error
-  ;;         org-special-ctrl-a/e t
-  ;;         org-insert-heading-respect-content t
-
-  ;;         ;; Org styling, hide markup etc.
-  ;;         org-hide-emphasis-markers t
-  ;;         org-pretty-entities t
-  ;;         org-ellipsis "…"
-
-  ;;         ;; Agenda styling
-  ;;         org-agenda-tags-column 0
-  ;;         org-agenda-block-separator ?─
-  ;;         org-agenda-time-grid
-  ;;         '((daily today require-timed)
-  ;;           (800 1000 1200 1400 1600 1800 2000)
-  ;;           " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
-  ;;         org-agenda-current-time-string
-  ;;         "⭠ now ─────────────────────────────────────────────────")
-  ;;   :config
-  ;;   (global-org-modern-mode +1))
   )
 
-;;
+;; Setup ChatGPT, CodeGPT, and DALL-E
 (leaf *chatgpt
   :config
   (leaf openai :vc (:url "https://github.com/emacs-openai/openai"))
@@ -291,6 +251,7 @@
   (if (file-exists-p (expand-file-name ".env.el" my:d))
       (load (expand-file-name ".env.el" my:d))))
 
+;; Miscellaneous Functions
 (defvar my/yt-iframe-format
   ;; You may want to change your width and height.
   (concat "<iframe width=\"440\""
