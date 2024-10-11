@@ -1,7 +1,7 @@
 ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
 ;;
 ;; Author: YAMASHITA Takao <tjy1965@gmail.com>
-;; $Lastupdate: 2024/10/07 20:28:50 $
+;; $Lastupdate: 2024/10/12  6:48:59 $
 ;;
 ;; This file is not part of GNU Emacs.
 
@@ -102,8 +102,7 @@
      ("C-M-^" . #'(lambda () (interactive)
 		            (show-org-buffer "notes.org")))
      ("C-M-~" . #'(lambda () (interactive)
-    		        (show-org-buffer "kb.org")))
-     )
+    		        (show-org-buffer "kb.org"))))
     :config
     (setq  org-agenda-files (list org-directory)
 	       org-default-notes-file "notes.org"
@@ -126,8 +125,7 @@
 	         "* %?\nEntered on %U\n %i\n %a")
             ;; ("j" "Journal" entry (function org-journal-find-location)
 	        ;;  "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-	        ))
-    )
+	        )))
 
   ;; org-babel
   (leaf ob
@@ -142,8 +140,7 @@
        (R . t)
        (ditaa . t)
        (plantuml . t)
-       ))
-    )
+       )))
 
   ;; org-superstar
   (leaf org-superstar
@@ -152,8 +149,7 @@
     :custom
     (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷" "" ""))
     :hook
-    (org-mode-hook (lambda () (org-superstar-mode 1)))
-    )
+    (org-mode-hook (lambda () (org-superstar-mode 1))))
 
   ;; org-journal
   (leaf org-journal
@@ -168,31 +164,26 @@
       (org-journal-new-entry t)
       ;; Position point on the journal's top-level heading so that org-capture
       ;; will add the new entry as a child entry.
-      (goto-char (point-min))
-      )
-    )
+      (goto-char (point-min))))
 
   ;; org-cliplink
   (leaf org-cliplink
     :after org
     :ensure t
     :bind
-    ("C-x p i" . org-cliplink)
-    )
+    ("C-x p i" . org-cliplink))
 
   ;; org-download
   (leaf org-download
     :after org
     :ensure t
     :config
-    (setq-default org-download-image-dir (concat org-directory "/pictures"))
-    )
+    (setq-default org-download-image-dir (concat org-directory "/pictures")))
 
   ;; org-web-tools
   (leaf org-web-tools
     :after org
-    :ensure t
-    )
+    :ensure t)
 
   ;; toc-org
   (leaf toc-org
@@ -203,8 +194,7 @@
     (add-hook 'org-mode-hook 'toc-org-enable)
     ;; enable in markdown, too
     (add-hook 'markdown-mode-hook 'toc-org-mode)
-    (define-key markdown-mode-map (kbd "\C-c\C-o") 'toc-org-markdown-follow-thing-at-point)
-    )
+    (define-key markdown-mode-map (kbd "\C-c\C-o") 'toc-org-markdown-follow-thing-at-point))
 
   ;; tomelr
   (leaf tomelr
@@ -260,9 +250,7 @@
     (setq org-roam-node-display-template (concat "${title:*} " (propertize "${tags:10}" 'face 'org-tag)))
     (org-roam-db-autosync-mode)
     ;; If using org-roam-protocol
-    (require 'org-roam-protocol)
-    )
-
+    (require 'org-roam-protocol))
 
   ;; (leaf org-modern
   ;;   :ensure t
@@ -292,16 +280,6 @@
   ;;   (global-org-modern-mode +1))
   )
 
-
-(defvar yt-iframe-format
-  ;; You may want to change your width and height.
-  (concat "<iframe width=\"440\""
-          " height=\"335\""
-          " src=\"https://www.youtube.com/embed/%s\""
-          " frameborder=\"0\""
-          " allowfullscreen>%s</iframe>"))
-
-
 ;;
 (leaf *chatgpt
   :config
@@ -313,6 +291,14 @@
   (if (file-exists-p (expand-file-name ".env.el" my:d))
       (load (expand-file-name ".env.el" my:d))))
 
+(defvar my/yt-iframe-format
+  ;; You may want to change your width and height.
+  (concat "<iframe width=\"440\""
+          " height=\"335\""
+          " src=\"https://www.youtube.com/embed/%s\""
+          " frameborder=\"0\""
+          " allowfullscreen>%s</iframe>"))
+
 ;;
 (org-add-link-type
  "yt"
@@ -322,13 +308,13 @@
             handle)))
  (lambda (path desc backend)
    (cl-case backend
-     (html (format yt-iframe-format
+     (html (format my/yt-iframe-format
                    path (or desc "")))
      (latex (format "\href{%s}{%s}"
                     path (or desc "video"))))))
 
 ;;
-(defun open-by-vscode ()
+(defun my/open-by-vscode ()
   (interactive)
   (shell-command
    (format "code -r -g %s:%d:%d"
@@ -336,10 +322,10 @@
            (line-number-at-pos)
            (current-column))))
 
-(define-key global-map (kbd "C-c C-v") 'open-by-vscode)
+(define-key global-map (kbd "C-c C-v") 'my/open-by-vscode)
 
 ;; https://takaxp.github.io/utility.html
-(defun my-print-build-info ()
+(defun my/print-build-info ()
   (interactive)
   (switch-to-buffer (get-buffer-create "*Build info*"))
   (let ((buffer-read-only nil))
@@ -362,16 +348,15 @@
   (view-mode))
 
 ;;
-(defun add-org-task-to-reminder ()
+(defun my/add-org-task-to-reminder ()
   (interactive)
   (when (eq major-mode 'org-mode)
     (setq reminder-list-name "リマインダー")
-    (setq element (org-element-at-point))              ;; カーソル位置のタスク(エレメント)を取得する
-    (setq title (org-element-property :title element)) ;; そのタスク(エレメント)から名前を取得する
+    (setq element (org-element-at-point))
+    (setq title (org-element-property :title element))
     (setq command (format "reminders add %s %s" reminder-list-name title))
     (shell-command-to-string command)))
 
 
 (provide 'tjy)
-
 ;;; tjy.el ends here
