@@ -12,6 +12,13 @@
   #+end_src
 * Configuration
 ** Eary-init.el
+Key highlights:
+- **Garbage Collection Tuning**: You've set up a high initial threshold for garbage collection to avoid frequent pauses during startup, with a reset mechanism after initialization.
+- **Native Compilation**: Your configuration ensures proper handling of native compilation caches and suppresses warnings.
+- **File Handling**: Temporarily disabling `file-name-handler-alist` during startup improves loading speed.
+- **GUI and Startup Settings**: You’ve configured a minimalist and efficient GUI setup, particularly with elements like frame resizing, menu bar handling, and fullscreen mode.
+
+
    #+begin_src emacs-lisp :tangle no
      ;; early-init.el --- Early Init File for >= Emacs 27.
 
@@ -119,6 +126,16 @@
      ;;; early-init.el ends here
    #+end_src
 ** init.el
+### Highlights:
+- **Startup Optimization**:
+   - By setting `gc-cons-threshold` to a high value, it minimizes the impact of garbage collection during startup.
+   - You’re ensuring that Emacs always prefers newer byte-compiled files by setting `load-prefer-newer` to `t`.
+
+- **Org-mode-based Configuration**:
+   - Using `org-babel-load-file` to load the main configuration from an `org-mode` file is an efficient and well-documented approach. This makes your configuration cleaner and easier to maintain.
+
+- **Error Handling**: You’ve disabled `debug-on-error`, which can be useful for non-development environments, but may be worth re-enabling if you are debugging your config.
+
    #+begin_src emacs-lisp :tangle no
      ;;; -- Emacs.d -*- lexical-binding: t; -*-
 
@@ -174,6 +191,364 @@
      (provide 'init)
      ;;; init.el ends here
    #+end_src
+** Personal Configuration aka. tjy.el
+Here's a summary of what it does:
+
+### 1. **Personal Information & General Config**
+   - Sets your full name, email, preferred font (`HackGen35`), and font size.
+   - Defines important directories such as cloud storage and blog paths.
+   - Adds custom elisp directories to `load-path`.
+   - Sets up font configurations for Emacs when running as a daemon or in window mode.
+
+### 2. **MEW Email Client**
+   - Configures MEW as the email client within Emacs, with support for sending and composing emails.
+
+### 3. **Org-mode Setup**
+   - Configures Org-mode with custom keybindings for agenda (`C-c a`), capture (`C-c c`), and showing specific org files (`gtd.org`, `notes.org`, `kb.org`).
+   - Integrates various org-mode extensions such as:
+     - `org-superstar` for pretty bullets.
+     - `org-journal` for daily entries.
+     - `org-cliplink` for capturing web links into org files.
+     - `org-download` for adding images.
+     - `org-web-tools` for capturing web content.
+     - `toc-org` for generating tables of contents in org and markdown files.
+   - Enables `ox-hugo` for Hugo static site generation and sets up capture templates for blog posts.
+
+### 4. **Org-roam Setup**
+   - Sets up Org-roam for personal knowledge management and daily notes.
+   - Configures keybindings for Org-roam-related tasks like inserting and capturing nodes.
+
+### 5. **ChatGPT, CodeGPT, DALL-E Integration**
+   - Prepares Emacs for ChatGPT, CodeGPT, and DALL-E integration using the `openai` packages.
+
+### 6. **Miscellaneous Functions**
+   - Adds a function to generate and insert a YouTube iframe link in org files.
+   - Integrates Visual Studio Code for opening files in VSCode (`C-c C-v`).
+   - Provides a function to display Emacs build information.
+   - Adds a function to convert an Org-mode task to a reminder (using macOS Reminders).
+
+   #+begin_src emacs-lisp :tangle no
+     ;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
+     ;;
+     ;; Author: YAMASHITA Takao <ac1965@ty07.net>
+     ;;
+     ;; This file is not part of GNU Emacs.
+
+     ;;; Commentary:
+
+     ;;; License: GPLv3
+
+     ;;; Code:
+
+     ;; Personal Information and General Configuratio
+     (leaf *personal-configuration
+       :config
+       (setq user-full-name "YAMASHITA Takao"
+             user-mail-address "ac1965@ty07.net"
+             conf:font-name "HackGen35" ; FiraCode Nerd Font Mono
+             conf:font-size 16
+             inhibit-compacting-font-caches t)
+
+       ;; Define directories
+       (defconst my-cloud-directory "~/Documents/")
+       (defconst my-blog-directory (concat my-cloud-directory "devel/repos/mysite/"))
+       (defconst my-capture-blog-file (expand-file-name "all-posts.org" my-blog-directory))
+
+       ;; Add custom elisp directories to load-path
+       (defconst my-elisp-directory "~/.elisp")
+       (dolist (dir (let ((dir (expand-file-name my-elisp-directory)))
+                      (list dir (format "%s%d" dir emacs-major-version))))
+         (when (and (stringp dir) (file-directory-p dir))
+           (let ((default-directory dir))
+             (add-to-list 'load-path default-directory)
+             (normal-top-level-add-subdirs-to-load-path))))
+
+       (if (daemonp)
+           (add-hook 'after-make-frame-functions #'font-setup-frame))
+       (when window-system
+         (font-setup)))
+
+     ;; Configure MEW Email Client
+     (leaf mew
+       :require nil t
+       :config
+       (autoload 'mew "mew" nil t)
+       (autoload 'mew-send "mew" nil t)
+       (setq read-mail-command 'mew)
+       (autoload 'mew-user-agent-compose "mew" nil t)
+       (if (boundp 'mail-user-agent)
+           (setq mail-user-agent 'mew-user-agent))
+       (if (fboundp 'define-mail-user-agent)
+           (define-mail-user-agent
+             'mew-user-agent
+             'mew-user-agent-compose
+             'mew-draft-send-message
+             'mew-draft-kill
+             'mew-send-hook)))
+
+
+     ;; Org-mode Setup
+     (leaf Org-mode
+       :config
+       (leaf org
+         :leaf-defer t
+         :init
+         (setq org-directory (expand-file-name "Org/" my-cloud-directory))
+         (unless (file-exists-p org-directory)
+           (make-directory org-directory))
+         (defun org-buffer-files ()
+           "Return list of opened Org mode buffer files."
+           (mapcar (function buffer-file-name)
+     	          (org-buffer-list 'files)))
+         (defun show-org-buffer (file)
+           "Show an org-file FILE on the current buffer."
+           (interactive)
+           (if (get-buffer file)
+     	      (let ((buffer (get-buffer file)))
+     	        (switch-to-buffer buffer)
+     	        (message "%s" file))
+     	    (find-file (concat org-directory "/" file))))
+         :bind
+         (("C-c a" . org-agenda)
+          ("C-c c" . org-capture)
+          ("C-c h" . org-store-link)
+          ("C-M--" . #'(lambda () (interactive)
+     		            (show-org-buffer "gtd.org")))
+          ("C-M-^" . #'(lambda () (interactive)
+     		            (show-org-buffer "notes.org")))
+          ("C-M-~" . #'(lambda () (interactive)
+         		        (show-org-buffer "kb.org"))))
+         :config
+         (setq  org-agenda-files (list org-directory)
+     	       org-default-notes-file "notes.org"
+     	       org-log-done 'time
+     	       org-startup-truncated nil
+     	       org-startup-folded 'content
+     	       org-use-speed-commands t
+     	       org-enforce-todo-dependencies t)
+         (remove (concat org-directory "/archives") org-agenda-files)
+         (setq org-todo-keywords
+     	      '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
+         (setq org-refile-targets
+     	      (quote ((nil :maxlevel . 3)
+     		          (org-buffer-files :maxlevel . 1)
+     		          (org-agenda-files :maxlevel . 3))))
+         (setq org-capture-templates
+     	      '(("t" "Todo" entry (file+headline "gtd.org" "Inbox")
+     	         "* TODO %?\n %i\n %a")
+                 ("n" "Note" entry (file+headline "notes.org" "Notes")
+     	         "* %?\nEntered on %U\n %i\n %a")
+                 ;; ("j" "Journal" entry (function org-journal-find-location)
+     	        ;;  "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+     	        )))
+
+       ;; org-babel
+       (leaf ob
+         :after org
+         :defun org-babel-do-load-languages
+         :config
+         (org-babel-do-load-languages
+          'org-babel-load-languages
+          '((emacs-lisp . t)
+            (shell . t)
+            (python . t)
+            (R . t)
+            (ditaa . t)
+            (plantuml . t)
+            )))
+
+       ;; org-superstar
+       (leaf org-superstar
+         :after org
+         :ensure t
+         :custom
+         (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷" "" ""))
+         :hook
+         (org-mode-hook (lambda () (org-superstar-mode 1))))
+
+       ;; org-journal
+       (leaf org-journal
+         :after org
+         :ensure t
+         :config
+         (setq org-journal-dir (concat org-directory "/journal")
+     	      org-journal-enable-agenda-integration t)
+         (defun org-journal-find-location ()
+           ;; Open today's journal, but specify a non-nil prefix argument in order to
+           ;; inhibit inserting the heading; org-capture will insert the heading.
+           (org-journal-new-entry t)
+           ;; Position point on the journal's top-level heading so that org-capture
+           ;; will add the new entry as a child entry.
+           (goto-char (point-min))))
+
+       ;; org-cliplink
+       (leaf org-cliplink
+         :after org
+         :ensure t
+         :bind
+         ("C-x p i" . org-cliplink))
+
+       ;; org-download
+       (leaf org-download
+         :after org
+         :ensure t
+         :config
+         (setq-default org-download-image-dir (concat org-directory "/pictures")))
+
+       ;; org-web-tools
+       (leaf org-web-tools
+         :after org
+         :ensure t)
+
+       ;; toc-org
+       (leaf toc-org
+         :after org markdown-mode
+         :ensure t
+         ;;:commands toc-org-enable
+         :config
+         (add-hook 'org-mode-hook 'toc-org-enable)
+         ;; enable in markdown, too
+         (add-hook 'markdown-mode-hook 'toc-org-mode)
+         (define-key markdown-mode-map (kbd "\C-c\C-o") 'toc-org-markdown-follow-thing-at-point))
+
+       ;; tomelr
+       (leaf tomelr
+         :ensure t)
+
+       ;; ox-hugo
+       (leaf ox-hugo
+         :ensure t
+         :require t
+         :after ox
+         :custom ((org-hugo-front-matter-format . "toml")))
+
+       ;; ox-hugo-capture
+       (leaf *ox-hugo--capture
+         :require org-capture
+         :defvar (org-capture-templates)
+         :config
+         (add-to-list 'org-capture-templates
+                      '("b" "Create new blog post" entry
+                        (file+headline my-capture-blog-file "blog")
+                        "** TODO %?
+     :PROPERTIES:
+     :EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
+     (format-time-string \"%Y\")
+     (let ((sha1 (sha1 (shell-command-to-string \"head -c 1024 /dev/urandom\"))))
+     (cl-loop for (a b c d) on (cdr (split-string sha1 \"\")) by #'cddddr repeat 2 collect (concat a b c d))))
+     :EXPORT_DATE:
+     :EXPORT_HUGO_TAGS:
+     :EXPORT_HUGO_CATEGORIES:
+     :EXPORT_HUGO_LASTMOD:
+     :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
+     :END:
+     \n
+     ")))
+
+       ;; org-roam
+       (leaf org-roam
+         :ensure t
+         :after org
+         :bind
+         ("C-c n l" . org-roam-buffer-toggle)
+         ("C-c n f" . org-roam-node-find)
+         ("C-c n g" . org-roam-graph)
+         ("C-c n i" . org-roam-node-insert)
+         ("C-c n c" . org-roam-capture)
+         ;; Dailies
+         ("C-c n j" . org-roam-dailies-capture-today)
+         :config
+         (setq org-roam-directory (concat org-directory "/org-roam"))
+         (unless (file-exists-p org-directory)
+           (make-directory org-roam-directory))
+         ;; If you're using a vertical completion framework, you might want a more informative completion interface
+         (setq org-roam-node-display-template (concat "${title:*} " (propertize "${tags:10}" 'face 'org-tag)))
+         (org-roam-db-autosync-mode)
+         ;; If using org-roam-protocol
+         (require 'org-roam-protocol))
+       )
+
+     ;; Setup ChatGPT, CodeGPT, and DALL-E
+     (leaf *chatgpt
+       :config
+       (leaf openai :vc (:url "https://github.com/emacs-openai/openai"))
+       (leaf chatgpi :vc (:url "https://github.com/emacs-openai/chatgpt"))
+       (leaf codegpt :vc (:url "https://github.com/emacs-openai/codegpt"))
+       (leaf dall-e :vc (:url "https://github.com/emacs-openai/dall-e"))
+       :init
+       (if (file-exists-p (expand-file-name ".env.el" my:d))
+           (load (expand-file-name ".env.el" my:d))))
+
+     ;; Miscellaneous Functions
+     (defvar my/yt-iframe-format
+       ;; You may want to change your width and height.
+       (concat "<iframe width=\"440\""
+               " height=\"335\""
+               " src=\"https://www.youtube.com/embed/%s\""
+               " frameborder=\"0\""
+               " allowfullscreen>%s</iframe>"))
+
+     (org-add-link-type
+      "yt"
+      (lambda (handle)
+        (browse-url
+         (concat "https://www.youtube.com/embed/"
+                 handle)))
+      (lambda (path desc backend)
+        (cl-case backend
+          (html (format my/yt-iframe-format
+                        path (or desc "")))
+          (latex (format "\href{%s}{%s}"
+                         path (or desc "video"))))))
+
+     ;;
+     (defun my/open-by-vscode ()
+       (interactive)
+       (shell-command
+        (format "code -r -g %s:%d:%d"
+                (buffer-file-name)
+                (line-number-at-pos)
+                (current-column))))
+
+     (define-key global-map (kbd "C-c C-v") 'my/open-by-vscode)
+
+     ;; https://takaxp.github.io/utility.html
+     (defun my/print-build-info ()
+       (interactive)
+       (switch-to-buffer (get-buffer-create "*Build info*"))
+       (let ((buffer-read-only nil))
+         (erase-buffer)
+         (insert
+          (format "GNU Emacs %s\nCommit:\t\t%s\nBranch:\t\t%s\nSystem:\t\t%s\nDate:\t\t\t%s\n"
+                  emacs-version
+                  (emacs-repository-get-version)
+                  (when (version< "27.0" emacs-version)
+                    (emacs-repository-get-branch))
+                  system-configuration
+                  (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
+         (insert (format "Patch:\t\t%s ns-inline.patch\n"
+                         (if (boundp 'mac-ime--cursor-type) "with" "without")))
+         (insert
+          (format "Features:\t%s\n" system-configuration-features))
+         ;; (insert
+         ;;  (format "Options:\t%s\n"  system-configuration-options))
+         )
+       (view-mode))
+
+     ;;
+     (defun my/add-org-task-to-reminder ()
+       (interactive)
+       (when (eq major-mode 'org-mode)
+         (setq reminder-list-name "リマインダー")
+         (setq element (org-element-at-point))
+         (setq title (org-element-property :title element))
+         (setq command (format "reminders add %s %s" reminder-list-name title))
+         (shell-command-to-string command)))
+
+
+     (provide 'tjy)
+     ;;; tjy.el ends here
+   #+end_src
 ** Emacs Configuration
 *** Header
    #+begin_src emacs-lisp
@@ -183,7 +558,7 @@
 
      ;; Author: YAMASHITA Takao <ac1965@ty07.com>
      ;; Keywords: emacs.d
-     ;; $Lastupdate: 2024/10/12  6:35:27 $
+     ;; $Lastupdate: 2024/10/12  9:06:09 $
 
      ;; This file is not part of GNU Emacs.
 
