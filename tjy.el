@@ -305,6 +305,76 @@
     )
   (view-mode))
 
+;; Generate a table of keybindings sorted by key sequence and command name.
+(defun my/generate-keybinding-table ()
+  "Generate a table of keybindings sorted by key sequence and command name."
+  (interactive)
+  (let ((bindings '()))
+    ;; Iterate through all keymaps and collect keybindings
+    (mapatoms
+     (lambda (sym)
+       (when (commandp sym)
+         (let ((keys (where-is-internal sym)))
+           (dolist (key keys)
+             (push (list (key-description key) (symbol-name sym)) bindings))))))
+    ;; Sort by key sequence and then by command name
+    (setq bindings
+          (sort bindings
+                (lambda (a b)
+                  (or (string< (car a) (car b))
+                      (and (string= (car a) (car b))
+                           (string< (cadr a) (cadr b)))))))
+    ;; Create the table in tabulated-list-mode
+    (with-current-buffer (get-buffer-create "*Keybindings Table*")
+      (tabulated-list-mode)
+      (setq tabulated-list-format [("Key" 20 t) ("Command" 40 t)])
+      (setq tabulated-list-entries
+            (mapcar (lambda (x)
+                      (list (car x) (vector (car x) (cadr x))))
+                    bindings))
+      (tabulated-list-init-header)
+      (tabulated-list-print)
+      (pop-to-buffer (current-buffer)))))
+
+(define-key global-map (kbd "C-c C-k") 'my/generate-keybinding-table)
+
+;; Convert KEYMAP to an Org-mode table.
+(defun my/keymap-to-org-table (keymap)
+  "Convert KEYMAP to an Org-mode table."
+  (let ((bindings '())
+        (output ""))
+    ;; Collect key bindings and commands
+    (map-keymap
+     (lambda (key binding)
+       (when (and (vectorp key) (commandp binding))
+         (let ((key-desc (key-description key))
+               (command (symbol-name binding)))
+           (push (list key-desc command) bindings))))
+     keymap)
+    ;; Sort by key order
+    (setq bindings (sort bindings (lambda (a b) (string< (car a) (car b)))))
+    ;; Create Org-mode table header
+    (setq output "| Key | Command |\n|-\n")
+    ;; Populate table rows
+    (dolist (binding bindings)
+      (setq output (concat output "| " (car binding) " | " (cadr binding) " |\n")))
+    ;; Return the Org table
+    output))
+
+;; Print the Org table for the given KEYMAP.
+(defun my/print-keymap-org-table (keymap)
+  "Print the Org table for the given KEYMAP."
+  (interactive "aKeymap: ")
+  (let ((org-table (my/keymap-to-org-table keymap)))
+    (with-current-buffer (get-buffer-create "*Keymap Org Table*")
+      (erase-buffer)
+      (insert org-table)
+      (org-mode)
+      (pop-to-buffer (current-buffer)))))
+
+;; Output the global keymap in Org-mode table format
+;; (my/print-keymap-org-table (current-global-map))
+
 ;;
 (defun my/add-org-task-to-reminder ()
   (interactive)
