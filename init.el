@@ -40,25 +40,8 @@
 
 ;;; Code:
 
-;; ref:https://ayatakesi.github.io
-
 ;; (require 'profiler)
 ;; (profiler-start 'cpu)
-
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (message "Emacs ready in %s with %d garbage collections."
-                     (format "%.2f seconds"
-                             (float-time
-                              (time-subtract after-init-time before-init-time)))
-                     gcs-done)))
-
-(setq debug-on-error nil)
-(setq gc-cons-threshold most-positive-fixnum)
-
-(setq byte-compile-warnings '(not cl-functions obsolete))
-(when (boundp 'load-prefer-newer)
-  (setq load-prefer-newer t))
 
 (setq startup-file (expand-file-name "README.org" my:d))
 (when (file-exists-p startup-file)

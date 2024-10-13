@@ -19,14 +19,17 @@
 
 ;;; Code:
 
-;; Define GC
-
-(setq debug-on-error nil)
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (message "Emacs ready in %s with %d garbage collections."
+                     (format "%.2f seconds"
+                             (float-time
+                              (time-subtract after-init-time before-init-time)))
+                     gcs-done)))
 
 (setenv "LIBRARY_PATH" "/usr/local/opt/gcc/lib/gcc/14:/usr/local/opt/libgccjit/lib/gcc/14:/usr/local/opt/gcc/lib/gcc/14/gcc/x86_64-apple-darwin23/14")
 
-(setq package-enable-at-startup nil)
-(setq inhibit-default-init nil)
+(defvar default-file-name-handler-alist file-name-handler-alist)
 
 (defconst my:d
   (file-name-directory
@@ -37,6 +40,17 @@
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
 
+(setq debug-on-error nil
+      package-enable-at-startup nil
+      inhibit-default-init nil
+      byte-compile-warnings '(not cl-functions obsolete)
+      file-name-handler-alist nil
+      gc-cons-threshold most-positive-fixnum
+      gc-cons-percentage 1)
+
+(when (boundp 'load-prefer-newer)
+  (setq load-prefer-newer t))
+
 (when (featurep 'native-compile)
   (setq native-comp-async-report-warnings-errors nil))
 
@@ -46,16 +60,6 @@
   (startup-redirect-eln-cache
    (convert-standard-filename
     (expand-file-name  "eln-cache/" my:d:cache))))
-
-(setq byte-compile-warnings '(not cl-functions obsolete))
-(when (boundp 'load-prefer-newer)
-  (setq load-prefer-newer t))
-
-(defvar default-file-name-handler-alist file-name-handler-alist)
-(setq file-name-handler-alist nil)
-
-(setq gc-cons-threshold most-positive-fixnum
-      gc-cons-percentage 1)
 
 (defun +gc-after-focus-change ()
   "Run GC when frame loses focus."
@@ -93,6 +97,7 @@
       inhibit-x-resources t
       inhibit-startup-echo-area-message user-login-name ; read the docstring
       inhibit-startup-buffer-menu t)
+
 (menu-bar-mode 1)
 (unless (and (display-graphic-p) (eq system-type 'darwin))
   (push '(menu-bar-lines . 1) default-frame-alist)
