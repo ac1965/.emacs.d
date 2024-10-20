@@ -99,7 +99,6 @@
  '(scroll-bar-mode nil)
  '(tool-bar-mode nil)
  '(initial-buffer-choice t)
- '(initial-major-mode 'fundamental-mode)
  '(frame-inhibit-implied-resize t)
  '(frame-title-format '("%b"))
  '(frame-resize-pixelwise t)
