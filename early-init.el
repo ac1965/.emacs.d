@@ -70,22 +70,16 @@
    (convert-standard-filename
     (expand-file-name  "eln-cache/" my:d:cache))))
 
-(setq debug-on-error nil
-      package-enable-at-startup nil
-      byte-compile-warnings '(not cl-functions obsolete)
-      file-name-handler-alist nil
-      init-file-debug nil
-      enable-recursive-minibuffers t
-      ring-bell-function 'ignore
-      global-prettify-symbols-mode t
-      text-quoting-style 'straight
-      use-short-answers)
-
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
+ '(debug-on-error nil)
+ '(package-enable-at-startup nil)
+ '(byte-compile-warnings '(not cl-functions obsolete))
+ '(file-name-handler-alist nil)
+ '(init-file-debug nil)
  '(inhibit-startup-screen t)
  '(inhibit-startup-message t)
  '(inhibit-startup-echo-area-message t)
@@ -110,6 +104,11 @@
  '(x-underline-at-descent-line t)
  '(window-divider-default-right-width 16)
  '(window-divider-default-places 'right-only)
+ '(enable-recursive-minibuffers t)
+ '(ring-bell-function 'ignore)
+ '(global-prettify-symbols-mode t)
+ '(text-quoting-style 'straight)
+ '(use-short-answers t)
  '(create-lockfiles nil)
  '(tab-width 4)
  '(history-length 1000)
