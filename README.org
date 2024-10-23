@@ -1,4 +1,3 @@
-
 # -*- mode: org; coding: utf-8-unix; indent-tabs-mode: nil -*-
 #+title: ac1965's Emacs literate configuration =.emacs.d=
 #+startup: content
@@ -600,7 +599,7 @@ You are cloning a GitHub repository (https://github.com/ac1965/.emacs.d) into th
 
      ;; Author: YAMASHITA Takao <ac1965@ty07.com>
      ;; Keywords: emacs.d
-     ;; $Lastupdate: 2024/10/21 18:59:54 $
+     ;; $Lastupdate: 2024/10/23 20:08:45 $
 
      ;; This file is not part of GNU Emacs.
 
@@ -1175,6 +1174,8 @@ This setup emphasizes both productivity and tidiness, with tools for file manage
 
     (leaf savehist
       :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
+      :custom
+      (savehist-additional-variables . '(kill-ring consult-shell-command-history))
       :global-minor-mode t)
 
     ;; Display keybindings in a popup
@@ -1381,109 +1382,214 @@ This configuration optimizes completion for speed and accuracy, leveraging both 
 
 
 #+begin_src emacs-lisp
-    ;;; Completion Framework
-    (leaf completion-settings
+  ;;; Completion Framework
+  (leaf completion-settings
+    :config
+    (leaf corfu
+      :doc "COmpletion in Region FUnction"
+      :ensure t
+      :global-minor-mode global-corfu-mode corfu-popupinfo-mode
+      :custom ((corfu-auto . t)
+               (corfu-auto-delay . 0)
+               (corfu-auto-prefix . 1)
+               (corfu-popupinfo-delay . nil)) ; manual
+      :bind ((corfu-map
+              ("C-s" . corfu-insert-separator))))
+
+    (leaf vertico
+      :doc "VERTical Interactive COmpletion"
+      :ensure t
+      :global-minor-mode t
+      :hook (after-init-hook . vertico-mode))
+
+    (leaf vertico-posframe
+      :doc "Show Vertico in posframe"
+      :url "https://github.com/tumashu/vertico-posframe"
+      :global-minor-mode vertico-posframe-mode
+      :ensure t
+      :custom
+      (vertico-posframe-border-width . 5)
+      (vertico-posframe-parameters
+       .  '((left-fringe . 8)
+            (right-fringe . 8)))
+      :custom-face
+      (vertico-posframe-border . '((t (:background "#323445")))))
+
+    (leaf consult-ghq
+      :doc "Consult integration for ghq (with affe)"
+      :url "https://github.com/tomoya/consult-ghq"
+      :ensure t
+      :require t
       :config
-      (leaf corfu
-        :doc "COmpletion in Region FUnction"
-        :ensure t
-        :global-minor-mode global-corfu-mode corfu-popupinfo-mode
-        :custom ((corfu-auto . t)
-                 (corfu-auto-delay . 0)
-                 (corfu-auto-prefix . 1)
-                 (corfu-popupinfo-delay . nil)) ; manual
-        :bind ((corfu-map
-                ("C-s" . corfu-insert-separator))))
+      (setq consult-ghq-find-function #'projectile-find-file))
 
-      (leaf vertico
-        :doc "VERTical Interactive COmpletion"
-        :ensure t
-        :global-minor-mode t
-        :hook (after-init-hook . vertico-mode))
+    (leaf consult-make
+      :doc "Run make command in project root"
+      :after (consult projectile)
+      :require (consult projectile)
+      :custom
+      (consult-make-buffer-name . "*Consult Make*")
+      :preface
+      (defun consult-make--target-candidates ()
+        "Generate candidates for GNU make"
+        (split-string
+         (let ((default-directory (projectile-project-root)))
+           ;; Inspired by https://github.com/fish-shell/fish-shell/blob/master/share/completions/make.fish#L14-L18
+           (shell-command-to-string
+            (concat "make -pRrq 2>/dev/null |\
+                      awk -F: '/^# Files/,/^# Finished Make data base/ {
+                          if ($1 == \"# Not a target\") skip = 1;
+                          if ($1 !~ \"^[#.\t]\") { if (!skip) print $1; skip=0 }
+                      }'")))))
+      (defun consult-make-in-project-root ()
+        "Run make command in project root"
+        (interactive)
+        (let* ((default-directory (projectile-project-root))
+               (makefile (concat default-directory "Makefile")))
+          (if (file-readable-p makefile)
+              (let ((target (consult--read (consult-make--target-candidates) :prompt "Make Target: ")))
+                (async-shell-command (concat "make " target " && echo \"\ndone!\" || echo \"\nfailed...\"") consult-make-buffer-name))
+            (message (concat "Not found Makefile in " default-directory))))))
 
-      (leaf marginalia
-        :doc "Enrich existing commands with completion annotations"
-        :ensure t
-        :global-minor-mode t)
+    (leaf consult-shell-command
+      :doc "Select history using consult & run shell command"
+      :after (consult projectile)
+      :require (consult projectile)
+      :init
+      ;; Change shell from zsh to fish
+      (setq-default shell-file-name (executable-find "fish"))
+      :custom
+      (consult-shell-command-prompt       . "Command: ")
+      :preface
+      (defun consult-shell-command--history-candidates ()
+        "Return shell command history candidate."
+        (split-string (shell-command-to-string "history") "\n" t))
+      (defun consult-shell-command--execute (fn)
+        "Select shell command history or type new one using consult,
+       and then run it."
+        (interactive)
+        (let ((cmd (consult--read
+                    (consult-shell-command--history-candidates)
+                    :prompt consult-shell-command-prompt)))
+          (funcall fn cmd)))
+      (defun consult-shell-command ()
+        "Select shell command history or type new one using consult,
+       and then run it."
+        (interactive)
+        (consult-shell-command--execute #'shell-command))
+      (defun consult-async-shell-command ()
+        "Select shell command history or type new one using consult,
+       and then run it asynchronous."
+        (interactive)
+        (consult-shell-command--execute #'async-shell-command))
+      (defun consult-projectile-run-shell-command-in-root ()
+        "Select shell command history or type new one using consult,
+       and then run it in the project root."
+        (interactive)
+        (consult-shell-command--execute #'projectile-run-shell-command-in-root))
+      (defun consult-projectile-run-async-shell-command-in-root ()
+        "Select shell command history or type new one using consult,
+       and then run it asynchronous in the project root."
+        (interactive)
+        (consult-shell-command--execute #'projectile-run-async-shell-command-in-root)))
 
-      (leaf embark
-        :ensure t
-        :bind
-        (("s-/" . embark-act)         ;; pick some comfortable binding
-         ("s-;" . embark-dwim)        ;; good alternative: M-.
-         ("C-<f2>" . embark-bindings)) ;; alternative for `describe-bindings'
-        :init
-        ;; Optionally replace the key help with a completing-read interface
-        (setq prefix-help-command #'embark-prefix-help-command)
-        :config
-        ;; Hide the mode line of the Embark live/completions buffers
-        (add-to-list 'display-buffer-alist
-                     '("\\`\\*Embark Collect \\(Live\\|Completions\\)\\*"
-                       nil
-                       (window-parameters (mode-line-format . none)))))
+    (leaf consult-xwidget
+      :doc "Custom consult functions for xwidget"
+      :after consult
+      :require consult
+      :custom
+      (consult-xwidget-bookmarks
+       . '("https://chatgpt.com/?temporary-chat=true"
+           "https://localhost:1313/"))
+      :preface
+      (defun consult-browse ()
+        (interactive)
+        (let ((url (consult--read consult-xwidget-bookmarks :prompt "URL: ")))
+          (progn
+            (funcall #'xwidget-webkit-browse-url url)))))
 
-      (leaf embark-consult
-        :doc "Consult integration for Embark"
-        :ensure t
-        :hook
-        (embark-collect-mode . consult-preview-at-point-mode))
+    (leaf marginalia
+      :doc "Enrich existing commands with completion annotations"
+      :ensure t
+      :global-minor-mode t)
 
+    (leaf embark
+      :ensure t
+      :bind
+      (("s-/" . embark-act)         ;; pick some comfortable binding
+       ("s-;" . embark-dwim)        ;; good alternative: M-.
+       ("C-<f2>" . embark-bindings)) ;; alternative for `describe-bindings'
+      :init
+      ;; Optionally replace the key help with a completing-read interface
+      (setq prefix-help-command #'embark-prefix-help-command)
+      :config
+      ;; Hide the mode line of the Embark live/completions buffers
+      (add-to-list 'display-buffer-alist
+                   '("\\`\\*Embark Collect \\(Live\\|Completions\\)\\*"
+                     nil
+                     (window-parameters (mode-line-format . none)))))
 
-      (leaf affe
-        :doc "Asynchronous Fuzzy Finder for Emacs"
-        :ensure t
-        :custom ((affe-highlight-function . 'orderless-highlight-matches)
-                 (affe-regexp-function . 'orderless-pattern-compiler))
-        :bind (("M-g r" . affe-grep)
-               ("M-g s" . affe-find)))
+    (leaf embark-consult
+      :doc "Consult integration for Embark"
+      :ensure t
+      :hook
+      (embark-collect-mode . consult-preview-at-point-mode))
 
-      (leaf orderless
-        :doc "Completion style for matching regexps in any order"
-        :ensure t
-        :custom ((completion-styles . '(orderless))
-                 (completion-category-defaults . nil)
-                 (completion-category-overrides . '((file (styles partial-completion))))))
+    (leaf affe
+      :doc "Asynchronous Fuzzy Finder for Emacs"
+      :ensure t
+      :custom ((affe-highlight-function . 'orderless-highlight-matches)
+               (affe-regexp-function . 'orderless-pattern-compiler))
+      :bind (("M-g r" . affe-grep)
+             ("M-g s" . affe-find)))
 
-      (leaf cape
-        :doc "Completion At Point Extensions"
-        :ensure t
-        :config
-        (add-to-list 'completion-at-point-functions #'cape-file))
+    (leaf orderless
+      :doc "Completion style for matching regexps in any order"
+      :ensure t
+      :custom ((completion-styles . '(orderless))
+               (completion-category-defaults . nil)
+               (completion-category-overrides . '((file (styles partial-completion))))))
 
-      (leaf consult
-        :doc "Consulting completing-read"
-        :ensure t
-        :hook (completion-list-mode-hook . consult-preview-at-point-mode)
-        :defun consult-line
-        :preface
-        (defun c/consult-line (&optional at-point)
-          "Consult-line uses things-at-point if set C-u prefix."
-          (interactive "P")
-          (if at-point
-              (consult-line (thing-at-point 'symbol))
-            (consult-line)))
-        :custom ((xref-show-xrefs-function . #'consult-xref)
-                 (xref-show-definitions-function . #'consult-xref)
-                 (consult-line-start-from-top . t))
-        :bind (;; C-c bindings (mode-specific-map)
-               ([remap switch-to-buffer] . consult-buffer) ; C-x b
-               ([remap project-switch-to-buffer] . consult-project-buffer) ; C-x p b
+    (leaf cape
+      :doc "Completion At Point Extensions"
+      :ensure t
+      :config
+      (add-to-list 'completion-at-point-functions #'cape-file))
 
-               ;; M-g bindings (goto-map)
-               ([remap goto-line] . consult-goto-line)    ; M-g g
-               ([remap imenu] . consult-imenu)            ; M-g i
-               ("M-g f" . consult-flymake)
+    (leaf consult
+      :doc "Consulting completing-read"
+      :ensure t
+      :hook (completion-list-mode-hook . consult-preview-at-point-mode)
+      :defun consult-line
+      :preface
+      (defun c/consult-line (&optional at-point)
+        "Consult-line uses things-at-point if set C-u prefix."
+        (interactive "P")
+        (if at-point
+            (consult-line (thing-at-point 'symbol))
+          (consult-line)))
+      :custom ((xref-show-xrefs-function . #'consult-xref)
+               (xref-show-definitions-function . #'consult-xref)
+               (consult-line-start-from-top . t))
+      :bind (;; C-c bindings (mode-specific-map)
+             ([remap switch-to-buffer] . consult-buffer) ; C-x b
+             ([remap project-switch-to-buffer] . consult-project-buffer) ; C-x p b
 
-               ;; C-M-s bindings
-               ("C-s" . c/consult-line)       ; isearch-forward
-               ("C-M-s" . nil)                ; isearch-forward-regexp
-               ("C-M-s s" . isearch-forward)
-               ("C-M-s C-s" . isearch-forward-regexp)
-               ("C-M-s r" . consult-ripgrep)
+             ;; M-g bindings (goto-map)
+             ([remap goto-line] . consult-goto-line)    ; M-g g
+             ([remap imenu] . consult-imenu)            ; M-g i
+             ("M-g f" . consult-flymake)
 
-               (minibuffer-local-map
-                :package emacs
-                ("C-r" . consult-history)))))
+             ;; C-M-s bindings
+             ("C-s" . c/consult-line)       ; isearch-forward
+             ("C-M-s" . nil)                ; isearch-forward-regexp
+             ("C-M-s s" . isearch-forward)
+             ("C-M-s C-s" . isearch-forward-regexp)
+             ("C-M-s r" . consult-ripgrep)
+
+             (minibuffer-local-map
+              :package emacs
+              ("C-r" . consult-history)))))
   #+end_src
 *** User define
 /This snippet of code is designed to load a **user-specific configuration** in Emacs. Here's how it works/
