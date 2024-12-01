@@ -40,6 +40,77 @@
 
 ;;; Code:
 
+;;; Initialization
+(defvar my:d (file-name-directory (file-chase-links load-file-name)) "The giant turtle on which the world rests.")
+(defvar my:d:cache (concat my:d ".cache/") "Cache directory.")
+
+(setq package-user-dir (concat my:d:cache "elpa")
+      no-littering-etc-directory (concat my:d ".etc/")
+      no-littering-var-directory (concat my:d ".var/"))
+
+;;; Window Management
+(defvar my/saved-window-config nil "Store window layout.")
+
+;; Native Comp
+(when (and (fboundp 'startup-redirect-eln-cache)
+           (fboundp 'native-comp-available-p)
+           (native-comp-available-p))
+  (setq native-comp-eln-load-path
+        (list (expand-file-name "eln-cache/" my:d:cache)))
+  (make-directory (car native-comp-eln-load-path) t)
+  (startup-redirect-eln-cache
+   (convert-standard-filename
+    (expand-file-name  "eln-cache/" my:d:cache))))
+
+;; custom-set-variables was added by Custom.
+;; If you edit it by hand, you could mess it up, so be careful.
+;; Your init file should contain only one such instance.
+;; If there is more than one, they won't work right.
+(custom-set-variables
+ '(byte-compile-warnings '(not cl-functions obsolete))
+ '(create-lockfiles nil)
+ '(cursor-in-non-selected-windows nil)
+ '(debug-on-error nil)
+ '(enable-recursive-minibuffers t)
+ '(epg-gpg-program "/usr/local/bin/gpg")
+ '(file-name-handler-alist nil t)
+ '(font-lock-maximum-decoration nil)
+ '(font-lock-maximum-size nil)
+ '(frame-inhibit-implied-resize t)
+ '(frame-resize-pixelwise t)
+ '(frame-title-format '("%b") t)
+ '(gc-cons-percentage 0.2)
+ '(gc-cons-threshold (* 512 1024 1024))
+ '(read-process-output-max (* 1024 1024))
+ '(large-file-warning-threshold 100000000)
+ '(global-prettify-symbols-mode t)
+ '(history-delete-duplicates t)
+ '(history-length 1000)
+ '(indent-tabs-mode nil)
+ '(inhibit-startup-echo-area-message t)
+ '(inhibit-startup-screen t)
+ '(init-file-debug nil t)
+ '(initial-buffer-choice t)
+ '(initial-major-mode 'emacs-lisp-mode)
+ '(initial-scratch-message nil)
+ '(menu-bar-mode t)
+ '(package-enable-at-startup nil)
+ '(package-selected-packages nil)
+ '(ring-bell-function 'ignore)
+ '(scroll-bar-mode nil)
+ '(scroll-conservatively 101)
+ '(scroll-preserve-screen-position t)
+ '(scroll-margin 8)
+ '(tab-bar-mode t)
+ '(tab-width 4)
+ '(text-quoting-style 'straight)
+ '(tool-bar-mode nil)
+ '(truncate-lines t)
+ '(use-short-answers t)
+ '(window-divider-default-places 'right-only)
+ '(window-divider-default-right-width 16)
+ '(x-underline-at-descent-line t))
+
 (setq init-org-file (expand-file-name "README.org" my:d))
 (when (file-exists-p init-org-file)
   (org-babel-load-file init-org-file))
