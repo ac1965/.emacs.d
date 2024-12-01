@@ -39,14 +39,16 @@
           (lambda ()
             (setq gc-cons-threshold (* 16 1024 1024))))
 
-(defconst my:d
+(defvar my:d
   (file-name-directory
    (file-chase-links load-file-name))
   "The giant turtle on which the world rests.")
 
-(defconst my:d:cache (concat my:d ".cache/"))
+(defvar my:d:cache (concat my:d ".cache/") "Cache directory.")
 (unless (file-exists-p my:d:cache)
   (make-directory my:d:cache))
+
+(defvar my/saved-window-config nil "Store window layout.")
 
 (when (boundp 'load-prefer-newer)
   (setq load-prefer-newer t))
