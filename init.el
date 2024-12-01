@@ -40,9 +40,6 @@
 
 ;;; Code:
 
-;; (require 'profiler)
-;; (profiler-start 'cpu)
-
 (setq init-org-file (expand-file-name "README.org" my:d))
 (when (file-exists-p init-org-file)
   (org-babel-load-file init-org-file))
