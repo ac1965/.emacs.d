@@ -111,6 +111,14 @@
  '(window-divider-default-right-width 16)
  '(x-underline-at-descent-line t))
 
+;; Ensure package management and load org-babel
+(require 'package)
+(unless (package-installed-p 'org)
+  (package-refresh-contents)
+  (package-install 'org))
+
+;; Load settings from README.org using org-babel
+(require 'org)
 (setq init-org-file (expand-file-name "README.org" my:d))
 (when (file-exists-p init-org-file)
   (org-babel-load-file init-org-file))
