@@ -20,9 +20,9 @@
 ;;; Code:
 
 (setenv "LIBRARY_PATH" (string-join
-                        '("/usr/local/opt/gcc/lib/gcc/14"
-                          "/usr/local/opt/libgccjit/lib/gcc/14"
-                          "/usr/local/opt/gcc/lib/gcc/14/gcc/aarch64-apple-darwin23/13")
+                        '("/usr/local/opt/gcc/lib/gcc/current"
+                          "/usr/local/opt/libgccjit/lib/gcc/current"
+                          "/usr/local/opt/gcc/lib/gcc/current/gcc/x86_64-apple-darwin24/14")
                         ":"))
 
 (add-hook 'emacs-startup-hook
