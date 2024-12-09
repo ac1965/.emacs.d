@@ -121,7 +121,9 @@
 (require 'org)
 (setq init-org-file (expand-file-name "README.org" my:d))
 (when (file-exists-p init-org-file)
-  (org-babel-load-file init-org-file))
+  (condition-case err
+      (org-babel-load-file init-org-file)
+    (error (message "Error loading org file: %s" err))))
 
 (provide 'init)
 ;;; init.el ends here
