@@ -105,10 +105,7 @@
 	        (message "%s" file))
 	    (find-file (concat org-directory "/" file))))
     :bind
-    (("C-c a" . org-agenda)
-     ("C-c c" . org-capture)
-     ("C-c h" . org-store-link)
-     ("C-M--" . #'(lambda () (interactive)
+    (("C-M--" . #'(lambda () (interactive)
 		            (show-org-buffer "gtd.org")))
      ("C-M-^" . #'(lambda () (interactive)
 		            (show-org-buffer "notes.org")))
@@ -134,9 +131,11 @@
 	         "* TODO %?\n %i\n %a")
             ("n" "Note" entry (file+headline "notes.org" "Notes")
 	         "* %?\nEntered on %U\n %i\n %a")
-            ;; ("j" "Journal" entry (function org-journal-find-location)
-	        ;;  "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-	        )))
+            ("j" "Journal" entry (function org-journal-find-location)
+	         "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+            ("m" "Meeting" entry (file "meetings.org")
+             "* MEETING with %? :meeting:\n  %U\n  %a")
+            )))
 
   ;; org-babel
   (leaf ob

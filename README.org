@@ -256,7 +256,7 @@ You are cloning a GitHub repository (https://github.com/ac1965/.emacs.d) into th
 
      ;; Author: YAMASHITA Takao <ac1965@ty07.com>
      ;; Keywords: emacs.d
-     ;; $Lastupdate: 2024/12/14 21:57:04 $
+     ;; $Lastupdate: 2024/12/14 22:50:26 $
 
      ;; This file is not part of GNU Emacs.
 
@@ -581,6 +581,7 @@ You are cloning a GitHub repository (https://github.com/ac1965/.emacs.d) into th
         "Open the init file for quick access."
         (interactive)
         (find-file user-init-file))
+
       :config
       (leaf-keys
        ;; Basic editing operations
@@ -593,6 +594,7 @@ You are cloning a GitHub repository (https://github.com/ac1965/.emacs.d) into th
         ;; Window navigation
         ("M-o"          . ace-window)             ;; Quick window switch
         ("C-."          . other-window)           ;; Switch to the other window
+        ("C-c w l"      . my/toggle-linum-lines)  ;; Toggle line numbers
         ("C-c w 2"      . my/split-below)
         ("C-c w d"      . my/toggle-window-dedication)
         ("C-c w s"      . my/save-window-layout)
@@ -628,9 +630,10 @@ You are cloning a GitHub repository (https://github.com/ac1965/.emacs.d) into th
 
         ;; Alignment and line number toggle
         ("C-c M-a"      . align-regexp)           ;; Align using regex
-        ("C-c l"        . my/toggle-linum-lines)  ;; Toggle line numbers
 
         ;; Org Capture
+        ("C-c a"        . org-agenda)
+        ("C-c l"        . org-store-link)
         ("C-c c"        . org-capture)            ;; Capture Org entry
 
         ;; Scrolling
@@ -933,6 +936,30 @@ This configuration optimizes completion for speed and accuracy, leveraging both 
       ((completion-styles . '(orderless basic)) ;; Use fuzzy matching by default
        (completion-category-defaults . nil)
        (completion-category-overrides . '((file (styles . (partial-completion))))))))
+
+  (defun my/enable-lsp-and-tree-sitter ()
+    "Enable LSP and Tree-Sitter only in supported programming modes and for files under 1MB."
+    (when (and (derived-mode-p 'prog-mode)
+               (not (eq major-mode 'emacs-lisp-mode)) ;; Disable LSP for emacs-lisp-mode
+               (< (buffer-size) 1048576)) ;; 1MB size limit
+      (lsp)
+      (tree-sitter-mode)))
+
+  (defun my/disable-lsp-and-tree-sitter-in-non-prog-modes ()
+    "Disable LSP and Tree-Sitter in non-programming modes."
+    (unless (derived-mode-p 'prog-mode)
+      (when (bound-and-true-p lsp-mode) (lsp-mode -1))
+      (when (bound-and-true-p tree-sitter-mode) (tree-sitter-mode -1))))
+
+  (add-hook 'prog-mode-hook #'my/enable-lsp-and-tree-sitter)
+  (add-hook 'after-change-major-mode-hook #'my/disable-lsp-and-tree-sitter-in-non-prog-modes)
+
+  ;; Consider auxiliary features for emacs-lisp-mode.
+  (add-hook 'emacs-lisp-mode-hook #'eldoc-mode)
+  (add-hook 'emacs-lisp-mode-hook #'xref-etags-mode)
+  (add-hook 'emacs-lisp-mode-hook #'flycheck-mode)
+  (when (executable-find "parinfer-rust-server")
+    (add-hook 'emacs-lisp-mode-hook #'parinfer-rust-mode))
    #+end_src
 
 *** Utilties Package
@@ -945,7 +972,7 @@ This configuration optimizes completion for speed and accuracy, leveraging both 
   - ~my/no-kill-new-duplicate~: Prevents duplicate entries in the kill ring.
   - ~delete-trailing-whitespace~: Cleans up trailing whitespace on save.
 
-  #+begin_src emacs-lisp
+   #+begin_src emacs-lisp
      ;;; Utilties Package Configuration
 
      ;; Enable global visual-line-mode for better word wrapping
@@ -1077,7 +1104,21 @@ This configuration optimizes completion for speed and accuracy, leveraging both 
        (custom-set-variables '(epg-gpg-program  "/usr/local/bin/gpg"))
        (setq epa-pinentry-mode 'loopback))
 
-     ;; Miscellaneous helper functions
+     ;;; Miscellaneous helper functions
+
+     ;; Delete backup files that are older than 7 days
+     (defun my/delete-old-backups ()
+       "Delete backup files that are older than 7 days."
+       (let ((backup-dir (concat no-littering-var-directory "backup/")))
+         (when (file-directory-p backup-dir)
+           (dolist (file (directory-files backup-dir t))
+             (when (and (file-regular-p file)
+                        (> (- (float-time (current-time))
+                              (float-time (nth 5 (file-attributes file))))
+                           (* 7 24 60 60))) ;; Older than 7 days
+               (delete-file file))))))
+     (add-hook 'emacs-startup-hook #'my/delete-old-backups)
+
      ;; Enable `view-mode` automatically when `read-only-mode` is activated.
      (defun my/enable-view-mode-on-read-only ()
        "Enable `view-mode` automatically when `read-only-mode` is activated."
@@ -1098,7 +1139,7 @@ This configuration optimizes completion for speed and accuracy, leveraging both 
      (progn
        (add-hook 'prog-mode-hook 'goto-address-prog-mode)
        (add-hook 'text-mode-hook 'goto-address-mode))
-  #+end_src
+   #+end_src
 
 *** User define
 /This snippet of code is designed to load a *user-specific configuration* in Emacs. Here's how it works/
