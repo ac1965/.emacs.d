@@ -19,6 +19,7 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'subr-x))
 (setenv "LIBRARY_PATH" (string-join
                         '("/usr/local/opt/gcc/lib/gcc/current"
                           "/usr/local/opt/libgccjit/lib/gcc/current"
