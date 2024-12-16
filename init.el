@@ -78,3 +78,62 @@
 
 (provide 'init)
 ;;; init.el ends here
+(custom-set-variables
+ ;; custom-set-variables was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(byte-compile-warnings '(not cl-functions obsolete))
+ '(create-lockfiles nil)
+ '(cursor-in-non-selected-windows nil)
+ '(debug-on-error nil)
+ '(enable-recursive-minibuffers t)
+ '(epg-gpg-program "/usr/local/bin/gpg")
+ '(file-name-handler-alist nil t)
+ '(font-lock-maximum-decoration nil)
+ '(font-lock-maximum-size nil)
+ '(frame-inhibit-implied-resize t)
+ '(frame-resize-pixelwise t)
+ '(frame-title-format '("%b") t)
+ '(gc-cons-percentage 0.2)
+ '(gc-cons-threshold (* 512 1024 1024))
+ '(global-prettify-symbols-mode t)
+ '(history-delete-duplicates t)
+ '(history-length 1000)
+ '(indent-tabs-mode nil)
+ '(inhibit-startup-echo-area-message t)
+ '(inhibit-startup-screen t)
+ '(init-file-debug nil t)
+ '(initial-buffer-choice t)
+ '(initial-major-mode 'emacs-lisp-mode)
+ '(initial-scratch-message nil)
+ '(large-file-warning-threshold 100000000)
+ '(menu-bar-mode t)
+ '(package-enable-at-startup nil)
+ '(package-selected-packages nil)
+ '(package-vc-selected-packages
+   '((dall-e :url "https://github.com/emacs-openai/dall-e")
+     (codegpt :url "https://github.com/emacs-openai/codegpt")
+     (chatgpi :url "https://github.com/emacs-openai/chatgpt")
+     (openai :url "https://github.com/emacs-openai/openai")))
+ '(read-process-output-max (* 1024 1024) t)
+ '(ring-bell-function 'ignore)
+ '(scroll-bar-mode nil)
+ '(scroll-conservatively 101)
+ '(scroll-margin 8)
+ '(scroll-preserve-screen-position t)
+ '(tab-bar-mode t)
+ '(tab-width 4)
+ '(text-quoting-style 'straight)
+ '(tool-bar-mode nil)
+ '(truncate-lines t)
+ '(use-short-answers t)
+ '(window-divider-default-places 'right-only)
+ '(window-divider-default-right-width 16)
+ '(x-underline-at-descent-line t))
+(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ )
