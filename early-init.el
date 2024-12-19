@@ -20,11 +20,12 @@
 ;;; Code:
 
 (eval-when-compile (require 'subr-x))
-(setenv "LIBRARY_PATH" (string-join
-                        '("/usr/local/opt/gcc/lib/gcc/current"
-                          "/usr/local/opt/libgccjit/lib/gcc/current"
-                          "/usr/local/opt/gcc/lib/gcc/current/gcc/x86_64-apple-darwin24/14")
-                        ":"))
+(when (string= system-type "darwin")
+  (setenv "LIBRARY_PATH" (string-join
+                          '("/usr/local/opt/gcc/lib/gcc/current"
+                            "/usr/local/opt/libgccjit/lib/gcc/current"
+                            "/usr/local/opt/gcc/lib/gcc/current/gcc/x86_64-apple-darwin24/14")
+                          ":")))
 
 (add-hook 'emacs-startup-hook
           (lambda ()
