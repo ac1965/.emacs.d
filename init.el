@@ -48,6 +48,11 @@
       no-littering-etc-directory (concat my:d ".etc/")
       no-littering-var-directory (concat my:d ".var/"))
 
+;; Startup performance optimization.
+(setq gc-cons-threshold (* 50 1000 1000)
+      read-process-output-max (* 1024 1024)
+      inhibit-default-init t)
+
 ;; Native Comp
 (when (and (fboundp 'startup-redirect-eln-cache)
            (fboundp 'native-comp-available-p)
