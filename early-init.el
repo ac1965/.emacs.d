@@ -19,13 +19,33 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'subr-x))
-(when (string= system-type "darwin")
-  (setenv "LIBRARY_PATH" (string-join
-                          '("/usr/local/opt/gcc/lib/gcc/current"
-                            "/usr/local/opt/libgccjit/lib/gcc/current"
-                            "/usr/local/opt/gcc/lib/gcc/current/gcc/x86_64-apple-darwin24/14")
-                          ":")))
+(when (eq system-type 'darwin)
+  ;; Utility function to set environment variables
+  (defun my-set-env-paths (env-var paths)
+    "Set ENV-VAR to a colon-separated list of PATHS."
+    (setenv env-var (string-join paths ":")))
+
+  ;; Configure GCC-related paths
+  (let ((gcc-base-paths (list "/opt/homebrew/opt/gcc/lib/gcc/current"
+                              "/opt/homebrew/opt/libgccjit/lib/gcc/current"
+                              "/opt/homebrew/opt/gcc/lib/gcc/current/gcc/aarch64-apple-darwin/14"
+                              "/usr/local/opt/gcc/lib/gcc/current"
+                              "/usr/local/opt/libgccjit/lib/gcc/current"
+                              "/usr/local/opt/gcc/lib/gcc/current/gcc/x86_64-apple-darwin/14"))
+        (gcc-paths nil))
+    ;; Filter existing directories from the base paths
+    (setq gcc-paths (seq-filter #'file-directory-p gcc-base-paths))
+    (when gcc-paths
+      (my-set-env-paths "LIBRARY_PATH" gcc-paths)))
+
+  ;; Automatically detect and set Homebrew paths
+  (let ((brew-paths '("/opt/homebrew/bin" "/usr/local/bin")))
+    (dolist (path brew-paths)
+      (when (file-directory-p path)
+        ;; Prepend the Homebrew path to PATH
+        (my-set-env-paths "PATH" (cons path (split-string (getenv "PATH") ":")))
+        ;; Add the Homebrew path to exec-path
+        (add-to-list 'exec-path path)))))
 
 (add-hook 'emacs-startup-hook
           (lambda ()
@@ -52,7 +72,7 @@
 
 (when (string= system-type "darwin")
   (setq dired-use-ls-dired t
-        insert-directory-program "/usr/local/bin/gls"
+        insert-directory-program "gls"
         dired-listing-switches "-aBhl --group-directories-first"))
 
 
@@ -66,7 +86,7 @@
  '(cursor-in-non-selected-windows nil)
  '(debug-on-error nil)
  '(enable-recursive-minibuffers t)
- '(epg-gpg-program "/usr/local/bin/gpg")
+ '(epg-gpg-program "gpg")
  '(file-name-handler-alist nil t)
  '(font-lock-maximum-decoration nil)
  '(font-lock-maximum-size nil)
