@@ -33,9 +33,6 @@
    (convert-standard-filename
     (expand-file-name  "eln-cache/" my:d:cache))))
 
-;;; Window Management
-(defvar my/saved-window-config nil "Store window layout.")
-
 ;; Load settings from README.org using org-babel
 (require 'org)
 (setq init-org-file (expand-file-name "README.org" my:d))
