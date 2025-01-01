@@ -49,6 +49,9 @@
         ;; Add the Homebrew path to exec-path
         (add-to-list 'exec-path path))))
 
+  ;; GPG Program-name
+  (custom-set-variables '(epg-gpg-program  "gpg"))
+
   ;; Configure dired to use GNU Core Utilities
   (setq dired-use-ls-dired t
         insert-directory-program "gls" ; Use GNU ls
@@ -81,7 +84,8 @@
       initial-major-mode 'text-mode)      ; Set default scratch buffer mode
 
 ;; Miscellaneous optimizations
-(setq create-lockfiles nil                ; Disable lockfiles
+(setq use-short-answers t                 ; Enable Short Answe
+      create-lockfiles nil                ; Disable lockfiles
       make-backup-files nil               ; Disable backup files
       auto-save-default nil)              ; Disable autosave
 
