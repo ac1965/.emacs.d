@@ -75,7 +75,6 @@
         insert-directory-program "gls"
         dired-listing-switches "-aBhl --group-directories-first"))
 
-
 ;; custom-set-variables was added by Custom.
 ;; If you edit it by hand, you could mess it up, so be careful.
 ;; Your init file should contain only one such instance.
@@ -93,9 +92,6 @@
  '(frame-inhibit-implied-resize t)
  '(frame-resize-pixelwise t)
  '(frame-title-format '("%b") t)
- '(gc-cons-percentage 0.2)
- '(gc-cons-threshold (* 512 1024 1024))
- '(read-process-output-max (* 1024 1024))
  '(large-file-warning-threshold 100000000)
  '(global-prettify-symbols-mode t)
  '(history-delete-duplicates t)
