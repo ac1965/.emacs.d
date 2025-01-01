@@ -1,24 +1,26 @@
-;; early-init.el --- Early Init File for >= Emacs 27.
+;;; early-init.el --- Early initialization for Emacs 29+ -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2024 YAMASHITA Takao <ac1965@ty07.net>
-;;
-;; This file is free software: you can redistribute it and/or modify it
-;; under the terms of the GNU General Public License as published by the
-;; Free Software Foundation, either version 3 of the License, or (at
-;; your option) any later version.
-;;
-;; This file is distributed in the hope that it will be useful, but
-;; WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-;; General Public License for more details.
-;;
-;; You should have received a copy of the GNU General Public License
-;; along with this file.  If not, see <http://www.gnu.org/licenses/>.
+;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+;; Licensed under the GNU General Public License version 3 or later.
 
 ;;; Commentary:
+;; This file optimizes Emacs startup performance and configures platform-specific
+;; settings (e.g., macOS). It also initializes native compilation settings.
 
 ;;; Code:
 
+;; Optimize garbage collection during startup
+(setq gc-cons-threshold (* 100 1024 1024) ; Increase threshold for fewer GC cycles
+      read-process-output-max (* 1024 1024) ; Increase subprocess output buffer
+      file-name-handler-alist nil)        ; Temporarily disable file handlers
+
+;; Enable native compilation
+(when (featurep 'native-compile)
+  (setq native-comp-async-report-warnings-errors 'silent ; Suppress warnings
+        native-comp-speed 2                              ; Optimize for speed
+        native-comp-jit-compilation t))                  ; Enable JIT compilation
+
+;; macOS-specific configuration
 (when (eq system-type 'darwin)
   ;; Utility function to set environment variables
   (defun my-set-env-paths (env-var paths)
@@ -45,8 +47,45 @@
         ;; Prepend the Homebrew path to PATH
         (my-set-env-paths "PATH" (cons path (split-string (getenv "PATH") ":")))
         ;; Add the Homebrew path to exec-path
-        (add-to-list 'exec-path path)))))
+        (add-to-list 'exec-path path))))
 
+  ;; Configure dired to use GNU Core Utilities
+  (setq dired-use-ls-dired t
+        insert-directory-program "gls" ; Use GNU ls
+        dired-listing-switches "-aBhl --group-directories-first")); Human-readable format
+
+
+(add-hook 'focus-out-hook #'garbage-collect)
+
+(when (boundp 'load-prefer-newer)
+  (setq load-prefer-newer t))
+
+;; Set default frame options
+(add-to-list 'default-frame-alist '(fullscreen . maximized)) ; Start maximized
+(setq frame-title-format "%b")                              ; Show buffer name in title
+(setq frame-resize-pixelwise t)                             ; Enable pixel-perfect resizing
+
+;; Disable unnecessary UI elements
+(menu-bar-mode -1)
+(tool-bar-mode -1)
+(scroll-bar-mode -1)
+
+;; Smooth scrolling
+(setq scroll-margin 8                     ; Add margin when scrolling
+      scroll-conservatively 101           ; Avoid large jumps
+      scroll-preserve-screen-position t)  ; Preserve cursor position during scrolling
+
+;; Configure startup screen
+(setq inhibit-startup-screen t            ; Disable splash screen
+      initial-scratch-message nil         ; Remove scratch buffer message
+      initial-major-mode 'text-mode)      ; Set default scratch buffer mode
+
+;; Miscellaneous optimizations
+(setq create-lockfiles nil                ; Disable lockfiles
+      make-backup-files nil               ; Disable backup files
+      auto-save-default nil)              ; Disable autosave
+
+;; Show Emacs Startup Performance
 (add-hook 'emacs-startup-hook
           (lambda ()
             (message "Emacs ready in %s with %d garbage collections."
@@ -55,71 +94,10 @@
                               (time-subtract after-init-time before-init-time)))
                      gcs-done)))
 
-(add-hook 'focus-out-hook #'garbage-collect)
-
-(add-hook 'after-init-hook
+;; Restore GC threshold after startup
+(add-hook 'emacs-startup-hook
           (lambda ()
-            (setq gc-cons-threshold (* 16 1024 1024))))
-
-(when (boundp 'load-prefer-newer)
-  (setq load-prefer-newer t))
-
-(when (featurep 'native-compile)
-  (setq native-comp-async-report-warnings-errors 'silent
-        native-comp-speed 2
-        comp-deferred-compilation t
-        native-comp-deferred-compilation-deny-list '("/intero/")))
-
-(when (string= system-type "darwin")
-  (setq dired-use-ls-dired t
-        insert-directory-program "gls"
-        dired-listing-switches "-aBhl --group-directories-first"))
-
-;; custom-set-variables was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-(custom-set-variables
- '(byte-compile-warnings '(not cl-functions obsolete))
- '(create-lockfiles nil)
- '(cursor-in-non-selected-windows nil)
- '(debug-on-error nil)
- '(enable-recursive-minibuffers t)
- '(epg-gpg-program "gpg")
- '(file-name-handler-alist nil t)
- '(font-lock-maximum-decoration nil)
- '(font-lock-maximum-size nil)
- '(frame-inhibit-implied-resize t)
- '(frame-resize-pixelwise t)
- '(frame-title-format '("%b") t)
- '(large-file-warning-threshold 100000000)
- '(global-prettify-symbols-mode t)
- '(history-delete-duplicates t)
- '(history-length 1000)
- '(indent-tabs-mode nil)
- '(inhibit-startup-echo-area-message t)
- '(inhibit-startup-screen t)
- '(init-file-debug nil t)
- '(initial-buffer-choice t)
- '(initial-major-mode 'emacs-lisp-mode)
- '(initial-scratch-message nil)
- '(menu-bar-mode t)
- '(package-enable-at-startup nil)
- '(package-selected-packages nil)
- '(ring-bell-function 'ignore)
- '(scroll-bar-mode nil)
- '(scroll-conservatively 101)
- '(scroll-preserve-screen-position t)
- '(scroll-margin 8)
- '(tab-bar-mode t)
- '(tab-width 4)
- '(text-quoting-style 'straight)
- '(tool-bar-mode nil)
- '(truncate-lines t)
- '(use-short-answers t)
- '(window-divider-default-places 'right-only)
- '(window-divider-default-right-width 16)
- '(x-underline-at-descent-line t))
+            (setq gc-cons-threshold (* 16 1024 1024)))) ; Lower threshold for runtime
 
 (provide 'early-init)
 ;;; early-init.el ends here
