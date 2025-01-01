@@ -1,12 +1,13 @@
-;;; tjy.el --- Emacs.d -*- lexical-binding: t; -*-
-;;
-;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;;
-;; This file is not part of GNU Emacs.
+;;; tjy.el --- Personal Configuration -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2024-2025 YAMASHITA Takao <ac1965@ty07.net>
+;; Licensed under the GNU General Public License version 3 or later.
 
 ;;; Commentary:
-
-;;; License: GPLv3
+;; This file contains personal configurations including:
+;; - User information and directory setup
+;; - Authentication management
+;; - Email client settings
 
 ;;; Code:
 
