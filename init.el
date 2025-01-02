@@ -10,28 +10,31 @@
 ;;; Code:
 
 ;;; Initialization
-(defvar my:d (file-name-directory (file-chase-links load-file-name)) "The giant turtle on which the world rests.")
-(defvar my:d:cache (concat my:d ".cache/") "Cache directory.")
+(defvar my:d (file-name-directory (file-chase-links load-file-name))
+  "Base directory for user-specific configuration.")
+(defvar my:d:cache (expand-file-name ".cache/" my:d)
+  "Cache directory for temporary files.")
 
-(setq package-user-dir (concat my:d:cache "elpa")
-      no-littering-etc-directory (concat my:d ".etc/")
-      no-littering-var-directory (concat my:d ".var/"))
+;; Package and no-littering configuration
+(setq package-user-dir (expand-file-name "elpa/" my:d:cache)
+      no-littering-etc-directory (expand-file-name ".etc/" my:d)
+      no-littering-var-directory (expand-file-name ".var/" my:d))
 
-;; Startup performance optimization.
-(setq gc-cons-threshold (* 50 1000 1000)
-      read-process-output-max (* 1024 1024)
+;; Optimize startup performance
+(setq gc-cons-threshold (* 100 1024 1024)  ; Increase for faster startup
+      read-process-output-max (* 4 1024 1024)  ; Enhance subprocess I/O performance
       inhibit-default-init t)
 
-;; Native Comp
-(when (and (fboundp 'startup-redirect-eln-cache)
-           (fboundp 'native-comp-available-p)
-           (native-comp-available-p))
+;; Use Emacs 30's native startup improvements
+(when (boundp 'early-init-file)
+  (setq native-comp-jit-compilation t)) ; Enable JIT compilation
+
+;; Native Compilation Settings
+(when (native-comp-available-p)
   (setq native-comp-eln-load-path
         (list (expand-file-name "eln-cache/" my:d:cache)))
   (make-directory (car native-comp-eln-load-path) t)
-  (startup-redirect-eln-cache
-   (convert-standard-filename
-    (expand-file-name  "eln-cache/" my:d:cache))))
+  (startup-redirect-eln-cache (car native-comp-eln-load-path)))
 
 ;; Load settings from README.org using org-babel
 (require 'org)
@@ -39,7 +42,7 @@
 (when (file-exists-p init-org-file)
   (condition-case err
       (org-babel-load-file init-org-file)
-    (error (message "Error loading org file: %s" err))))
+    (error (message "Error loading org file: %s" (error-message-string err)))))
 
 (provide 'init)
 ;;; init.el ends here
