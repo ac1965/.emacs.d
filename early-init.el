@@ -9,6 +9,12 @@
 
 ;;; Code:
 
+;; Check Emacs version 30+
+(if (version< emacs-version "30")
+    (progn
+      ;; Display a message and stop applying advanced configurations
+      (message "Emacs 30 or higher is required. Applying basic configurations for better readability.")))
+
 ;; Optimize garbage collection during startup
 (setq gc-cons-threshold (* 100 1024 1024) ; Increase threshold for fewer GC cycles
       read-process-output-max (* 1024 1024) ; Increase subprocess output buffer
