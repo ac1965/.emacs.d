@@ -76,6 +76,7 @@
       create-lockfiles nil
       make-backup-files nil
       auto-save-default nil)
+(global-prettify-symbols-mode 1)
 
 ;; Restore GC threshold after startup
 (add-hook 'emacs-startup-hook
