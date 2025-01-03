@@ -20,11 +20,6 @@
       no-littering-etc-directory (expand-file-name ".etc/" my:d)
       no-littering-var-directory (expand-file-name ".var/" my:d))
 
-;; Optimize startup performance
-(setq gc-cons-threshold (* 100 1024 1024)  ; Increase for faster startup
-      read-process-output-max (* 4 1024 1024)  ; Enhance subprocess I/O performance
-      inhibit-default-init t)
-
 ;; Use Emacs 30's native startup improvements
 (when (boundp 'early-init-file)
   (setq native-comp-jit-compilation t)) ; Enable JIT compilation
