@@ -46,7 +46,8 @@
         (add-to-list 'exec-path path))))
 
   ;; Configure GPG for macOS
-  (setq epg-gpg-program "gpg")
+  (when (executable-find "gpg")
+    (setq epg-gpg-program "gpg"))
 
   ;; Use GNU ls for dired if available
   (when (executable-find "gls")
