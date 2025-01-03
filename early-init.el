@@ -4,8 +4,8 @@
 ;; Licensed under the GNU General Public License version 3 or later.
 
 ;;; Commentary:
-;; Optimizes Emacs startup performance and includes platform-specific settings.
-;; This configuration leverages new features available in Emacs 30+.
+;; This configuration optimizes Emacs startup performance and includes platform-specific settings.
+;; Designed for Emacs 30 and above, it leverages features like native compilation and precise scrolling.
 
 ;;; Code:
 
@@ -14,25 +14,24 @@
   (error "This configuration requires Emacs 30 or higher"))
 
 ;; Optimize garbage collection and file handler processing during startup
-(setq gc-cons-threshold most-positive-fixnum  ; Prevent GC during startup
-      read-process-output-max (* 4 1024 1024) ; Increase for better LSP performance
-      file-name-handler-alist nil)            ; Temporarily disable file handlers
+(setq gc-cons-threshold (* 64 1024 1024) ; Set to 64MB to minimize GC overhead during startup
+      read-process-output-max (* 8 1024 1024) ; Improve LSP and subprocess performance
+      file-name-handler-alist nil)            ; Temporarily disable file handlers for faster startup
 
-;; Restore file handler and GC settings after startup
+;; Restore default GC and file handler settings after startup
 (add-hook 'emacs-startup-hook
           (lambda ()
-            (setq gc-cons-threshold (* 32 1024 1024) ; Lower threshold post-startup
+            (setq gc-cons-threshold (* 32 1024 1024) ; Reduce GC threshold to 32MB
                   file-name-handler-alist (default-value 'file-name-handler-alist))))
 
 ;; Native compilation settings
-(when (featurep 'native-compile)
-  (setq native-comp-async-report-warnings-errors 'silent
-        native-comp-speed 3
-        native-comp-jit-compilation t)) ; JIT compilation enabled by default in Emacs 30
+;; Optimize for speed and suppress warnings during async compilation
+(setq native-comp-async-report-warnings-errors 'silent
+      native-comp-speed 3)
 
 ;; macOS-specific settings
 (when (eq system-type 'darwin)
-  ;; Set environment variables for GCC and Homebrew paths
+  ;; Configure LIBRARY_PATH for GCC and set PATH for Homebrew
   (let ((gcc-paths (seq-filter #'file-directory-p
                                '("/opt/homebrew/opt/gcc/lib/gcc/current"
                                  "/usr/local/opt/gcc/lib/gcc/current"))))
@@ -45,20 +44,19 @@
         (setenv "PATH" (string-join (cons path (split-string (getenv "PATH") ":")) ":"))
         (add-to-list 'exec-path path))))
 
-  ;; Configure GPG for macOS
-  (when (executable-find "gpg")
-    (setq epg-gpg-program "gpg"))
+  ;; Use `gpg` for encryption, if available
+  (setq epg-gpg-program (or (executable-find "gpg") epg-gpg-program))
 
-  ;; Use GNU ls for dired if available
+  ;; Use GNU ls (gls) for dired if available
   (when (executable-find "gls")
     (setq insert-directory-program "gls"
           dired-use-ls-dired t
           dired-listing-switches "-aBhl --group-directories-first")))
 
-;; Frame settings: maximize frame and enable pixel-perfect resizing
-(setq default-frame-alist '((fullscreen . maximized)
-                            (resize-pixelwise . t))
-      frame-title-format "%b") ; Display buffer name in frame title
+;; Frame settings
+(setq default-frame-alist '((fullscreen . maximized) ; Start with maximized frame
+                            (resize-pixelwise . t)) ; Allow pixel-perfect resizing
+      frame-title-format "%b") ; Display the buffer name in the frame title
 
 ;; Disable unnecessary UI elements
 (menu-bar-mode -1)
@@ -66,24 +64,32 @@
 (scroll-bar-mode -1)
 
 ;; Enable smooth scrolling using `pixel-scroll-precision-mode`
-(pixel-scroll-precision-mode 1) ; New in Emacs 29+, better smooth scrolling
+;; This feature is available from Emacs 29 onwards
+(when (featurep 'pixel-scroll)
+  (pixel-scroll-precision-mode 1))
 
-(setq scroll-margin 8
-      scroll-conservatively 101
-      scroll-preserve-screen-position t)
+;; Configure scrolling behavior
+(setq scroll-margin 8 ; Keep 8 lines of context when scrolling
+      scroll-conservatively 101 ; Avoid recentering unless necessary
+      scroll-preserve-screen-position t) ; Maintain the cursor position during scrolling
 
 ;; Disable startup screen and configure initial buffer
-(setq inhibit-startup-screen t
-      initial-scratch-message nil
-      initial-major-mode 'text-mode)
+(setq inhibit-startup-screen t ; Skip the startup screen
+      initial-scratch-message nil ; Start with an empty *scratch* buffer
+      initial-major-mode 'text-mode) ; Use text-mode for the initial buffer
 
 ;; Miscellaneous optimizations
-(setq use-short-answers t   ; Use y/n instead of yes/no
+(setq use-short-answers t   ; Use y/n prompts instead of yes/no
       create-lockfiles nil  ; Disable lockfiles
       make-backup-files nil ; Disable backup files
       auto-save-default nil ; Disable auto-save
-      auto-save-list-file-prefix nil)
+      auto-save-list-file-prefix nil) ; Prevent auto-save list files
+
+;; Enable global prettify symbols mode for better symbol rendering
 (global-prettify-symbols-mode 1)
+
+;; Enable Modifier Bar Mode, introduced in Emacs 30
+(modifier-bar-mode 1)
 
 ;; Display startup performance metrics
 (add-hook 'emacs-startup-hook
