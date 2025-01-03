@@ -71,7 +71,7 @@ Below are the system details and Emacs build configurations for two machines.
      ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
      ;; Licensed under the GNU General Public License version 3 or later.
 
-     ;; $Lastupdate: 2025/01/03 15:45:50 $
+     ;; $Lastupdate: 2025/01/03 16:09:55 $
 
      ;;; Commentary:
 
@@ -326,13 +326,16 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
   #+begin_src emacs-lisp
     (leaf KeyBinding
       :preface
+      ;; Toggle line numbers display
       (defun my/toggle-linum-lines ()
-        "Toggle display line number."
+        "Toggle display of line numbers."
         (interactive)
         (display-line-numbers-mode (if display-line-numbers-mode -1 1)))
 
+      ;; Toggle window split orientation
       (defun my/toggle-window-split ()
-        "Toggle window split between horizontal and vertical."
+        "Toggle window split between horizontal and vertical.
+    Only works when exactly two windows are open."
         (interactive)
         (if (= (count-windows) 2)
             (let* ((this-win-buffer (window-buffer))
@@ -356,11 +359,12 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
                 (set-window-buffer (selected-window) this-win-buffer)
                 (set-window-buffer (next-window) next-win-buffer)
                 (select-window first-win)
-                (if this-win-2nd (other-window 1))))))
+                (if this-win-2nd (other-window 1))))
+          (message "This function only works with exactly two windows open.")))
 
+      ;; Open Dired file in another window
       (defun my/dired-view-file-other-window ()
         "Open the selected file or directory in another window.
-
     If the target is a directory, navigate to it.
     If the target is a file, open it in read-only mode in another window."
         (interactive)
@@ -371,49 +375,43 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
                   (dired file))
             (view-file-other-window file))))
 
+      ;; Find conflicting keybindings
       (defun my/find-keybinding-conflicts ()
         "Find and display keybinding conflicts in all active keymaps."
         (interactive)
         (let ((conflicts (make-hash-table :test 'equal))
               (buffer-name "*Keybinding Conflicts*"))
-          ;; Collect conflicts from all active keymaps
           (mapatoms (lambda (keymap)
                       (when (and (boundp keymap) (keymapp (symbol-value keymap)))
-                        (map-keymap (lambda (_ key-binding)
-                                      (when (keymapp key-binding)
-                                        (map-keymap
-                                         (lambda (key cmd)
-                                           ;; Only process valid commands
-                                           (when (or (symbolp cmd) (functionp cmd))
-                                             (let* ((key (vector key))
-                                                    (existing (gethash key conflicts)))
-                                               (if existing
-                                                   (puthash key (cons cmd existing) conflicts)
-                                                 (puthash key (list cmd) conflicts)))))
-                                         key-binding)))
-                                    (symbol-value keymap)))))
-          ;; Create and populate the result buffer
+                        (map-keymap
+                         (lambda (_ key-binding)
+                           (when (keymapp key-binding)
+                             (map-keymap
+                              (lambda (key cmd)
+                                (when (or (symbolp cmd) (functionp cmd))
+                                  (let* ((key (vector key))
+                                         (existing (gethash key conflicts)))
+                                    (if existing
+                                        (puthash key (cons cmd existing) conflicts)
+                                      (puthash key (list cmd) conflicts)))))
+                              key-binding)))
+                         (symbol-value keymap)))))
           (with-current-buffer (get-buffer-create buffer-name)
-            (read-only-mode -1) ; Ensure the buffer is writable
-            (erase-buffer)      ; Clear any previous content
+            (read-only-mode -1)
+            (erase-buffer)
             (insert "Keybinding Conflicts:\n\n")
             (maphash (lambda (key cmds)
                        (when (> (length cmds) 1)
                          (insert (format "%s => %s\n"
                                          (key-description key)
-                                         (mapconcat (lambda (cmd)
-                                                      (if (symbolp cmd)
-                                                          (symbol-name cmd)
-                                                        (format "%s" cmd)))
-                                                    cmds ", ")))))
+                                         (mapconcat #'symbol-name cmds ", ")))))
                      conflicts)
-            (read-only-mode 1)) ; Make the buffer read-only for safety
-          ;; Display the buffer
+            (read-only-mode 1))
           (switch-to-buffer buffer-name)))
 
+      ;; Replace string in buffer
       (defun my/replace-string-in-buffer ()
-        "Prompt the user for a string to replace and its replacement,
-    then replace all occurrences in the buffer."
+        "Prompt user to replace a string with another in the current buffer."
         (interactive)
         (let ((from (read-string "Replace: "))
               (to (read-string "With: ")))
@@ -422,19 +420,25 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
             (while (search-forward from nil t)
               (replace-match to nil t)))))
 
+      ;; Open init file quickly
       (defun my/open-init-file ()
         "Open the init file for quick access."
         (interactive)
         (find-file user-init-file))
 
       :config
+      ;; Keybindings
       (leaf-keys
-       ;; Basic editing operations
-       (("C-h"           . backward-delete-char)  ;; Delete character before the cursor
+       ( ;; Basic editing operations
+        ("C-h"           . backward-delete-char)  ;; Delete character before the cursor
         ("C-?"           . help-command)          ;; Open help
         ("C-/"           . undo-fu-only-undo)     ;; Undo
         ("C-z"           . undo-fu-only-redo)     ;; Redo
         ("C-c i"         . my/open-init-file)     ;; Open init file
+
+        ;; File operations
+        ("C-c o" . find-file)                ;; Open file
+        ("C-c i" . my/open-init-file)        ;; Open init file
 
         ;; Window navigation
         ("M-o"          . ace-window)             ;; Quick window switch
@@ -444,12 +448,9 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
         ("C-c w d"      . my/toggle-window-dedication)
         ("C-c w s"      . my/save-window-layout)
         ("C-c w r"      . my/restore-window-layout)
+        ("C-c w t"      . my/toggle-window-split)
         ("C-c d s"      . my/save-desktop-session)
         ("C-c d r"      . my/restore-desktop-session)
-
-        ;; Text scaling
-        ("C-+"          . text-scale-increase)    ;; Increase text size
-        ("C--"          . text-scale-decrease)    ;; Decrease text size
 
         ;; Emacs control
         ("C-q"          . kill-emacs)             ;; Quit Emacs
@@ -514,14 +515,6 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
         ;; Magit
         ("C-x g"        . magit-status)           ;; Open Magit status
 
-        ;; Embark
-        ("s-."          . embark-act)             ;; Embark action
-        ("s-,"          . embark-dwim)            ;; Embark Do What I Mean
-        ("C-<f2>"       . embark-bindings)        ;; Embark key bindings
-
-        ;; Marginalia
-        ("M-A"          . marginalia-cycle)       ;; Cycle annotation styles
-
         ;; Acewindow
         ("M-o"          . ace-window)             ;; Quick window switch
 
@@ -531,16 +524,14 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
         ("M-g i"        . consult-imenu)          ;; Search functions in buffer
         ("M-g b"        . consult-buffer)         ;; Buffer switch
 
-        ;; Miscellaneous
-        ("M-x"          . execute-extended-command))) ;; Execute extended command
+        ;; Text scaling
+        ("C-+" . text-scale-increase)        ;; Increase text size
+        ("C--" . text-scale-decrease)))      ;; Decrease text size
 
-      ;; Keybinding redefinition
-      (global-set-key (kbd "C-c r") nil)
-
-      ;; Enable Windmove keybindings for window navigation
+      ;; Enable windmove for arrow key navigation
       (windmove-default-keybindings)
 
-      ;; Dired Mode Custom Keybinding
+      ;; Add custom keybinding for Dired mode
       (add-hook 'dired-mode-hook
                 (lambda ()
                   (define-key dired-mode-map "z" 'my/dired-view-file-other-window))))
