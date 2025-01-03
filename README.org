@@ -71,7 +71,7 @@ Below are the system details and Emacs build configurations for two machines.
      ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
      ;; Licensed under the GNU General Public License version 3 or later.
 
-     ;; $Lastupdate: 2025/01/03 15:42:46 $
+     ;; $Lastupdate: 2025/01/03 15:45:50 $
 
      ;;; Commentary:
 
@@ -251,39 +251,65 @@ Let me know if you need further adjustments or if this integrates well with your
      ;;; Font Configuration using leaf for better font management and icon support.
      (leaf Fonts
        :preface
-       ;; Font existence check
-       (defun font-exists-p (font) (member font (font-family-list)))
+       ;; Check if a font exists
+       (defun font-exists-p (font)
+         "Return non-nil if FONT exists on the system."
+         (member font (font-family-list)))
 
        ;; Default font setup function
        (defun font-setup (&optional frame)
-         "Set up the default font and icon fonts for FRAME."
-         (when (font-exists-p conf:font-family)
-           (set-face-attribute 'default frame :family conf:font-family
+         "Set up the default font and icon fonts for FRAME.
+     Uses `conf:font-family` and `conf:font-size` for main font configuration.
+     Fallback to a default font if `conf:font-family` is not available."
+         (let ((font-family (if (font-exists-p conf:font-family)
+                                conf:font-family
+                              "DejaVu Sans Mono"))) ; Fallback font
+           (set-face-attribute 'default frame :family font-family
                                :height (* conf:font-size 10))
-           (set-fontset-font t 'unicode
-                             (font-spec :family "Noto Color Emoji") nil 'prepend)))
+           ;; Set emoji font for Unicode characters
+           (when (font-exists-p "Noto Color Emoji")
+             (set-fontset-font t 'unicode
+                               (font-spec :family "Noto Color Emoji") nil 'prepend))
+           ;; Add fallback fonts for symbols
+           (when (font-exists-p "Symbols Nerd Font Mono")
+             (set-fontset-font t 'symbol
+                               (font-spec :family "Symbols Nerd Font Mono") nil 'append))))
 
        :config
-       ;; Font settings
+       ;; Default font family and size
        (unless (boundp 'conf:font-family)
          (setq conf:font-family "JetBrains Mono"
-               "Default font family"))
+               "Default font family for programming."))
        (unless (boundp 'conf:font-size)
          (setq conf:font-size 16
-               "Default font size"))
+               "Default font size in points."))
 
-       ;; Icons settings
-       (leaf nerd-icons :if (display-graphic-p) :ensure t)
+       ;; Icon support with nerd-icons
+       (leaf nerd-icons
+         :if (display-graphic-p)
+         :ensure t)
+
+       ;; Enable nerd-icons in Dired mode
        (leaf nerd-icons-dired
          :if (display-graphic-p)
          :ensure t
          :hook (dired-mode-hook . nerd-icons-dired-mode))
 
-       ;; Ligature
-       (leaf ligature :ensure t
+       ;; Enable nerd-icons in Treemacs
+       (leaf treemacs-nerd-icons
+         :if (display-graphic-p)
+         :ensure t
+         :after treemacs
+         :config (treemacs-load-theme "nerd-icons"))
+
+       ;; Ligature support for programming symbols
+       (leaf ligature
+         :ensure t
          :config
-         (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
-         (global-ligature-mode t))
+         ;; Define ligatures for programming languages
+         (ligature-set-ligatures 'prog-mode
+                                 '("->" "=>" "::" "===" "!=" "&&" "||" "++" "--" "<<" ">>"))
+         (global-ligature-mode t)) ; Enable ligatures globally
 
        ;; Load fonts at startup or in daemon mode
        (if (daemonp)
