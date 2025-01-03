@@ -25,6 +25,9 @@
       no-littering-etc-directory (expand-file-name ".etc/" my:d) ; Store config files
       no-littering-var-directory (expand-file-name ".var/" my:d)) ; Store variable data
 
+;;; Treesit configuration
+(setq treesit-extra-load-path (expand-file-name "tree-sitter/" no-littering-var-directory))
+
 ;;; Native Compilation Settings
 (when (native-comp-available-p)
   ;; Redirect ELN (Emacs Lisp Native) cache to user-specific directory
