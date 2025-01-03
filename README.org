@@ -63,177 +63,21 @@ Below are the system details and Emacs build configurations for two machines.
   | Features | ACL DBUS GIF GLIB GMP GNUTLS JPEG LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TIFF TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM ZLIB |
   |-+-|
 
-* Configuration
-** Eary-init.el
-- *Purpose*
-  The early-init.el file is intended for customizations that need to take effect before the standard initialization file (init.el) runs. This is particularly useful for settings related to package management and performance optimizations.
-
-   #+begin_src emacs-lisp :tangle no
-     ;;; early-init.el --- Early initialization for Emacs 30+ -*- lexical-binding: t; -*-
-
-     ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
-     ;; Licensed under the GNU General Public License version 3 or later.
-
-     ;;; Commentary:
-     ;; Optimizes Emacs startup performance and includes platform-specific settings.
-     ;; Takes advantage of Emacs 30+ features for better configuration and maintenance.
-
-     ;;; Code:
-
-     ;; Ensure compatibility with Emacs 30 or later
-     (when (version< emacs-version "30")
-       (error "This configuration requires Emacs 30 or higher"))
-
-     ;; Optimize garbage collection during startup
-     (setq gc-cons-threshold (* 128 1024 1024) ; Larger threshold reduces GC during init
-           read-process-output-max (* 2 1024 1024) ; Increase process output buffer size
-           file-name-handler-alist nil)        ; Temporarily disable file handlers
-
-     ;; Native compilation settings
-     (when (featurep 'native-compile)
-       (setq native-comp-async-report-warnings-errors 'silent ; Suppress warnings
-             native-comp-speed 3                              ; Maximize speed optimizations
-             native-comp-deferred-compilation t))             ; Use deferred compilation
-
-     ;; macOS-specific settings
-     (when (eq system-type 'darwin)
-       ;; Set environment variables for GCC and Homebrew
-       (defun set-env-paths (env-var paths)
-         "Set ENV-VAR to a colon-separated list of PATHS."
-         (setenv env-var (string-join paths ":")))
-
-       (let ((gcc-paths (seq-filter #'file-directory-p
-                                    '("/opt/homebrew/opt/gcc/lib/gcc/current"
-                                      "/usr/local/opt/gcc/lib/gcc/current"))))
-         (when gcc-paths
-           (set-env-paths "LIBRARY_PATH" gcc-paths)))
-
-       (let ((brew-paths '("/opt/homebrew/bin" "/usr/local/bin")))
-         (dolist (path brew-paths)
-           (when (file-directory-p path)
-             (set-env-paths "PATH" (cons path (split-string (getenv "PATH") ":")))
-             (add-to-list 'exec-path path))))
-
-       ;; Configure GPG
-       (setq epg-gpg-program "gpg")
-
-       ;; Use GNU ls for dired
-       (setq dired-use-ls-dired t
-             insert-directory-program "gls"
-             dired-listing-switches "-aBhl --group-directories-first"))
-
-     ;; Frame settings
-     (setq default-frame-alist '((fullscreen . maximized)       ; Start maximized
-                                 (resize-pixelwise . t))        ; Pixel-perfect resizing
-           frame-title-format "%b")                            ; Buffer name in title
-
-     ;; Disable unnecessary UI elements
-     (menu-bar-mode -1)
-     (tool-bar-mode -1)
-     (scroll-bar-mode -1)
-
-     ;; Enable smooth scrolling
-     (setq scroll-margin 8
-           scroll-conservatively 101
-           scroll-preserve-screen-position t)
-
-     ;; Disable startup screen
-     (setq inhibit-startup-screen t
-           initial-scratch-message nil
-           initial-major-mode 'text-mode)
-
-     ;; Miscellaneous optimizations
-     (setq use-short-answers t
-           create-lockfiles nil
-           make-backup-files nil
-           auto-save-default nil)
-
-     ;; Restore GC threshold after startup
-     (add-hook 'emacs-startup-hook
-               (lambda ()
-                 (setq gc-cons-threshold (* 16 1024 1024))))
-
-     ;; Display startup performance metrics
-     (add-hook 'emacs-startup-hook
-               (lambda ()
-                 (message "Emacs loaded in %s with %d garbage collections."
-                          (format "%.2f seconds"
-                                  (float-time
-                                   (time-subtract after-init-time before-init-time)))
-                          gcs-done)))
-
-     (provide 'early-init)
-     ;;; early-init.el ends here
-   #+end_src
-** init.el
-- *Org-mode-based Configuration*
-   - Using `org-babel-load-file` to load the main configuration from an `org-mode` file is an efficient and well-documented approach. This makes your configuration cleaner and easier to maintain.
-
-   #+begin_src emacs-lisp :tangle no
-     ;;; init.el --- Main configuration file -*- lexical-binding: t; -*-
-
-     ;; Copyright (C) 2024-2025 YAMASHITA Takao <ac1965@ty07.net>
-     ;; Licensed under the GNU General Public License version 3 or later.
-
-     ;;; Commentary:
-     ;; This file initializes Emacs, loads core settings, and configures
-     ;; essential packages. Most of the detailed configuration is in `README.org`.
-
-     ;;; Code:
-
-     ;;; Initialization
-     (defvar my:d (file-name-directory (file-chase-links load-file-name))
-       "Base directory for user-specific configuration.")
-     (defvar my:d:cache (expand-file-name ".cache/" my:d)
-       "Cache directory for temporary files.")
-
-     ;; Package and no-littering configuration
-     (setq package-user-dir (expand-file-name "elpa/" my:d:cache)
-           no-littering-etc-directory (expand-file-name ".etc/" my:d)
-           no-littering-var-directory (expand-file-name ".var/" my:d))
-
-     ;; Optimize startup performance
-     (setq gc-cons-threshold (* 100 1024 1024)  ; Increase for faster startup
-           read-process-output-max (* 4 1024 1024)  ; Enhance subprocess I/O performance
-           inhibit-default-init t)
-
-     ;; Use Emacs 30's native startup improvements
-     (when (boundp 'early-init-file)
-       (setq native-comp-jit-compilation t)) ; Enable JIT compilation
-
-     ;; Native Compilation Settings
-     (when (native-comp-available-p)
-       (setq native-comp-eln-load-path
-             (list (expand-file-name "eln-cache/" my:d:cache)))
-       (make-directory (car native-comp-eln-load-path) t)
-       (startup-redirect-eln-cache (car native-comp-eln-load-path)))
-
-     ;; Load settings from README.org using org-babel
-     (require 'org)
-     (setq init-org-file (expand-file-name "README.org" my:d))
-     (when (file-exists-p init-org-file)
-       (condition-case err
-           (org-babel-load-file init-org-file)
-         (error (message "Error loading org file: %s" (error-message-string err)))))
-
-     (provide 'init)
-     ;;; init.el ends here
-   #+end_src
-** Emacs Configuration
-*** Header
+* Emacs Configuration
+** Header
    #+begin_src emacs-lisp
      ;;; README.el --- Emacs.d -*- lexical-binding: t; -*-
 
      ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
      ;; Licensed under the GNU General Public License version 3 or later.
 
-     ;; $Lastupdate: 2025/01/03  0:25:38 $
+     ;; $Lastupdate: 2025/01/03 13:33:38 $
 
      ;;; Commentary:
 
      ;;; Code:
    #+end_src
-*** Leaf
+** Leaf
 This Emacs configuration sets up package management and defines essential packages using `leaf` for a more structured approach. Here's a summary.
 
 - *Package Management*
@@ -256,7 +100,7 @@ This Emacs configuration sets up package management and defines essential packag
         :ensure t
         :config (leaf-keywords-init)))
   #+end_src
-*** User define
+** User define
 This snippet of code is designed to load a *user-specific configuration* in Emacs. Here's how it works.
 
 - *setq user-specific-config*
@@ -281,7 +125,9 @@ Let me know if you need further adjustments or if this integrates well with your
     (if (file-exists-p user-specific-config) (load user-specific-config))
   #+end_src
 
+** UI/Fonts/Keybind
 *** UI
+
 - *UI Improvements*
 - *Window Management*
    Provide utilities for saving and restoring window layouts.
@@ -675,7 +521,7 @@ This Emacs configuration defines custom key bindings using the `leaf` package to
                 (lambda ()
                   (define-key dired-mode-map "z" 'my/dired-view-file-other-window))))
   #+end_src
-*** Basic
+** Basic
 This configuration script includes basic settings and utilities aimed at improving the functionality and cleanliness of the Emacs environment. Here's a summary of the key components
 
 - *Basic*
@@ -820,7 +666,7 @@ This configuration script includes basic settings and utilities aimed at improvi
       (tree-sitter-langs-install-grammars))
   #+end_src
 
-*** Utilties Package
+** Utilties Package
 Miscellaneous functions that improve user experience and add extra utility.
 These include toggling line numbers, switching window layouts, and custom functions for buffer management and Dired mode.
 
@@ -1329,7 +1175,7 @@ These include toggling line numbers, switching window layouts, and custom functi
        (add-hook 'text-mode-hook 'goto-address-mode))
    #+end_src
 
-*** Completion Framework
+** Completion Framework
 This configuration sets up a modern, feature-rich completion framework for Emacs, optimized for speed, accuracy, and flexibility.
 
 - *Prescient*
@@ -1418,7 +1264,7 @@ This configuration sets up a modern, feature-rich completion framework for Emacs
     )
 #+end_src
 
-*** Footer
+** Footer
   #+begin_src emacs-lisp
 
     (provide 'README)
