@@ -1,3 +1,5 @@
+
+
 # -*- mode: org; coding: utf-8-unix; indent-tabs-mode: nil -*-
 #+title: ac1965's Emacs literate configuration =.emacs.d=
 #+startup: content
@@ -71,7 +73,7 @@ Below are the system details and Emacs build configurations for two machines.
      ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
      ;; Licensed under the GNU General Public License version 3 or later.
 
-     ;; $Lastupdate: 2025/01/03 16:09:55 $
+     ;; $Lastupdate: 2025/01/03 16:31:56 $
 
      ;;; Commentary:
 
@@ -213,6 +215,10 @@ Let me know if you need further adjustments or if this integrates well with your
       ;; Spacious Padding: improve readability with flexible padding
       (leaf spacious-padding :ensure t
         :config
+        (setq spacious-padding-subtle-mode-line
+              `( :mode-line-active 'default
+                 :mode-line-inactive vertical-border))
+        ;; These is the default value, but I keep it here for visiibility.
         (setq spacious-padding-widths '( :internal-border-width 15)) ; Set padding width
         (spacious-padding-mode 1)
         (define-key global-map (kbd "<f7>") #'spacious-padding-mode)) ; Toggle with F7
@@ -546,34 +552,35 @@ This configuration script includes basic settings and utilities aimed at improvi
   #+begin_src emacs-lisp
     ;;; Basic Configuration
 
-    ;; Basic Configuration for file saving, shell integration, and more.
+    ;; Add last updated timestamp before saving the buffer
     (leaf *lastupdate
       :preface
       (defun my/save-buffer-wrapper ()
+        "Insert or update a $Lastupdate: 2025/01/03 16:31:56 $ string in the buffer before saving."
         (interactive)
-        (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %k:%M:%S") " $")))
+        (let ((tostr (concat "$Lastupdate: 2025/01/03 16:31:56 $")))
           (save-excursion
             (goto-char (point-min))
-            (while (re-search-forward "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
+            (while (re-search-forward "\\$Lastupdate\\(: .*?\\)?\\$" nil t)
               (replace-match tostr nil t)))))
       :hook (before-save-hook . my/save-buffer-wrapper))
 
-    ;; macOS specific settings for shell integration using exec-path-from-shell.
+    ;; macOS-specific shell integration
     (leaf exec-path-from-shell
       :ensure t
       :if (memq window-system '(mac ns))
-      :commands (exec-path-from-shell-getenvs exec-path-from-shell-setenv)
       :custom ((exec-path-from-shell-check-startup-files . nil))
       :config (exec-path-from-shell-initialize))
 
-    ;; no-littering: Organize Emacs config and cache files neatly.
+    ;; Organize configuration and cache files
     (leaf no-littering :ensure t :require t)
 
-    ;; Customize basic Emacs behaviors
-    (leaf cus-edit :custom `((custom-file . ,(concat no-littering-etc-directory "custom.el")))
+    ;; Customize `custom-file` to avoid polluting init files
+    (leaf cus-edit
+      :custom `((custom-file . ,(concat no-littering-etc-directory "custom.el")))
       :config (ignore-errors (load custom-file)))
 
-    ;; Designed
+    ;; Desktop session management
     (leaf *desktop
       :preface
       (defun my/save-desktop-session ()
@@ -581,11 +588,13 @@ This configuration script includes basic settings and utilities aimed at improvi
         (interactive)
         (desktop-save desktop-dirname)
         (message "Desktop session saved."))
+
       (defun my/restore-desktop-session ()
-        "Restore the desktop session."
+        "Restore the saved desktop session."
         (interactive)
         (desktop-read)
         (message "Desktop session restored."))
+
       :config
       (setq desktop-dirname (concat no-littering-var-directory "desktop")
             desktop-save 'if-exists
@@ -595,10 +604,11 @@ This configuration script includes basic settings and utilities aimed at improvi
       (desktop-save-mode 1)
       (winner-mode 1))
 
-    ;; Automatically revert buffers if file changes on disk
-    (leaf autorevert :global-minor-mode global-auto-revert-mode)
+    ;; Automatically revert buffers when files change
+    (leaf autorevert
+      :global-minor-mode global-auto-revert-mode)
 
-    ;; Automatic parenthesis pairing and paren matching highlighting.
+    ;; Automatic pairing and highlighting of parentheses
     (leaf elec-pair :global-minor-mode electric-pair-mode)
     (leaf paren
       :custom ((show-paren-delay . 0)
@@ -606,58 +616,53 @@ This configuration script includes basic settings and utilities aimed at improvi
       :global-minor-mode show-paren-mode)
     (leaf puni :ensure t :global-minor-mode puni-global-mode)
 
-    ;; Auto save and backup settings to keep files safe.
+    ;; Auto-save and backup settings
     (leaf files
       :preface
       (defun toggle-auto-save-visited-mode ()
-        "Toggle auto-save-visited-mode."
+        "Toggle `auto-save-visited-mode` and display a status message."
         (interactive)
-        (if auto-save-visited-mode
-            (progn
-              (auto-save-visited-mode -1)
-              (message "auto-save-visited-mode disabled"))
-          (progn
-            (auto-save-visited-mode 1)
-            (message "auto-save-visited-mode enabled"))))
+        (auto-save-visited-mode (if auto-save-visited-mode -1 1))
+        (message "auto-save-visited-mode %s" (if auto-save-visited-mode "enabled" "disabled")))
+
       :custom `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
                 (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
                 (delete-old-versions . t)
                 (auto-save-visited-interval . 1))
       :global-minor-mode auto-save-visited-mode)
 
-    ;; Tramp: Remote file editing settings.
+    ;; Remote file editing with Tramp
     (leaf tramp
-      :pre-setq `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-                  (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-      :setq ((tramp-default-method . "scp")
-             (tramp-encoding-shell . "/bin/bash")
-             (tramp-debug-buffer . t)
-             (tramp-verbose . 10)
-             (tramp-shell-prompt-pattern . "\\(?:^\\|\r\\)[^]#$%>\n]*#?[]#$%>] *\\(^[\\[[0-9;]*[a-zA-Z] *\\)*")
-             (tramp-use-ssh-controlmaster-options . nil)
-             (tramp-password-prompt-regexp . '(concat
-                                               "^.*"
-                                               (regexp-opt
-                                                '("passphrase" "Passphrase"
-                                                  "password" "Password"
-                                                  "Verification code")
-                                                t)
-                                               ".*:\0? *"))))
+      :custom `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+                (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave"))
+                (tramp-default-method . "scp")
+                (tramp-encoding-shell . "/bin/bash")
+                (tramp-debug-buffer . t)
+                (tramp-verbose . 10)
+                (tramp-shell-prompt-pattern . "\\(?:^\\|\r\\)[^]#$%>\n]*#?[]#$%>] *")
+                (tramp-use-ssh-controlmaster-options . nil)
+                (tramp-password-prompt-regexp . ".*\\(passphrase\\|Password\\|Verification code\\).*")))
 
-    ;; Miscellaneous useful settings for startup, history, and display.
-    (leaf startup :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
-    (leaf savehist :custom `((savehist-file . ,(concat no-littering-var-directory "savehist"))) :global-minor-mode t)
+    ;; Save minibuffer history
+    (leaf savehist
+      :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
+      :global-minor-mode t)
+
+    ;; Auto-save list configuration
+    (leaf startup
+      :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
 
     ;; Display keybindings in a popup
-    (leaf which-key :require t :global-minor-mode t)
+    (leaf which-key
+      :ensure t
+      :global-minor-mode t)
 
-    ;; Tree-sitter support for improved syntax highlighting and parsing
+    ;; Tree-sitter for better syntax highlighting
     (leaf treesit-auto
       :ensure t
-      :require t
-      :config
-      (setq treesit-auto-install t)
-      (global-treesit-auto-mode))
+      :custom ((treesit-auto-install . t))
+      :global-minor-mode global-treesit-auto-mode)
+
     (leaf treesit
       :config
       (setq treesit-font-lock-level 4))
