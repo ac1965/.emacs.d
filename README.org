@@ -71,7 +71,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/04 17:01:40 $
+  ;; $Lastupdate: 2025/01/04 17:15:04 $
 
   ;;; Commentary:
 
@@ -156,11 +156,11 @@ This setup enhances the Emacs user interface with a modern theme, dynamic window
 
 
 #+begin_src emacs-lisp
-  ;;; UI Configurations
+  ;;; UI Configurations using `leaf`
 
   (leaf UI
     :preface
-    ;; These two functions save and restore the window layout configuration.
+    ;; Save and restore the window layout configuration.
     (defun my/save-window-layout ()
       "Save the current window configuration."
       (interactive)
@@ -177,7 +177,7 @@ This setup enhances the Emacs user interface with a modern theme, dynamic window
             (message "Window configuration restored."))
         (message "No window configuration to restore.")))
 
-    ;; Custom function to display a buffer in the same window when possible.
+    ;; Function to display a buffer in the same window if possible.
     (defun my/display-buffer-same-window (buffer alist)
       "Reuse the currently selected window if possible."
       (unless (or (cdr (assq 'inhibit-same-window alist))
@@ -185,7 +185,7 @@ This setup enhances the Emacs user interface with a modern theme, dynamic window
                   (window-dedicated-p))
         (window--display-buffer buffer (selected-window) 'reuse alist)))
 
-    ;; Custom function to split the window below, from the parent or root window.
+    ;; Split the window below, starting from the root or parent window.
     (defun my/split-below (arg)
       "Split window below from the parent or root with ARG."
       (interactive "P")
@@ -195,28 +195,30 @@ This setup enhances the Emacs user interface with a modern theme, dynamic window
 
     ;; Toggle the 'dedicated' status of the selected window.
     (defun my/toggle-window-dedication ()
-      "Toggles window dedication in the selected window."
+      "Toggle window dedication for the selected window."
       (interactive)
       (set-window-dedicated-p (selected-window)
                               (not (window-dedicated-p (selected-window)))))
 
     :config
-    ;; Set fullscreen mode if the display is graphical.
+    ;; Set fullscreen mode when in a graphical display environment.
     (when (display-graphic-p)
       (set-frame-parameter nil 'fullscreen 'fullboth))
 
-    ;; Enable Golden Ratio mode to dynamically adjust window sizes for optimal viewing.
+    ;; Use golden-ratio mode for dynamically resizing windows.
     (leaf golden-ratio
       :ensure t
-      :global-minor-mode t)
+      :global-minor-mode golden-ratio-mode
+      :custom ((golden-ratio-adjust-factor . 1.2)
+               (golden-ratio-auto-scale . t)))
 
-    ;; Set a visually pleasant theme (ef-frost).
+    ;; Load a visually appealing theme (ef-frost).
     (leaf ef-themes
       :ensure t
       :config
       (load-theme 'ef-frost t))
 
-    ;; Configure the modeline for better visibility and information display.
+    ;; Configure modeline for better visibility.
     (leaf modeline
       :config
       (leaf minions
@@ -225,13 +227,15 @@ This setup enhances the Emacs user interface with a modern theme, dynamic window
         (minions-mode 1)
         (setq minions-mode-line-lighter "[+]"))
 
-      ;; Enable time and battery status in the modeline.
+      ;; Enable display of time and battery status in the mode-line.
       (setq display-time-interval 30
             display-time-day-and-date t
             display-time-24hr-format t)
-      (display-time-mode 1))
+      (display-time-mode 1)
+      (when (display-battery-mode)
+        (display-battery-mode 1)))
 
-    ;; Add padding around the mode-line for readability, toggled with F7 key.
+    ;; Add subtle padding to the mode-line and toggle with F7.
     (leaf spacious-padding
       :ensure t
       :config
@@ -242,12 +246,12 @@ This setup enhances the Emacs user interface with a modern theme, dynamic window
       (spacious-padding-mode 1)
       (define-key global-map (kbd "<f7>") #'spacious-padding-mode))
 
-    ;; Enable global tab line mode for easier tab navigation.
+    ;; Enable global tab line mode.
     (leaf tabmode
       :config
-      (global-tab-line-mode))
+      (global-tab-line-mode t))
 
-    ;; Configure Treemacs for file navigation.
+    ;; Configure Treemacs for file and project navigation.
     (leaf treemacs
       :ensure t
       :bind
@@ -290,34 +294,38 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
 
 
 #+begin_src emacs-lisp
-  ;;; Font Configuration using leaf for better font management and icon support.
+  ;;; Font Configuration using `leaf` for improved font management and icon support.
 
   (leaf Fonts
     :preface
-    ;; Function to check if a font exists in the system.
+    ;; Check if a font exists on the system.
     (defun font-exists-p (font)
-      "Check if FONT exists in the system."
+      "Check if FONT exists on the system."
       (member font (font-family-list)))
 
-    ;; Function to set up default font and icon fonts for a specific frame.
+    ;; Set up the default font and icon fonts for a specific frame.
     (defun font-setup (&optional frame)
       "Set up the default font and icon fonts for FRAME."
       (when (font-exists-p conf:font-family)
         (set-face-attribute 'default frame :family conf:font-family
                             :height (* conf:font-size 10))
+        ;; Configure Unicode fonts, such as emojis.
         (set-fontset-font t 'unicode
                           (font-spec :family "Noto Color Emoji") nil 'prepend)))
 
     :config
-    ;; Set default font family and size if not already configured.
+    ;; Default font family and size.
     (unless (boundp 'conf:font-family)
-      (setq conf:font-family "JetBrains Mono"
-            "Default font family"))
+      (setq conf:font-family "JetBrains Mono")) ;; Default font family
     (unless (boundp 'conf:font-size)
-      (setq conf:font-size 16
-            "Default font size"))
+      (setq conf:font-size 16)) ;; Default font size
 
-    ;; Icons settings using Nerd Fonts
+    ;; Ensure fonts are loaded correctly in daemon mode or GUI startup.
+    (if (daemonp)
+        (add-hook 'after-make-frame-functions #'font-setup)
+      (font-setup))
+
+    ;; Configure Nerd Fonts for icons and UI enhancements.
     (leaf nerd-icons
       :if (display-graphic-p)
       :ensure t
@@ -325,22 +333,19 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
       (unless (font-exists-p "Symbols Nerd Font Mono")
         (message "Nerd Font is not installed. Some icons may not display correctly.")))
 
+    ;; Enable Nerd Icons in Dired mode for file management.
     (leaf nerd-icons-dired
       :if (display-graphic-p)
       :ensure t
       :hook (dired-mode-hook . nerd-icons-dired-mode))
 
-    ;; Ligature settings for programming modes
+    ;; Enable ligatures (special character combinations) for programming modes.
     (leaf ligature
       :ensure t
       :config
-      (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
-      (global-ligature-mode t))
-
-    ;; Load fonts at startup or in daemon mode.
-    (if (daemonp)
-        (add-hook 'after-make-frame-functions #'font-setup)
-      (font-setup)))
+      (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
+                                           ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
+      (global-ligature-mode t)))
 #+end_src
 ** Basic
 /This configuration script includes basic settings and utilities aimed at improving the functionality and cleanliness of the Emacs environment. Here's a summary of the key components/
