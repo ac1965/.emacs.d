@@ -71,12 +71,13 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/04 21:14:23 $
+  ;; $Lastupdate: 2025/01/04 21:47:31 $
 
   ;;; Commentary:
 
   ;;; Code:
 #+end_src
+
 ** Leaf
 /This Emacs configuration sets up package management and defines essential packages using `leaf` for a more structured approach. Here's a summary/
 
@@ -347,6 +348,7 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
                                            ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
       (global-ligature-mode t)))
 #+end_src
+
 ** Basic
 /This configuration script includes basic settings and utilities aimed at improving the functionality and cleanliness of the Emacs environment. Here's a summary of the key components/
 
@@ -534,492 +536,6 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
     (tree-sitter-langs-install-grammars))
 #+end_src
 
-** Utilties Package
-/Miscellaneous functions that improve user experience and add extra utility./
-
-These include toggling line numbers, switching window layouts, and custom functions for buffer management and Dired mode.
-
-
-#+begin_src emacs-lisp
-  ;;; Utilities Package Configuration
-
-  ;; Enable global visual-line-mode for better word wrapping
-  (leaf visual-line-mode
-    :global-minor-mode t)
-
-  ;; macOS clipboard support using pbcopy
-  (leaf pbcopy
-    :if (memq window-system '(mac ns))
-    :ensure t)
-
-  ;; Utility packages for dired, expand-region, undo-fu, aggressive-indent, and delsel
-  (leaf dired-filter :ensure t)
-  (leaf expand-region :ensure t)
-  (leaf undo-fu :ensure t)
-  (leaf aggressive-indent
-    :ensure t
-    :global-minor-mode global-aggressive-indent-mode)
-  (leaf delsel
-    :global-minor-mode delete-selection-mode)
-
-  ;; Search and jump utilities (Ripgrep and dumb-jump)
-  (leaf rg :ensure t)
-  (leaf dumb-jump
-    :ensure t
-    :after rg
-    :hook ((xref-backend-functions . dumb-jump-xref-activate))
-    :custom ((dumb-jump-force-searcher . 'rg)))
-
-  ;; Multi-cursor editing support
-  (leaf multiple-cursors :ensure t)
-
-  ;; Version control using Magit
-  (leaf magit :ensure t)
-
-  ;; Flymake and Flycheck for on-the-fly syntax checking
-  (leaf flymake :ensure t :global-minor-mode)
-  (leaf flycheck :ensure t :global-minor-mode t)
-
-  ;; Flyspell for spell checking
-  (leaf flyspell
-    :ensure t
-    :hook (text-mode . flyspell-mode)
-    :custom ((ispell-program-name . "aspell")))
-
-  ;; Projectile for project management
-  (leaf projectile :ensure t :global-minor-mode t)
-
-  ;; Yasnippet for snippet support
-  (leaf yasnippet :ensure t :global-minor-mode yas-global-mode)
-
-  ;; EasyPG activate
-  (leaf epa-file
-    :require t
-    :config
-    (epa-file-enable)
-    (custom-set-variables '(epg-gpg-program  "/usr/local/bin/gpg"))
-    (setq epa-pinentry-mode 'loopback))
-
-  ;; Ellama
-  (leaf ellama
-    :after llm-ollama
-    :ensure t
-    :init
-    (setopt ellama-language "Japanese")
-    (setopt ellama-sessions-directory (concat no-littering-var-directory "ellama-sessions"))
-    (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
-    ;; default provider
-    (setopt ellama-provider (make-llm-ollama
-                             :chat-model "codestral:22b-v0.1-q4_K_S"
-                             :embedding-model "codestral:22b-v0.1-q4_K_S"))
-    ;; translation provider
-    (setopt ellama-translation-provider (make-llm-ollama
-                                         :chat-model "llama3:8b-instruct-q8_0"
-                                         :embedding-model "llama3:8b-instruct-q8_0"))
-    ;; ellama use providers
-    (setopt ellama-providers
-            '(("codestral" . (make-llm-ollama
-                              :chat-model "codestral:22b-v0.1-q4_K_S"
-                              :embedding-model "codestral:22b-v0.1-q4_K_S"))
-              ("gemma2" . (make-llm-ollama
-                           :chat-model "gemma2:27b-instruct-q4_K_S"
-                           :embedding-model "gemma2:27b-instruct-q4_K_S"))
-              ("llama3.2-vision" . (make-llm-ollama
-                                    :chat-model "llama3:8b-instruct-q8_0"
-                                    :embedding-model "llama3:8b-instruct-q8_0")))))
-
-  ;; Programming and markup language support
-  (leaf prog-mode
-    :hook
-    (prog-mode-hook . (lambda ()
-                        (display-line-numbers-mode)
-                        (electric-pair-mode))))
-
-  ;; LSP configuration for various programming languages
-  (leaf lsp-mode
-    :ensure t
-    :commands lsp
-    :hook
-    ((python-mode-hook go-mode-hook rust-mode-hook) . lsp)
-    :config
-    (setq lsp-enable-symbol-highlighting t
-          lsp-signature-auto-activate nil
-          lsp-disabled-clients '(copilot-ls)))
-
-  (leaf lsp-ui
-    :ensure t
-    :after lsp-mode
-    :config
-    (setq lsp-ui-doc-enable t
-          lsp-ui-doc-delay 0.2
-          lsp-ui-sideline-enable t))
-
-  (leaf parinfer-rust-mode
-    :ensure t
-    :hook (clojure-mode emacs-lisp-mode common-lisp-mode scheme-mode lisp-mode)
-    :init
-    (setq parinfer-rust-auto-download t))
-
-  ;; Eglot configuration for language server support
-  (leaf eglot
-    :ensure t
-    :config
-    ;; Add Deno server for JavaScript/TypeScript
-    (add-to-list 'eglot-server-programs '((js-mode js-ts-mode typescript-mode typescript-ts-mode) . (eglot-deno "deno" "lsp")))
-
-    ;; Define custom class for Deno LSP server
-    (defclass eglot-deno (eglot-lsp-server) () :documentation "Custom class for deno LSP.")
-
-    ;; Provide initialization options for Deno
-    (cl-defmethod eglot-initialization-options ((server eglot-deno))
-      "Passes through required deno initialization options"
-      (list :enable t :lint t))
-
-    ;; Disable certain server capabilities
-    (setq eglot-ignored-server-capabilities '(:documentHighlightProvider :inlayHintProvider))
-
-    ;; Disable multiline eldoc echo area
-    (setq eldoc-echo-area-use-multiline-p nil)
-
-    ;; Hook eglot to start automatically in various modes
-    :hook
-    ((sh-mode
-      c-mode
-      c++-mode
-      python-mode
-      ruby-mode
-      rust-mode
-      html-mode
-      css-mode
-      js-mode) . eglot-ensure))
-
-  ;;; Org-mode Setup
-  (leaf Org-mode
-    :config
-    ;; Org-mode document management and editing
-    (leaf org
-      :leaf-defer t
-      :preface
-      (defvar warning-suppress-types nil)
-
-      ;; Return list of opened Org mode buffer files
-      (defun org-buffer-files ()
-        "Return list of opened Org mode buffer files."
-        (mapcar (function buffer-file-name)
-                (org-buffer-list 'files)))
-
-      ;; Show Org buffer file in current window
-      (defun show-org-buffer (file)
-        "Show an org-file FILE in the current buffer."
-        (interactive)
-        (if (get-buffer file)
-            (let ((buffer (get-buffer file)))
-              (switch-to-buffer buffer)
-              (message "%s" file))
-          (find-file (concat org-directory "/" file))))
-
-      :custom
-      (org-support-shift-select . t)
-
-      :init
-      (setq org-directory (expand-file-name "Org/" my:d:cloud))
-      (unless (file-exists-p org-directory)
-        (make-directory org-directory))
-      (setq org-startup-indented t
-            org-ellipsis " ▾"
-            org-hide-leading-stars t)
-      (setq warning-suppress-types (append warning-suppress-types '((org-element-cache))))
-
-      :bind
-      (("C-M--" . #'(lambda () (interactive)
-                      (show-org-buffer "gtd.org")))
-       ("C-M-^" . #'(lambda () (interactive)
-                      (show-org-buffer "notes.org")))
-       ("C-M-~" . #'(lambda () (interactive)
-                      (show-org-buffer "kb.org"))))
-
-      :config
-      (setq org-agenda-files (list org-directory)
-            org-default-notes-file "notes.org"
-            org-log-done 'time
-            org-startup-truncated nil
-            org-startup-folded 'content
-            org-use-speed-commands t
-            org-enforce-todo-dependencies t)
-
-      (remove (concat org-directory "/archives") org-agenda-files)
-
-      (setq org-todo-keywords
-            '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
-
-      (setq org-refile-targets
-            (quote ((nil :maxlevel . 3)
-                    (org-buffer-files :maxlevel . 1)
-                    (org-agenda-files :maxlevel . 3))))
-
-      (setq org-capture-templates
-            '(("t" "Todo" entry (file+headline "gtd.org" "Inbox")
-               "* TODO %?\n %i\n %a")
-              ("n" "Note" entry (file+headline "notes.org" "Notes")
-               "* %?\nEntered on %U\n %i\n %a")
-              ("j" "Journal" entry (function org-journal-find-location)
-               "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-              ("m" "Meeting" entry (file "meetings.org")
-               "* MEETING with %? :meeting:\n  %U\n  %a")
-              )))
-
-    ;; Additional Org-related packages and configuration
-    (leaf org-bullets
-      :ensure t
-      :hook (org-mode . org-bullets-mode))
-
-    (leaf org-latex
-      :after org
-      :custom
-      (org-latex-packages-alist '(("" "graphicx" t)
-                                  ("" "longtable" nil)
-                                  ("" "wrapfig" nil)))
-      (org-latex-pdf-process '("pdflatex -interaction nonstopmode -output-directory %o %f"
-                               "pdflatex -interaction nonstopmode -output-directory %o %f")))
-
-    (leaf ob
-      :after org
-      :defun org-babel-do-load-languages
-      :config
-      (org-babel-do-load-languages
-       'org-babel-load-languages
-       '((emacs-lisp . t)
-         (shell . t)
-         (python . t)
-         (R . t)
-         (ditaa . t)
-         (plantuml . t))))
-
-    (leaf org-superstar
-      :after org
-      :ensure t
-      :custom
-      (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷" "" ""))
-      :hook
-      (org-mode-hook (lambda () (org-superstar-mode 1))))
-
-    (leaf org-journal
-      :after org
-      :ensure t
-      :config
-      (setq org-journal-dir (concat org-directory "/journal")
-            org-journal-enable-agenda-integration t)
-      (defun org-journal-find-location ()
-        ;; Open today's journal and position point at the top-level heading.
-        (org-journal-new-entry t)
-        (goto-char (point-min))))
-
-    ;; Other Org-related extensions and tools
-    (leaf org-cliplink :after org :ensure t :bind ("C-x p i" . org-cliplink))
-    (leaf org-download
-      :after org
-      :ensure t
-      :config
-      (setq-default org-download-image-dir (concat org-directory "/pictures")))
-    (leaf org-web-tools :after org :ensure t)
-    (leaf toc-org
-      :after org markdown-mode
-      :ensure t
-      :config
-      (add-hook 'org-mode-hook 'toc-org-enable)
-      (add-hook 'markdown-mode-hook 'toc-org-mode)
-      (define-key markdown-mode-map (kbd "\C-c\C-o") 'toc-org-markdown-follow-thing-at-point))
-
-    ;; Org-roam for knowledge management
-    (leaf org-roam
-      :ensure t
-      :after org
-      :bind
-      ("C-c n l" . org-roam-buffer-toggle)
-      ("C-c n f" . org-roam-node-find)
-      ("C-c n g" . org-roam-graph)
-      ("C-c n i" . org-roam-node-insert)
-      ("C-c n c" . org-roam-capture)
-      ("C-c n j" . org-roam-dailies-capture-today)
-      :config
-      (setq org-roam-directory (concat org-directory "/org-roam"))
-      (org-roam-db-autosync-mode))
-
-    ;; Export Org files to Hugo markdown format using ox-hugo
-    (leaf ox-hugo
-      :ensure t
-      :require t
-      :after ox
-      :custom ((org-hugo-front-matter-format . "toml")))
-    ;; ox-hugo-capture
-    (leaf *ox-hugo--capture
-      :require org-capture
-      :defvar (org-capture-templates)
-      :config
-      (add-to-list 'org-capture-templates
-                   '("b" "Create new blog post" entry
-                     (file+headline my-capture-blog-file "blog")
-                     "** TODO %?
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
-  (format-time-string \"%Y\")
-  (let ((sha1 (sha1 (shell-command-to-string \"head -c 1024 /dev/urandom\"))))
-  (cl-loop for (a b c d) on (cdr (split-string sha1 \"\")) by #'cddddr repeat 2 collect (concat a b c d))))
-  :EXPORT_DATE:
-  :EXPORT_HUGO_TAGS:
-  :EXPORT_HUGO_CATEGORIES:
-  :EXPORT_HUGO_LASTMOD:
-  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
-  :END:
-  \n
-  ")))
-    (leaf markdown-mode
-    :ensure t
-    :mode ("\\.md\\'" . markdown-mode)))
-
-  ;;; Miscellaneous helper functions
-
-  ;; Delete backup files that are older than 7 days
-  (defun my/delete-old-backups ()
-    "Delete backup files that are older than 7 days."
-    (let ((backup-dir (concat no-littering-var-directory "backup/")))
-      (when (file-directory-p backup-dir)
-        (dolist (file (directory-files backup-dir t))
-          (when (and (file-regular-p file)
-                     (> (- (float-time (current-time))
-                           (float-time (nth 5 (file-attributes file))))
-                        (* 7 24 60 60))) ;; Older than 7 days
-            (delete-file file))))))
-  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
-
-  ;; Enable `view-mode` automatically when `read-only-mode` is activated.
-  (defun my/enable-view-mode-on-read-only ()
-    "Enable `view-mode` automatically when `read-only-mode` is activated."
-    (if buffer-read-only
-        (view-mode 1)
-      (view-mode -1)))
-  (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
-
-  ;;
-  (defun my/open-by-vscode ()
-    (interactive)
-    (shell-command
-     (format "code -r -g %s:%d:%d"
-             (buffer-file-name)
-             (line-number-at-pos)
-             (current-column))))
-  (define-key global-map (kbd "C-c C-v") 'my/open-by-vscode)
-
-  ;; https://takaxp.github.io/utility.html
-  (defun my/print-build-info ()
-    (interactive)
-    (switch-to-buffer (get-buffer-create "*Build info*"))
-    (let ((buffer-read-only nil))
-      (erase-buffer)
-      (insert
-       (format "GNU Emacs %s\nCommit:\t\t%s\nBranch:\t\t%s\nSystem:\t\t%s\nDate:\t\t\t%s\n"
-               emacs-version
-               (emacs-repository-get-version)
-               (when (version< "27.0" emacs-version)
-                 (emacs-repository-get-branch))
-               system-configuration
-               (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
-      (insert (format "Patch:\t\t%s ns-inline.patch\n"
-                      (if (boundp 'mac-ime--cursor-type) "with" "without")))
-      (insert
-       (format "Features:\t%s\n" system-configuration-features))
-      ;; (insert
-      ;;  (format "Options:\t%s\n"  system-configuration-options))
-      )
-    (view-mode))
-
-  ;; Generate a table of keybindings sorted by key sequence and command name.
-  (defun my/generate-keybinding-table ()
-    "Generate a table of keybindings sorted by key sequence and command name."
-    (interactive)
-    (let ((bindings '()))
-      ;; Iterate through all keymaps and collect keybindings
-      (mapatoms
-       (lambda (sym)
-         (when (commandp sym)
-           (let ((keys (where-is-internal sym)))
-             (dolist (key keys)
-               (push (list (key-description key) (symbol-name sym)) bindings))))))
-      ;; Sort by key sequence and then by command name
-      (setq bindings
-            (sort bindings
-                  (lambda (a b)
-                    (or (string< (car a) (car b))
-                        (and (string= (car a) (car b))
-                             (string< (cadr a) (cadr b)))))))
-      ;; Create the table in tabulated-list-mode
-      (with-current-buffer (get-buffer-create "*Keybindings Table*")
-        (tabulated-list-mode)
-        (setq tabulated-list-format [("Key" 20 t) ("Command" 40 t)])
-        (setq tabulated-list-entries
-              (mapcar (lambda (x)
-                        (list (car x) (vector (car x) (cadr x))))
-                      bindings))
-        (tabulated-list-init-header)
-        (tabulated-list-print)
-        (pop-to-buffer (current-buffer)))))
-  (define-key global-map (kbd "C-c C-k") 'my/generate-keybinding-table)
-
-  (defun my/show-mode-keybindings ()
-    "Display a list of keybindings for the major and minor modes of the current buffer in a new *Help* buffer if one already exists."
-    (interactive)
-    (let ((help-buffer (get-buffer-create "*Help*"))) ;; Create or retrieve the *Help* buffer
-      (when (get-buffer-window help-buffer) ;; Check if *Help* buffer is already visible
-        (setq help-buffer (generate-new-buffer "*Help*"))) ;; Create a new buffer if visible
-      (with-current-buffer help-buffer
-        (describe-mode)) ;; Display mode keybindings in the buffer
-      (display-buffer help-buffer))) ;; Show the buffer in the current window
-
-  (define-key global-map (kbd "C-c C-s") 'my/show-mode-keybindings)
-
-  (defun my/keybindings-to-org-table (prefix)
-    "Show keybindings under a given PREFIX as an Org-mode table."
-    (interactive "sEnter key prefix (e.g., 'C-c'): ")
-    (let ((keymap (current-global-map))
-          (output '()))
-      ;; Get all key bindings starting with the given prefix
-      (map-keymap
-       (lambda (event binding)
-         (let ((key (vector event)))
-           (when (and (keymapp binding)
-                      (key-binding (vconcat (list (kbd prefix)) key)))
-             (map-keymap
-              (lambda (ev bind)
-                (let ((full-key (vconcat (list (kbd prefix) ev))))
-                  (push (list (key-description full-key)
-                              (format "%s" bind))
-                        output)))
-              binding))))
-       keymap)
-      ;; Sort by keybinding
-      (setq output (sort output (lambda (a b) (string< (car a) (car b)))))
-      ;; Output as Org-mode table
-      (insert "| Keybinding | Command |\n")
-      (insert "|------------+---------|\n")
-      (dolist (entry output)
-        (insert (format "| %s | %s |\n" (car entry) (cadr entry))))
-      (org-table-align)))
-  (define-key global-map (kbd "C-c C-;") 'my/keybindings-to-org-table)
-
-  ;; Remove duplicate entries from kill-ring
-  (defun my/no-kill-new-duplicate (yank)
-    (setq kill-ring (delete yank kill-ring)))
-  (advice-add 'kill-new :before #'my/no-kill-new-duplicate)
-
-  ;; Clean up whitespace before saving
-  (add-hook 'before-save-hook 'delete-trailing-whitespace)
-
-  ;; goto-address-mode
-  (progn
-    (add-hook 'prog-mode-hook 'goto-address-prog-mode)
-    (add-hook 'text-mode-hook 'goto-address-mode))
-#+end_src
-
 ** Completion Framework
 /This configuration script sets up a sophisticated *completion framework* for Emacs, utilizing a combination of packages to provide fast, flexible, and user-friendly completion across various contexts. Here's an overview of the key components/
 
@@ -1142,6 +658,224 @@ These include toggling line numbers, switching window layouts, and custom functi
   (add-hook 'emacs-lisp-mode-hook #'flycheck-mode)
   (when (executable-find "parinfer-rust-server")
     (add-hook 'emacs-lisp-mode-hook #'parinfer-rust-mode))
+#+end_src
+
+** Utilties Package
+/Miscellaneous functions that improve user experience and add extra utility./
+
+These include toggling line numbers, switching window layouts, and custom functions for buffer management and Dired mode.
+
+
+#+begin_src emacs-lisp
+  ;;; Utilities Package Configuration with `leaf`
+  ;;; Refactored for Emacs 30+ using `leaf` and added proper documentation.
+
+  ;; -----------------------------------------------------------------------------
+  ;; 1. Enable `visual-line-mode` globally for better word wrapping
+  ;; -----------------------------------------------------------------------------
+  (leaf visual-line-mode
+    :doc "Enable global visual-line-mode for improved word wrapping."
+    :global-minor-mode t)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 2. macOS clipboard integration using `pbcopy`
+  ;; -----------------------------------------------------------------------------
+  (leaf pbcopy
+    :doc "Support macOS clipboard integration via pbcopy."
+    :if (memq window-system '(mac ns))
+    :ensure t)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 3. Utility packages for editing and file management
+  ;; -----------------------------------------------------------------------------
+
+  ;; Enhance Dired capabilities
+  (leaf dired-filter
+    :doc "Add filtering capabilities to Dired."
+    :ensure t)
+
+  ;; Quickly expand the selected region
+  (leaf expand-region
+    :doc "Expand the selection region incrementally."
+    :ensure t)
+
+  ;; Undo management with redo support
+  (leaf undo-fu
+    :doc "Provides enhanced undo/redo functionality."
+    :ensure t)
+
+  ;; Enable aggressive indentation globally
+  (leaf aggressive-indent
+    :doc "Automatically and aggressively indent code as you type."
+    :ensure t
+    :global-minor-mode global-aggressive-indent-mode)
+
+  ;; Enable deletion of selected text when typing
+  (leaf delsel
+    :doc "Replace the selected region when typing."
+    :global-minor-mode delete-selection-mode)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 4. Search and navigation utilities
+  ;; -----------------------------------------------------------------------------
+
+  ;; Ripgrep integration for fast searching
+  (leaf rg
+    :doc "Integrate Ripgrep for fast file searching."
+    :ensure t)
+
+  ;; Dumb Jump integration for quick navigation
+  (leaf dumb-jump
+    :doc "Enable context-aware code navigation using dumb-jump."
+    :ensure t
+    :after rg
+    :hook ((xref-backend-functions . dumb-jump-xref-activate))
+    :custom ((dumb-jump-force-searcher . 'rg)))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 5. Multi-cursor editing support
+  ;; -----------------------------------------------------------------------------
+  (leaf multiple-cursors
+    :doc "Enable multi-cursor editing."
+    :ensure t)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 6. Version control with Magit
+  ;; -----------------------------------------------------------------------------
+  (leaf magit
+    :doc "Version control interface for Git."
+    :ensure t)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 7. Syntax checking utilities
+  ;; -----------------------------------------------------------------------------
+
+  ;; Built-in Flymake syntax checker
+  (leaf flymake
+    :doc "Enable Flymake for on-the-fly syntax checking."
+    :ensure t
+    :global-minor-mode t)
+
+  ;; Flycheck for advanced syntax checking
+  (leaf flycheck
+    :doc "Enable Flycheck for enhanced syntax checking."
+    :ensure t
+    :global-minor-mode t)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 8. Spell checking with Flyspell
+  ;; -----------------------------------------------------------------------------
+  (leaf flyspell
+    :doc "Enable Flyspell for spell checking in text modes."
+    :ensure t
+    :hook (text-mode . flyspell-mode)
+    :custom ((ispell-program-name . "aspell")))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 9. Project management with Projectile
+  ;; -----------------------------------------------------------------------------
+  (leaf projectile
+    :doc "Enable Projectile for project management."
+    :ensure t
+    :global-minor-mode t)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 10. Snippet management with Yasnippet
+  ;; -----------------------------------------------------------------------------
+  (leaf yasnippet
+    :doc "Enable Yasnippet for snippet expansion."
+    :ensure t
+    :global-minor-mode yas-global-mode)
+
+  ;; -----------------------------------------------------------------------------
+  ;; 11. EasyPG (GPG encryption) configuration
+  ;; -----------------------------------------------------------------------------
+  (leaf epa-file
+    :doc "Enable EasyPG for encrypted file handling."
+    :require t
+    :config
+    (epa-file-enable)
+    (custom-set-variables '(epg-gpg-program "gpg"))
+    (setq epa-pinentry-mode 'loopback))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 12. Advanced AI-assisted utilities with Ellama
+  ;; -----------------------------------------------------------------------------
+  (leaf ellama
+    :doc "Enable Ellama for AI-assisted tasks such as translation."
+    :after llm-ollama
+    :ensure t
+    :init
+    (setopt ellama-language "Japanese")
+    (setopt ellama-sessions-directory (concat no-littering-var-directory "ellama-sessions"))
+    (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
+    (setopt ellama-provider (make-llm-ollama
+                             :chat-model "codestral:22b-v0.1-q4_K_S"
+                             :embedding-model "codestral:22b-v0.1-q4_K_S"))
+    (setopt ellama-translation-provider (make-llm-ollama
+                                         :chat-model "llama3:8b-instruct-q8_0"
+                                         :embedding-model "llama3:8b-instruct-q8_0"))
+    (setopt ellama-providers
+            '(("codestral" . (make-llm-ollama
+                              :chat-model "codestral:22b-v0.1-q4_K_S"
+                              :embedding-model "codestral:22b-v0.1-q4_K_S"))
+              ("gemma2" . (make-llm-ollama
+                           :chat-model "gemma2:27b-instruct-q4_K_S"
+                           :embedding-model "gemma2:27b-instruct-q4_K_S"))
+              ("llama3.2-vision" . (make-llm-ollama
+                                    :chat-model "llama3:8b-instruct-q8_0"
+                                    :embedding-model "llama3:8b-instruct-q8_0")))))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 13. Language support and programming utilities
+  ;; -----------------------------------------------------------------------------
+
+  ;; Enable useful minor modes in all programming modes
+  (leaf prog-mode
+    :doc "Enable useful minor modes for all programming languages."
+    :hook
+    (prog-mode-hook . (lambda ()
+                        (display-line-numbers-mode)
+                        (electric-pair-mode))))
+
+  ;; LSP mode for advanced language support
+  (leaf lsp-mode
+    :doc "Enable LSP for advanced language support."
+    :ensure t
+    :commands lsp
+    :hook
+    ((python-mode-hook go-mode-hook rust-mode-hook) . lsp)
+    :config
+    (setq lsp-enable-symbol-highlighting t
+          lsp-signature-auto-activate nil
+          lsp-disabled-clients '(copilot-ls)))
+
+  (leaf lsp-ui
+    :doc "Enhance LSP mode with UI features."
+    :ensure t
+    :after lsp-mode
+    :custom
+    ((lsp-ui-doc-enable . t)
+     (lsp-ui-doc-delay . 0.2)
+     (lsp-ui-sideline-enable . t)))
+
+  (leaf parinfer-rust-mode
+    :doc "Enable Parinfer for Lisp editing."
+    :ensure t
+    :hook (clojure-mode emacs-lisp-mode common-lisp-mode scheme-mode lisp-mode)
+    :init
+    (setq parinfer-rust-auto-download t))
+
+  ;; Eglot as an alternative LSP client
+  (leaf eglot
+    :doc "Enable Eglot as an alternative LSP client."
+    :ensure t
+    :config
+    (add-to-list 'eglot-server-programs '((js-mode js-ts-mode typescript-mode typescript-ts-mode) . (eglot-deno "deno" "lsp")))
+    (setq eglot-ignored-server-capabilities '(:documentHighlightProvider :inlayHintProvider)
+          eldoc-echo-area-use-multiline-p nil)
+    :hook
+    ((sh-mode c-mode c++-mode python-mode ruby-mode rust-mode html-mode css-mode js-mode) . eglot-ensure))
 #+end_src
 
 ** Keybind
@@ -1374,6 +1108,210 @@ These include toggling line numbers, switching window layouts, and custom functi
               (lambda ()
                 (define-key dired-mode-map "z" 'my/dired-view-file-other-window))))
 #+end_src
+
+** Org Package  
+
+#+begin_src emacs-lisp
+  ;;; Org-mode Setup with `leaf`
+  ;;; Refactored for Emacs 30+ using `leaf` with proper documentation.
+
+  ;; -----------------------------------------------------------------------------
+  ;; 1. Core Org-mode configuration
+  ;; -----------------------------------------------------------------------------
+  (leaf org
+    :doc "Core configuration for Org-mode."
+    :leaf-defer t
+    :preface
+    (defvar warning-suppress-types nil)
+
+    ;; Return list of opened Org-mode buffer files
+    (defun org-buffer-files ()
+      "Return a list of opened Org-mode buffer files."
+      (mapcar #'buffer-file-name
+              (org-buffer-list 'files)))
+
+    ;; Show Org buffer in the current window
+    (defun show-org-buffer (file)
+      "Show an Org-mode file in the current buffer."
+      (interactive)
+      (if (get-buffer file)
+          (let ((buffer (get-buffer file)))
+            (switch-to-buffer buffer)
+            (message "%s" file))
+        (find-file (concat org-directory "/" file))))
+
+    :init
+    (setq org-directory (expand-file-name "Org/" my:d:cloud)
+          org-startup-indented t
+          org-ellipsis " ▾"
+          org-hide-leading-stars t
+          org-log-done 'time
+          org-startup-truncated nil
+          org-startup-folded 'content
+          org-use-speed-commands t
+          org-enforce-todo-dependencies t)
+
+    ;; Ensure org-directory exists
+    (unless (file-exists-p org-directory)
+      (make-directory org-directory))
+
+    ;; Suppress certain warnings
+    (setq warning-suppress-types (append warning-suppress-types '((org-element-cache))))
+
+    :custom
+    (org-support-shift-select . t)
+
+    :bind
+    (("C-M--" . (lambda () (interactive) (show-org-buffer "gtd.org")))
+     ("C-M-^" . (lambda () (interactive) (show-org-buffer "notes.org")))
+     ("C-M-~" . (lambda () (interactive) (show-org-buffer "kb.org"))))
+
+    :config
+    (setq org-agenda-files (list org-directory)
+          org-default-notes-file "notes.org"
+          org-todo-keywords '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)"))
+          org-refile-targets '((nil :maxlevel . 3)
+                               (org-buffer-files :maxlevel . 1)
+                               (org-agenda-files :maxlevel . 3)))
+
+    ;; Define capture templates
+    (setq org-capture-templates
+          '(("t" "Todo" entry (file+headline "gtd.org" "Inbox")
+             "* TODO %?\n %i\n %a")
+            ("n" "Note" entry (file+headline "notes.org" "Notes")
+             "* %?\nEntered on %U\n %i\n %a")
+            ("j" "Journal" entry (function org-journal-find-location)
+             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+            ("m" "Meeting" entry (file "meetings.org")
+             "* MEETING with %? :meeting:\n  %U\n  %a"))))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 2. Org-mode extensions and utilities
+  ;; -----------------------------------------------------------------------------
+
+  (leaf org-bullets
+    :doc "Use fancy bullets for Org headlines."
+    :ensure t
+    :hook (org-mode . org-bullets-mode))
+
+  (leaf org-superstar
+    :doc "Enable fancy bullets and formatting for Org-mode."
+    :ensure t
+    :custom (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷" ""))
+    :hook (org-mode-hook . org-superstar-mode))
+
+  (leaf org-latex
+    :doc "Configure LaTeX export for Org-mode."
+    :after org
+    :custom (org-latex-packages-alist . '(("" "graphicx" t)
+                                          ("" "longtable" nil)
+                                          ("" "wrapfig" nil)))
+    (org-latex-pdf-process . '("pdflatex -interaction nonstopmode -output-directory %o %f"
+                               "pdflatex -interaction nonstopmode -output-directory %o %f")))
+
+  (leaf ob
+    :doc "Enable Babel support for multiple languages in Org-mode."
+    :after org
+    :config
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     '((emacs-lisp . t)
+       (shell . t)
+       (python . t)
+       (R . t)
+       (ditaa . t)
+       (plantuml . t))))
+
+  (leaf org-download
+    :doc "Enable image downloads in Org-mode."
+    :ensure t
+    :after org
+    :config
+    (setq org-download-image-dir (concat org-directory "/pictures")))
+
+  (leaf org-journal
+    :doc "Enable journaling in Org-mode."
+    :ensure t
+    :after org
+    :config
+    (setq org-journal-dir (concat org-directory "/journal")
+          org-journal-enable-agenda-integration t)
+    (defun org-journal-find-location ()
+      "Open today's journal and position point at the top-level heading."
+      (org-journal-new-entry t)
+      (goto-char (point-min))))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 3. Knowledge management with Org-roam
+  ;; -----------------------------------------------------------------------------
+  (leaf org-roam
+    :doc "Enable Org-roam for personal knowledge management."
+    :ensure t
+    :after org
+    :bind (("C-c n l" . org-roam-buffer-toggle)
+           ("C-c n f" . org-roam-node-find)
+           ("C-c n g" . org-roam-graph)
+           ("C-c n i" . org-roam-node-insert)
+           ("C-c n c" . org-roam-capture)
+           ("C-c n j" . org-roam-dailies-capture-today))
+    :config
+    (setq org-roam-directory (concat org-directory "/org-roam"))
+    (org-roam-db-autosync-mode))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 4. Export to Hugo using ox-hugo
+  ;; -----------------------------------------------------------------------------
+  (leaf ox-hugo
+    :doc "Enable export of Org files to Hugo markdown format."
+    :ensure t
+    :after ox
+    :custom (org-hugo-front-matter-format . "toml"))
+
+  ;; ox-hugo-capture
+  (leaf *ox-hugo--capture
+    :require org-capture
+    :defvar (org-capture-templates)
+    :config
+    (add-to-list 'org-capture-templates
+                 '("b" "Create new blog post" entry
+                   (file+headline my-capture-blog-file "blog")
+                   "** TODO %?
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
+  (format-time-string \"%Y\")
+  (let ((sha1 (sha1 (shell-command-to-string \"head -c 1024 /dev/urandom\"))))
+  (cl-loop for (a b c d) on (cdr (split-string sha1 \"\")) by #'cddddr repeat 2 collect (concat a b c d))))
+  :EXPORT_DATE:
+  :EXPORT_HUGO_TAGS:
+  :EXPORT_HUGO_CATEGORIES:
+  :EXPORT_HUGO_LASTMOD:
+  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
+  :END:
+  \n
+  ")))
+
+  (leaf markdown-mode
+    :ensure t
+    :mode ("\\.md\\'" . markdown-mode)))
+
+  ;; -----------------------------------------------------------------------------
+  ;; 5. Markdown mode support
+  ;; -----------------------------------------------------------------------------
+  (leaf markdown-mode
+    :doc "Enable markdown editing mode."
+    :ensure t
+    :mode ("\\.md\\'" . markdown-mode))
+
+  (leaf toc-org
+    :doc "Enable table of contents generation for Org and Markdown files."
+    :ensure t
+    :after (org markdown-mode)
+    :hook ((org-mode . toc-org-enable)
+           (markdown-mode . toc-org-mode))
+    :bind (:map markdown-mode-map
+                ("C-c C-o" . toc-org-markdown-follow-thing-at-point)))
+#+end_src
+
 ** Footer
 #+begin_src emacs-lisp
 
