@@ -54,11 +54,6 @@
        (message "Error loading org file: %s" (error-message-string err))))
   (message "README.org not found. Please ensure it exists in %s" my:d))
 
-;; ;;; Asynchronous Package Loading (Emacs 30+)
-;; ;; Optimize package activation for Emacs 30 and later
-;; (when (fboundp 'package-activate-all)
-;;   (package-activate-all :async t))
-
 ;;; Provide the init feature
 (provide 'init)
 ;;; init.el ends here
