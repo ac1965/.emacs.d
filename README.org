@@ -71,7 +71,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/04 17:15:04 $
+  ;; $Lastupdate: 2025/01/04 21:14:23 $
 
   ;;; Commentary:
 
@@ -272,7 +272,7 @@ This setup enhances the Emacs user interface with a modern theme, dynamic window
                               (display-line-numbers-mode 0)))))
 #+end_src
 *** Fonts
-*Fonts setting*
+*Fon ts setting*
 nerd-icons provides icons in file listings. emojify adds emoji support in Org mode. Font settings are applied across frames.
 
 *Explanation:*
@@ -356,13 +356,17 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
 
 
 #+begin_src emacs-lisp
-  ;;; Basic Configuration
+  ;;; Basic Configuration with `leaf`
+  ;;; Refactored for Emacs 30+ using `leaf` and improved structure.
 
-  ;; Insert a timestamp of the last update before saving the buffer.
+  ;; -----------------------------------------------------------------------------
+  ;; 1. Insert a timestamp before saving the buffer
+  ;; -----------------------------------------------------------------------------
   (leaf *lastupdate
+    :doc "Automatically insert a last update timestamp before saving."
     :preface
     (defun my/save-buffer-wrapper ()
-      "Insert the last update timestamp in the buffer before saving."
+      "Insert a last update timestamp at the top of the buffer before saving."
       (interactive)
       (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
         (save-excursion
@@ -371,26 +375,38 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
             (replace-match tostr nil t)))))
     :hook (before-save-hook . my/save-buffer-wrapper))
 
-  ;; macOS-specific integration to fetch environment variables from the shell
+  ;; -----------------------------------------------------------------------------
+  ;; 2. macOS-specific environment variable integration
+  ;; -----------------------------------------------------------------------------
   (leaf exec-path-from-shell
-    :ensure t
+    :doc "Fetch environment variables from shell (macOS)."
     :if (memq window-system '(mac ns))
+    :ensure t
     :commands (exec-path-from-shell-getenvs exec-path-from-shell-setenv)
     :custom ((exec-path-from-shell-check-startup-files . nil))
-    :config (exec-path-from-shell-initialize))
+    :config
+    (exec-path-from-shell-initialize))
 
-  ;; Keep Emacs configuration and cache files organized with no-littering
+  ;; -----------------------------------------------------------------------------
+  ;; 3. Organize Emacs config and cache files using `no-littering`
+  ;; -----------------------------------------------------------------------------
   (leaf no-littering
+    :doc "Keep configuration and cache files cleanly organized."
     :ensure t
     :require t)
 
-  ;; Safely load custom settings from custom.el
+  ;; Safely load custom settings from `custom.el`
   (leaf cus-edit
+    :doc "Load custom settings from a clean location."
     :custom `((custom-file . ,(concat no-littering-etc-directory "custom.el")))
-    :config (ignore-errors (load custom-file)))
+    :config
+    (ignore-errors (load custom-file)))
 
-  ;; Save and restore the desktop session and window configuration
+  ;; -----------------------------------------------------------------------------
+  ;; 4. Desktop session management
+  ;; -----------------------------------------------------------------------------
   (leaf *desktop
+    :doc "Save and restore desktop sessions."
     :preface
     (defun my/save-desktop-session ()
       "Save the current desktop session."
@@ -398,7 +414,7 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
       (desktop-save desktop-dirname)
       (message "Desktop session saved."))
     (defun my/restore-desktop-session ()
-      "Restore the desktop session."
+      "Restore a previously saved desktop session."
       (interactive)
       (desktop-read)
       (message "Desktop session restored."))
@@ -408,31 +424,42 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
           desktop-auto-save-timeout 180
           desktop-restore-eager 10
           desktop-restore-forces-onscreen nil)
-    (desktop-save-mode 1)
-    (winner-mode 1))
+    (desktop-save-mode 1)   ; Enable desktop saving
+    (winner-mode 1))        ; Enable winner mode for window management
 
-  ;; Automatically revert buffers when files are changed externally
+  ;; -----------------------------------------------------------------------------
+  ;; 5. Automatically revert buffers when files change externally
+  ;; -----------------------------------------------------------------------------
   (leaf autorevert
+    :doc "Automatically reload buffers when files change."
     :global-minor-mode global-auto-revert-mode)
 
-  ;; Enable automatic parenthesis pairing and highlighting
+  ;; -----------------------------------------------------------------------------
+  ;; 6. Automatic parenthesis pairing and highlighting
+  ;; -----------------------------------------------------------------------------
   (leaf elec-pair
+    :doc "Enable automatic pairing of parentheses."
     :global-minor-mode electric-pair-mode)
 
   (leaf paren
+    :doc "Highlight matching parentheses."
     :custom ((show-paren-delay . 0)
              (show-paren-style . 'expression))
     :global-minor-mode show-paren-mode)
 
   (leaf puni
+    :doc "Advanced parenthesis editing."
     :ensure t
     :global-minor-mode puni-global-mode)
 
-  ;; Auto-save and backup settings for safer file handling
+  ;; -----------------------------------------------------------------------------
+  ;; 7. Auto-save and backup settings
+  ;; -----------------------------------------------------------------------------
   (leaf files
+    :doc "Manage auto-save and backup settings."
     :preface
     (defun toggle-auto-save-visited-mode ()
-      "Toggle auto-save-visited-mode."
+      "Toggle `auto-save-visited-mode`."
       (interactive)
       (if auto-save-visited-mode
           (progn
@@ -441,55 +468,67 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
         (progn
           (auto-save-visited-mode 1)
           (message "auto-save-visited-mode enabled"))))
-    :custom
-    `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
-      (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
-      (delete-old-versions . t)
-      (auto-save-visited-interval . 1))
+    :custom `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+              (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
+              (delete-old-versions . t)
+              (auto-save-visited-interval . 1))
     :global-minor-mode auto-save-visited-mode)
 
-  ;; Remote file editing with Tramp (e.g., SSH, SCP)
+  ;; -----------------------------------------------------------------------------
+  ;; 8. Remote file editing with Tramp
+  ;; -----------------------------------------------------------------------------
   (leaf tramp
+    :doc "Edit remote files over SSH, SCP, etc."
     :pre-setq
     `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
       (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-    :setq
-    ((tramp-default-method . "scp")
-     (tramp-encoding-shell . "/bin/bash")
-     (tramp-debug-buffer . t)
-     (tramp-verbose . 10)
-     (tramp-shell-prompt-pattern . "\\(?:^\\|\r\\)[^]#$%>\n]*#?[]#$%>] *\\(^[\\[[0-9;]*[a-zA-Z] *\\)*")
-     (tramp-use-ssh-controlmaster-options . nil)
-     (tramp-password-prompt-regexp . '(concat
-                                       "^.*"
-                                       (regexp-opt
-                                        '("passphrase" "Passphrase"
-                                          "password" "Password"
-                                          "Verification code")
-                                        t)
-                                       ".*:\0? *"))))
+    :setq ((tramp-default-method . "scp")
+           (tramp-encoding-shell . "/bin/bash")
+           (tramp-debug-buffer . t)
+           (tramp-verbose . 10)
+           (tramp-shell-prompt-pattern . "\\(?:^\\|\r\\)[^]#$%>\n]*#?[]#$%>] *\\(^[\\[[0-9;]*[a-zA-Z] *\\)*")
+           (tramp-use-ssh-controlmaster-options . nil)
+           (tramp-password-prompt-regexp . '(concat
+                                             "^.*"
+                                             (regexp-opt
+                                              '("passphrase" "Passphrase"
+                                                "password" "Password"
+                                                "Verification code")
+                                              t)
+                                             ".*:\0? *"))))
 
-  ;; Miscellaneous settings for startup and history
+  ;; -----------------------------------------------------------------------------
+  ;; 9. Miscellaneous settings for startup and history
+  ;; -----------------------------------------------------------------------------
   (leaf startup
+    :doc "Configure startup options."
     :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
 
   (leaf savehist
+    :doc "Save minibuffer history across sessions."
     :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
     :global-minor-mode t)
 
-  ;; Display keybindings in a helpful popup
+  ;; -----------------------------------------------------------------------------
+  ;; 10. Display keybindings in a helpful popup
+  ;; -----------------------------------------------------------------------------
   (leaf which-key
+    :doc "Display keybinding hints in a popup."
     :ensure t
     :global-minor-mode t)
 
-  ;; Tree-sitter integration for advanced syntax highlighting and parsing
+  ;; -----------------------------------------------------------------------------
+  ;; 11. Tree-sitter for advanced syntax highlighting
+  ;; -----------------------------------------------------------------------------
   (leaf tree-sitter
+    :doc "Enable Tree-sitter for better syntax highlighting and parsing."
     :ensure t
     :config
     (global-tree-sitter-mode)
     (add-hook 'tree-sitter-after-on-hook #'tree-sitter-hl-mode))
 
   (leaf tree-sitter-langs
+    :doc "Install and load language grammars for Tree-sitter."
     :ensure t
     :config
     (tree-sitter-langs-install-grammars))
