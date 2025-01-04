@@ -83,7 +83,8 @@
       create-lockfiles nil  ; Disable lockfiles
       make-backup-files nil ; Disable backup files
       auto-save-default nil ; Disable auto-save
-      auto-save-list-file-prefix nil) ; Prevent auto-save list files
+      auto-save-list-file-prefix nil ; Prevent auto-save list files
+      display-line-numbers-type 'relative) ; Set relative numbering
 
 ;; Enable global prettify symbols mode for better symbol rendering
 (global-prettify-symbols-mode 1)
