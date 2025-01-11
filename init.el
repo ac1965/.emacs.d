@@ -47,12 +47,18 @@
 (setq init-org-file (expand-file-name "README.org" my:d))
 
 ;; Check if README.org exists, and load it
-(if (file-exists-p init-org-file)
-    (condition-case err
-        (org-babel-load-file init-org-file)
-      (error
-       (message "Error loading org file: %s" (error-message-string err))))
-  (message "README.org not found. Please ensure it exists in %s" my:d))
+(condition-case err
+    (let ((org-confirm-babel-evaluate nil))
+      (org-babel-load-file init-org-file))
+  (error
+   (message "Error loading org file: %s" (error-message-string err))
+   (warn "Failed to load %s" init-org-file)
+   (with-current-buffer (get-buffer-create "*Org Load Error*")
+     (let ((inhibit-read-only t))
+       (erase-buffer)
+       (insert (propertize (format "Error loading %s:\n\n%s\n" init-org-file (error-message-string err))
+                           'face '(:foreground "red" :weight bold)))
+       (display-buffer (current-buffer) '((display-buffer-reuse-window display-buffer-at-bottom)))))))
 
 ;;; Provide the init feature
 (provide 'init)
