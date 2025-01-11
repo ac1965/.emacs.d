@@ -86,10 +86,11 @@
       auto-save-list-file-prefix nil ; Prevent auto-save list files
       display-line-numbers-type 'relative) ; Set relative numbering
 
-;; Enable global prettify symbols mode for better symbol rendering
+;; Enable setting
+(global-auto-revert-mode 1)
+(electric-pair-mode 1)
+(show-paren-mode 1)
 (global-prettify-symbols-mode 1)
-
-;; Enable Modifier Bar Mode, introduced in Emacs 30
 (modifier-bar-mode 1)
 
 ;; Display startup performance metrics
