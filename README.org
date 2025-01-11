@@ -72,7 +72,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/11 21:49:05 $
+  ;; $Lastupdate: 2025/01/11 22:24:58 $
 
   ;;; Commentary:
 
@@ -1159,25 +1159,33 @@ These include toggling line numbers, switching window layouts, and custom functi
                (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
       (view-mode)))
 
-  ;; Generate a table of all keybindings sorted by key sequence and command name.
-  (defun my/generate-keybinding-table ()
-    "Generate a table of all keybindings sorted by key sequence and command name."
+  ;; Generate an Org-mode formatted cheatsheet of keybindings
+  (defun my/org-mode-keybindings-cheatsheet ()
+    "Generate an Org-mode formatted cheatsheet of keybindings for the current major mode, with error handling."
     (interactive)
-    (let ((bindings '()))
-      (mapatoms (lambda (sym)
-                  (when (commandp sym)
-                    (dolist (key (where-is-internal sym))
-                      (push (list (key-description key) (symbol-name sym)) bindings)))))
-      (setq bindings (sort bindings (lambda (a b) (string< (car a) (car b)))))
-      (with-current-buffer (get-buffer-create "*Keybindings Table*")
-        (tabulated-list-mode)
-        (setq tabulated-list-format [("Key" 20 t) ("Command" 40 t)])
-        (setq tabulated-list-entries
-              (mapcar (lambda (x) (list (car x) (vector (car x) (cadr x))))
-                      bindings))
-        (tabulated-list-init-header)
-        (tabulated-list-print)
-        (pop-to-buffer (current-buffer)))))
+    (condition-case err
+        (let* ((mode-name (if (boundp 'major-mode)
+                              (format "%s" major-mode)
+                            "unknown-mode"))
+               (buffer-name (format "*%s Keybindings Cheatsheet*" mode-name))
+               (org-buffer (get-buffer-create buffer-name)))
+          (with-current-buffer org-buffer
+            (org-mode)
+            (erase-buffer)
+            (insert (format "#+TITLE: %s Keybindings Cheatsheet\n\n" mode-name))
+            (insert "* Keybindings\n")
+            (mapatoms
+             (lambda (symbol)
+               (when (and (commandp symbol)
+                          (not (string-prefix-p "org-" (symbol-name symbol)))) ; Avoid Org-mode commands
+                 (let ((key-bindings (where-is-internal symbol (list (current-local-map)))))
+                   (dolist (key key-bindings)
+                     (when (and key (not (string= "" (key-description key)))) ; Ensure key is valid
+                       (insert (format "** %s\n" (key-description key)))
+                       (insert (format "   - Command: ~%s~\n" symbol))))))))
+            (goto-char (point-min)))
+          (switch-to-buffer org-buffer))
+      (error (message "An error occurred: %S" err))))
 
   ;; Remove duplicate entries from the kill ring before adding a new one.
   (defun my/no-kill-new-duplicate (yank)
