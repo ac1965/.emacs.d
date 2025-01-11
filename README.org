@@ -72,7 +72,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/11 13:48:42 $
+  ;; $Lastupdate: 2025/01/11 15:15:04 $
 
   ;;; Commentary:
 
@@ -958,27 +958,29 @@ These include toggling line numbers, switching window layouts, and custom functi
 
 
 #+begin_src emacs-lisp
-  ;; Functions to save and restore window layout configurations.
+  ;; Variable to store the current window configuration.
   (defvar my/saved-window-config nil
-    "Stores the current window configuration for restoration.")
+    "Stores the current window configuration for later restoration.")
 
+  ;; Save the current window layout.
   (defun my/save-window-layout ()
     "Save the current window configuration to `my/saved-window-config`."
     (interactive)
     (setq my/saved-window-config (current-window-configuration))
     (message "Window configuration saved."))
 
+  ;; Restore the saved window layout if available.
   (defun my/restore-window-layout ()
-    "Restore the saved window configuration from `my/saved-window-config`.
+    "Restore the saved window configuration.
   If no configuration has been saved, notify the user."
     (interactive)
     (if my/saved-window-config
         (progn
           (set-window-configuration my/saved-window-config)
           (message "Window configuration restored."))
-      (message "No window configuration to restore.")))
+      (message "No saved window configuration found.")))
 
-  ;; Function to reuse the currently selected window when displaying a buffer.
+  ;; Reuse the currently selected window when displaying a buffer.
   (defun my/display-buffer-same-window (buffer alist)
     "Attempt to display BUFFER in the currently selected window.
   Avoids opening a new window unless necessary."
@@ -987,18 +989,18 @@ These include toggling line numbers, switching window layouts, and custom functi
                 (window-dedicated-p))
       (window--display-buffer buffer (selected-window) 'reuse alist)))
 
-  ;; Function to split the window below from the parent or root window.
+  ;; Split the window below from the root or parent window based on ARG.
   (defun my/split-below (arg)
     "Split the window below, starting from the root if ARG is non-nil.
   Otherwise, split from the parent of the current window."
     (interactive "P")
     (split-window (if arg (frame-root-window)
                     (window-parent (selected-window)))
-                  nil 'below nil))
+                  nil 'below))
 
-  ;; Function to toggle the dedicated status of the selected window.
+  ;; Toggle the dedicated status of the selected window.
   (defun my/toggle-window-dedication ()
-    "Toggle the dedicated status of the selected window.
+    "Toggle the dedicated status of the currently selected window.
   A dedicated window will not display other buffers."
     (interactive)
     (let ((window (selected-window)))
@@ -1006,75 +1008,73 @@ These include toggling line numbers, switching window layouts, and custom functi
       (message "Window dedication %s"
                (if (window-dedicated-p window) "enabled" "disabled"))))
 
-  ;; Functions to manually save and restore desktop sessions.
+  ;; Save the current desktop session.
   (defun my/save-desktop-session ()
     "Save the current desktop session using `desktop-save`."
     (interactive)
     (desktop-save desktop-dirname)
     (message "Desktop session saved."))
 
+  ;; Restore a previously saved desktop session.
   (defun my/restore-desktop-session ()
-    "Restore a previously saved desktop session using `desktop-read`."
+    "Restore a desktop session using `desktop-read`."
     (interactive)
     (desktop-read)
     (message "Desktop session restored."))
 
   ;; Delete backup files older than 7 days.
   (defun my/delete-old-backups ()
-    "Delete backup files from `no-littering-var-directory/backup/` older than 7 days."
+    "Delete backup files in `no-littering-var-directory/backup/` older than 7 days."
     (let ((backup-dir (concat no-littering-var-directory "backup/")))
       (when (file-directory-p backup-dir)
-        (dolist (file (directory-files backup-dir t))
+        (dolist (file (directory-files backup-dir t "\\`[^.]"))
           (when (and (file-regular-p file)
                      (> (- (float-time (current-time))
                            (float-time (nth 5 (file-attributes file))))
-                        (* 7 24 60 60))) ;; Check if older than 7 days
+                        (* 7 24 60 60))) ;; Files older than 7 days
             (delete-file file))))))
   (add-hook 'emacs-startup-hook #'my/delete-old-backups)
 
   ;; Automatically enable or disable `view-mode` based on buffer's read-only status.
   (defun my/enable-view-mode-on-read-only ()
-    "Enable `view-mode` when the buffer is read-only, disable otherwise."
+    "Enable `view-mode` if the buffer is read-only, disable otherwise."
     (if buffer-read-only
         (view-mode 1)
       (view-mode -1)))
   (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
 
+  ;; Toggle the display of line numbers.
   (defun my/toggle-linum-lines ()
-    "Toggle display line number."
+    "Toggle line number display using `display-line-numbers-mode`."
     (interactive)
-    (display-line-numbers-mode (if display-line-numbers-mode -1 1)))
+    (if display-line-numbers-mode
+        (display-line-numbers-mode -1)
+      (display-line-numbers-mode 1)))
 
+  ;; Toggle the window split between horizontal and vertical.
   (defun my/toggle-window-split ()
-    "Toggle window split between horizontal and vertical."
+    "Toggle the window split between horizontal and vertical.
+  This function only works when exactly two windows are open."
     (interactive)
     (if (= (count-windows) 2)
         (let* ((this-win-buffer (window-buffer))
                (next-win-buffer (window-buffer (next-window)))
                (this-win-edges (window-edges (selected-window)))
                (next-win-edges (window-edges (next-window)))
-               (this-win-2nd
-                (not (and (<= (car this-win-edges)
-                              (car next-win-edges))
-                          (<= (cadr this-win-edges)
-                              (cadr next-win-edges)))))
-               (splitter
-                (if (= (car this-win-edges)
-                       (car (window-edges (next-window))))
-                    'split-window-horizontally
-                  'split-window-vertically)))
+               (splitter (if (= (car this-win-edges)
+                                (car (window-edges (next-window))))
+                             'split-window-horizontally
+                           'split-window-vertically)))
           (delete-other-windows)
           (let ((first-win (selected-window)))
             (funcall splitter)
-            (if this-win-2nd (other-window 1))
             (set-window-buffer (selected-window) this-win-buffer)
             (set-window-buffer (next-window) next-win-buffer)
-            (select-window first-win)
-            (if this-win-2nd (other-window 1))))))
+            (select-window first-win)))))
 
+  ;; Open the selected file or directory in another window in Dired mode.
   (defun my/dired-view-file-other-window ()
     "Open the selected file or directory in another window.
-
   If the target is a directory, navigate to it.
   If the target is a file, open it in read-only mode in another window."
     (interactive)
@@ -1085,49 +1085,38 @@ These include toggling line numbers, switching window layouts, and custom functi
               (dired file))
         (view-file-other-window file))))
 
+  ;; Find and display keybinding conflicts in all active keymaps.
   (defun my/find-keybinding-conflicts ()
-    "Find and display keybinding conflicts in all active keymaps."
+    "Detect and display keybinding conflicts across active keymaps."
     (interactive)
     (let ((conflicts (make-hash-table :test 'equal))
           (buffer-name "*Keybinding Conflicts*"))
-      ;; Collect conflicts from all active keymaps
       (mapatoms (lambda (keymap)
                   (when (and (boundp keymap) (keymapp (symbol-value keymap)))
-                    (map-keymap (lambda (_ key-binding)
-                                  (when (keymapp key-binding)
-                                    (map-keymap
-                                     (lambda (key cmd)
-                                       ;; Only process valid commands
-                                       (when (or (symbolp cmd) (functionp cmd))
-                                         (let* ((key (vector key))
-                                                (existing (gethash key conflicts)))
-                                           (if existing
-                                               (puthash key (cons cmd existing) conflicts)
-                                             (puthash key (list cmd) conflicts)))))
-                                     key-binding)))
-                                (symbol-value keymap)))))
-      ;; Create and populate the result buffer
+                    (map-keymap
+                     (lambda (key cmd)
+                       (when (commandp cmd)
+                         (let ((existing (gethash key conflicts)))
+                           (if existing
+                               (puthash key (cons cmd existing) conflicts)
+                             (puthash key (list cmd) conflicts)))))
+                     (symbol-value keymap)))))
       (with-current-buffer (get-buffer-create buffer-name)
-        (read-only-mode -1) ; Ensure the buffer is writable
-        (erase-buffer)      ; Clear any previous content
+        (read-only-mode -1)
+        (erase-buffer)
         (insert "Keybinding Conflicts:\n\n")
         (maphash (lambda (key cmds)
                    (when (> (length cmds) 1)
                      (insert (format "%s => %s\n"
                                      (key-description key)
-                                     (mapconcat (lambda (cmd)
-                                                  (if (symbolp cmd)
-                                                      (symbol-name cmd)
-                                                    (format "%s" cmd)))
-                                                cmds ", ")))))
+                                     (mapconcat #'symbol-name cmds ", ")))))
                  conflicts)
-        (read-only-mode 1)) ; Make the buffer read-only for safety
-      ;; Display the buffer
+        (read-only-mode 1))
       (switch-to-buffer buffer-name)))
 
+  ;; Replace all occurrences of a string in the current buffer.
   (defun my/replace-string-in-buffer ()
-    "Prompt the user for a string to replace and its replacement,
-  then replace all occurrences in the buffer."
+    "Prompt for a string to replace and its replacement, then replace all occurrences."
     (interactive)
     (let ((from (read-string "Replace: "))
           (to (read-string "With: ")))
@@ -1136,14 +1125,15 @@ These include toggling line numbers, switching window layouts, and custom functi
         (while (search-forward from nil t)
           (replace-match to nil t)))))
 
+  ;; Open the init file for quick editing.
   (defun my/open-init-file ()
-    "Open the init file for quick access."
+    "Open the user's Emacs init file."
     (interactive)
     (find-file user-init-file))
 
-  ;; Function to open the current file in Visual Studio Code at the current line and column.
+  ;; Open the current buffer in Visual Studio Code at the current line and column.
   (defun my/open-by-vscode ()
-    "Open the current buffer in Visual Studio Code at the current line and column."
+    "Open the current file in Visual Studio Code at the current line and column."
     (interactive)
     (when (buffer-file-name)
       (shell-command
@@ -1151,11 +1141,10 @@ These include toggling line numbers, switching window layouts, and custom functi
                (buffer-file-name)
                (line-number-at-pos)
                (current-column)))))
-  (define-key global-map (kbd "C-c C-v") 'my/open-by-vscode)
 
-  ;; Function to display detailed information about the current Emacs build.
+  ;; Display detailed information about the current Emacs build.
   (defun my/print-build-info ()
-    "Print detailed information about the current Emacs build in a new buffer."
+    "Display detailed information about the current Emacs build."
     (interactive)
     (switch-to-buffer (get-buffer-create "*Build info*"))
     (let ((buffer-read-only nil))
@@ -1170,42 +1159,33 @@ These include toggling line numbers, switching window layouts, and custom functi
                (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
       (view-mode)))
 
-  ;; Generate a tabulated list of keybindings, sorted by key sequence and command name.
+  ;; Generate a table of all keybindings sorted by key sequence and command name.
   (defun my/generate-keybinding-table ()
     "Generate a table of all keybindings sorted by key sequence and command name."
     (interactive)
     (let ((bindings '()))
-      ;; Collect keybindings from all keymaps
-      (mapatoms
-       (lambda (sym)
-         (when (commandp sym)
-           (let ((keys (where-is-internal sym)))
-             (dolist (key keys)
-               (push (list (key-description key) (symbol-name sym)) bindings))))))
-      ;; Sort keybindings alphabetically
-      (setq bindings
-            (sort bindings
-                  (lambda (a b) (string< (car a) (car b)))))
-      ;; Display keybindings in a tabulated list
+      (mapatoms (lambda (sym)
+                  (when (commandp sym)
+                    (dolist (key (where-is-internal sym))
+                      (push (list (key-description key) (symbol-name sym)) bindings)))))
+      (setq bindings (sort bindings (lambda (a b) (string< (car a) (car b)))))
       (with-current-buffer (get-buffer-create "*Keybindings Table*")
         (tabulated-list-mode)
         (setq tabulated-list-format [("Key" 20 t) ("Command" 40 t)])
         (setq tabulated-list-entries
-              (mapcar (lambda (x)
-                        (list (car x) (vector (car x) (cadr x))))
+              (mapcar (lambda (x) (list (car x) (vector (car x) (cadr x))))
                       bindings))
         (tabulated-list-init-header)
         (tabulated-list-print)
         (pop-to-buffer (current-buffer)))))
-  (define-key global-map (kbd "C-c C-k") 'my/generate-keybinding-table)
 
-  ;; Remove duplicates from the kill ring before adding a new entry.
+  ;; Remove duplicate entries from the kill ring before adding a new one.
   (defun my/no-kill-new-duplicate (yank)
     "Remove duplicate entries from `kill-ring` before adding YANK."
     (setq kill-ring (delete yank kill-ring)))
   (advice-add 'kill-new :before #'my/no-kill-new-duplicate)
 
-  ;; Hook to clean up trailing whitespace before saving a file.
+  ;; Automatically delete trailing whitespace before saving a file.
   (add-hook 'before-save-hook 'delete-trailing-whitespace)
 
   ;; Enable clickable URLs in programming and text modes.
