@@ -9,6 +9,9 @@
 
 ;;; Code:
 
+;; Debug enabled
+(setq debug-on-error t)
+
 ;; Ensure compatibility with Emacs 30 or later
 (when (version< emacs-version "30")
   (error "This configuration requires Emacs 30 or higher"))
