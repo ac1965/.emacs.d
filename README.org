@@ -71,7 +71,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/12 12:56:22 $
+  ;; $Lastupdate: 2025/01/12 13:17:26 $
 
   ;;; Commentary:
 
@@ -430,11 +430,12 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
       ;; Marginalia
       ("M-A"          . marginalia-cycle)       ;; Cycle annotation styles
 
-      ;; Consult for extended search
+      ;; Consult
       ("C-s"          . consult-line)           ;; Search in buffer
       ("C-c c g"      . consult-goto-line)      ;; Go to line
       ("C-c c i"      . consult-imenu)          ;; Search functions in buffer
       ("C-c c b"      . consult-buffer)         ;; Buffer switch
+      ("C-c e"        . consult-flymake)        ;; Consult integration for LSP diagnostics
 
       ;; Miscellaneous
       ("C-c v"        . my/open-by-vscode)      ;; Open the current buffer in Visual Studio Code
@@ -697,63 +698,46 @@ These include toggling line numbers, switching window layouts, and custom functi
                         (display-line-numbers-mode)
                         (electric-pair-mode))))
 
-  ;; LSP configuration for various programming languages
+  ;; Using eglot for simple LSP integration
+  (leaf eglot
+    :hook (prog-mode . eglot-ensure)
+    :custom
+    `((eglot-autoshutdown . t)
+      (eglot-sync-connect . nil)
+      (eglot-events-buffer-size . 200))
+    :bind (:eglot-mode-map
+           ("C-c h" . eglot-help-at-point)
+           ("C-c r" . eglot-rename)
+           ("C-c a" . eglot-code-actions)
+           ("C-c d" . flymake-show-buffer-diagnostics)))
+
+  ;; Using lsp-mode for advanced LSP integration
   (leaf lsp-mode
     :ensure t
-    :commands lsp
-    :hook
-    ((python-mode-hook go-mode-hook rust-mode-hook) . lsp)
+    :hook ((python-mode . lsp)
+           (rust-mode . lsp)
+           (go-mode . lsp)
+           (js-mode . lsp)
+           (typescript-mode . lsp)
+           (c-mode . lsp)
+           (c++-mode . lsp))
+    :custom
+    `((lsp-enable-snippet . t)
+      (lsp-idle-delay . 0.5)
+      (lsp-headerline-breadcrumb-enable . t)
+      (lsp-prefer-flymake . nil))
     :config
-    (setq lsp-enable-symbol-highlighting t
-          lsp-signature-auto-activate nil
-          lsp-disabled-clients '(copilot-ls)))
+    (setq lsp-completion-provider :capf))
 
   (leaf lsp-ui
     :ensure t
     :after lsp-mode
-    :config
-    (setq lsp-ui-doc-enable t
-          lsp-ui-doc-delay 0.2
-          lsp-ui-sideline-enable t))
-
-  (leaf parinfer-rust-mode
-    :ensure t
-    :hook (clojure-mode emacs-lisp-mode common-lisp-mode scheme-mode lisp-mode)
-    :init
-    (setq parinfer-rust-auto-download t))
-
-  ;; Eglot configuration for language server support
-  (leaf eglot
-    :ensure t
-    :config
-    ;; Add Deno server for JavaScript/TypeScript
-    (add-to-list 'eglot-server-programs '((js-mode js-ts-mode typescript-mode typescript-ts-mode) . (eglot-deno "deno" "lsp")))
-
-    ;; Define custom class for Deno LSP server
-    (defclass eglot-deno (eglot-lsp-server) () :documentation "Custom class for deno LSP.")
-
-    ;; Provide initialization options for Deno
-    (cl-defmethod eglot-initialization-options ((server eglot-deno))
-      "Passes through required deno initialization options"
-      (list :enable t :lint t))
-
-    ;; Disable certain server capabilities
-    (setq eglot-ignored-server-capabilities '(:documentHighlightProvider :inlayHintProvider))
-
-    ;; Disable multiline eldoc echo area
-    (setq eldoc-echo-area-use-multiline-p nil)
-
-    ;; Hook eglot to start automatically in various modes
-    :hook
-    ((sh-mode
-      c-mode
-      c++-mode
-      python-mode
-      ruby-mode
-      rust-mode
-      html-mode
-      css-mode
-      js-mode) . eglot-ensure))
+    :custom
+    `((lsp-ui-doc-enable . t)
+      (lsp-ui-sideline-enable . t)
+      (lsp-ui-sideline-show-hover . t)
+      (lsp-ui-sideline-show-code-actions . t)
+      (lsp-ui-sideline-show-diagnostics . t)))
 #+end_src
 
 *** Org-mode
@@ -1010,26 +994,16 @@ These include toggling line numbers, switching window layouts, and custom functi
     ;; Corfu: Minimal completion UI with support for inline suggestions
     (leaf corfu
       :ensure t
-      :global-minor-mode global-corfu-mode
+      :init (global-corfu-mode)
       :custom
-      ((corfu-auto . t)  ;; Enable automatic popup for completion
-       (corfu-auto-delay . 0)  ;; Instant popup after typing
-       (corfu-auto-prefix . 2)  ;; Show popup after typing 2 characters
-       (corfu-cycle . t))  ;; Allow cycling through candidates
+      `((corfu-auto . t)
+        (corfu-auto-delay . 0)
+        (corfu-auto-prefix . 2))
       :config
-      (corfu-popupinfo-mode)  ;; Display detailed information in popup
-      ;; Key bindings for navigation and completion
-      (define-key corfu-map (kbd "TAB") 'corfu-next)
-      (define-key corfu-map (kbd "<tab>") 'corfu-next)
-      (define-key corfu-map (kbd "S-TAB") 'corfu-previous)
-      (define-key corfu-map (kbd "<backtab>") 'corfu-previous)
-      (define-key corfu-map (kbd "RET") 'corfu-complete)
-      ;; Prescient integration for sorting in Corfu
-      (leaf corfu-prescient
-        :ensure t
-        :after (corfu prescient)
-        :config
-        (corfu-prescient-mode 1)))  ;; Enable prescient sorting in Corfu
+      (defun my/corfu-lsp-setup ()
+        "Add LSP completion to `completion-at-point-functions`."
+        (add-to-list 'completion-at-point-functions #'eglot-completion-at-point))
+      (add-hook 'eglot-managed-mode-hook #'my/corfu-lsp-setup))
 
     ;; Kind-icon: Add icons to completion candidates for better visualization
     (leaf kind-icon
