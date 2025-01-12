@@ -27,7 +27,8 @@
 ;; Native compilation settings
 ;; Optimize for speed and suppress warnings during async compilation
 (setq native-comp-async-report-warnings-errors 'silent
-      native-comp-speed 3)
+      native-comp-speed 3
+      comp-deferred-compilation t)
 
 ;; macOS-specific settings
 (when (eq system-type 'darwin)
