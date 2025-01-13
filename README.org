@@ -71,7 +71,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/13 12:17:53 $
+  ;; $Lastupdate: 2025/01/13 12:21:35 $
 
   ;;; Commentary:
 
@@ -1039,6 +1039,8 @@ These include toggling line numbers, switching window layouts, and custom functi
 
 
 #+begin_src emacs-lisp
+  ;;; Custom utility functions for window, desktop, and buffer management.
+
   ;; Run TASK asynchronously and handle any errors gracefully.
   (defun my/safe-run-async (task)
     "Run TASK asynchronously and handle any errors gracefully."
@@ -1048,18 +1050,16 @@ These include toggling line numbers, switching window layouts, and custom functi
                        (funcall task)
                      (error (message "An error occurred during asynchronous execution: %s" err))))))
 
-  ;; Variable to store the current window configuration.
+  ;; Save and restore the window layout
   (defvar my/saved-window-config nil
     "Stores the current window configuration for later restoration.")
 
-  ;; Save the current window layout.
   (defun my/save-window-layout ()
     "Save the current window configuration to `my/saved-window-config`."
     (interactive)
     (setq my/saved-window-config (current-window-configuration))
     (message "Window configuration saved."))
 
-  ;; Restore the saved window layout if available.
   (defun my/restore-window-layout ()
     "Restore the saved window configuration.
   If no configuration has been saved, notify the user."
@@ -1070,25 +1070,7 @@ These include toggling line numbers, switching window layouts, and custom functi
           (message "Window configuration restored."))
       (message "No saved window configuration found.")))
 
-  ;; Reuse the currently selected window when displaying a buffer.
-  (defun my/display-buffer-same-window (buffer alist)
-    "Attempt to display BUFFER in the currently selected window.
-  Avoids opening a new window unless necessary."
-    (unless (or (cdr (assq 'inhibit-same-window alist))
-                (window-minibuffer-p)
-                (window-dedicated-p))
-      (window--display-buffer buffer (selected-window) 'reuse alist)))
-
-  ;; Split the window below from the root or parent window based on ARG.
-  (defun my/split-below (arg)
-    "Split the window below, starting from the root if ARG is non-nil.
-  Otherwise, split from the parent of the current window."
-    (interactive "P")
-    (split-window (if arg (frame-root-window)
-                    (window-parent (selected-window)))
-                  nil 'below))
-
-  ;; Toggle the dedicated status of the selected window.
+  ;; Toggle the dedicated status of the selected window
   (defun my/toggle-window-dedication ()
     "Toggle the dedicated status of the currently selected window.
   A dedicated window will not display other buffers."
@@ -1098,27 +1080,21 @@ These include toggling line numbers, switching window layouts, and custom functi
       (message "Window dedication %s"
                (if (window-dedicated-p window) "enabled" "disabled"))))
 
-  ;; Save the current desktop session.
-  (defun my/save-desktop-session ()
-    "Save the desktop session asynchronously."
-    (interactive)
-    (make-thread
-     (lambda ()
-       (desktop-save desktop-dirname)
-       (message "Desktop session saved asynchronously."))))
+  ;; Save and restore the desktop session asynchronously
+  (leaf desktop
+    :custom
+    `((desktop-dirname . ,(concat no-littering-var-directory "desktop"))
+      (desktop-save . 'if-exists)
+      (desktop-auto-save-timeout . 180)
+      (desktop-restore-eager . 10))
+    :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
+           (emacs-startup-hook . desktop-read))
+    :config
+    (desktop-save-mode 1))
 
-  ;; Restore a previously saved desktop session.
-  (defun my/restore-desktop-session ()
-    "Restore the desktop session asynchronously."
-    (interactive)
-    (make-thread
-     (lambda ()
-       (desktop-read)
-       (message "Desktop session restored asynchronously."))))
-
-  ;; Delete backup files older than 7 days.
+  ;; Delete backup files older than 7 days asynchronously
   (defun my/delete-old-backups ()
-    "Delete old backup files asynchronously using `run-at-time` with error handling."
+    "Delete old backup files asynchronously."
     (interactive)
     (my/safe-run-async
      (lambda ()
@@ -1129,8 +1105,8 @@ These include toggling line numbers, switching window layouts, and custom functi
                         (> (- (float-time (current-time))
                               (float-time (nth 5 (file-attributes file))))
                            (* 7 24 60 60))) ;; Delete files older than 7 days
-               (delete-file file)
-  	     (message "Old backup files deleted asynchronously."))))))))
+               (delete-file file))))
+         (message "Old backup files deleted.")))))
   (add-hook 'emacs-startup-hook #'my/delete-old-backups)
 
   ;; Automatically enable or disable `view-mode` based on buffer's read-only status.
@@ -1141,15 +1117,13 @@ These include toggling line numbers, switching window layouts, and custom functi
       (view-mode -1)))
   (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
 
-  ;; Toggle the display of line numbers.
+  ;; Toggle line number display
   (defun my/toggle-linum-lines ()
     "Toggle line number display using `display-line-numbers-mode`."
     (interactive)
-    (if display-line-numbers-mode
-        (display-line-numbers-mode -1)
-      (display-line-numbers-mode 1)))
+    (display-line-numbers-mode 'toggle))
 
-  ;; Toggle the window split between horizontal and vertical.
+  ;; Toggle window split between horizontal and vertical
   (defun my/toggle-window-split ()
     "Toggle the window split between horizontal and vertical.
   This function only works when exactly two windows are open."
@@ -1157,33 +1131,18 @@ These include toggling line numbers, switching window layouts, and custom functi
     (if (= (count-windows) 2)
         (let* ((this-win-buffer (window-buffer))
                (next-win-buffer (window-buffer (next-window)))
-               (this-win-edges (window-edges (selected-window)))
-               (next-win-edges (window-edges (next-window)))
-               (splitter (if (= (car this-win-edges)
-                                (car (window-edges (next-window))))
-                             'split-window-horizontally
-                           'split-window-vertically)))
+               (splitter (if (window-combined-p)
+                             'split-window-vertically
+                           'split-window-horizontally)))
           (delete-other-windows)
           (let ((first-win (selected-window)))
             (funcall splitter)
             (set-window-buffer (selected-window) this-win-buffer)
             (set-window-buffer (next-window) next-win-buffer)
-            (select-window first-win)))))
+            (select-window first-win)))
+      (message "This function only works when exactly two windows are open.")))
 
-  ;; Open the selected file or directory in another window in Dired mode.
-  (defun my/dired-view-file-other-window ()
-    "Open the selected file or directory in another window.
-  If the target is a directory, navigate to it.
-  If the target is a file, open it in read-only mode in another window."
-    (interactive)
-    (let ((file (dired-get-file-for-visit)))
-      (if (file-directory-p file)
-          (or (and (cdr dired-subdir-alist)
-                   (dired-goto-subdir file))
-              (dired file))
-        (view-file-other-window file))))
-
-  ;; Find and display keybinding conflicts in all active keymaps.
+  ;; Find and display keybinding conflicts
   (defun my/find-keybinding-conflicts ()
     "Detect and display keybinding conflicts across active keymaps."
     (interactive)
@@ -1211,95 +1170,6 @@ These include toggling line numbers, switching window layouts, and custom functi
                  conflicts)
         (read-only-mode 1))
       (switch-to-buffer buffer-name)))
-
-  ;; Replace all occurrences of a string in the current buffer.
-  (defun my/replace-string-in-buffer (from to)
-    "Replace a string in the current buffer asynchronously."
-    (interactive
-     (list (read-string "Replace: ")
-           (read-string "With: ")))
-    (make-thread
-     (lambda ()
-       (save-excursion
-         (goto-char (point-min))
-         (while (search-forward from nil t)
-           (replace-match to nil t)))
-       (message "String replacement completed asynchronously."))))
-
-  ;; Open the init file for quick editing.
-  (defun my/open-init-file ()
-    "Open the user's Emacs init file."
-    (interactive)
-    (find-file user-init-file))
-
-  ;; Open the current buffer in Visual Studio Code at the current line and column.
-  (defun my/open-by-vscode ()
-    "Open the current file in Visual Studio Code asynchronously."
-    (interactive)
-    (when (buffer-file-name)
-      (async-shell-command
-       (format "code -r -g %s:%d:%d"
-               (buffer-file-name)
-               (line-number-at-pos)
-               (current-column)))))
-
-  ;; Display detailed information about the current Emacs build.
-  (defun my/print-build-info ()
-    "Display detailed information about the current Emacs build."
-    (interactive)
-    (switch-to-buffer (get-buffer-create "*Build info*"))
-    (let ((buffer-read-only nil))
-      (erase-buffer)
-      (insert
-       (format "GNU Emacs %s\nCommit:\t\t%s\nBranch:\t\t%s\nSystem:\t\t%s\nDate:\t\t\t%s\n"
-               emacs-version
-               (emacs-repository-get-version)
-               (when (version< "27.0" emacs-version)
-                 (emacs-repository-get-branch))
-               system-configuration
-               (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
-      (view-mode)))
-
-  ;; Generate an Org-mode formatted cheatsheet of keybindings
-  (defun my/org-mode-keybindings-cheatsheet ()
-    "Generate an Org-mode formatted cheatsheet of keybindings for the current major mode, with error handling."
-    (interactive)
-    (condition-case err
-        (let* ((mode-name (if (boundp 'major-mode)
-                              (format "%s" major-mode)
-                            "unknown-mode"))
-               (buffer-name (format "*%s Keybindings Cheatsheet*" mode-name))
-               (org-buffer (get-buffer-create buffer-name)))
-          (with-current-buffer org-buffer
-            (org-mode)
-            (erase-buffer)
-            (insert (format "#+TITLE: %s Keybindings Cheatsheet\n\n" mode-name))
-            (insert "* Keybindings\n")
-            (mapatoms
-             (lambda (symbol)
-               (when (and (commandp symbol)
-                          (not (string-prefix-p "org-" (symbol-name symbol)))) ; Avoid Org-mode commands
-                 (let ((key-bindings (where-is-internal symbol (list (current-local-map)))))
-                   (dolist (key key-bindings)
-                     (when (and key (not (string= "" (key-description key)))) ; Ensure key is valid
-                       (insert (format "** %s\n" (key-description key)))
-                       (insert (format "   - Command: ~%s~\n" symbol))))))))
-            (goto-char (point-min)))
-          (switch-to-buffer org-buffer))
-      (error (message "An error occurred: %S" err))))
-
-  ;; Remove duplicate entries from the kill ring before adding a new one.
-  (defun my/no-kill-new-duplicate (yank)
-    "Remove duplicate entries from `kill-ring` before adding YANK."
-    (setq kill-ring (delete yank kill-ring)))
-  (advice-add 'kill-new :before #'my/no-kill-new-duplicate)
-
-  ;; Automatically delete trailing whitespace before saving a file.
-  (add-hook 'before-save-hook 'delete-trailing-whitespace)
-
-  ;; Enable clickable URLs in programming and text modes.
-  (add-hook 'prog-mode-hook 'goto-address-prog-mode)
-  (add-hook 'text-mode-hook 'goto-address-mode)
 #+end_src
 
 ** Footer
