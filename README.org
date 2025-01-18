@@ -71,7 +71,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/01/18 14:40:00 $
+  ;; $Lastupdate: 2025/01/18 15:54:16 $
 
   ;;; Commentary:
 
@@ -349,67 +349,132 @@ This configuration sets up attractive fonts and visual enhancements in Emacs. It
 
 
 #+begin_src emacs-lisp
+  ;;; Key Binding Configuration
+
   (leaf which-key
     :ensure t
     :global-minor-mode t)
 
   (leaf undo-fu :ensure t)
 
-  (leaf meow :ensure t)
+  (leaf KeyBinding
+    :config
+    ;; Basic editing operations
+    (leaf-keys
+     (("C-/"           . undo-fu-only-undo)       ;; Undo
+      ("C-?"           . help)                    ;; Help
+      ("C-h"           . backward-delete-char)    ;; Delete character before the cursor
+      ("C-z"           . undo-fu-only-redo)))     ;; Redo
 
-  (leaf hydra :ensure t)
+    ;; Window and Frame management
+    (leaf-keys
+     (("C-."           . other-window)             ;; Switch to the other window
+      ("M-o"           . ace-window)               ;; Quick window switch
+      ("s-j"           . find-file-other-window)   ;; Open file in other window
+      ("s-o"           . find-file-other-frame)    ;; Open file in other frame
+      ("s-d"           . delete-frame)             ;; Delete current frame
+      ("s-m"           . make-frame)               ;; Create a new frame
+      ("s-r"           . restart-emacs)))          ;; Restart Emacs
 
-  (defun my-meow-setup ()
-    "Setup custom keybindings for Meow."
-    ;; Define keybindings for Normal mode
-    (meow-normal-define-key
-     '(("u" . undo-fu-only-undo)
-       ("U" . undo-fu-only-redo)
-       ("h" . backward-delete-char)
-       ("." . other-window)
-       ("M-o" . ace-window)
-       ("s-j" . find-file-other-window)
-       ("s-o" . find-file-other-frame)
-       ("s-d" . delete-frame)
-       ("s-m" . make-frame)
-       ("s-r" . restart-emacs)
-       ("=" . text-scale-increase)
-       ("-" . text-scale-decrease)
-       ("<s-up>" . beginning-of-buffer)
-       ("<s-down>" . end-of-buffer)
-       ("C-;" . comment-region)
-       ("C-:" . uncomment-region)
-       ("C-x k" . kill-buffer-and-window)
-       ("C-x g" . magit-status)))
+    ;; Scrolling and text scaling
+    (leaf-keys
+     (("C-+"           . text-scale-increase)      ;; Increase text size
+      ("C--"           . text-scale-decrease)      ;; Decrease text size
+      ("s-<up>"        . beginning-of-buffer)      ;; Go to the beginning of the buffer
+      ("s-<down>"      . end-of-buffer)))          ;; Go to the end of the buffer
 
-    ;; Define leader keybindings
-    (meow-leader-define-key
-     '(("f o" . find-file)
-       ("f v" . find-file-read-only)
-       ("r" . consult-ripgrep)
-       ("s" . consult-line)
-       ("o a" . org-agenda)
-       ("o c" . org-capture)
-       ("o i" . org-roam-node-insert)
-       ("o f" . org-roam-node-find)
-       ("M-a" . align-regexp)
-       ("=" . er/expand-region)
-       ("w" . hydra-window/body)
-       ("z" . hydra-text-scale/body)
-       ("b" . hydra-buffer/body)))
+    ;; Commenting
+    (leaf-keys
+     (("C-c ;"         . comment-region)           ;; Comment selected region
+      ("C-c :"         . uncomment-region)))       ;; Uncomment selected region
 
-    ;; Customize the leader key
-    (setq meow-leader-key "SPC")
+    ;; File operations
+    (leaf-keys
+     (("C-c f o"       . find-file)                ;; Open file
+      ("C-c f v"       . find-file-read-only)))    ;; Open file in read-only mode
 
-    ;; Cursor styles for Meow states
-    (setq meow-cursor-type-normal 'box
-          meow-cursor-type-insert 'bar
-          meow-cursor-type-motion 'hollow
-          meow-cursor-type-keypad 'box
-          meow-cursor-type-beacon 'hollow)
+    ;; Search and replace
+    (leaf-keys
+     (("C-c C-r"       . consult-ripgrep)          ;; Ripgrep search
+      ("C-s"           . consult-line)))           ;; Search in buffer
 
-    ;; Enable Meow globally
-    (meow-global-mode 1))
+    ;; Org Mode keybindings
+    (leaf-keys
+     (("C-c o a"       . org-agenda)               ;; Open org-agenda
+      ("C-c o c"       . org-capture)              ;; Capture Org entry
+      ("C-c o i"       . org-roam-node-insert)     ;; Insert Org-roam node
+      ("C-c o f"       . org-roam-node-find)))     ;; Find Org-roam node
+
+    ;; Buffer operations
+    (leaf-keys
+     (("C-c k"         . kill-buffer-and-window))) ;; Kill buffer and close window
+
+    ;; Miscellaneous
+    (leaf-keys
+     (("C-c M-a"       . align-regexp)             ;; Align using regex
+      ("C-="           . er/expand-region)         ;; Expand selected region
+      ("M-x"           . execute-extended-command) ;; Execute extended command
+      ("C-x g"         . magit-status)))           ;; Open Magit status
+
+    ;; Windmove: Enable keybindings for directional window navigation
+    (windmove-default-keybindings)
+
+    ;; Dired Mode: Custom keybinding for other window view
+    (add-hook 'dired-mode-hook
+              (lambda ()
+                (define-key dired-mode-map "z" 'my/dired-view-file-other-window))))
+
+  ;;; Hydra Configuration for Efficient Window, Buffer, and Text Scaling Operations
+  (leaf hydra
+    :ensure t
+    :config
+    ;; Hydra for window and frame management
+    (defhydra hydra-window (:hint nil :color red)
+      "
+  ^Window Management^
+  ----------------------------------
+  [_o_] Other window  [_s_] Split window
+  [_d_] Delete window [_f_] Find file
+  [_m_] Make frame    [_r_] Restart Emacs
+  [_q_] Quit
+  "
+      ("o" other-window)
+      ("s" split-window-below)
+      ("d" ace-delete-window)
+      ("f" find-file)
+      ("m" make-frame)
+      ("r" restart-emacs)
+      ("q" nil :color blue))
+
+    ;; Hydra for text scaling
+    (defhydra hydra-text-scale (:hint nil :color red)
+      "
+  ^Text Scaling^
+  ---------------------------
+  [_+_] Increase   [_-_] Decrease   [_0_] Reset
+  "
+      ("+" text-scale-increase)
+      ("-" text-scale-decrease)
+      ("0" (text-scale-set 0) :color blue)
+      ("q" nil "quit" :color blue))
+
+    ;; Hydra for buffer operations
+    (defhydra hydra-buffer (:hint nil :color red)
+      "
+  ^Buffer Operations^
+  ---------------------------
+  [_n_] Next Buffer   [_p_] Previous Buffer   [_k_] Kill Buffer   [_q_] Quit
+  "
+      ("n" next-buffer)
+      ("p" previous-buffer)
+      ("k" kill-this-buffer)
+      ("q" nil :color blue))
+
+    ;; Keybindings to invoke hydras
+    (leaf-keys
+     (("C-c w" . hydra-window/body)        ;; Invoke window management hydra
+      ("C-c z" . hydra-text-scale/body)    ;; Invoke text scaling hydra
+      ("C-c b" . hydra-buffer/body))))     ;; Invoke buffer operations hydra
 #+end_src
 
 ** Basic
