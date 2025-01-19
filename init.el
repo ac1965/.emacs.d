@@ -39,8 +39,8 @@
 
 ;;; Package and no-littering configuration
 (setq package-user-dir (expand-file-name "elpa/" my:d:cache) ; Customize package installation directory
-      no-littering-etc-directory (expand-file-name ".etc/" my:d) ; Store config files
-      no-littering-var-directory (expand-file-name ".var/" my:d)) ; Store variable data
+      no-littering-etc-directory my:d:etc ; Store config files
+      no-littering-var-directory my:d:var) ; Store variable data
 
 ;;; Load settings from README.org using org-babel
 (require 'org)
