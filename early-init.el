@@ -1,52 +1,58 @@
-;;; early-init.el --- Early initialization for Emacs 30+ -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
-;; Licensed under the GNU General Public License version 3 or later.
+;;; early-init.el --- Early initializatione -*- lexical-binding: t; -*-
+;; Author: YAMASHITA Takao <ac1965@ty07.net>
+;; License: GNU General Public License version 3 or later
+;; Keywords: initialization, performance
+;; Version: 1.0
 
 ;;; Commentary:
-;; This configuration optimizes Emacs startup performance and includes platform-specific settings.
-;; Designed for Emacs 30 and above, it leverages features like native compilation and precise scrolling.
+;; This configuration file optimizes Emacs startup performance and includes platform-specific settings.
+;; Designed for Emacs 30 and above, it configures garbage collection, native compilation, and macOS-specific features.
 
 ;;; Code:
 
-;; Ensure compatibility with Emacs 30 or later
+;; ---------------------------------------------------------------------------
+;;; Compatibility Check
+;; Ensure that Emacs version is 30 or higher.
 (when (version< emacs-version "30")
   (error "This configuration requires Emacs 30 or higher"))
 
-;; Optimize garbage collection and file handler processing during startup
-(setq gc-cons-threshold (* 64 1024 1024) ; Set to 64MB to minimize GC overhead during startup
-      read-process-output-max (* 8 1024 1024) ; Improve LSP and subprocess performance
-      file-name-handler-alist nil)            ; Temporarily disable file handlers for faster startup
+;; ---------------------------------------------------------------------------
+;;; Performance Optimization
+;; Adjust garbage collection and file handling during startup for faster initialization.
+(setq gc-cons-threshold (* 64 1024 1024) ; Temporarily set GC threshold to 64MB
+      read-process-output-max (* 8 1024 1024) ; Improve subprocess performance
+      file-name-handler-alist nil) ; Disable file handlers temporarily
 
-;; Restore default GC and file handler settings after startup
+;; Restore default garbage collection settings after startup
 (add-hook 'emacs-startup-hook
           (lambda ()
             (setq gc-cons-threshold (* 32 1024 1024) ; Reduce GC threshold to 32MB
                   file-name-handler-alist (default-value 'file-name-handler-alist))))
 
-;; Native compilation settings
-;; Optimize for speed and suppress warnings during async compilation
+;; ---------------------------------------------------------------------------
+;;; Native Compilation Settings
+;; Optimize native compilation settings for speed and error suppression.
 (setq native-comp-async-report-warnings-errors 'silent
       native-comp-speed 3
       comp-deferred-compilation t)
 
-;; macOS-specific settings
+;; ---------------------------------------------------------------------------
+;;; macOS-Specific Settings
+;; Configure macOS-specific environment variables and paths.
 (when (eq system-type 'darwin)
-  ;; Configure LIBRARY_PATH for GCC and set PATH for Homebrew
+  ;; Set LIBRARY_PATH for GCC
   (let ((gcc-paths (seq-filter #'file-directory-p
                                '("/opt/homebrew/opt/gcc/lib/gcc/current"
                                  "/usr/local/opt/gcc/lib/gcc/current"))))
     (when gcc-paths
       (setenv "LIBRARY_PATH" (string-join gcc-paths ":"))))
 
+  ;; Set PATH for Homebrew
   (let ((brew-paths '("/opt/homebrew/bin" "/usr/local/bin")))
     (dolist (path brew-paths)
       (when (file-directory-p path)
         (setenv "PATH" (string-join (cons path (split-string (getenv "PATH") ":")) ":"))
         (add-to-list 'exec-path path))))
-
-  ;; Use `gpg` for encryption, if available
-  (setq epg-gpg-program (or (executable-find "gpg") epg-gpg-program))
 
   ;; Use GNU ls (gls) for dired if available
   (when (executable-find "gls")
@@ -54,53 +60,54 @@
           dired-use-ls-dired t
           dired-listing-switches "-aBhl --group-directories-first")))
 
-;; Frame settings
-(setq default-frame-alist '((fullscreen . maximized) ; Start with maximized frame
-                            (resize-pixelwise . t)) ; Allow pixel-perfect resizing
-      frame-title-format "%b") ; Display the buffer name in the frame title
+;; ---------------------------------------------------------------------------
+;;; Frame and UI Customization
+;; Configure frame appearance and behavior.
+(setq default-frame-alist '((fullscreen . maximized) ; Start maximized
+                            (resize-pixelwise . t)) ; Pixel-perfect resizing
+      frame-title-format "%b") ; Display buffer name in frame title
 
 ;; Disable unnecessary UI elements
 (menu-bar-mode -1)
 (tool-bar-mode -1)
 (scroll-bar-mode -1)
 
-;; Enable smooth scrolling using `pixel-scroll-precision-mode`
-;; This feature is available from Emacs 29 onwards
+;; Enable smooth scrolling
 (when (featurep 'pixel-scroll)
   (pixel-scroll-precision-mode 1))
 
 ;; Configure scrolling behavior
-(setq scroll-margin 8 ; Keep 8 lines of context when scrolling
-      scroll-conservatively 101 ; Avoid recentering unless necessary
-      scroll-preserve-screen-position t) ; Maintain the cursor position during scrolling
+(setq scroll-margin 8 ; Keep 8 lines of context
+      scroll-conservatively 101 ; Avoid recentering
+      scroll-preserve-screen-position t) ; Maintain cursor position
 
-;; Disable startup screen and configure initial buffer
-(setq inhibit-startup-screen t ; Skip the startup screen
-      initial-scratch-message nil ; Start with an empty *scratch* buffer
-      initial-major-mode 'text-mode) ; Use text-mode for the initial buffer
-
-;; Miscellaneous optimizations
-(setq use-short-answers t   ; Use y/n prompts instead of yes/no
-      create-lockfiles nil  ; Disable lockfiles
+;; ---------------------------------------------------------------------------
+;;; Miscellaneous Optimizations
+;; General improvements for smoother operation.
+(setq inhibit-startup-screen t ; Disable startup screen
+      initial-scratch-message nil ; Empty scratch buffer
+      initial-major-mode 'text-mode ; Use text-mode in the scratch buffer
+      use-short-answers t ; Enable y/n answers
+      create-lockfiles nil ; Disable lockfiles
       make-backup-files nil ; Disable backup files
       auto-save-default nil ; Disable auto-save
-      auto-save-list-file-prefix nil ; Prevent auto-save list files
-      display-line-numbers-type 'relative) ; Set relative numbering
+      auto-save-list-file-prefix nil ; Disable auto-save lists
+      display-line-numbers-type 'relative) ; Use relative line numbers
 
-;; Enable setting
+;; Enable useful global modes
 (global-auto-revert-mode 1)
 (electric-pair-mode 1)
 (show-paren-mode 1)
 (global-prettify-symbols-mode 1)
-(modifier-bar-mode 1)
 
-;; Display startup performance metrics
+;; ---------------------------------------------------------------------------
+;;; Startup Metrics
+;; Log startup time and garbage collection statistics.
 (add-hook 'emacs-startup-hook
           (lambda ()
             (message "Emacs loaded in %s with %d garbage collections."
                      (format "%.2f seconds"
-                             (float-time
-                              (time-subtract after-init-time before-init-time)))
+                             (float-time (time-subtract after-init-time before-init-time)))
                      gcs-done)))
 
 (provide 'early-init)
