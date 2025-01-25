@@ -72,7 +72,7 @@ Below are the system details and Emacs build configurations for two machines.
 ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
 ;; Licensed under the GNU General Public License version 3 or later.
 
-;; $Lastupdate: 2025/01/25 12:44:29 $
+;; $Lastupdate: 2025/01/25 12:59:46 $
 
 ;;; Commentary:
 ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -1020,92 +1020,102 @@ Enhance Org documents with better bullets and headings.
 #+end_src
 
 *** Completion Framework
-/This configuration script sets up a sophisticated *completion framework* for Emacs, utilizing a combination of packages to provide fast, flexible, and user-friendly completion across various contexts. Here's an overview of the key components/
-
+/This configuration script sets up a sophisticated *completion framework* for Emacs, focusing on efficient, flexible, and user-friendly completion across various contexts./
 
 #+begin_src emacs-lisp
-  ;;; Completion Framework Configuration - Optimized for minimal keystrokes
+;;; Completion Framework Configuration
 
-  (leaf completion-settings
+(leaf completion-settings
+  :config
+
+  ;; Prescient: Sort and filter candidates based on usage history
+  (leaf prescient
+    :ensure t
+    :custom
+    ((prescient-aggressive-file-save . t))  ;; Automatically save history
+    :global-minor-mode prescient-persist-mode)
+
+  ;; Vertico: Vertical completion menu
+  ;; Best suited for commands like M-x, file completion, and more.
+  (leaf vertico
+    :ensure t
+    :global-minor-mode vertico-mode
+    :custom
+    ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
     :config
-    ;; Prescient: Sort and filter candidates based on usage history
-    (leaf prescient
+    ;; Posframe integration for cleaner UI
+    (leaf vertico-posframe
       :ensure t
       :custom
-      ((prescient-aggressive-file-save . t))  ;; Save history after each update
-      :global-minor-mode prescient-persist-mode)
+      ((vertico-posframe-border-width . 2)
+       (vertico-posframe-parameters . '((left-fringe . 4)
+                                        (right-fringe . 4))))
+      :global-minor-mode vertico-posframe-mode))
 
-    ;; Vertico: Vertical completion menu
-    (leaf vertico
+  ;; Marginalia: Annotate candidates with additional context
+  (leaf marginalia
+    :ensure t
+    :global-minor-mode marginalia-mode)
+
+  ;; Consult: Enhanced search and navigation commands
+  ;; Adds better search capabilities to complement Vertico.
+  (leaf consult
+    :ensure t
+    :custom
+    ((xref-show-xrefs-function . #'consult-xref)
+     (xref-show-definitions-function . #'consult-xref)))
+
+  ;; Embark: Context-aware actions for completion candidates
+  ;; Provides detailed actions for selected candidates in Vertico.
+  (leaf embark
+    :ensure t
+    :custom
+    ((prefix-help-command . #'embark-prefix-help-command))
+    :config
+    ;; Integrate Embark with Consult for richer functionality
+    (leaf embark-consult
       :ensure t
-      :global-minor-mode vertico-mode
+      :after (embark consult)
+      :hook (embark-collect-mode . consult-preview-at-point-mode)))
+
+  ;; Corfu: Popup-based completion for `completion-at-point`
+  ;; Suitable for in-buffer completions, e.g., programming contexts.
+  (leaf corfu
+    :ensure t
+    :init
+    (global-corfu-mode)  ;; Enable Corfu globally
+    :custom
+    ((corfu-auto . t)          ;; Enable auto-completion
+     (corfu-auto-delay . 0)    ;; No delay before showing candidates
+     (corfu-auto-prefix . 2)   ;; Trigger completion after 2 characters
+     (corfu-cycle . t))        ;; Cycle through candidates
+    :config
+    ;; Add icons to completion candidates for better visualization
+    (leaf kind-icon
+      :ensure t
+      :after corfu
       :custom
-      ((vertico-count . 15))  ;; Show up to 15 candidates
+      ((kind-icon-default-face . 'corfu-default))
       :config
-      ;; Use posframe for cleaner display of completion candidates
-      (leaf vertico-posframe
-        :ensure t
-        :custom
-        ((vertico-posframe-border-width . 2)
-         (vertico-posframe-parameters . '((left-fringe . 4)
-                                          (right-fringe . 4))))
-        :global-minor-mode vertico-posframe-mode))
+      (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
 
-    ;; Marginalia: Annotate completion options with extra information
-    (leaf marginalia
-      :ensure t
-      :global-minor-mode marginalia-mode)
+  ;; Cape: Additional completion sources for Corfu
+  ;; Extend completion with extra sources like file and keyword completions.
+  (leaf cape
+    :ensure t
+    :init
+    ;; Add sources for file, dabbrev, and keyword completion
+    (add-to-list 'completion-at-point-functions #'cape-file)
+    (add-to-list 'completion-at-point-functions #'cape-dabbrev)
+    (add-to-list 'completion-at-point-functions #'cape-keyword))
 
-    ;; Consult: Powerful search and navigation commands
-    (leaf consult
-      :ensure t
-      :custom
-      ((xref-show-xrefs-function . #'consult-xref)
-       (xref-show-definitions-function . #'consult-xref)))
-
-    ;; Embark: Context-aware actions for completion candidates
-    (leaf embark
-      :ensure t
-      :custom
-      ((prefix-help-command . #'embark-prefix-help-command))
-      :config
-      (leaf embark-consult
-        :ensure t
-        :hook (embark-collect-mode . consult-preview-at-point-mode)))
-
-    ;; Corfu: Minimal popup-based completion for `completion-at-point`
-    (leaf corfu
-      :ensure t
-      :init
-      (global-corfu-mode)
-      :custom
-      `((corfu-auto . t)
-        (corfu-auto-delay . 0)
-        (corfu-auto-prefix . 2)
-        (corfu-cycle . t))  ;; Enable cycling through candidates
-      :config
-      ;; Add icons to completion candidates
-      (leaf kind-icon
-        :ensure t
-        :custom
-        ((kind-icon-default-face . 'corfu-default))
-        :config
-        (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
-
-    ;; Cape: Additional completion sources for Corfu
-    (leaf cape
-      :ensure t
-      :init
-      (add-to-list 'completion-at-point-functions #'cape-file)
-      (add-to-list 'completion-at-point-functions #'cape-dabbrev)
-      (add-to-list 'completion-at-point-functions #'cape-keyword))
-
-    ;; Orderless: Enable fuzzy matching for completion
-    (leaf orderless
-      :ensure t
-      :custom
-      ((completion-styles . '(orderless basic))
-       (completion-category-overrides . '((file (styles . (partial-completion))))))))
+  ;; Orderless: Fuzzy matching for completion
+  ;; Improve matching logic to handle partial and unordered patterns.
+  (leaf orderless
+    :ensure t
+    :custom
+    ((completion-styles . '(orderless basic))  ;; Enable fuzzy matching
+     (completion-category-overrides . '((file (styles . (partial-completion))))))))
 #+end_src
 
 *** Miscellaneous helper functions
