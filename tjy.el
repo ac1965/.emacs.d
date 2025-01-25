@@ -4,42 +4,59 @@
 ;; Keywords: personal, configuration, authentication, email
 
 ;;; Commentary:
-;; This file contains personal configurations including:
+;; This file contains personal configurations, including:
 ;; - User information and directory setup
 ;; - Authentication management
-;; - Email client settings
+;; - Email client settings (Mew)
 
 ;;; Code:
 
 ;; ---------------------------------------------------------------------------
-;;; Personal Information and General Configuration
+;;; User Information and General Configuration
 (leaf *personal-configuration
   :config
   ;; User information
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "ac1965@ty07.net"
-        conf:font-family "Source Code Pro" ; Preferred font
-        conf:font-size 16 ; Font size
-        inhibit-compacting-font-caches t ; Improve font performance
+        my:font-family "Source Code Pro"
+        my:font-size 16
+        inhibit-compacting-font-caches t
         plstore-cache-passphrase-for-symmetric-encryption t)
 
+  ;; Font settings
+  (set-face-attribute 'default nil
+                      :family my:font-family
+                      :height (* my:font-size 10))
+
   ;; Define essential directories
-  (defconst my:d:cloud "~/Documents/"
+  (defconst my:cloud-directory "~/Documents/"
     "Directory for cloud-synced documents.")
-  (defconst my:d:blog (concat my:d:cloud "devel/repos/mysite/")
+  (defconst my:blog-directory (concat my:cloud-directory "devel/repos/mysite/")
     "Directory for blog development.")
-  (defconst my-capture-blog-file
-    (expand-file-name "all-posts.org" my:d:blog)
+  (defconst my:capture-blog-file
+    (expand-file-name "all-posts.org" my:blog-directory)
     "Path to the blog capture file.")
-  (defconst my:d:password-store
+  (defconst my:password-store-directory
     (or (getenv "PASSWORD_STORE_DIR")
-        (concat my:d:cloud "password-store"))
+        (concat my:cloud-directory "password-store"))
     "Path to the password store.")
 
+  ;; Function to ensure directories exist
+  (defun ensure-directory (dir)
+    "Ensure that DIR exists."
+    (unless (file-directory-p dir)
+      (warn "Directory does not exist: %s" dir)))
+
+  ;; Ensure essential directories exist
+  (mapc #'ensure-directory
+        (list my:cloud-directory
+              my:blog-directory
+              my:password-store-directory))
+
   ;; Add custom elisp directories to `load-path`
-  (defconst my-elisp-directory "~/.elisp"
+  (defconst my:elisp-directory "~/.elisp"
     "Base directory for custom elisp files.")
-  (dolist (dir (let ((dir (expand-file-name my-elisp-directory)))
+  (dolist (dir (let ((dir (expand-file-name my:elisp-directory)))
                  (list dir (format "%s%d" dir emacs-major-version))))
     (when (and (stringp dir) (file-directory-p dir))
       (let ((default-directory dir))
@@ -50,36 +67,33 @@
 ;;; Authentication Management
 (leaf *authentication
   :if (and (getenv "GPG_KEY_ID")
-           (file-directory-p my:d:password-store))
+           (file-directory-p my:password-store-directory))
   :init
   ;; Check for necessary environment variables and directories
   (unless (getenv "GPG_KEY_ID")
     (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
-  (unless (file-directory-p my:d:password-store)
-    (warn "Password store directory does not exist: %s" my:d:password-store))
-
-  ;; Default settings for `plstore`
-  (setq leaf-default-plstore
-        (plstore-open (expand-file-name "plstore.plist" my:d:password-store)))
-
-  ;; Exclude password store from version control
-  (add-to-list 'vc-directory-exclusion-list
-               (expand-file-name my:d:password-store))
+  (unless (file-directory-p my:password-store-directory)
+    (warn "Password store directory does not exist: %s" my:password-store-directory))
 
   ;; Configure authentication sources
   (leaf auth-source
-    :custom
-    `((auth-source-gpg-encrypt-to . (getenv "GPG_KEY_ID"))))
+    :config
+    (setq auth-source-gpg-encrypt-to
+          (or (getenv "GPG_KEY_ID")
+              (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
 
   ;; Use password-store and auth-source-pass for password management
   (leaf password-store :ensure t)
-  (leaf auth-source-pass :ensure t)
+  (leaf auth-source-pass :ensure t
+    :config
+    (when (executable-find "pass")
+      (auth-source-pass-enable)))
 
-  ;; Configure `plstore` for secure storage
+  ;; Configure plstore for secure storage
   (leaf plstore
-    :custom
-    `((plstore-secret-keys . 'silent)
-      (plstore-encrypt-to . ,(getenv "GPG_KEY_ID")))))
+    :config
+    (setq plstore-secret-keys 'silent
+          plstore-encrypt-to (getenv "GPG_KEY_ID"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Email Client Configuration (Mew)
@@ -103,7 +117,13 @@
         'mew-user-agent-compose
         'mew-draft-send-message
         'mew-draft-kill
-        'mew-send-hook)))
+        'mew-send-hook))
+
+  ;; Mew server settings (example)
+  (setq mew-mail-domain "ty07.net"
+        mew-smtp-server "smtp.ty07.net"
+        mew-imap-server "imap.ty07.net"
+        mew-imap-user "ac1965@ty07.net"))
 
 (provide 'tjy)
 ;;; tjy.el ends here
