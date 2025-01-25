@@ -72,7 +72,7 @@ Below are the system details and Emacs build configurations for two machines.
 ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
 ;; Licensed under the GNU General Public License version 3 or later.
 
-;; $Lastupdate: 2025/01/25 10:11:16 $
+;; $Lastupdate: 2025/01/25 11:52:29 $
 
 ;;; Commentary:
 ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -514,145 +514,119 @@ Additional useful bindings.
   ("C-x g"         . magit-status)))           ;; Open Magit status
 #+end_src
 
-** Basic
-/This configuration script includes basic settings and utilities aimed at improving the functionality and cleanliness of the Emacs environment. Here's a summary of the key components/
+** Basic Configuration
+This section includes fundamental settings for auto-saving, backup management, and visual enhancements.
 
-- *Basic*
-
-  Editing and font settings improve readability and usability.
-  We define settings for auto-saving, backup management, and basic editing features.
-
+*** Save and Backup
+Manage backups, auto-saving, and save-related utilities.
 
 #+begin_src emacs-lisp
-  ;;; Basic Configuration for Emacs 30+ using leaf
+;; Insert a timestamp before saving the buffer.
+(defun my/save-buffer-wrapper ()
+  "Insert a timestamp at the top of the buffer before saving."
+  (interactive)
+  (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
+        (replace-match tostr nil t)))))
 
-  ;; Insert a timestamp of the last update before saving the buffer.
-  (leaf *lastupdate
-    :preface
-    ;; Define a function to insert a timestamp before saving the buffer.
-    (defun my/save-buffer-wrapper ()
-      "Insert the last update timestamp in the buffer before saving."
-      (interactive)
-      (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
-        (save-excursion
-          (goto-char (point-min))
-          (while (re-search-forward "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
-            (replace-match tostr nil t)))))
-    ;; Attach the function to `before-save-hook`.
-    :hook (before-save-hook . my/save-buffer-wrapper))
+(add-hook 'before-save-hook #'my/save-buffer-wrapper)
 
-  ;; GC manager
-  (leaf gcmh :ensure t :global-minor-mode t)
+;; Configure auto-save and backup settings.
+(leaf files
+  :custom
+  `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+    (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
+    (delete-old-versions . t)
+    (auto-save-visited-interval . 1))
+  :global-minor-mode auto-save-visited-mode)
+#+end_src
 
-  ;; macOS-specific integration to fetch environment variables from the shell.
-  (leaf exec-path-from-shell
-    :ensure t
-    :if (memq window-system '(mac ns))  ;; Load only on macOS GUI
-    :commands (exec-path-from-shell-getenvs exec-path-from-shell-setenv)
-    :custom ((exec-path-from-shell-check-startup-files . nil))
-    :config
-    (exec-path-from-shell-initialize))
+*** Session Management
+Save and restore sessions, window configurations, and history.
 
-  ;; Keep Emacs configuration and cache files organized.
-  (leaf no-littering
-    :ensure t
-    :require t)
+#+begin_src emacs-lisp
+(leaf *desktop
+  :config
+  (setq desktop-dirname (concat no-littering-var-directory "desktop")
+        desktop-save 'if-exists
+        desktop-auto-save-timeout 180
+        desktop-restore-eager 10)
+  (desktop-save-mode 1)  ;; Enable session saving
+  (winner-mode 1))       ;; Enable window configuration undo/redo
 
-  ;; Safely load custom settings from a dedicated custom.el file.
-  (leaf cus-edit
-    :custom `((custom-file . ,(concat no-littering-etc-directory "custom.el")))
-    :config (ignore-errors (load custom-file)))
+(leaf savehist
+  :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
+  :global-minor-mode t)
+#+end_src
 
-  ;; Save and restore the desktop session and window configuration.
-  (leaf *desktop
-    :config
-    ;; Desktop session and window configuration settings.
-    (setq desktop-dirname (concat no-littering-var-directory "desktop")
-          desktop-save 'if-exists
-          desktop-auto-save-timeout 180
-          desktop-restore-eager 10
-          desktop-restore-forces-onscreen nil)
-    (desktop-save-mode 1)  ;; Enable desktop save mode
-    (winner-mode 1))       ;; Enable winner mode for undo/redo of window changes
+*** Editing Enhancements
+Enable features for editing convenience and readability.
 
-  ;; Automatically revert buffers when files are changed externally.
-  (leaf autorevert
-    :global-minor-mode global-auto-revert-mode)
+#+begin_src emacs-lisp
+(leaf elec-pair
+  :global-minor-mode electric-pair-mode)
 
-  ;; Enable automatic parenthesis pairing and highlighting.
-  (leaf elec-pair
-    :global-minor-mode electric-pair-mode)
+(leaf paren
+  :custom ((show-paren-delay . 0)
+           (show-paren-style . 'expression))
+  :global-minor-mode show-paren-mode)
 
-  (leaf paren
-    :custom ((show-paren-delay . 0)
-             (show-paren-style . 'expression))
-    :global-minor-mode show-paren-mode)
+(leaf puni
+  :ensure t
+  :global-minor-mode puni-global-mode)
+#+end_src
 
-  (leaf puni
-    :ensure t
-    :global-minor-mode puni-global-mode)
+*** System Utilities
+Optimize performance and integrate macOS-specific settings.
 
-  ;; Auto-save and backup settings for safer file handling.
-  (leaf files
-    :preface
-    ;; Function to toggle `auto-save-visited-mode`.
-    (defun toggle-auto-save-visited-mode ()
-      "Toggle auto-save-visited-mode."
-      (interactive)
-      (if auto-save-visited-mode
-          (progn
-            (auto-save-visited-mode -1)
-            (message "auto-save-visited-mode disabled"))
-        (progn
-          (auto-save-visited-mode 1)
-          (message "auto-save-visited-mode enabled"))))
+#+begin_src emacs-lisp
+(leaf gcmh
+  :ensure t
+  :global-minor-mode t)
 
-    :custom
-    `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
-      (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
-      (delete-old-versions . t)
-      (auto-save-visited-interval . 1))
-    :global-minor-mode auto-save-visited-mode)
+(leaf exec-path-from-shell
+  :ensure t
+  :if (memq window-system '(mac ns))
+  :custom ((exec-path-from-shell-check-startup-files . nil))
+  :config
+  (exec-path-from-shell-initialize))
+#+end_src
 
-  ;; Remote file editing with Tramp (e.g., SSH, SCP).
-  (leaf tramp
-    :pre-setq
-    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-    :setq
-    ((tramp-default-method . "scp")
-     (tramp-encoding-shell . "/bin/bash")
-     (tramp-debug-buffer . t)
-     (tramp-verbose . 10)
-     (tramp-shell-prompt-pattern . "\\(?:^\\|\r\\)[^]#$%>\n]*#?[]#$%>] *\\(^[\\[[0-9;]*[a-zA-Z] *\\)*")
-     (tramp-use-ssh-controlmaster-options . nil)
-     (tramp-password-prompt-regexp . '(concat
-                                       "^.*"
-                                       (regexp-opt
-                                        '("passphrase" "Passphrase"
-                                          "password" "Password"
-                                          "Verification code")
-                                        t)
-                                       ".*:\0? *"))))
+*** Tree-Sitter
+Enable syntax highlighting and grammar support using Tree-Sitter.
 
-  ;; Miscellaneous settings for startup and history.
-  (leaf startup
-    :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
+#+begin_src emacs-lisp
+(leaf tree-sitter
+  :ensure t
+  :global-minor-mode global-tree-sitter-mode
+  :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode))
 
-  (leaf savehist
-    :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
-    :global-minor-mode t)
+(leaf tree-sitter-langs
+  :ensure t
+  :config
+  (tree-sitter-langs-install-grammars))
+#+end_src
 
-  ;; Ensure tree-sitter and related modes are properly configured
-  (leaf tree-sitter
-    :ensure t
-    :global-minor-mode global-tree-sitter-mode
-    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode))
+*** Miscellaneous
+Organize Emacs configuration and handle remote file editing.
 
-  (leaf tree-sitter-langs
-    :ensure t
-    :config
-    (tree-sitter-langs-install-grammars))
+#+begin_src emacs-lisp
+(leaf no-littering
+  :ensure t
+  :require t)
+
+(leaf tramp
+  :pre-setq
+  `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+    (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
+  :custom
+  `((tramp-default-method . "scp")
+    (tramp-verbose . 10)))
+
+(leaf startup
+  :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
 #+end_src
 
 ** Utilties Package
