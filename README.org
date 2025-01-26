@@ -7,27 +7,45 @@
 
 * Installation
 
-This section documents the setup required to build and install Emacs from source.
+This section documents the steps to build and install Emacs from source safely and effectively.
+
+** Step 1: Clone the Configuration Repository
+Run the following command to clone the configuration files from GitHub:
 
 #+begin_src shell :eval never
   git clone https://github.com/ac1965/.emacs.d ~/.emacs.d
 #+end_src
 
-You are cloning a GitHub repository (https://github.com/ac1965/.emacs.d) into the =~/.emacs.d= directory on your local machine.
+Make sure that the `~/.emacs.d` directory does not already exist, or back it up if necessary.
 
-- *Build Emacs*
+** Step 2: Build Emacs
 
-You build Emacs using a script (=build-emacs.sh=) and want to specify the location of your GitHub repositories.
-
-[[https://github.com/ac1965/dotfiles/blob/master/.local/bin/build-emacs.sh][build-emacs.sh]]
-
-The following script builds Emacs with native compilation enabled. You need to set the `GITHUB_REPOS` environment variable to point to your source repository.
+To build Emacs, use the provided `build-emacs.sh` script. You must set the `GITHUB_REPOS` environment variable to the location of your source repositories:
+[[https://github.com/ac1965/dotfiles/blob/master/.local/bin/build-emacs.sh][
+build-enmacs.sh]]
 
 #+begin_src shell :eval never
-  GITHUB_REPOS=/Users/ac1965/devel/src build-emacs.sh --native-compilation
+  export GITHUB_REPOS=/Users/ac1965/devel/src
+  ./build-emacs.sh --native-compilation
 #+end_src
 
-- *System Information*
+** Requirements and Troubleshooting
+
+- **Dependencies**: Ensure you have the following installed before running the script:
+  - `gcc` (Version 10 or newer)
+  - `libgccjit`
+  - `make`
+
+- **Permissions**: If you encounter permission issues, try running the script with `sudo`, but only after verifying its contents.
+
+- **Error Handling**:
+  - If native compilation fails, check that `libgccjit` is installed and properly linked.
+  - Verify that the `GITHUB_REPOS` directory exists and contains the necessary source files.
+
+** Notes
+For detailed troubleshooting, refer to the Emacs build documentation: [[https://www.gnu.org/software/emacs/manual/html_node/efaq/Building-Emacs.html][Building Emacs FAQ]].
+
+** System Information
 
 Below are the system details and Emacs build configurations for two machines.
 
@@ -71,7 +89,7 @@ Below are the system details and Emacs build configurations for two machines.
 ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
 ;; Licensed under the GNU General Public License version 3 or later.
 
-;; $Lastupdate: 2025/01/25 19:48:01 $
+;; $Lastupdate: 2025/01/26 18:17:36 $
 
 ;;; Commentary:
 ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -929,24 +947,30 @@ This section sets up essential Org-mode features, including directories
 #+end_src
 
 **** Org-mode Visual Enhancements
-Visual Customizations for Org-mode
-Enhance Org documents with better bullets and headings.
+This section improves the visual presentation of Org-mode documents by customizing headline bullets and indentation.
+
+*Explanation*
+
+- **Headline Bullets**:
+The symbols `◉`, `★`, `○`, and `▷` are used to visually distinguish different heading levels, making the document easier to navigate.
+- **Hidden Stars**:
+Leading stars (e.g., `** Subheading`) are hidden to reduce visual clutter and improve readability.
 
 #+begin_src emacs-lisp
-  (leaf org-bullets
-    :ensure t
-    :hook (org-mode . org-bullets-mode))
-
   (leaf org-superstar
     :after org
     :ensure t
     :custom
-    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷" "" ""))
-    :hook
-    (org-mode-hook (lambda () (org-superstar-mode 1))))
+    ;; Customize bullets for different headline levels
+    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
+    ;; Hide leading stars in headlines
+    (org-superstar-remove-leading-stars . t)
+    ;; Show custom bullets in Org-mode buffers
+    :hook (org-mode . org-superstar-mode))
 #+end_src
 
 **** Additional Org-related packages and configuration
+Enable LaTeX export with custom packages and PDF generation commands.
 
 #+begin_src emacs-lisp
   (leaf org-latex
@@ -957,7 +981,29 @@ Enhance Org documents with better bullets and headings.
                                 ("" "wrapfig" nil)))
     (org-latex-pdf-process '("pdflatex -interaction nonstopmode -output-directory %o %f"
                              "pdflatex -interaction nonstopmode -output-directory %o %f")))
+#+end_src
 
+Integrate Org-journal for daily note-taking.
+
+#+begin_src emacs-lisp
+  (leaf org-journal
+    :ensure t
+    :after org
+    :config
+    ;; Specify the journal directory
+    (setq org-journal-dir (concat org-directory "/journal")
+          org-journal-enable-agenda-integration t)
+
+    ;; Define a custom function for finding today's journal entry
+    (defun org-journal-find-location ()
+      "Open today’s journal entry."
+      (org-journal-new-entry t)
+      (goto-char (point-min))))
+#+end_src
+
+Enable support for executing code blocks in Org files.
+
+#+begin_src emacs-lisp
   (leaf ob
     :after org
     :defun org-babel-do-load-languages
@@ -970,35 +1016,11 @@ Enhance Org documents with better bullets and headings.
        (R . t)
        (ditaa . t)
        (plantuml . t))))
+#+end_src
 
-  (leaf org-journal
-    :after org
-    :ensure t
-    :config
-    (setq org-journal-dir (concat org-directory "/journal")
-          org-journal-enable-agenda-integration t)
-    (defun org-journal-find-location ()
-      ;; Open today's journal and position point at the top-level heading.
-      (org-journal-new-entry t)
-      (goto-char (point-min))))
+Enable support for executing code blocks in Org files.
 
-  ;; Other Org-related extensions and tools
-  (leaf org-cliplink :after org :ensure t :bind ("C-x p i" . org-cliplink))
-  (leaf org-download
-    :after org
-    :ensure t
-    :config
-    (setq-default org-download-image-dir (concat org-directory "/pictures")))
-  (leaf org-web-tools :after org :ensure t)
-  (leaf toc-org
-    :after org markdown-mode
-    :ensure t
-    :config
-    (add-hook 'org-mode-hook 'toc-org-enable)
-    (add-hook 'markdown-mode-hook 'toc-org-mode)
-    (define-key markdown-mode-map (kbd "\C-c\C-o") 'toc-org-markdown-follow-thing-at-point))
-
-  ;; Org-roam for knowledge management
+#+begin_src emacs-lisp
   (leaf org-roam
     :ensure t
     :after org
@@ -1006,22 +1028,52 @@ Enhance Org documents with better bullets and headings.
     (setq org-roam-directory (concat org-directory "/org-roam"))
     (my:ensure-directory-exists org-roam-directory)
     (org-roam-db-autosync-mode))
+#+end_src
 
-    ;; Export Org files to Hugo markdown format using ox-hugo
-    (leaf ox-hugo
-      :ensure t
-      :require t
-      :after ox
-      :custom ((org-hugo-front-matter-format . "toml")))
-    ;; ox-hugo-capture
-    (leaf *ox-hugo--capture
-      :require org-capture
-      :defvar (org-capture-templates)
-      :config
-      (add-to-list 'org-capture-templates
-  		 '("b" "Create new blog post" entry
-                     (file+headline my-capture-blog-file "blog")
-                     "** TODO %?
+Additional extensions to enhance Org-mode functionality.
+
+#+begin_src emacs-lisp
+  ;; Download and manage images in Org files
+  (leaf org-download
+    :ensure t
+    :after org
+    :config
+    (setq-default org-download-image-dir (concat org-directory "/pictures")))
+
+  ;; Generate and navigate table of contents in Org and Markdown files
+  (leaf toc-org
+    :ensure t
+    :after org markdown-mode
+    :config
+    (add-hook 'org-mode-hook 'toc-org-enable)
+    (add-hook 'markdown-mode-hook 'toc-org-mode))
+
+  ;; Add clickable links from the clipboard
+  (leaf org-cliplink
+    :ensure t
+    :after org
+    :bind ("C-x p i" . org-cliplink))
+#+end_src
+
+Enable support for executing code blocks in Org files.
+
+#+begin_src emacs-lisp
+  ;; Export Org files to Hugo markdown format using ox-hugo
+  (leaf ox-hugo
+    :ensure t
+    :require t
+    :after ox
+    :custom ((org-hugo-front-matter-format . "toml")))
+
+  ;; ox-hugo-capture
+  (leaf *ox-hugo--capture
+    :require org-capture
+    :defvar (org-capture-templates)
+    :config
+    (add-to-list 'org-capture-templates
+  	       '("b" "Create new blog post" entry
+                   (file+headline my-capture-blog-file "blog")
+                   "** TODO %?
     :PROPERTIES:
     :EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
     (format-time-string \"%Y\")
@@ -1035,27 +1087,17 @@ Enhance Org documents with better bullets and headings.
     :END:
     \n
     ")))
-    (leaf markdown-mode
-      :ensure t
-      :mode ("\\.md\\'" . markdown-mode)))
+
+  (leaf markdown-mode
+    :ensure t
+    :mode ("\\.md\\'" . markdown-mode)))
 #+end_src
 
 *** Miscellaneous Helper Functions
-/This section contains a collection of utility functions for managing windows, desktops, buffers, and keybindings in Emacs. These functions are designed to enhance usability, optimize workflows, and handle edge cases gracefully./
+This section contains utility functions for managing windows, desktops, and workflows in Emacs.
 
 #+begin_src emacs-lisp
-  ;;; Custom utility functions for window, desktop, and buffer management.
-
-  ;; Run TASK asynchronously and handle any errors gracefully.
-  (defun my/safe-run-async (task)
-    "Run TASK asynchronously and handle any errors gracefully."
-    (run-at-time 0 nil
-                 (lambda ()
-                   (condition-case err
-                       (funcall task)
-                     (error (message "An error occurred during asynchronous execution: %s" err))))))
-
-  ;; Save and restore the window layout
+  ;; Save the current window layout
   (defvar my/saved-window-config nil
     "Stores the current window configuration for later restoration.")
 
@@ -1067,18 +1109,18 @@ Enhance Org documents with better bullets and headings.
 
   (defun my/restore-window-layout ()
     "Restore the saved window configuration.
-  If no configuration has been saved, notify the user."
+    If no configuration has been saved, display an appropriate message."
     (interactive)
     (if my/saved-window-config
         (progn
           (set-window-configuration my/saved-window-config)
           (message "Window configuration restored."))
-      (message "No saved window configuration found.")))
+      (message "No saved window configuration found. Please save a layout first with `my/save-window-layout`.")))
 
-  ;; Toggle the dedicated status of the selected window
+  ;; Toggle the dedicated status of a window
   (defun my/toggle-window-dedication ()
     "Toggle the dedicated status of the currently selected window.
-  A dedicated window will not display other buffers."
+    A dedicated window will not display other buffers."
     (interactive)
     (let ((window (selected-window)))
       (set-window-dedicated-p window (not (window-dedicated-p window)))
@@ -1088,6 +1130,7 @@ Enhance Org documents with better bullets and headings.
   ;; Save and restore the desktop session asynchronously
   (leaf desktop
     :custom
+    ;; Set up desktop saving configuration
     `((desktop-dirname . ,(concat no-littering-var-directory "desktop"))
       (desktop-save . 'if-exists)
       (desktop-auto-save-timeout . 180)
@@ -1095,7 +1138,17 @@ Enhance Org documents with better bullets and headings.
     :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
            (emacs-startup-hook . desktop-read))
     :config
+    ;; Enable desktop saving mode
     (desktop-save-mode 1))
+
+  ;; Run TASK asynchronously with error handling
+  (defun my/safe-run-async (task)
+    "Run TASK asynchronously and handle any errors gracefully."
+    (run-at-time 0 nil
+                 (lambda ()
+                   (condition-case err
+                       (funcall task)
+                     (error (message "An error occurred during asynchronous execution: %s" err))))))
 
   ;; Delete backup files older than 7 days asynchronously
   (defun my/delete-old-backups ()
