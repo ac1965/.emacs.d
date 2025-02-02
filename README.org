@@ -52,10 +52,10 @@ Below are the system details and Emacs build configurations for two machines.
 
 - GNU Emacs 31.0.50
 
-|Commit|bd39ec062d0078c97140b8ad4ddf7c47e6f6e4ee|
+|Commit|c91c591f0f0cc774647c32bdcf05bb3a9551e340|
 |Branch|master|
-|System|aarch64-apple-darwin24.2.0|
-|Date|2025-02-01 00:28:02 (JST)|
+|System|aarch64-apple-darwin24.3.0|
+|Date|2025-02-02 13:07:09 (JST)|
 |Patch|without ns-inline.patch|
 |Features|ACL DBUS GLIB GNUTLS LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB|
 |Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg CFLAGS=-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
@@ -86,7 +86,7 @@ Below are the system details and Emacs build configurations for two machines.
 ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
 ;; Licensed under the GNU General Public License version 3 or later.
 
-;; $Lastupdate: 2025/02/02 13:03:29 $
+;; $Lastupdate: 2025/02/02 15:01:16 $
 
 ;;; Commentary:
 ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -522,9 +522,7 @@ Enable features for editing convenience and readability.
 
   (leaf puni
     :ensure t
-    :global-minor-mode puni-global-mode
-    :config
-    (electric-pair-mode -1)) ;; Disable electric-pair-mode to prevent conflicts
+    :global-minor-mode puni-global-mode)
 #+end_src
 
 *** System Utilities
@@ -590,11 +588,13 @@ Enable clipboard integration, visual-line-mode, and useful extensions.
 
 #+begin_src emacs-lisp
   (leaf visual-line-mode
-    :global-minor-mode t)
+    :hook (text-mode . visual-line-mode))
 
   (leaf pbcopy
     :if (memq window-system '(mac ns))
-    :ensure t)
+    :ensure t
+    :config
+    (turn-on-pbcopy))
 
   (leaf dired-filter :ensure t)
   (leaf expand-region :ensure t)
@@ -609,14 +609,15 @@ Enable clipboard integration, visual-line-mode, and useful extensions.
 Enhance search and navigation capabilities.
 
 #+begin_src emacs-lisp
-(leaf rg :ensure t)
+  (setq grep-program "rg")
+  (leaf rg :ensure t)
 
-(leaf dumb-jump
-  :ensure t
-  :hook ((xref-backend-functions . dumb-jump-xref-activate))
-  :custom ((dumb-jump-force-searcher . 'rg)))
+  (leaf dumb-jump
+    :ensure t
+    :hook (xref-backend-functions . dumb-jump-xref-activate)
+    :custom ((dumb-jump-force-searcher . 'rg)))
 
-(leaf multiple-cursors :ensure t)
+  (leaf multiple-cursors :ensure t)
 #+end_src
 
 **** Version Control
@@ -630,14 +631,14 @@ Use Magit for version control and Git management.
 On-the-fly syntax and spell checking.
 
 #+begin_src emacs-lisp
-(leaf flycheck
-  :ensure t
-  :global-minor-mode t)
+  (leaf flycheck
+    :ensure t
+    :hook (prog-mode . flycheck-mode))
 
-(leaf flyspell
-  :ensure t
-  :hook (text-mode . flyspell-mode)
-  :custom ((ispell-program-name . "aspell")))
+  (leaf flyspell
+    :ensure t
+    :hook (text-mode . flyspell-mode)
+    :custom ((ispell-program-name . "aspell")))
 #+end_src
 
 **** Project Management
@@ -666,213 +667,217 @@ Enable Yasnippet for template-based coding.
 Enable encryption with EasyPG.
 
 #+begin_src emacs-lisp
-(leaf epa-file
-  :config
-  (epa-file-enable)
-  (setq epa-pinentry-mode 'loopback)
-  (custom-set-variables '(epg-gpg-program "gpg")))
+  (leaf epa-file
+    :config
+    (epa-file-enable)
+    (setq epa-pinentry-mode
+  	(if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
 #+end_src
 
 **** Ellama Configuration
 Integrate advanced AI capabilities with Ellama for language and translation tasks.
 
 #+begin_src emacs-lisp
-(leaf ellama
-  :ensure t
-  :after llm-ollama
-  :init
-  ;; Set default language to Japanese
-  (setopt ellama-language "Japanese")
+  (leaf ellama
+    :ensure t
+    :after llm-ollama
+    :init
+    ;; Set default language to Japanese
+    (setopt ellama-language "Japanese")
 
-  ;; Define session directory for Ellama
-  (setopt ellama-sessions-directory (concat no-littering-var-directory "ellama-sessions"))
+    ;; Define session directory for Ellama
+    (setopt ellama-sessions-directory (concat no-littering-var-directory "ellama-sessions"))
 
-  ;; Configure naming scheme for sessions
-  (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
+    ;; Configure naming scheme for sessions
+    (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
 
-  ;; Set default provider
-  (setopt ellama-provider
-          (make-llm-ollama
-           :chat-model "codestral:22b-v0.1-q4_K_S"
-           :embedding-model "codestral:22b-v0.1-q4_K_S"))
+    ;; Set default provider
+    (setopt ellama-provider
+            (make-llm-ollama
+             :chat-model "codestral:22b-v0.1-q4_K_S"
+             :embedding-model "codestral:22b-v0.1-q4_K_S"))
 
-  ;; Define translation provider
-  (setopt ellama-translation-provider
-          (make-llm-ollama
-           :chat-model "llama3:8b-instruct-q8_0"
-           :embedding-model "llama3:8b-instruct-q8_0"))
+    ;; Define translation provider
+    (setopt ellama-translation-provider
+            (make-llm-ollama
+             :chat-model "llama3:8b-instruct-q8_0"
+             :embedding-model "llama3:8b-instruct-q8_0"))
 
-  ;; Define additional providers
-  (setopt ellama-providers
-          '(("codestral" . (make-llm-ollama
-                            :chat-model "codestral:22b-v0.1-q4_K_S"
-                            :embedding-model "codestral:22b-v0.1-q4_K_S"))
-            ("gemma2" . (make-llm-ollama
-                         :chat-model "gemma2:27b-instruct-q4_K_S"
-                         :embedding-model "gemma2:27b-instruct-q4_K_S"))
-            ("llama3.2-vision" . (make-llm-ollama
-                                  :chat-model "llama3:8b-instruct-q8_0"
-                                  :embedding-model "llama3:8b-instruct-q8_0"))))
+    ;; Define additional providers
+    (setopt ellama-providers
+            '(("codestral" . (make-llm-ollama
+                              :chat-model "codestral:22b-v0.1-q4_K_S"
+                              :embedding-model "codestral:22b-v0.1-q4_K_S"))
+              ("gemma2" . (make-llm-ollama
+                           :chat-model "gemma2:27b-instruct-q4_K_S"
+                           :embedding-model "gemma2:27b-instruct-q4_K_S"))
+              ("llama3.2-vision" . (make-llm-ollama
+                                    :chat-model "llama3:8b-instruct-q8_0"
+                                    :embedding-model "llama3:8b-instruct-q8_0"))))
 
-  ;; Add error handling for unsupported providers
-  (defun ellama-set-provider (provider-name)
-    "Set the active provider for Ellama by PROVIDER-NAME."
-    (interactive
-     (list (completing-read "Select provider: "
-                            (mapcar #'car ellama-providers))))
-    (if-let ((provider (cdr (assoc provider-name ellama-providers))))
-        (progn
-          (setopt ellama-provider provider)
-          (message "Ellama provider set to: %s" provider-name))
-      (error "Provider '%s' not found in ellama-providers" provider-name)))
+    ;; Add error handling for unsupported providers
+    (defun ellama-set-provider (provider-name)
+      "Set the active provider for Ellama by PROVIDER-NAME."
+      (interactive
+       (list (completing-read "Select provider: "
+                              (mapcar #'car ellama-providers))))
+      (if-let ((provider (cdr (assoc provider-name ellama-providers))))
+          (progn
+            (setopt ellama-provider provider)
+            (message "Ellama provider set to: %s" provider-name))
+        (error "Provider '%s' not found in ellama-providers" provider-name)))
 
-  :config
-  ;; Ensure that Ellama initializes correctly
-  (unless (and ellama-provider ellama-translation-provider)
-    (message "Ellama configuration is incomplete. Verify providers.")))
+    :config
+    ;; Ensure that Ellama initializes correctly
+    (unless (and ellama-provider ellama-translation-provider)
+      (message "Ellama configuration is incomplete. Verify providers.")))
 #+end_src
 
 **** Programming Utilities
 Enhance programming with LSP support and utilities.
 
 #+begin_src emacs-lisp
-(leaf eglot
-  :hook (prog-mode . eglot-ensure)
-  :custom
-  `((eglot-autoshutdown . t)
-    (eglot-sync-connect . nil)
-    (eglot-events-buffer-size . 200))
-  :bind (:eglot-mode-map
-         ("C-c h" . eglot-help-at-point)
-         ("C-c r" . eglot-rename)
-         ("C-c a" . eglot-code-actions)
-         ("C-c d" . flymake-show-buffer-diagnostics)))
+  (defvar my/use-lsp 'eglot) ;; Change to 'lsp if needed
 
-(leaf lsp-mode
-  :ensure t
-  :hook ((python-mode . lsp)
-         (rust-mode . lsp)
-         (go-mode . lsp)
-         (js-mode . lsp)
-         (typescript-mode . lsp)
-         (c-mode . lsp)
-         (c++-mode . lsp))
-  :custom
-  `((lsp-enable-snippet . t)
-    (lsp-idle-delay . 0.5)
-    (lsp-headerline-breadcrumb-enable . t)
-    (lsp-prefer-flymake . nil))
-  :config
-  (setq lsp-completion-provider :capf))
+  (when (eq my/use-lsp 'eglot)
+    (leaf eglot
+      :hook (prog-mode . eglot-ensure)
+      :custom
+      `((eglot-autoshutdown . t)
+        (eglot-sync-connect . nil)
+        (eglot-events-buffer-size . 200))
+      :bind (:eglot-mode-map
+             ("C-c h" . eglot-help-at-point)
+             ("C-c r" . eglot-rename)
+             ("C-c a" . eglot-code-actions)
+             ("C-c d" . flymake-show-buffer-diagnostics))))
 
-(leaf lsp-ui
-  :ensure t
-  :after lsp-mode
-  :custom
-  `((lsp-ui-doc-enable . t)
-    (lsp-ui-sideline-enable . t)
-    (lsp-ui-sideline-show-hover . t)
-    (lsp-ui-sideline-show-code-actions . t)
-    (lsp-ui-sideline-show-diagnostics . t)))
+  (when (eq my/use-lsp 'lsp)
+    (leaf lsp-mode
+      :ensure t
+      :hook ((python-mode . lsp)
+             (rust-mode . lsp)
+             (go-mode . lsp)
+             (js-mode . lsp)
+             (typescript-mode . lsp)
+             (c-mode . lsp)
+             (c++-mode . lsp))
+      :custom
+      `((lsp-enable-snippet . t)
+        (lsp-idle-delay . 0.5)
+        (lsp-headerline-breadcrumb-enable . t)
+        (lsp-prefer-flymake . nil))
+      :config
+      (setq lsp-completion-provider :capf)))
+
+  (leaf lsp-ui
+    :ensure t
+    :after lsp-mode
+    :custom
+    `((lsp-ui-doc-enable . t)
+      (lsp-ui-sideline-enable . t)
+      (lsp-ui-sideline-show-hover . t)
+      (lsp-ui-sideline-show-code-actions . t)
+      (lsp-ui-sideline-show-diagnostics . t)))
 #+end_src
 
 **** Completion Framework
 This configuration script sets up a sophisticated *completion framework* for Emacs, focusing on efficient, flexible, and user-friendly completion across various contexts.
 
 #+begin_src emacs-lisp
-;;; Completion Framework Configuration
+  ;;; Completion Framework Configuration
 
-(leaf completion-settings
-  :config
-
-  ;; Prescient: Sort and filter candidates based on usage history
-  (leaf prescient
-    :ensure t
-    :custom
-    ((prescient-aggressive-file-save . t))  ;; Automatically save history
-    :global-minor-mode prescient-persist-mode)
-
-  ;; Vertico: Vertical completion menu
-  ;; Best suited for commands like M-x, file completion, and more.
-  (leaf vertico
-    :ensure t
-    :global-minor-mode vertico-mode
-    :custom
-    ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
+  (leaf completion-settings
     :config
-    ;; Posframe integration for cleaner UI
-    (leaf vertico-posframe
+
+    ;; Prescient: Sort and filter candidates based on usage history
+    (leaf prescient
       :ensure t
       :custom
-      ((vertico-posframe-border-width . 2)
-       (vertico-posframe-parameters . '((left-fringe . 4)
-                                        (right-fringe . 4))))
-      :global-minor-mode vertico-posframe-mode))
+      ((prescient-aggressive-file-save . t))  ;; Automatically save history
+      :global-minor-mode prescient-persist-mode)
 
-  ;; Marginalia: Annotate candidates with additional context
-  (leaf marginalia
-    :ensure t
-    :global-minor-mode marginalia-mode)
-
-  ;; Consult: Enhanced search and navigation commands
-  ;; Adds better search capabilities to complement Vertico.
-  (leaf consult
-    :ensure t
-    :custom
-    ((xref-show-xrefs-function . #'consult-xref)
-     (xref-show-definitions-function . #'consult-xref)))
-
-  ;; Embark: Context-aware actions for completion candidates
-  ;; Provides detailed actions for selected candidates in Vertico.
-  (leaf embark
-    :ensure t
-    :custom
-    ((prefix-help-command . #'embark-prefix-help-command))
-    :config
-    ;; Integrate Embark with Consult for richer functionality
-    (leaf embark-consult
+    ;; Vertico: Vertical completion menu
+    ;; Best suited for commands like M-x, file completion, and more.
+    (leaf vertico
       :ensure t
-      :after (embark consult)
-      :hook (embark-collect-mode . consult-preview-at-point-mode)))
-
-  ;; Corfu: Popup-based completion for `completion-at-point`
-  ;; Suitable for in-buffer completions, e.g., programming contexts.
-  (leaf corfu
-    :ensure t
-    :init
-    (global-corfu-mode)  ;; Enable Corfu globally
-    :custom
-    ((corfu-auto . t)          ;; Enable auto-completion
-     (corfu-auto-delay . 0)    ;; No delay before showing candidates
-     (corfu-auto-prefix . 2)   ;; Trigger completion after 2 characters
-     (corfu-cycle . t))        ;; Cycle through candidates
-    :config
-    ;; Add icons to completion candidates for better visualization
-    (leaf kind-icon
-      :ensure t
-      :after corfu
+      :global-minor-mode vertico-mode
       :custom
-      ((kind-icon-default-face . 'corfu-default))
+      ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
       :config
-      (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
+      ;; Posframe integration for cleaner UI
+      (leaf vertico-posframe
+        :ensure t
+        :if (display-graphic-p)
+        :custom
+        ((vertico-posframe-border-width . 2)
+         (vertico-posframe-parameters . '((left-fringe . 4)
+                                          (right-fringe . 4))))
+        :global-minor-mode vertico-posframe-mode))
 
-  ;; Cape: Additional completion sources for Corfu
-  ;; Extend completion with extra sources like file and keyword completions.
-  (leaf cape
-    :ensure t
-    :init
-    ;; Add sources for file, dabbrev, and keyword completion
-    (add-to-list 'completion-at-point-functions #'cape-file)
-    (add-to-list 'completion-at-point-functions #'cape-dabbrev)
-    (add-to-list 'completion-at-point-functions #'cape-keyword))
+    ;; Marginalia: Annotate candidates with additional context
+    (leaf marginalia
+      :ensure t
+      :global-minor-mode marginalia-mode)
 
-  ;; Orderless: Fuzzy matching for completion
-  ;; Improve matching logic to handle partial and unordered patterns.
-  (leaf orderless
-    :ensure t
-    :custom
-    ((completion-styles . '(orderless basic))  ;; Enable fuzzy matching
-     (completion-category-overrides . '((file (styles . (partial-completion))))))))
+    ;; Consult: Enhanced search and navigation commands
+    ;; Adds better search capabilities to complement Vertico.
+    (leaf consult
+      :ensure t
+      :custom
+      ((xref-show-xrefs-function . #'consult-xref)
+       (xref-show-definitions-function . #'consult-xref)))
+
+    ;; Embark: Context-aware actions for completion candidates
+    ;; Provides detailed actions for selected candidates in Vertico.
+    (leaf embark
+      :ensure t
+      :custom
+      ((prefix-help-command . #'embark-prefix-help-command))
+      :config
+      ;; Integrate Embark with Consult for richer functionality
+      (leaf embark-consult
+        :ensure t
+        :after (embark consult)
+        :hook (embark-collect-mode . consult-preview-at-point-mode)))
+
+    ;; Corfu: Popup-based completion for `completion-at-point`
+    ;; Suitable for in-buffer completions, e.g., programming contexts.
+    (leaf corfu
+      :ensure t
+      :init
+      (global-corfu-mode)  ;; Enable Corfu globally
+      :custom
+      ((corfu-auto . t)          ;; Enable auto-completion
+       (corfu-auto-delay . 0)    ;; No delay before showing candidates
+       (corfu-auto-prefix . 2)   ;; Trigger completion after 2 characters
+       (corfu-cycle . t))        ;; Cycle through candidates
+      :config
+      ;; Add icons to completion candidates for better visualization
+      (leaf kind-icon
+        :ensure t
+        :after corfu
+        :custom
+        ((kind-icon-default-face . 'corfu-default))
+        :config
+        (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
+
+    ;; Cape: Additional completion sources for Corfu
+    ;; Extend completion with extra sources like file and keyword completions.
+    (leaf cape
+      :ensure t
+      :init
+      (setq completion-at-point-functions
+            (append completion-at-point-functions
+                    '(cape-file cape-dabbrev cape-keyword))))
+
+    ;; Orderless: Fuzzy matching for completion
+    ;; Improve matching logic to handle partial and unordered patterns.
+    (leaf orderless
+      :ensure t
+      :custom
+      ((completion-styles . '(orderless basic))  ;; Enable fuzzy matching
+       (completion-category-overrides . '((file (styles . (partial-completion))))))))
 #+end_src
 
 *** Org-mode
@@ -900,14 +905,12 @@ This section sets up essential Org-mode features, including directories
 
       ;; Show Org buffer file in current window
       (defun show-org-buffer (file)
-        "Show an org-file FILE in the current buffer."
-        (interactive)
-        (if (get-buffer file)
-            (let ((buffer (get-buffer file)))
-              (switch-to-buffer buffer)
-              (message "%s" file))
-          (find-file (concat org-directory "/" file))))
-
+        "Show an org FILE in the current buffer."
+        (interactive "fOrg file: ")
+        (let ((filepath (expand-file-name file org-directory)))
+  	(if (get-file-buffer filepath)
+              (switch-to-buffer (get-file-buffer filepath))
+  	  (find-file filepath))))
       :custom
       (org-support-shift-select . t)
 
@@ -936,7 +939,8 @@ This section sets up essential Org-mode features, including directories
             org-use-speed-commands t
             org-enforce-todo-dependencies t)
 
-      (remove (concat org-directory "/archives") org-agenda-files)
+      (setq org-agenda-files (remove (expand-file-name "archives" org-directory)
+  				   org-agenda-files))
 
       (setq org-todo-keywords
             '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
@@ -947,15 +951,14 @@ This section sets up essential Org-mode features, including directories
                     (org-agenda-files :maxlevel . 3))))
 
       (setq org-capture-templates
-            '(("t" "Todo" entry (file+headline "gtd.org" "Inbox")
-               "* TODO %?\n %i\n %a")
-              ("n" "Note" entry (file+headline "notes.org" "Notes")
-               "* %?\nEntered on %U\n %i\n %a")
-              ("j" "Journal" entry (function org-journal-find-location)
-               "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-              ("m" "Meeting" entry (file "meetings.org")
-               "* MEETING with %? :meeting:\n  %U\n  %a")
-              )))
+        `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
+           "* TODO %?\n %i\n %a")
+          ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
+           "* %?\nEntered on %U\n %i\n %a")
+          ("j" "Journal" entry (function org-journal-find-location)
+           "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+          ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
+           "* MEETING with %? :meeting:\n  %U\n  %a"))))
 #+end_src
 
 **** Org-mode Visual Enhancements
@@ -976,7 +979,7 @@ Leading stars (e.g., `** Subheading`) are hidden to reduce visual clutter and im
     ;; Customize bullets for different headline levels
     (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
     ;; Hide leading stars in headlines
-    (org-superstar-remove-leading-stars . t)
+    (org-superstar-remove-leading-stars . nil)
     ;; Show custom bullets in Org-mode buffers
     :hook (org-mode . org-superstar-mode))
 #+end_src
@@ -1038,7 +1041,8 @@ Enable support for executing code blocks in Org files.
     :after org
     :config
     (setq org-roam-directory (concat org-directory "/org-roam"))
-    (my:ensure-directory-exists org-roam-directory)
+    (unless (file-directory-p org-roam-directory)
+      (make-directory org-roam-directory t))
     (org-roam-db-autosync-mode))
 #+end_src
 
@@ -1050,7 +1054,9 @@ Additional extensions to enhance Org-mode functionality.
     :ensure t
     :after org
     :config
-    (setq-default org-download-image-dir (concat org-directory "/pictures")))
+    (setq org-download-image-dir (expand-file-name "pictures" org-directory))
+    (unless (file-directory-p org-download-image-dir)
+      (make-directory org-download-image-dir t)))
 
   ;; Generate and navigate table of contents in Org and Markdown files
   (leaf toc-org
@@ -1082,15 +1088,16 @@ Enable support for executing code blocks in Org files.
     :require org-capture
     :defvar (org-capture-templates)
     :config
+    (defun generate-safe-filename ()
+      "Generate a unique and safe filename for Hugo export."
+      (format "%s-%s" (format-time-string "%Y")
+  	    (shell-command-to-string "uuidgen | cut -c1-8")))
     (add-to-list 'org-capture-templates
   	       '("b" "Create new blog post" entry
-                   (file+headline my-capture-blog-file "blog")
+                   (file+headline my:capture-blog-file "blog")
                    "** TODO %?
     :PROPERTIES:
-    :EXPORT_FILE_NAME: %(apply #'format \"%s-%s-%s\"
-    (format-time-string \"%Y\")
-    (let ((sha1 (sha1 (shell-command-to-string \"head -c 1024 /dev/urandom\"))))
-    (cl-loop for (a b c d) on (cdr (split-string sha1 \"\")) by #'cddddr repeat 2 collect (concat a b c d))))
+    :EXPORT_FILE_NAME: %(generate-safe-filename)
     :EXPORT_DATE:
     :EXPORT_HUGO_TAGS:
     :EXPORT_HUGO_CATEGORIES:
