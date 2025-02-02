@@ -92,7 +92,8 @@
       make-backup-files nil ; Disable backup files
       auto-save-default nil ; Disable auto-save
       auto-save-list-file-prefix nil ; Disable auto-save lists
-      display-line-numbers-type 'relative) ; Use relative line numbers
+      display-line-numbers-type 'relative ; Use relative line numbers
+      epg-gpg-program "gpg")
 
 ;; Enable useful global modes
 (global-auto-revert-mode 1)
