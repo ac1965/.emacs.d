@@ -13,7 +13,7 @@ This section documents the steps to build and install Emacs from source safely a
 Run the following command to clone the configuration files from GitHub:
 
 #+begin_src shell :eval never
-  git clone https://github.com/ac1965/.emacs.d ~/.emacs.d
+  git clone --depth 1 https://github.com/ac1965/.emacs.d ~/.emacs.d
 #+end_src
 
 Make sure that the `~/.emacs.d` directory does not already exist, or back it up if necessary.
@@ -52,10 +52,10 @@ Below are the system details and Emacs build configurations for two machines.
 
 - GNU Emacs 31.0.50
 
-|Commit|a00e6e7143d5ebf7282b5e5b410e1bd882634d57|
+|Commit|bd39ec062d0078c97140b8ad4ddf7c47e6f6e4ee|
 |Branch|master|
 |System|aarch64-apple-darwin24.2.0|
-|Date|2025-01-25 09:11:07 (JST)|
+|Date|2025-02-01 00:28:02 (JST)|
 |Patch|without ns-inline.patch|
 |Features|ACL DBUS GLIB GNUTLS LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB|
 |Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg CFLAGS=-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
@@ -85,7 +85,7 @@ Below are the system details and Emacs build configurations for two machines.
 ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
 ;; Licensed under the GNU General Public License version 3 or later.
 
-;; $Lastupdate: 2025/01/26 18:55:53 $
+;; $Lastupdate: 2025/02/02 12:29:22 $
 
 ;;; Commentary:
 ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -141,55 +141,59 @@ This section customizes the Emacs UI for better usability and aesthetics.
 Enable dynamic resizing and improved window navigation.
 
 #+begin_src emacs-lisp
-;; Enable fullscreen mode in graphical environments
-(when (display-graphic-p)
-  (set-frame-parameter nil 'fullscreen 'fullboth))
+  ;; Enable fullscreen mode in graphical environments
+  (when (display-graphic-p)
+    (set-frame-parameter nil 'fullscreen 'fullboth))
 
-;; Dynamic window resizing using golden-ratio
-(leaf golden-ratio
-  :ensure t
-  :global-minor-mode golden-ratio-mode
-  :custom ((golden-ratio-adjust-factor . 1.2)
-           (golden-ratio-auto-scale . t)))
+  ;; Dynamic window resizing using golden-ratio
+  (leaf golden-ratio
+    :ensure t
+    :global-minor-mode golden-ratio-mode
+    :custom ((golden-ratio-adjust-factor . 1.1)
+             (golden-ratio-auto-scale . t)
+             (golden-ratio-exclude-modes . '("ediff-mode" "dired-mode"))))
 #+end_src
 
 **** Themes and Padding
 Set a modern theme and adjust UI spacing for clarity.
 
 #+begin_src emacs-lisp
-;; Use ef-themes for consistent UI aesthetics
-(leaf ef-themes
-  :ensure t
-  :config
-  (load-theme 'ef-frost t))
+  ;; Use ef-themes for consistent UI aesthetics
+  (leaf ef-themes
+    :ensure t
+    :config
+    (if (display-graphic-p)
+        (load-theme 'ef-frost t)
+      (load-theme 'deeper-blue t)))
 
-;; Add spacious padding for better readability
-(leaf spacious-padding
-  :ensure t
-  :custom
-  ((spacious-padding-subtle-mode-line . '(:mode-line-active default
-                                      :mode-line-inactive vertical-border))
-   (spacious-padding-widths . '(:internal-border-width 15)))
-  :config
-  (spacious-padding-mode 1))
+  ;; Add spacious padding for better readability
+  (leaf spacious-padding
+    :ensure t
+    :custom
+    ((spacious-padding-subtle-mode-line . '( :mode-line-active default
+  					   :mode-line-inactive vertical-border))
+     (spacious-padding-widths . '(:internal-border-width 10)))
+    :config
+    (spacious-padding-mode 1))
 #+end_src
 
 **** Modeline Enhancements
 Minimize clutter and add useful information to the mode-line.
 
 #+begin_src emacs-lisp
-(leaf minions
-  :ensure t
-  :config
-  (minions-mode 1)
-  (setq minions-mode-line-lighter "[+]"))
+  (leaf minions
+    :ensure t
+    :config
+    (setq minions-mode-line-lighter "⚙")
+    (minions-mode 1))
 
-;; Display time and battery status in the mode-line
-(setq display-time-interval 30
-      display-time-day-and-date t
-      display-time-24hr-format t)
-(display-time-mode 1)
-(display-battery-mode 1)
+  ;; Display time and battery status in the mode-line
+  (setq display-time-interval 30
+        display-time-day-and-date t
+        display-time-24hr-format t)
+  (setq battery-mode-line-format "[🔋 %p%%]")
+  (display-time-mode 1)
+  (display-battery-mode 1)
 #+end_src
 
 **** Tab Management
@@ -208,20 +212,22 @@ Enable tabs and enhance navigation between buffers.
 Configure Treemacs as a file and project explorer.
 
 #+begin_src emacs-lisp
-(leaf treemacs
-  :ensure t
-  :bind (:treemacs-mode-map
-         ([mouse-1] . #'treemacs-single-click-expand-action))
-  :custom
-  ((treemacs-no-png-images . nil)
-   (treemacs-filewatch-mode . t)
-   (treemacs-follow-mode . t)
-   (treemacs-indentation . 2)
-   (treemacs-missing-project-action . 'remove))
-  :hook
-  (treemacs-mode-hook . (lambda ()
-                          (setq mode-line-format nil)
-                          (display-line-numbers-mode 0))))
+  (leaf treemacs
+    :ensure t
+    :bind (:treemacs-mode-map
+           ([mouse-1] . #'treemacs-single-click-expand-action))
+    :custom
+    ((treemacs-no-png-images . nil)
+     (treemacs-filewatch-mode . t)
+     (treemacs-follow-mode . t)
+     (treemacs-indentation . 2)
+     (treemacs-missing-project-action . 'remove))
+    :config
+    (setq treemacs-width 30)
+    :hook
+    (treemacs-mode-hook . (lambda ()
+                            (setq mode-line-format nil)
+                            (display-line-numbers-mode 0))))
 #+end_src
 
 *** Fonts
@@ -231,49 +237,50 @@ This section sets up fonts, icons, and ligatures for a modern and visually enhan
 Defines the default font and applies it to all frames.
 
 #+begin_src emacs-lisp
-;; Check if a font exists on the system.
-(defun font-exists-p (font)
-  "Return t if FONT exists on the system."
-  (member font (font-family-list)))
+  ;; Check if a font exists on the system.
+  (defun font-exists-p (font)
+    "Return t if FONT exists on the system."
+    (member font (font-family-list)))
 
-;; Set up the default font and icon fonts for a frame.
-(defun font-setup (&optional frame)
-  "Apply font settings to the FRAME or the current frame."
-  (when (font-exists-p my:font-family)
-    (set-face-attribute 'default frame :family my:font-family
-                        :height (* my:font-size 10))
-    ;; Configure emoji fonts.
-    (set-fontset-font t 'unicode
-                      (font-spec :family "Noto Color Emoji") nil 'prepend)))
+  ;; Set up the default font and icon fonts for a frame.
+  (defun font-setup (&optional frame)
+    "Apply font settings to the FRAME or the current frame."
+    (when (font-exists-p my:font-family)
+      (set-face-attribute 'default frame :family my:font-family
+                          :height (* my:font-size 10))
+      ;; Configure emoji fonts.
+      (set-fontset-font t 'unicode
+                        (font-spec :family "Noto Color Emoji") nil 'prepend)))
 
-;; Set default font family and size.
-(unless (boundp 'my:font-family)
-  (setq my:font-family "JetBrains Mono"))
-(unless (boundp 'my:font-size)
-  (setq my:font-size 16))
+  ;; Set default font family and size.
+  (unless (font-exists-p my:font-family)
+    (setq my:font-family (if (eq system-type 'windows-nt) "Consolas" "Monospace")))
+  (unless (boundp 'my:font-size)
+    (setq my:font-size (if (> (display-pixel-width) 1920) 18 16)))
 
-;; Apply font settings in GUI or daemon mode.
-(if (daemonp)
-    (add-hook 'after-make-frame-functions #'font-setup)
-  (font-setup))
+  ;; Apply font settings in GUI or daemon mode.
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'font-setup)
+    (font-setup))
 #+end_src
 
 **** Nerd Icons
 Adds icons to file listings and UI elements using Nerd Fonts.
 
 #+begin_src emacs-lisp
-(leaf nerd-icons
-  :if (display-graphic-p)
-  :ensure t
-  :config
-  (unless (font-exists-p "Symbols Nerd Font Mono")
-    (message "Nerd Font is not installed. Please install it for icon support.")))
+  (leaf nerd-icons
+    :if (display-graphic-p)
+    :ensure t
+    :config
+    (setq nerd-icons-color-icons t)
+    (unless (font-exists-p "Symbols Nerd Font Mono")
+      (setq nerd-icons-color-icons nil)))
 
-;; Enable Nerd Icons in Dired mode.
-(leaf nerd-icons-dired
-  :if (display-graphic-p)
-  :ensure t
-  :hook (dired-mode-hook . nerd-icons-dired-mode))
+  ;; Enable Nerd Icons in Dired mode.
+  (leaf nerd-icons-dired
+    :if (display-graphic-p)
+    :ensure t
+    :hook (dired-mode-hook . nerd-icons-dired-mode))
 #+end_src
 
 **** Ligatures
@@ -336,49 +343,54 @@ Custom key bindings for efficient navigation, editing, and window management.
 Define shortcuts for undo, help, and text scaling.
 
 #+begin_src emacs-lisp
-(leaf which-key
-  :ensure t
-  :global-minor-mode t)
+  (leaf which-key
+    :ensure t
+    :global-minor-mode t
+    :config
+    (setq which-key-idle-delay 0.5))
 
-(leaf undo-fu
-  :ensure t)
+  (leaf undo-fu
+    :ensure t
+    :config
+    (setq undo-fu-allow-undo-in-region t))
 
-(leaf hydra
-  :ensure t
-  :config
-  ;; Text scaling hydra
-  (defhydra hydra-text-scale (:hint nil :color red)
-    "
-^Text Scaling^
-----------------------------
-[_+_] Increase   [_-_] Decrease   [_0_] Reset
-"
-    ("+" text-scale-increase)
-    ("-" text-scale-decrease)
-    ("0" (text-scale-set 0) :color blue)
-    ("q" nil "quit" :color blue))
+  (leaf hydra
+    :ensure t
+    :config
+    ;; Text scaling hydra
+    (defhydra hydra-text-scale (:hint nil :color red)
+      "
+  ^Text Scaling^
+  ----------------------------
+  [_+_] Increase   [_-_] Decrease   [_0_] Reset
+  "
+      ("+" text-scale-increase)
+      ("-" text-scale-decrease)
+      ("0" (text-scale-set 0) :color blue)
+      ("q" nil "quit" :color blue))
 
-  ;; Bind text scaling hydra to a key
-  (leaf-keys
-   (("C-c z" . hydra-text-scale/body))))
+    ;; Bind text scaling hydra to a key
+    (leaf-keys
+     (("C-c z" . hydra-text-scale/body))))
 #+end_src
 
 **** Editing and Buffer Operations
 Shortcuts for text editing, buffer management, and scrolling.
 
 #+begin_src emacs-lisp
-(leaf-keys
- (("C-/"           . undo-fu-only-undo)         ;; Undo
-  ("C-?"           . help)                      ;; Help
-  ("C-h"           . backward-delete-char)      ;; Delete character
-  ("C-z"           . undo-fu-only-redo)         ;; Redo
-  ("s-n"           . next-buffer)               ;; Switch to next buffer
-  ("s-p"           . previous-buffer)           ;; Switch to previous buffer
-  ("s-k"           . kill-buffer-and-window)    ;; Kill buffer and close window
-  ("C-+"           . text-scale-increase)       ;; Increase text size
-  ("C--"           . text-scale-decrease)       ;; Decrease text size
-  ("s-<up>"        . beginning-of-buffer)       ;; Jump to beginning of buffer
-  ("s-<down>"      . end-of-buffer)))           ;; Jump to end of buffer
+  (leaf-keys
+   (("<f1>"          . help)                      ;; Help
+    ("<f8>"          . treemacs)                  ;; Treemacs
+    ("C-/"           . undo-fu-only-undo)         ;; Undo
+    ("C-h"           . backward-delete-char)      ;; Delete character
+    ("C-z"           . undo-fu-only-redo)         ;; Redo
+    ("s-n"           . next-buffer)               ;; Switch to next buffer
+    ("s-p"           . previous-buffer)           ;; Switch to previous buffer
+    ("s-k"           . kill-buffer-and-window)    ;; Kill buffer and close window
+    ("C-+"           . text-scale-increase)       ;; Increase text size
+    ("C--"           . text-scale-decrease)       ;; Decrease text size
+    ("s-<up>"        . beginning-of-buffer)       ;; Jump to beginning of buffer
+    ("s-<down>"      . end-of-buffer)))           ;; Jump to end of buffer
 #+end_src
 
 **** Window and Frame Management
