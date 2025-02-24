@@ -93,7 +93,6 @@
       auto-save-default nil ; Disable auto-save
       auto-save-list-file-prefix nil ; Disable auto-save lists
       display-line-numbers-type 'relative ; Use relative line numbers
-      package-quickstart t
       epg-gpg-program "gpg")
 
 ;; Enable useful global modes
