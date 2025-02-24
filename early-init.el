@@ -1,4 +1,4 @@
-;;; early-init.el --- Early initializatione -*- lexical-binding: t; -*-
+ ;;; early-init.el --- Early initializatione -*- lexical-binding: t; -*-
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
 ;; Keywords: initialization, performance
@@ -26,7 +26,7 @@
 ;; Restore default garbage collection settings after startup
 (add-hook 'emacs-startup-hook
           (lambda ()
-            (setq gc-cons-threshold (* 32 1024 1024) ; Reduce GC threshold to 32MB
+            (setq gc-cons-threshold (* 8 1024 1024) ; Reduce GC threshold to 32MB
                   file-name-handler-alist (default-value 'file-name-handler-alist))))
 
 ;; ---------------------------------------------------------------------------
@@ -93,6 +93,7 @@
       auto-save-default nil ; Disable auto-save
       auto-save-list-file-prefix nil ; Disable auto-save lists
       display-line-numbers-type 'relative ; Use relative line numbers
+      package-quickstart t
       epg-gpg-program "gpg")
 
 ;; Enable useful global modes

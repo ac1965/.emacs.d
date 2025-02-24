@@ -40,6 +40,11 @@
     (my:ensure-directory-exists eln-cache-dir)
     (startup-redirect-eln-cache eln-cache-dir)))
 
+;; Restore GC settings after Emacs startup
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setq gc-cons-threshold (* 8 1024 1024)))) ; 8MB に戻す
+
 ;; ---------------------------------------------------------------------------
 ;;; Package Settings
 ;; Configure directories for package installation and cleanup.
