@@ -1,4 +1,4 @@
-k#+title: ac1965's Emacs literate configuration =.emacs.d=
+#+title: ac1965's Emacs literate configuration =.emacs.d=
 #+startup: content
 #+author: YAMASHITA Takao
 #+options: auto-id:t H:6
@@ -89,7 +89,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/03/01 12:42:34 $
+  ;; $Lastupdate: 2025/03/01 14:10:49 $
 
 
   ;;; Commentary:
@@ -744,7 +744,7 @@ Integrate advanced AI capabilities with Ellama for language and translation task
       "Set the active provider for Ellama by PROVIDER-NAME."
       (interactive
        (list (completing-read "Select provider: " (mapcar #'car ellama-providers))))
-      (if-let ((provider (cdr (assoc provider-name ellama-providers))))
+      (if-let* ((provider (cdr (assoc provider-name ellama-providers))))
   	(progn
             (setopt ellama-provider provider)
             (message "Ellama provider set to: %s" provider-name))
@@ -921,82 +921,113 @@ Core Org-mode Configuration
 This section sets up essential Org-mode features, including directories
 
 #+begin_src emacs-lisp
-  ;;; Org-mode Setup
-  (leaf Org-mode
+  ;;; Org-mode document management and editing
+
+  (leaf org
+    :leaf-defer t
+    :preface
+    (defvar warning-suppress-types nil)
+    (unless (boundp 'my:d:cloud)
+      (setq my:d:cloud (concat no-littering-var-directory "./")))
+
+    ;; Return list of opened Org mode buffer files
+    (defun org-buffer-files ()
+      "Return a list of opened Org mode buffer files."
+      (delq nil
+            (mapcar (lambda (buf) (buffer-file-name buf))
+                    (org-buffer-list 'files))))
+
+    ;; Show Org buffer file in current window
+    (defun show-org-buffer (file)
+      "Show an org FILE in the current buffer."
+      (interactive (list (read-file-name "Org file: " org-directory nil t)))
+      (let ((filepath (expand-file-name file org-directory)))
+        (if (get-file-buffer filepath)
+            (switch-to-buffer (get-file-buffer filepath))
+  	(find-file filepath))))
+    :custom
+    (org-support-shift-select . t)
+
+    :init
+    (setq org-directory (expand-file-name "org/" my:d:cloud))
+    (my:ensure-directory-exists org-directory)
+    (setq org-return-follows-link t
+  	org-mouse-1-follows-link t)
+    (setq warning-suppress-types (append warning-suppress-types '((org-element-cache))))
+
+    :bind
+    (("C-M--" . #'(lambda () (interactive)
+                    (show-org-buffer "gtd.org")))
+     ("C-M-^" . #'(lambda () (interactive)
+                    (show-org-buffer "notes.org")))
+     ("C-M-~" . #'(lambda () (interactive)
+                    (show-org-buffer "kb.org"))))
+
     :config
-    ;; Org-mode document management and editing
-    (leaf org
-      :leaf-defer t
-      :preface
-      (defvar warning-suppress-types nil)
-      (unless (boundp 'my:d:cloud)
-        (setq my:d:cloud (concat no-littering-var-directory "./")))
+    (setq org-agenda-files (list org-directory)
+  	org-cycle-emulate-tab 'white-space
+  	org-default-notes-file "notes.org"
+  	org-enforce-todo-dependencies t
+  	org-idle-time 0.3
+  	org-log-done 'time
+  	org-startup-folded 'content
+  	org-startup-truncated nil
+  	org-use-speed-commands t)
 
-      ;; Return list of opened Org mode buffer files
-      (defun org-buffer-files ()
-        "Return a list of opened Org mode buffer files."
-        (delq nil
-              (mapcar (lambda (buf) (buffer-file-name buf))
-                      (org-buffer-list 'files))))
+    (setq org-link-frame-setup '((file . find-file)))
 
-      ;; Show Org buffer file in current window
-      (defun show-org-buffer (file)
-        "Show an org FILE in the current buffer."
-        (interactive "fOrg file: ")
-        (let ((filepath (expand-file-name file org-directory)))
-  	(if (get-file-buffer filepath)
-              (switch-to-buffer (get-file-buffer filepath))
-  	  (find-file filepath))))
-      :custom
-      (org-support-shift-select . t)
+    (setq org-agenda-files
+  	(seq-filter (lambda (file)
+                        (not (string-match-p "archives" file)))
+                      (directory-files-recursively org-directory "\\.org$")))
 
-      :init
-      (setq org-directory (expand-file-name "org/" my:d:cloud))
-      (my:ensure-directory-exists org-directory)
-      (setq org-startup-indented t
-            org-ellipsis " ▾"
-            org-hide-leading-stars t)
-      (setq warning-suppress-types (append warning-suppress-types '((org-element-cache))))
+    (setq org-todo-keywords
+          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
 
-      :bind
-      (("C-M--" . #'(lambda () (interactive)
-                      (show-org-buffer "gtd.org")))
-       ("C-M-^" . #'(lambda () (interactive)
-                      (show-org-buffer "notes.org")))
-       ("C-M-~" . #'(lambda () (interactive)
-                      (show-org-buffer "kb.org"))))
+    (setq org-refile-targets
+          (quote ((nil :maxlevel . 3)
+                  (org-buffer-files :maxlevel . 1)
+                  (org-agenda-files :maxlevel . 3))))
 
-      :config
-      (setq org-agenda-files (list org-directory)
-            org-default-notes-file "notes.org"
-            org-log-done 'time
-            org-startup-truncated nil
-            org-startup-folded 'content
-            org-use-speed-commands t
-            org-enforce-todo-dependencies t)
+    (setq org-capture-templates
+  	`(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
+             "* TODO %?\n %i\n %a")
+            ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
+             "* %?\nEntered on %U\n %i\n %a")
+            ("j" "Journal" entry (function org-journal-find-location)
+             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+            ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
+             "* MEETING with %? :meeting:\n  %U\n  %a"))))
 
-      (setq org-agenda-files
-        (cl-remove-if (lambda (file)
-                        (string-match-p "archives" file))
-                      org-agenda-files))
+  (leaf org-modern
+    :config
+    (setopt
+     ;; Edit settings
+     org-startup-indented t
+     org-hide-leading-stars t
+     org-auto-align-tags nil
+     org-tags-column 0
+     org-catch-invisible-edits 'show-and-error
+     org-special-ctrl-a/e t
+     org-insert-heading-respect-content t
 
-      (setq org-todo-keywords
-            '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
+     ;; Org styling, hide markup etc.
+     org-hide-emphasis-markers t
+     org-pretty-entities t
 
-      (setq org-refile-targets
-            (quote ((nil :maxlevel . 3)
-                    (org-buffer-files :maxlevel . 1)
-                    (org-agenda-files :maxlevel . 3))))
+     ;; Agenda styling
+     org-agenda-tags-column 0
+     org-agenda-block-separator ?─
+     org-agenda-time-grid
+     '((daily today require-timed)
+       (800 1000 1200 1400 1600 1800 2000)
+       " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+     org-agenda-current-time-string
+     "◀── now ─────────────────────────────────────────────────")
 
-      (setq org-capture-templates
-        `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
-           "* TODO %?\n %i\n %a")
-          ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
-           "* %?\nEntered on %U\n %i\n %a")
-          ("j" "Journal" entry (function org-journal-find-location)
-           "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-          ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
-           "* MEETING with %? :meeting:\n  %U\n  %a"))))
+    ;; Ellipsis styling
+    (setopt org-ellipsis " ▾")
+    (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil))
 #+end_src
 
 **** Org-mode Visual Enhancements
@@ -1053,8 +1084,7 @@ Integrate Org-journal for daily note-taking.
     ;; Define a custom function for finding today's journal entry
     (defun org-journal-find-location ()
       "Open today’s journal entry."
-      (org-journal-new-entry t)
-      (goto-char (point-min))))
+      (org-journal-new-entry t)))
 #+end_src
 
 Enable support for executing code blocks in Org files.
@@ -1082,7 +1112,8 @@ Enable support for executing code blocks in Org files.
     :after org
     :config
     (setq org-roam-directory (concat org-directory "/org-roam"))
-    (make-directory org-roam-directory t)
+    (unless (file-directory-p org-roam-directory)
+      (make-directory org-roam-directory t))
     (org-roam-db-autosync-mode))
 #+end_src
 
@@ -1149,13 +1180,15 @@ Enable support for executing code blocks in Org files.
 
   (leaf markdown-mode
     :ensure t
-    :mode ("\\.md\\'" . markdown-mode)))
+    :mode ("\\.md\\'" . markdown-mode))
 #+end_src
 
 *** Miscellaneous Helper Functions
 This section contains utility functions for managing windows, desktops, and workflows in Emacs.
 
 #+begin_src emacs-lisp
+  ;;; Miscellaneous Helper Functions
+
   ;; Save the current window layout
   (defvar my/saved-window-config nil
     "Stores the current window configuration for later restoration.")
