@@ -19,7 +19,9 @@
 ;; ---------------------------------------------------------------------------
 ;;; Directories
 ;; Define essential directories for configuration, cache, and variable data.
-(defvar my:d (file-name-directory (file-chase-links load-file-name))
+(defvar my:d (if load-file-name
+                 (file-name-directory (file-chase-links load-file-name))
+               user-emacs-directory)
   "Base directory for user-specific configuration.")
 (defvar my:d:cache (expand-file-name ".cache/" my:d)
   "Cache directory for temporary files.")
@@ -34,16 +36,13 @@
 ;; ---------------------------------------------------------------------------
 ;;; Native Compilation
 ;; Redirect ELN cache to a user-specific directory for better organization.
-(when (native-comp-available-p)
+(when (and (fboundp 'native-comp-available-p)
+           (native-comp-available-p))
   (let ((eln-cache-dir (expand-file-name "eln-cache/" my:d:cache)))
     (setq native-comp-eln-load-path (list eln-cache-dir))
     (my:ensure-directory-exists eln-cache-dir)
-    (startup-redirect-eln-cache eln-cache-dir)))
-
-;; Restore GC settings after Emacs startup
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (setq gc-cons-threshold (* 8 1024 1024))))
+    (when (fboundp 'startup-redirect-eln-cache)
+      (startup-redirect-eln-cache eln-cache-dir))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Package Settings
@@ -58,24 +57,14 @@
 (require 'org)
 (setq init-org-file (expand-file-name "README.org" my:d))
 
-(condition-case err
-    (let ((org-confirm-babel-evaluate nil))
-      (org-babel-load-file init-org-file))
-  (error
-   (message "Error loading org file: %s" (error-message-string err))
-   (warn "Failed to load %s" init-org-file)))
+(when (file-exists-p init-org-file)
+  (condition-case err
+      (let ((org-confirm-babel-evaluate nil))
+        (org-babel-load-file init-org-file))
+    (error
+     (display-warning 'init (format "Failed to load %s: %s" init-org-file (error-message-string err))
+                      :error))))
+
 
 (provide 'init)
 ;;; init.el ends here
-(custom-set-variables
- ;; custom-set-variables was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(package-selected-packages nil))
-(custom-set-faces
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- )

@@ -1,4 +1,4 @@
- ;;; early-init.el --- Early initializatione -*- lexical-binding: t; -*-
+ ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
 ;; Keywords: initialization, performance
@@ -24,17 +24,14 @@
       file-name-handler-alist nil) ; Disable file handlers temporarily
 
 ;; Restore default garbage collection settings after startup
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (setq gc-cons-threshold (* 8 1024 1024) ; Reduce GC threshold to 32MB
-                  file-name-handler-alist (default-value 'file-name-handler-alist))))
+(add-hook 'after-init-hook
+	  (lambda ()
+	    (setq gc-cons-threshold (* 16 1024 1024) ; Reduce GC threshold to 16MB
+		  file-name-handler-alist (default-value 'file-name-handler-alist))))
 
 ;; ---------------------------------------------------------------------------
-;;; Native Compilation Settings
-;; Optimize native compilation settings for speed and error suppression.
-(setq native-comp-async-report-warnings-errors 'silent
-      native-comp-speed 3
-      comp-deferred-compilation t)
+;;; Enable native compilation optimizations
+(setq native-comp-async-report-warnings-errors 'silent)
 
 ;; ---------------------------------------------------------------------------
 ;;; macOS-Specific Settings
