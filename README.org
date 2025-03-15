@@ -89,7 +89,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/03/15 10:33:13 $
+  ;; $Lastupdate: 2025/03/15 10:38:27 $
 
 
   ;;; Commentary:
@@ -1398,54 +1398,30 @@ This section contains utility functions for managing windows, desktops, and work
        (format "|Options|%s|\n"  system-configuration-options))
       )
     (view-mode))
+
   (defun my/parse-leaf-config (file)
-    "Parse the FILE to extract `leaf-keys` and `leaf-bind` data."
+    "Extract keybindings from FILE written in leaf syntax."
     (with-temp-buffer
-      ;; Load the content of the file into the temporary buffer.
       (insert-file-contents file)
-      (let ((keybinds '())) ;; Initialize an empty list to store keybinding data.
-        (condition-case err
-            (while t
-              ;; Read each S-expression (sexpr) from the buffer.
-              (let ((sexpr (read (current-buffer))))
-                ;; Check if the expression starts with `leaf-keys` or `leaf-bind`.
-                (when (and (listp sexpr)
-                           (memq (car sexpr) '(leaf-keys leaf-bind)))
-                  ;; Iterate over each keybinding pair in the expression.
-                  (dolist (keybind (cdr sexpr))
-                    (let ((keyseq (car keybind)) ;; The key sequence (e.g., "C-x C-f").
-                          (func (cdr keybind))  ;; The associated command (e.g., `find-file`).
-                          (desc ""))           ;; Default description is empty.
-                      ;; Add the key sequence, command, and description to the list.
-                      (push (list keyseq func desc) keybinds))))))
-          ;; Handle the end-of-file (EOF) condition gracefully.
-          (end-of-file))
-        ;; Return the collected keybinding data.
+      (goto-char (point-min))
+      (let (keybinds)
+        (while (re-search-forward ":bind\\s-*(?\\([^)]*\\))" nil t)
+          (let ((keys (match-string 1)))
+            (push (split-string keys) keybinds)))
         keybinds)))
 
-  (defun my/generate-org-keybind-table-from-config (input-file output-file)
-    "Generate an Org table of keybinds from INPUT-FILE and write it to OUTPUT-FILE."
+  (defun my/generate-org-keybind-table (input-file output-file)
+    "Generate an Org table from INPUT-FILE and save to OUTPUT-FILE."
     (interactive "fInput File: \nFOutput Org File: ")
-    ((keybinds (my/parse-leaf-config input-file))) ;; Parse the input file for keybind data.
-    (with-current-buffer (find-file-noselect output-file)
-      ;; Clear the buffer before writing the Org table.
-      (erase-buffer)
-      ;; Write the Org file header and table structure.
-      (insert "#+TITLE: Keybinds and Functions\n\n")
-      (insert "* Keybind Table\n")
-      (insert "| Key Sequence | Command          | Description         |\n")
-      (insert "|--------------+------------------+---------------------|\n")
-      ;; Populate the Org table with collected keybinding data.
-      (dolist (keybind (reverse keybinds)) ;; Reverse the list to maintain the original order.
-        (let ((keyseq (nth 0 keybind))  ;; The key sequence.
-              (func (nth 1 keybind))   ;; The associated command.
-              (desc (nth 2 keybind))) ;; The description (default is empty).
-          ;; Write a row for each keybinding.
-          (insert (format "| %s | %s | %s |\n" keyseq func desc))))
-      ;; Save the Org file to disk.
-      (save-buffer))
-    ;; Notify the user that the file has been written.
-    (message "Org table written to %s" output-file))
+    (let ((keybinds (my/parse-leaf-config input-file)))
+      (with-temp-buffer
+        (insert "#+TITLE: Keybindings\n\n* Keybind Table\n")
+        (insert "| Key Sequence | Command |\n")
+        (insert "|-------------+---------|\n")
+        (dolist (keybind keybinds)
+          (insert (format "| %s | %s |\n" (car keybind) (cadr keybind))))
+        (write-file output-file)))
+    (message "Org table saved to %s" output-file))
 
   ;; Automatically delete trailing whitespace before saving a file.
   (add-hook 'before-save-hook 'delete-trailing-whitespace)
