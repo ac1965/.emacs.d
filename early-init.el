@@ -19,7 +19,7 @@
 ;; ---------------------------------------------------------------------------
 ;;; Performance Optimization
 ;; Adjust garbage collection and file handling during startup for faster initialization.
-(setq gc-cons-threshold (* 64 1024 1024) ; Temporarily set GC threshold to 64MB
+(setq gc-cons-threshold most-positive-fixnum ; Reduce garbage collection during startup
       read-process-output-max (* 8 1024 1024) ; Improve subprocess performance
       file-name-handler-alist nil) ; Disable file handlers temporarily
 
@@ -28,6 +28,9 @@
 	  (lambda ()
 	    (setq gc-cons-threshold (* 16 1024 1024) ; Reduce GC threshold to 16MB
 		  file-name-handler-alist (default-value 'file-name-handler-alist))))
+
+;; Disable package.el in favor of straight.el or other managers
+(setq package-enable-at-startup nil)
 
 ;; ---------------------------------------------------------------------------
 ;;; Enable native compilation optimizations
@@ -59,6 +62,13 @@
 
 ;; ---------------------------------------------------------------------------
 ;;; Frame and UI Customization
+
+;; Prevent resizing of frame to avoid performance issues
+(setq frame-inhibit-implied-resize t)
+
+;; Prefer using pixels for resizing
+(setq frame-resize-pixelwise t)
+
 ;; Configure frame appearance and behavior.
 (setq default-frame-alist '((fullscreen . maximized) ; Start maximized
                             (resize-pixelwise . t)) ; Pixel-perfect resizing
