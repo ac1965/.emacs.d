@@ -17,6 +17,16 @@
   (error "This configuration requires Emacs 30 or higher"))
 
 ;; ---------------------------------------------------------------------------
+;;; Directories
+;; Define essential directories for configuration, cache, and variable data.
+(defvar my:d (if load-file-name
+                 (file-name-directory (file-chase-links load-file-name))
+               user-emacs-directory)
+  "Base directory for user-specific configuration.")
+(defvar my:d:cache (expand-file-name ".cache/" my:d)
+  "Cache directory for temporary files.")
+
+;; ---------------------------------------------------------------------------
 ;;; Performance Optimization
 ;; Adjust garbage collection and file handling during startup for faster initialization.
 (setq gc-cons-threshold most-positive-fixnum ; Reduce garbage collection during startup
@@ -35,6 +45,15 @@
 ;; ---------------------------------------------------------------------------
 ;;; Enable native compilation optimizations
 (setq native-comp-async-report-warnings-errors 'silent)
+
+(when (boundp 'native-comp-eln-load-path)
+  (startup-redirect-eln-cache
+   (expand-file-name "eln-cache/" my:d:cache)))
+
+(with-eval-after-load 'comp
+  (setopt native-comp-async-jobs-number 8
+          native-comp-speed 1
+          native-comp-always-compile t))
 
 ;; ---------------------------------------------------------------------------
 ;;; macOS-Specific Settings
