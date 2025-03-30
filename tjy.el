@@ -96,6 +96,28 @@
           plstore-encrypt-to (getenv "GPG_KEY_ID"))))
 
 ;; ---------------------------------------------------------------------------
+;; Emacs configuration for Logitech MX Ergo S on macOS
+;; Basic mouse settings
+(setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10)))
+(setq mouse-wheel-progressive-speed nil)  ; disable acceleration (precision is prioritized for trackballs)
+
+;; Smooth scrolling
+(setq scroll-conservatively 10000)
+(setq scroll-margin 2)
+(setq scroll-preserve-screen-position t)
+
+;; macOS specific settings
+(setq mac-mouse-wheel-smooth-scroll t)   ; enable smooth scrolling
+(setq mouse-wheel-tilt-scroll t)         ; horizontal scroll support (when possible)
+(setq mouse-wheel-flip-direction nil)    ; don't invert direction
+
+;; Trackball button configuration
+;; Button numbers on macOS may differ from Linux
+(global-set-key [mouse-2] 'yank)             ; middle click to paste
+(global-set-key [mouse-4] 'previous-buffer)  ; extra button 1
+(global-set-key [mouse-5] 'next-buffer)      ; extra button 2
+
+;; ---------------------------------------------------------------------------
 ;;; Email Client Configuration (Mew)
 (leaf mew
   :require nil t
