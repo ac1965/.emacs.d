@@ -1,4 +1,4 @@
- ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
+;; early-init.el ---  Early initialization -*- lexical-binding: t -*-
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
 ;; Keywords: initialization, performance
