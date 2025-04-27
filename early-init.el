@@ -1,5 +1,5 @@
 ;; early-init.el ---  Early initialization for macOS -*- lexical-binding: t; -*-
-;; Author: YAMASHITA Takao (ac1965@ty07.net)
+;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
 ;; Keywords: initialization, performance, macos
 ;; Version: 1.1
