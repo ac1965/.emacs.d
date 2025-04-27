@@ -18,8 +18,9 @@
   ;; User information
   (setq user-full-name "YAMASHITA Takao"
         user-mail-address "ac1965@ty07.net"
-        my:font-family "Source Code Pro"
-        my:font-size 16
+        ;; my:font-family "Source Code Pro"
+        my:font-family "Iosevka Nerd Font"
+	my:font-size 16
         inhibit-compacting-font-caches t
         plstore-cache-passphrase-for-symmetric-encryption t)
 

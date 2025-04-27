@@ -89,7 +89,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/04/25 22:35:59 $
+  ;; $Lastupdate: 2025/04/27 09:34:18 $
 
 
   ;;; Commentary:
@@ -567,7 +567,9 @@ Enable syntax highlighting and grammar support using Tree-Sitter.
   (leaf tree-sitter
     :ensure t
     :global-minor-mode global-tree-sitter-mode
-    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode))
+    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
+    :when (featurep 'treesit)
+    :config (setq treesit-font-lock-level 4))
 
   (leaf tree-sitter-langs
     :ensure t
@@ -615,6 +617,11 @@ Enable clipboard integration, visual-line-mode, and useful extensions.
     (turn-on-pbcopy))
 
   (leaf dired-filter :ensure t)
+  (leaf dired-subtree :ensure t
+    :after dired
+    :bind (:dired-mode-map
+           ("i" . dired-subtree-insert)
+           ("TAB" . dired-subtree-toggle)))
   (leaf expand-region :ensure t)
   (leaf aggressive-indent
     :ensure t
@@ -860,13 +867,29 @@ This configuration script sets up a sophisticated *completion framework* for Ema
     (leaf embark
       :ensure t
       :custom
-      ((prefix-help-command . #'embark-prefix-help-command))
+      ((prefix-help-command . #'embark-prefix-help-command)
+       (embark-collect-live-update . t))
       :config
+      (add-hook 'embark-collect-mode-map #'embark-collect-live-mode)
+      (when (require 'all-the-icons nil t)
+        (setq embark-indicators
+              '(embark-minimal-indicator
+                embark-highlight-indicator
+                embark-isearch-highlight-indicator)))
       ;; Integrate Embark with Consult for richer functionality
       (leaf embark-consult
         :ensure t
         :after (embark consult)
-        :hook (embark-collect-mode . consult-preview-at-point-mode)))
+        :hook (embark-collect-mode . consult-preview-at-point-mode)
+        :custom (consult-preview-key . "M-.")))
+
+    (defun cc/setup-embark-vertico-directory ()
+      "Integrate embark-act inside vertico-directory minibuffer."
+      (when (and (boundp 'vertico-map) (require 'embark nil t))
+        (define-key vertico-map (kbd "C-.") #'embark-act)
+        (define-key vertico-map (kbd "C-;") #'embark-dwim)))
+
+    (add-hook 'vertico-mode-hook #'cc/setup-embark-vertico-directory)
 
     ;; Corfu: Popup-based completion for `completion-at-point`
     ;; Suitable for in-buffer completions, e.g., programming contexts.
@@ -1424,12 +1447,21 @@ This section contains utility functions for managing windows, desktops, and work
         (write-file output-file)))
     (message "Org table saved to %s" output-file))
 
+  (defun cc/auto-tangle-init-org ()
+    "Auto-tangle init.org when saving."
+    (when (string= (file-name-nondirectory (buffer-file-name)) "README.org")
+      (org-babel-tangle)))
+
+
   ;; Automatically delete trailing whitespace before saving a file.
   (add-hook 'before-save-hook 'delete-trailing-whitespace)
 
   ;; Enable clickable URLs in programming and text modes.
   (add-hook 'prog-mode-hook 'goto-address-prog-mode)
   (add-hook 'text-mode-hook 'goto-address-mode)
+
+  ;;
+  (add-hook 'after-save-hook #'cc/auto-tangle-init-org)
 #+end_src
 
 ** Footer
