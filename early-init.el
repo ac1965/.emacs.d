@@ -138,6 +138,12 @@
 (global-prettify-symbols-mode 1)
 
 ;; ---------------------------------------------------------------------------
+;; safely ignore this warning, as it is not a critical error
+
+(with-eval-after-load 'prescient
+  (setq warning-suppress-types '((files lexical-binding))))
+
+;; ---------------------------------------------------------------------------
 ;;; Startup Metrics
 ;; Log startup time and garbage collection statistics.
 (add-hook 'emacs-startup-hook

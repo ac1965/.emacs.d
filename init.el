@@ -73,7 +73,19 @@
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
- '(package-selected-packages nil)
+ '(package-selected-packages
+   '(aggressive-indent cape corfu dired-filter dired-subtree dumb-jump
+		       ef-themes ellama embark-consult emigo
+		       exec-path-from-shell expand-region flycheck
+		       gcmh golden-ratio kind-icon leaf ligature
+		       lsp-ui magit marginalia minions
+		       multiple-cursors nerd-icons-dired no-littering
+		       orderless org-cliplink org-download org-journal
+		       org-roam org-superstar ox-hugo pbcopy
+		       projectile puni rg spacious-padding toc-org
+		       tree-sitter-langs treemacs undo-fu
+		       vertico-posframe vertico-prescient
+		       yasnippet-snippets))
  '(package-vc-selected-packages
    '((emigo :url "https://github.com/MatthewZMD/emigo.git" :rev nil))))
 (custom-set-faces

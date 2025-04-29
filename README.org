@@ -90,7 +90,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/04/27 18:09:54 $
+  ;; $Lastupdate: 2025/04/29 10:16:40 $
 
   ;;; Commentary:
   ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -437,14 +437,16 @@ Below are the system details and Emacs build configurations for two machines.
     :ensure t
     :global-minor-mode t)
 
+  (defvar my/shell-env-vars
+    '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY")
+    "Environment variables to import from the shell.")
+
   (leaf exec-path-from-shell
     :ensure t
     :if (memq window-system '(mac ns))
-    :custom
-    ((exec-path-from-shell-check-startup-files . nil)
-     (my/shell-env-vars . '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID"))
-     (exec-path-from-shell-variables . my/shell-env-vars))
     :config
+    (setq exec-path-from-shell-check-startup-files nil)
+    (setq exec-path-from-shell-variables my/shell-env-vars)
     (exec-path-from-shell-initialize))
 #+end_src
 
@@ -568,6 +570,73 @@ Below are the system details and Emacs build configurations for two machines.
 *** AI Configuration
 
 #+begin_src emacs-lisp
+  ;; emigo
+  ;; Customize group
+  (defgroup emigo-config nil
+    "Configuration for Emigo integration."
+    :group 'applications)
+
+  ;; API Key
+  (defcustom emigo-api-key nil
+    "API key for OpenRouter. If nil, will be loaded from environment variable OPENROUTER_API_KEY."
+    :type 'string
+    :group 'emigo-config)
+
+  ;; Default Model
+  (defcustom emigo-default-model "openrouter/deepseek/deepseek-chat-v3-0324"
+    "Default model for Emigo."
+    :type 'string
+    :group 'emigo-config)
+
+  ;; Default Base URL
+  (defcustom emigo-default-base-url "https://openrouter.ai/api/v1"
+    "Default base URL for OpenRouter API."
+    :type 'string
+    :group 'emigo-config)
+
+  ;; Ensure API Key is present
+  (defun emigo--ensure-api-key ()
+    "Ensure `emigo-api-key` is set, load from environment if needed."
+    (unless emigo-api-key
+      (setq emigo-api-key (getenv "OPENROUTER_API_KEY")))
+    (unless emigo-api-key
+      (error "Environment variable OPENROUTER_API_KEY is not set, and no manual value provided!")))
+
+  ;; Prompt to select model
+  (defun emigo--select-model ()
+    "Prompt user to select model for Emigo."
+    (let ((choices (list
+                    (or (getenv "OPENROUTER_MODEL") emigo-default-model)
+                    "openrouter/meta-llama/llama-3-70b-instruct"
+                    "openrouter/gpt-4-turbo"
+                    "openrouter/mistral/mistral-7b-instruct"
+                    "openrouter/anthropic/claude-3-opus")))
+      (completing-read "Select Emigo Model: " choices nil t)))
+
+  ;; Prompt to select API URL
+  (defun emigo--select-base-url ()
+    "Prompt user to select base URL for Emigo."
+    (let ((choices (list
+                    (or (getenv "OPENROUTER_API_URL") emigo-default-base-url)
+                    "https://api.openai.com/v1")))
+      (completing-read "Select Emigo API Base URL: " choices nil t)))
+
+  ;; Emigo main setup
+  (leaf emigo
+    :vc (:url "https://github.com/MatthewZMD/emigo")
+    :require t
+    :init
+    (emigo--ensure-api-key)
+    (defvar emigo--model (emigo--select-model) "Selected model for Emigo session.")
+    (defvar emigo--base-url (emigo--select-base-url) "Selected base URL for Emigo session.")
+    :custom
+    ((emigo-api-key emigo-api-key)
+     (emigo-model emigo--model)
+     (emigo-base-url emigo--base-url))
+    :config
+    (emigo-enable))
+
+  ;; ellama
   (leaf ellama
     :ensure t
     :after llm-ollama
@@ -1197,6 +1266,15 @@ Below are the system details and Emacs build configurations for two machines.
                (buffer-file-name)
                (line-number-at-pos)
                (current-column)))))
+
+  ;; Displau the value of environment
+  (defun my/show-env-variable (var)
+    "Display the value of environment variable VAR in the minibuffer."
+    (interactive "sEnvironment variable: ")
+    (let ((value (getenv var)))
+      (if value
+          (message "%s = %s" var value)
+        (message "Environment variable %s is not set." var))))
 
   ;; Emacs build information
   (defun my/print-build-info ()
