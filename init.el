@@ -64,27 +64,58 @@
 
 ;; ---------------------------------------------------------------------------
 ;;; Package Settings
-;; Configure directories for package installation and cleanup.
-(setq package-user-dir (expand-file-name "elpa/" my:d:cache)
-      no-littering-etc-directory my:d:etc
-      no-littering-var-directory my:d:var)
+;; Configure directories for cleanup.
+(setq package-user-dir (expand-file-name "elpa/" my:d:cache))
 
 ;; Ensure package directory exists
 (my:ensure-directory-exists package-user-dir)
 
+;; Bootstrap straight.el for declarative package management.
+(setq straight-base-dir (expand-file-name "straight/" my:d:cache))
+(defvar bootstrap-version)
+(let ((bootstrap-file
+       (expand-file-name
+        "straight/repos/straight.el/bootstrap.el"
+        (or (bound-and-true-p straight-base-dir)
+            user-emacs-directory)))
+      (bootstrap-version 7))
+  (unless (file-exists-p bootstrap-file)
+    (with-current-buffer
+        (url-retrieve-synchronously
+         "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+         'silent 'inhibit-cookies)
+      (goto-char (point-max))
+      (eval-print-last-sexp)))
+  (load bootstrap-file nil 'nomessage))
+
+;; Configure use-package to use straight.el by default.
+(straight-use-package 'use-package)
+(setq straight-use-package-by-default t)
+(setq load-prefer-newer t)
+(straight-use-package 'no-littering)
+(setq no-littering-etc-directory my:d:etc
+      no-littering-var-directory my:d:var)
+(straight-use-package 'org)
+
 ;; ---------------------------------------------------------------------------
 ;;; Load Configuration from README.org
 ;; Use org-babel to load additional configuration details.
-(require 'org)
 (setq init-org-file (expand-file-name "README.org" my:d))
 
 (when (file-exists-p init-org-file)
   (condition-case err
-      (let ((org-confirm-babel-evaluate nil))
+      (progn
+        (setq org-confirm-babel-evaluate nil)
         (org-babel-load-file init-org-file))
     (error
      (display-warning 'init (format "Failed to load %s: %s" init-org-file (error-message-string err))
                       :error))))
+
+;; ---------------------------------------------------------------------------
+;;; Load Configuration from user-specific-config
+;; Loading user-specific settings.
+(setq user-specific-config (concat my:d user-login-name ".el"))
+(if (file-exists-p user-specific-config) (load user-specific-config))
 
 ;; ---------------------------------------------------------------------------
 ;;; Package Initialization

@@ -13,7 +13,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;;; User Information and General Configuration
-(leaf *personal-configuration
+(use-package emacs
   :config
   ;; User information
   (setq user-full-name "YAMASHITA Takao"
@@ -29,13 +29,14 @@
                       :height (* my:font-size 10))
 
   ;; Define essential directories
-  (defconst my:d:cloud "~/Documents/"
+  (defconst my:cloud-directory "~/Documents/"
     "Directory for cloud-synced documents.")
-  (defconst my:d:blog (concat my:d:cloud "devel/repos/mysite/")
+  (defconst my:blog-directory (concat my:cloud-directory "devel/repos/mysite/")
     "Directory for blog development.")
-  (defconst my:f:capture-blog-file
-    (expand-file-name "all-posts.org" my:d:blog)
+  (defconst my:capture-blog-file
+    (expand-file-name "all-posts.org" my:blog-directory)
     "Path to the blog capture file.")
+  (defvar my:excluded-directories '("/Users/ac1965/Library/Accounts"))
 
   ;; Function to ensure directories exist
   (defun ensure-directory (dir)
@@ -45,70 +46,39 @@
 
   ;; Ensure essential directories exist
   (mapc #'ensure-directory
-        (list my:d:cloud
-              my:d:blog))
+        (list my:cloud-directory
+              my:blog-directory))
 
   ;; Add custom elisp directories to `load-path`
   (defconst my:elisp-directory "~/.elisp"
     "Base directory for custom elisp files.")
-  (dolist (dir (let ((dir (expand-file-name my:elisp-directory)))
-                 (list dir (format "%s%d" dir emacs-major-version))))
+  (dolist (dir (list (expand-file-name my:elisp-directory)))
     (when (and (stringp dir) (file-directory-p dir))
-      (let ((default-directory dir))
-        (add-to-list 'load-path default-directory)
-        (normal-top-level-add-subdirs-to-load-path)))))
+      (add-to-list 'load-path dir)
+      (normal-top-level-add-subdirs-to-load-path))))
 
 ;; ---------------------------------------------------------------------------
-;; Emacs configuration for Logitech MX Ergo S on macOS
-;; Basic mouse settings
-(setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10)))
-(setq mouse-wheel-progressive-speed nil)  ; disable acceleration (precision is prioritized for trackballs)
-
-;; Smooth scrolling
-(setq scroll-conservatively 10000)
-(setq scroll-margin 2)
-(setq scroll-preserve-screen-position t)
-
-;; macOS specific settings
-(setq mac-mouse-wheel-smooth-scroll t)   ; enable smooth scrolling
-(setq mouse-wheel-tilt-scroll t)         ; horizontal scroll support (when possible)
-(setq mouse-wheel-flip-direction nil)    ; don't invert direction
-
-;; Trackball button configuration
-;; Button numbers on macOS may differ from Linux
-(global-set-key [mouse-2] 'yank)             ; middle click to paste
-(global-set-key [mouse-4] 'previous-buffer)  ; extra button 1
-(global-set-key [mouse-5] 'next-buffer)      ; extra button 2
-
-;; ---------------------------------------------------------------------------
-;;; Email Client Configuration (Mew)
-(leaf mew
-  :require nil t
+;;; Logitech MX Ergo S Configuration (macOS)
+(use-package emacs
   :config
-  ;; Autoload Mew functions
-  (autoload 'mew "mew" nil t)
-  (autoload 'mew-send "mew" nil t)
+  ;; Basic mouse settings
+  (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10)))
+  (setq mouse-wheel-progressive-speed nil)  ; disable acceleration
 
-  ;; Set Mew as the default mail reader
-  (setq read-mail-command 'mew)
+  ;; Smooth scrolling
+  (setq scroll-conservatively 10000)
+  (setq scroll-margin 2)
+  (setq scroll-preserve-screen-position t)
 
-  ;; Configure Mew as the user agent for sending emails
-  (autoload 'mew-user-agent-compose "mew" nil t)
-  (if (boundp 'mail-user-agent)
-      (setq mail-user-agent 'mew-user-agent))
-  (if (fboundp 'define-mail-user-agent)
-      (define-mail-user-agent
-        'mew-user-agent
-        'mew-user-agent-compose
-        'mew-draft-send-message
-        'mew-draft-kill
-        'mew-send-hook))
+  ;; macOS specific settings
+  (setq mac-mouse-wheel-smooth-scroll t
+        mouse-wheel-tilt-scroll t
+        mouse-wheel-flip-direction nil)
 
-  ;; Mew server settings (example)
-  (setq mew-mail-domain "ty07.net"
-        mew-smtp-server "smtp.ty07.net"
-        mew-imap-server "imap.ty07.net"
-        mew-imap-user "ac1965@ty07.net"))
+  ;; Trackball button configuration
+  (global-set-key [mouse-2] 'yank)             ; middle click to paste
+  (global-set-key [mouse-4] 'previous-buffer)  ; extra button 1
+  (global-set-key [mouse-5] 'next-buffer))     ; extra button 2
 
-(provide 'tjy)
-;;; tjy.el ends here
+(provide 'ac1965)
+;;; ac1965.el ends here
