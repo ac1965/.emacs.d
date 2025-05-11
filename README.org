@@ -90,7 +90,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/05/10 21:20:50 $
+  ;; $Lastupdate: 2025/05/11 14:54:17 $
 
   ;;; Commentary:
   ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -201,56 +201,65 @@ Below are the system details and Emacs build configurations for two machines.
 *** Fonts
 
 #+begin_src emacs-lisp
-  ;; Check if a font exists on the system
-  (defun font-exists-p (font)
-    "Return t if FONT exists on the system."
-    (member font (font-family-list)))
+  ;; Define a utility function to check if a font exists on the system.
+  (defun font-exists-p (font-name)
+    "Check if FONT-NAME is available in the system."
+    (if (find-font (font-spec :family font-name))
+        t
+      nil))
 
-  ;; Set up the default font and icon fonts for a frame
+  ;; Configure the default font and emoji font, adjusting for display or daemon mode.
   (defun font-setup (&optional frame)
-    "Apply font settings to the FRAME or the current frame."
+    "Apply font settings to FRAME or the current frame."
     (when (font-exists-p my:font-family)
       (set-face-attribute 'default frame :family my:font-family
                           :height (* my:font-size 10))
-      ;; Configure emoji fonts
       (set-fontset-font t 'unicode
                         (font-spec :family "Noto Color Emoji") nil 'prepend)))
 
-  ;; Set default font family and size
-  (unless (font-exists-p my:font-family)
-    (setq my:font-family (if (eq system-type 'windows-nt) "Consolas" "Monospace")))
-  (unless (boundp 'my:font-size)
-    (setq my:font-size (if (> (display-pixel-width) 1920) 18 16)))
+  ;; Define default font fallback and scaling depending on resolution.
+  (defvar my:font-family nil "Default font family for Emacs.")
+  (unless my:font-family
+    (setq my:font-family
+          (cond
+           ((eq system-type 'windows-nt) "Consolas")
+           ((eq system-type 'darwin) "SF Mono") ; macOS
+           (t "Monospace"))))                   ; Linux, other
 
-  ;; Apply font settings in GUI or daemon mode
+  (unless (font-exists-p my:font-family)
+    (setq my:font-family (face-attribute 'default :family)))
+
+  (defvar my:font-size 16 "Default font size for Emacs.")
+  (unless (boundp 'my:font-size)
+    (setq my:font-size (if (> (or (display-pixel-width) 1920)) 18 16)))
+
+  ;; Hook font setup appropriately based on GUI or daemon mode.
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'font-setup)
     (font-setup))
 
-  ;; Nerd Icons for enhanced visual experience
+  ;; Load Nerd Icons if graphics are supported and font is available.
   (leaf nerd-icons
-    :if (display-graphic-p)
     :ensure t
+    :if (display-graphic-p)
     :config
     (setq nerd-icons-color-icons t)
     (unless (font-exists-p "Symbols Nerd Font Mono")
       (setq nerd-icons-color-icons nil)))
 
-  ;; Enable Nerd Icons in Dired mode
+  ;; Enable Nerd Icons in Dired mode for enhanced visuals.
   (leaf nerd-icons-dired
-    :if (display-graphic-p)
     :ensure t
-    :hook (dired-mode-hook . nerd-icons-dired-mode))
+    :if (display-graphic-p)
+    :hook (dired-mode . nerd-icons-dired-mode))
 
-  ;; Enable ligatures for programming modes
+  ;; Enable programming ligatures such as "->" and "==>" in coding buffers.
   (leaf ligature
     :ensure t
     :config
-    ;; Define ligatures for programming modes
     (ligature-set-ligatures 'prog-mode
                             '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
                               ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
-    ;; Enable ligatures globally
     (global-ligature-mode 1))
 #+end_src
 
@@ -559,12 +568,46 @@ Below are the system details and Emacs build configurations for two machines.
     :ensure t
     :after yasnippet)
 
-  ;; Encryption
-  (leaf epa-file
-    :config
-    (epa-file-enable)
-    (setq epa-pinentry-mode
-          (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
+  ;;; Authentication Management
+  (leaf *authentication
+    :init
+    (defvar my:d:password-store
+      (or (getenv "PASSWORD_STORE_DIR")
+  	(concat no-littering-var-directory "password-store/"))
+      "Path to the password store.")
+
+    ;; Check for necessary environment variables and directories
+    (unless (getenv "GPG_KEY_ID")
+      (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
+    (unless (file-directory-p my:d:password-store)
+      (warn "Password store directory does not exist: %s" my:d:password-store))
+
+    ;; Encryption
+    (leaf epa-file
+      :config
+      (epa-file-enable)
+      (setq epa-pinentry-mode
+            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
+
+    ;; Configure authentication sources
+    (leaf auth-source
+      :config
+      (setq auth-source-gpg-encrypt-to
+            (or (getenv "GPG_KEY_ID")
+                (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
+
+    ;; Use password-store and auth-source-pass for password management
+    (leaf password-store :ensure t)
+    (leaf auth-source-pass :ensure t
+      :config
+      (when (executable-find "pass")
+        (auth-source-pass-enable)))
+
+    ;; Configure plstore for secure storage
+    (leaf plstore
+      :config
+      (setq plstore-secret-keys 'silent
+            plstore-encrypt-to (getenv "GPG_KEY_ID"))))
 #+end_src
 
 *** AI Configuration
@@ -1009,7 +1052,7 @@ Below are the system details and Emacs build configurations for two machines.
               (shell-command-to-string "uuidgen | cut -c1-8")))
     (add-to-list 'org-capture-templates
                  '("b" "Create new blog post" entry
-                   (file+headline my:capture-blog-file "blog")
+                   (file+headline my:f:capture-blog-file "blog")
                    "** TODO %?
     :PROPERTIES:
     :EXPORT_FILE_NAME: %(generate-safe-filename)

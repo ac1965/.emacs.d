@@ -29,17 +29,13 @@
                       :height (* my:font-size 10))
 
   ;; Define essential directories
-  (defconst my:cloud-directory "~/Documents/"
+  (defconst my:d:cloud "~/Documents/"
     "Directory for cloud-synced documents.")
-  (defconst my:blog-directory (concat my:cloud-directory "devel/repos/mysite/")
+  (defconst my:d:blog (concat my:d:cloud "devel/repos/mysite/")
     "Directory for blog development.")
-  (defconst my:capture-blog-file
-    (expand-file-name "all-posts.org" my:blog-directory)
+  (defconst my:f:capture-blog-file
+    (expand-file-name "all-posts.org" my:d:blog)
     "Path to the blog capture file.")
-  (defconst my:password-store-directory
-    (or (getenv "PASSWORD_STORE_DIR")
-        (concat my:cloud-directory "password-store"))
-    "Path to the password store.")
 
   ;; Function to ensure directories exist
   (defun ensure-directory (dir)
@@ -49,9 +45,8 @@
 
   ;; Ensure essential directories exist
   (mapc #'ensure-directory
-        (list my:cloud-directory
-              my:blog-directory
-              my:password-store-directory))
+        (list my:d:cloud
+              my:d:blog))
 
   ;; Add custom elisp directories to `load-path`
   (defconst my:elisp-directory "~/.elisp"
@@ -62,38 +57,6 @@
       (let ((default-directory dir))
         (add-to-list 'load-path default-directory)
         (normal-top-level-add-subdirs-to-load-path)))))
-
-;; ---------------------------------------------------------------------------
-;;; Authentication Management
-(leaf *authentication
-  :if (and (getenv "GPG_KEY_ID")
-           (file-directory-p my:password-store-directory))
-  :init
-  ;; Check for necessary environment variables and directories
-  (unless (getenv "GPG_KEY_ID")
-    (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
-  (unless (file-directory-p my:password-store-directory)
-    (warn "Password store directory does not exist: %s" my:password-store-directory))
-
-  ;; Configure authentication sources
-  (leaf auth-source
-    :config
-    (setq auth-source-gpg-encrypt-to
-          (or (getenv "GPG_KEY_ID")
-              (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
-
-  ;; Use password-store and auth-source-pass for password management
-  (leaf password-store :ensure t)
-  (leaf auth-source-pass :ensure t
-    :config
-    (when (executable-find "pass")
-      (auth-source-pass-enable)))
-
-  ;; Configure plstore for secure storage
-  (leaf plstore
-    :config
-    (setq plstore-secret-keys 'silent
-          plstore-encrypt-to (getenv "GPG_KEY_ID"))))
 
 ;; ---------------------------------------------------------------------------
 ;; Emacs configuration for Logitech MX Ergo S on macOS
