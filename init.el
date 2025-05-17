@@ -71,7 +71,8 @@
 (my:ensure-directory-exists package-user-dir)
 
 ;; Bootstrap straight.el for declarative package management.
-(setq straight-base-dir (expand-file-name "straight/" my:d:cache))
+(setq straight-use-package-by-default t
+      straight-base-dir my:d:cache)
 (defvar bootstrap-version)
 (let ((bootstrap-file
        (expand-file-name
@@ -88,14 +89,17 @@
       (eval-print-last-sexp)))
   (load bootstrap-file nil 'nomessage))
 
-;; Configure use-package to use straight.el by default.
-(straight-use-package 'use-package)
-(setq straight-use-package-by-default t)
-(setq load-prefer-newer t)
-(straight-use-package 'no-littering)
+;; Configure leaf to use straight.el by default.
+(straight-use-package 'leaf)
+(straight-use-package 'leaf-keywords)
+(require 'leaf)
+(require 'leaf-keywords)
+(leaf-keywords-init)
+
 (setq no-littering-etc-directory my:d:etc
       no-littering-var-directory my:d:var)
-(straight-use-package 'org)
+(leaf no-littering :straight t)
+(leaf org :straight t)
 
 ;; ---------------------------------------------------------------------------
 ;;; Load Configuration from README.org

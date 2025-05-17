@@ -1,19 +1,17 @@
 ;;; tjy.el --- Personal Configuration -*- lexical-binding: t; -*-
+
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
-;; Keywords: personal, configuration, authentication, email
+;; Keywords: personal, device configuration
 
 ;;; Commentary:
 ;; This file contains personal configurations, including:
 ;; - User information and directory setup
-;; - Authentication management
-;; - Email client settings (Mew)
+;; - Device configurations
 
 ;;; Code:
 
-;; ---------------------------------------------------------------------------
-;;; User Information and General Configuration
-(use-package emacs
+(leaf *personal
   :config
   ;; User information
   (setq user-full-name "YAMASHITA Takao"
@@ -43,26 +41,24 @@
     "Ensure that DIR exists, except for excluded directories."
     (message "Checking directory: %s" dir)
     (unless (member dir my:excluded-directories)
-      (when (file-exists-p dir)
-        (unless (file-directory-p dir)
-          (warn "Path exists but is not a directory: %s" dir)))
-      (unless (file-directory-p dir)
-        (warn "Directory does not exist: %s" dir)))))
+      (if (file-exists-p dir)
+          (unless (file-directory-p dir)
+            (warn "Path exists but is not a directory: %s" dir))
+        (warn "Directory does not exist: %s" dir))))
 
   ;; Ensure essential directories exist
-  (mapc #'ensure-directory
-	(list my:d:cloud
-              my:d:blog))
+  (mapc #'ensure-directory (list my:d:cloud my:d:blog))
 
-  ;; Add custom elisp directories to `load-path`
-  (defconst my:elisp-directory "~/.elisp"
-    "Base directory for custom elisp files.")
-  (dolist (dir (list (expand-file-name my:elisp-directory)))
-    (when (and (stringp dir) (file-directory-p dir))
-      (add-to-list 'load-path dir)
-      (normal-top-level-add-subdirs-to-load-path)))
+  ;; Exclude directories in load-path
+  (setq load-path
+        (seq-remove (lambda (dir)
+                      (member dir my:excluded-directories))
+                    load-path)))
 
-  ;; Logitech MX Ergo S Configuration (macOS)
+;; ---------------------------------------------------------------------------
+;;; Logitech MX Ergo S Configuration (macOS)
+(leaf *device/MX_ErgoS
+  :config
   ;; Basic mouse settings
   (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10)))
   (setq mouse-wheel-progressive-speed nil)  ; disable acceleration
@@ -80,8 +76,7 @@
   ;; Trackball button configuration
   (global-set-key [mouse-2] 'yank)             ; middle click to paste
   (global-set-key [mouse-4] 'previous-buffer)  ; extra button 1
-  (global-set-key [mouse-5] 'next-buffer))     ; extra button 2
+  (global-set-key [mouse-5] 'next-buffer))
 
 (provide 'ac1965)
 ;;; ac1965.el ends here
-

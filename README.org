@@ -55,13 +55,13 @@ Below are the system details and Emacs build configurations for two machines.
 
 - GNU Emacs 31.0.50
 
-|Commit|1410bfb7ca5a3497fbbf36a9d31f9a1dce8fd63a|
+|Commit|9659f8aa344f73164bece7408d63991531fc115d|
 |Branch|master|
 |System|aarch64-apple-darwin24.4.0|
-|Date|2025-05-10 21:13:14 (JST)|
+|Date|2025-05-16 21:55:33 (JST)|
 |Patch|without ns-inline.patch|
 |Features|ACL DBUS GLIB GNUTLS LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB|
-|Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg CFLAGS=-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
+|Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg --with-mailutils --with-native-image-api --with-cairo CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
 
 *OLD Machine*
 
@@ -81,6 +81,7 @@ Below are the system details and Emacs build configurations for two machines.
 |Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg CFLAGS=-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include CPPFLAGS=-I/usr/local/opt/llvm/include 'LDFLAGS=-L/usr/local/opt/llvm/lib -L/usr/local/opt/llvm/lib/c++ -Wl,-rpath,/usr/local/opt/llvm/lib/c++'|
 
 * Emacs Configuration
+
 ** Header
 
 #+begin_src emacs-lisp
@@ -89,55 +90,74 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/05/11 13:41:40 $
+  ;; $Lastupdate: 2025/05/17 12:16:30 $
 
   ;;; Commentary:
-  ;; This file provides a structured Emacs configuration setup using `straight`.
+  ;; This file provides a structured Emacs configuration setup using `leaf`.
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
+#+end_src
+
+
+
+#+begin_src emacs-lisp
+  (eval-and-compile
+    (require 'package)
+    (customize-set-variable
+     'package-archives
+     '(("gnu" . "https://elpa.gnu.org/packages/")
+       ("melpa" . "https://melpa.org/packages/")))
+    (package-initialize)
+
+    (unless (package-installed-p 'leaf)
+      (package-refresh-contents)
+      (package-install 'leaf)))
+
+  (require 'leaf)
 #+end_src
 
 ** UI/Fonts/Keybind
 *** UI
 
 #+begin_src emacs-lisp
-  ;; Enable fullscreen mode only in graphical environments.
+  ;; Enable fullscreen mode in graphical environments
   (when (display-graphic-p)
     (set-frame-parameter nil 'fullscreen 'fullboth))
 
-  ;; Automatically resize windows according to golden-ratio layout.
-  (use-package golden-ratio
-    :hook (after-init . golden-ratio-mode)
-    :custom
-    (golden-ratio-adjust-factor 1.1)
-    (golden-ratio-auto-scale t)
-    (golden-ratio-exclude-modes '("ediff-mode" "dired-mode")))
+  ;; Dynamic window resizing using golden-ratio
+  (leaf golden-ratio
+    :straight t
+    :hook (after-init-hook . golden-ratio-mode)
+    :custom ((golden-ratio-adjust-factor . 1.1)
+             (golden-ratio-auto-scale . t)
+             (golden-ratio-exclude-modes . '("ediff-mode" "dired-mode"))))
 
-  ;; Load ef-themes for consistent and elegant UI aesthetics.
-  (use-package ef-themes
+  ;; Use ef-themes for consistent UI aesthetics
+  (leaf ef-themes
+    :straight t
     :config
     (if (display-graphic-p)
         (load-theme 'ef-frost t)
       (load-theme 'deeper-blue t)))
 
-  ;; Add internal padding to improve UI spacing and readability.
-  (use-package spacious-padding
+  ;; Add spacious padding for better readability
+  (leaf spacious-padding
+    :straight t
     :custom
-    (spacious-padding-subtle-mode-line '(:mode-line-active default
-  							 :mode-line-inactive vertical-border))
-    (spacious-padding-widths '(:internal-border-width 10))
+    ((spacious-padding-subtle-mode-line . '( :mode-line-active default
+                      :mode-line-inactive vertical-border))
+     (spacious-padding-widths . '(:internal-border-width 10)))
     :config
     (spacious-padding-mode 1))
 
-  ;; Replace minor modes in mode-line with a compact icon.
-  (use-package minions
-    :custom
-    (minions-mode-line-lighter "⚙")
+  (leaf minions
+    :straight t
     :config
+    (setq minions-mode-line-lighter "⚙")
     (minions-mode 1))
 
-  ;; Show current time and battery level in the mode-line.
+  ;; Display time and battery status in the mode-line
   (setq display-time-interval 30
         display-time-day-and-date t
         display-time-24hr-format t)
@@ -145,31 +165,29 @@ Below are the system details and Emacs build configurations for two machines.
   (display-time-mode 1)
   (display-battery-mode 1)
 
-  ;; Enable tab-bar for buffer groups and tab-line for visual navigation.
-  (use-package tab-bar
-    :custom
-    (tab-bar-show 1)
-    (tab-bar-new-tab-choice "*scratch*")
+  (leaf tab-bar
+    :custom ((tab-bar-show . 1)
+             (tab-bar-new-tab-choice . "*scratch*"))
     :config
     (tab-bar-mode 1)
     (global-tab-line-mode 1))
 
-  ;; Display project tree view using Treemacs with custom UI and behavior.
-  (use-package treemacs
-    :bind (:map treemacs-mode-map
-                ([mouse-1] . treemacs-single-click-expand-action))
+  (leaf treemacs
+    :straight t
+    :bind (:treemacs-mode-map
+           ([mouse-1] . #'treemacs-single-click-expand-action))
     :custom
-    (treemacs-no-png-images nil)
-    (treemacs-filewatch-mode t)
-    (treemacs-follow-mode t)
-    (treemacs-indentation 2)
-    (treemacs-missing-project-action 'remove)
+    ((treemacs-no-png-images . nil)
+     (treemacs-filewatch-mode . t)
+     (treemacs-follow-mode . t)
+     (treemacs-indentation . 2)
+     (treemacs-missing-project-action . 'remove))
     :config
     (setq treemacs-width 30)
     :hook
-    (treemacs-mode . (lambda ()
-                       (setq mode-line-format nil)
-                       (display-line-numbers-mode 0))))
+    (treemacs-mode-hook . (lambda ()
+                            (setq mode-line-format nil)
+                            (display-line-numbers-mode 0))))
 #+end_src
 
 *** Fonts
@@ -213,7 +231,8 @@ Below are the system details and Emacs build configurations for two machines.
     (font-setup))
 
   ;; Load Nerd Icons if graphics are supported and font is available.
-  (use-package nerd-icons
+  (leaf nerd-icons
+    :straight t
     :if (display-graphic-p)
     :config
     (setq nerd-icons-color-icons t)
@@ -221,12 +240,14 @@ Below are the system details and Emacs build configurations for two machines.
       (setq nerd-icons-color-icons nil)))
 
   ;; Enable Nerd Icons in Dired mode for enhanced visuals.
-  (use-package nerd-icons-dired
+  (leaf nerd-icons-dired
+    :straight t
     :if (display-graphic-p)
     :hook (dired-mode . nerd-icons-dired-mode))
 
   ;; Enable programming ligatures such as "->" and "==>" in coding buffers.
-  (use-package ligature
+  (leaf ligature
+    :straight t
     :config
     (ligature-set-ligatures 'prog-mode
                             '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
@@ -237,21 +258,22 @@ Below are the system details and Emacs build configurations for two machines.
 *** Key Bindings
 
 #+begin_src emacs-lisp
-  ;; Display possible keybindings after partial input for easier discovery.
-  (use-package which-key
-    :demand t
+  ;; Key binding utilities
+  (leaf which-key
+    :straight t
+    :global-minor-mode t
     :config
-    (setq which-key-idle-delay 0.5)
-    (which-key-mode 1))
+    (setq which-key-idle-delay 0.5))
 
-  ;; Use undo-fu for more reliable and intuitive undo/redo behavior.
-  (use-package undo-fu
+  (leaf undo-fu
+    :straight t
     :config
     (setq undo-fu-allow-undo-in-region t))
 
-  ;; Use hydra for transient menus, such as text scaling.
-  (use-package hydra
+  (leaf hydra
+    :straight t
     :config
+    ;; Text scaling hydra
     (defhydra hydra-text-scale (:hint nil :color red)
       "
   ^Text Scaling^
@@ -263,75 +285,85 @@ Below are the system details and Emacs build configurations for two machines.
       ("0" (text-scale-set 0) :color blue)
       ("q" nil "quit" :color blue)))
 
-  ;; Define global keybindings using `global-set-key` for various workflows.
-  (global-set-key (kbd "<f1>") 'help)
-  (global-set-key (kbd "<f8>") 'treemacs)
-  (global-set-key (kbd "C-?") 'help)
-  (global-set-key (kbd "C-h") 'backward-delete-char)
+  ;; Common key bindings
+  (leaf-keys
+   ;; Function keys and help
+   (("<f1>"          . help)
+    ("<f8>"          . treemacs)
+    ("C-?"           . help)
+    ("C-h"           . backward-delete-char)
 
-  (global-set-key (kbd "C-/") 'undo-fu-only-undo)
-  (global-set-key (kbd "C-z") 'undo-fu-only-redo)
+    ;; Undo/redo
+    ("C-/"           . undo-fu-only-undo)
+    ("C-z"           . undo-fu-only-redo)
 
-  (global-set-key (kbd "C-+") 'text-scale-increase)
-  (global-set-key (kbd "C--") 'text-scale-decrease)
-  (global-set-key (kbd "C-c z") 'hydra-text-scale/body)
+    ;; Text scaling
+    ("C-+"           . text-scale-increase)
+    ("C--"           . text-scale-decrease)
+    ("C-c z"         . hydra-text-scale/body)
 
-  (global-set-key (kbd "s-n") 'next-buffer)
-  (global-set-key (kbd "s-p") 'previous-buffer)
-  (global-set-key (kbd "s-<up>") 'beginning-of-buffer)
-  (global-set-key (kbd "s-<down>") 'end-of-buffer)
-  (global-set-key (kbd "C-c b") 'consult-buffer)
+    ;; Buffer navigation
+    ("s-n"           . next-buffer)
+    ("s-p"           . previous-buffer)
+    ("s-<up>"        . beginning-of-buffer)
+    ("s-<down>"      . end-of-buffer)
+    ("C-c b"         . consult-buffer)
 
-  (global-set-key (kbd "C-.") 'other-window)
-  (global-set-key (kbd "C-c 2") 'my/toggle-window-split)
-  (global-set-key (kbd "M-o") 'ace-window)
-  (global-set-key (kbd "s-.") 'ace-swap-window)
-  (global-set-key (kbd "s-d") 'delete-frame)
-  (global-set-key (kbd "s-m")
-                  (lambda () (interactive)
-                    (let ((frame (make-frame)))
-                      (with-selected-frame frame
-                        (switch-to-buffer (generate-new-buffer "untitled"))))))
+    ;; Window management
+    ("C-."           . other-window)
+    ("C-c 2"         . my/toggle-window-split)
+    ("M-o"           . ace-window)
+    ("s-."           . ace-swap-window)
+    ("s-d"           . delete-frame)
+    ("s-m"           . (lambda () (interactive)
+                         (let ((frame (make-frame)))
+                           (with-selected-frame frame
+                             (switch-to-buffer (generate-new-buffer "untitled"))))))
 
-  (global-set-key (kbd "s-j") 'find-file-other-window)
-  (global-set-key (kbd "s-o") 'find-file-other-frame)
-  (global-set-key (kbd "C-c o") 'find-file)
-  (global-set-key (kbd "C-c v") 'find-file-read-only)
-  (global-set-key (kbd "C-c V") 'view-file-other-window)
-  (global-set-key (kbd "C-c k") 'kill-buffer-and-window)
+    ;; File operations
+    ("s-j"           . find-file-other-window)
+    ("s-o"           . find-file-other-frame)
+    ("C-c o"         . find-file)
+    ("C-c v"         . find-file-read-only)
+    ("C-c V"         . view-file-other-window)
+    ("C-c k"         . kill-buffer-and-window)
 
-  (global-set-key (kbd "C-s") 'consult-line)
-  (global-set-key (kbd "C-c r") 'consult-ripgrep)
+    ;; Search
+    ("C-s"           . consult-line)
+    ("C-c r"         . consult-ripgrep)
 
-  (global-set-key (kbd "C-=") 'er/expand-region)
-  (global-set-key (kbd "C-c M-a") 'align-regexp)
-  (global-set-key (kbd "C-c ;") 'comment-region)
-  (global-set-key (kbd "C-c :") 'uncomment-region)
+    ;; Text manipulation
+    ("C-="           . er/expand-region)
+    ("C-c M-a"       . align-regexp)
+    ("C-c ;"         . comment-region)
+    ("C-c :"         . uncomment-region)
 
-  (global-set-key (kbd "C-c d a") 'org-agenda)
-  (global-set-key (kbd "C-c d c") 'org-capture)
-  (global-set-key (kbd "C-c d i") 'org-roam-node-insert)
-  (global-set-key (kbd "C-c d f") 'org-roam-node-find)
+    ;; Org mode and Roam
+    ("C-c d a"       . org-agenda)
+    ("C-c d c"       . org-capture)
+    ("C-c d i"       . org-roam-node-insert)
+    ("C-c d f"       . org-roam-node-find)
 
-  (global-set-key (kbd "M-x") 'execute-extended-command)
-  (global-set-key (kbd "C-x g") 'magit-status)
-  (global-set-key (kbd "s-r") 'restart-emacs)
+    ;; Misc
+    ("M-x"           . execute-extended-command)
+    ("C-x g"         . magit-status)
+    ("s-r"           . restart-emacs)))
 
-  ;; Enable Shift + Arrow for directional window movement.
+  ;; Enable directional window navigation
   (windmove-default-keybindings)
 
-  ;; Set a custom keybinding in Dired mode for viewing files in another window.
+  ;; Custom keybinding for dired view
   (add-hook 'dired-mode-hook
             (lambda ()
-              (define-key dired-mode-map (kbd "z")
-  			'my/dired-view-file-other-window)))
+              (define-key dired-mode-map "z"
+                          'my/dired-view-file-other-window)))
 #+end_src
 
 ** Basic Configuration
 *** Save and Backup
 
 #+begin_src emacs-lisp
-  ;; Automatically insert a timestamp at the top before saving.
+  ;; Insert a timestamp before saving the buffer
   (defun my/save-buffer-wrapper ()
     "Insert a timestamp at the top of the buffer before saving."
     (interactive)
@@ -343,106 +375,93 @@ Below are the system details and Emacs build configurations for two machines.
 
   (add-hook 'before-save-hook #'my/save-buffer-wrapper)
 
-  ;; Configure backup and auto-save behavior
-  (setq backup-directory-alist `(("." . ,(concat no-littering-var-directory "backup/")))
-        auto-save-file-name-transforms `((".*" ,(concat no-littering-var-directory "backup/") t))
-        delete-old-versions t
-        version-control t    ;; Enable versioning for backups
-        kept-new-versions 6  ;; Keep up to 6 new backups
-        kept-old-versions 2  ;; Keep up to 2 old backups
-        auto-save-visited-interval 5  ;; Auto-save interval in seconds
-        auto-save-visited-mode t)     ;; Enable auto-save for visited files
-
-  (auto-save-visited-mode 1)
+  ;; Configure auto-save and backup settings
+  (leaf files
+    :custom
+    `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+      (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
+      (delete-old-versions . t)
+      (auto-save-visited-interval . 1))
+    :global-minor-mode auto-save-visited-mode)
 #+end_src
 
 *** Session Management
 
 #+begin_src emacs-lisp
-  ;; Restore previous sessions and enable window layout history
-  (setq desktop-dirname (concat no-littering-var-directory "desktop")
-        desktop-save 'if-exists
-        desktop-auto-save-timeout 180
-        desktop-restore-eager 10)
-
-  (desktop-save-mode 1)
-  (winner-mode 1)
+  (leaf *desktop
+    :config
+    (setq desktop-dirname (concat no-littering-var-directory "desktop")
+          desktop-save 'if-exists
+          desktop-auto-save-timeout 180
+          desktop-restore-eager 10)
+    (desktop-save-mode 1)  ;; Enable session saving
+    (winner-mode 1))       ;; Enable window configuration undo/redo
 #+end_src
 
 *** Editing Enhancements
 
 #+begin_src emacs-lisp
-  ;; Restore cursor position in files
-  (use-package saveplace
-    :init (save-place-mode 1))
+  (leaf saveplace
+    :init
+    (save-place-mode +1))
 
-  ;; Keep track of recently opened files
-  (use-package recentf
+  (leaf recentf
     :init
     (setq recentf-max-saved-items 100)
-    (recentf-mode 1))
+    (recentf-mode +1))
 
-  ;; Preserve minibuffer history across sessions
-  (use-package savehist
+  (leaf savehist
+    :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
+    :global-minor-mode t)
+
+  (leaf autorevert
     :init
-    (setq savehist-file (concat no-littering-var-directory "savehist"))
-    (savehist-mode 1))
+    (global-auto-revert-mode +1))
 
-  ;; Automatically revert files changed externally
-  (use-package autorevert
-    :init (global-auto-revert-mode 1))
+  (leaf elec-pair
+    :global-minor-mode electric-pair-mode)
 
-  ;; Enable automatic insertion of matching delimiters
-  (use-package elec-pair
-    :init (electric-pair-mode 1))
+  (leaf paren
+    :custom ((show-paren-delay . 0)
+             (show-paren-style . 'expression))
+    :global-minor-mode show-paren-mode)
 
-  ;; Highlight matching parentheses immediately
-  (use-package paren
-    :init (show-paren-mode 1)
-    :custom
-    (show-paren-delay 0)
-    (show-paren-style 'expression))
-
-  ;; Structural editing support for parentheses (alternative to smartparens)
-  (use-package puni
+  (leaf puni
     :straight t
-    :init (puni-global-mode 1))
+    :global-minor-mode puni-global-mode)
 #+end_src
 
 *** System Utilities
 
 #+begin_src emacs-lisp
-  ;; Smarter garbage collection for better performance
-  (use-package gcmh
+  (leaf gcmh
     :straight t
-    :init (gcmh-mode 1))
+    :global-minor-mode t)
 
-  ;; Load environment variables from the shell (macOS only)
   (defvar my/shell-env-vars
     '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY")
     "Environment variables to import from the shell.")
 
-  (use-package exec-path-from-shell
-    :if (memq window-system '(mac ns))
+  (leaf exec-path-from-shell
     :straight t
+    :if (memq window-system '(mac ns))
     :config
-    (setq exec-path-from-shell-check-startup-files nil
-          exec-path-from-shell-variables my/shell-env-vars)
+    (setq exec-path-from-shell-check-startup-files nil)
+    (setq exec-path-from-shell-variables my/shell-env-vars)
     (exec-path-from-shell-initialize))
 #+end_src
 
 *** Tree-Sitter
 
 #+begin_src emacs-lisp
-  ;; Enable global Tree-sitter support (if Emacs has treesit)
-  (when (featurep 'treesit)
-    (use-package tree-sitter
-      :straight t
-      :config
-      (global-tree-sitter-mode)
-      (add-hook 'tree-sitter-after-on-hook #'tree-sitter-hl-mode)))
+  (leaf tree-sitter
+    :straight t
+    :global-minor-mode global-tree-sitter-mode
+    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
+    :when (featurep 'treesit)
+    :config (setq treesit-font-lock-level 4))
 
-  (use-package tree-sitter-langs
+  (leaf tree-sitter-langs
     :straight t
     :config
     (condition-case err
@@ -453,150 +472,192 @@ Below are the system details and Emacs build configurations for two machines.
 *** Miscellaneous
 
 #+begin_src emacs-lisp
-  ;; Configure TRAMP to avoid clutter and use more verbose output
-  (use-package tramp
-    :init
-    (setq tramp-default-method "scp")
-    :custom
-    (tramp-persistency-file-name (concat no-littering-var-directory "tramp"))
-    (tramp-auto-save-directory (concat no-littering-var-directory "tramp-autosave"))
-    (tramp-verbose 10))
+  (leaf no-littering
+    :straight t
+    :require t)
 
-  ;; Set custom location for auto-save list files
-  (use-package emacs
+  (leaf tramp
+    :pre-setq
+    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
     :custom
-    (auto-save-list-file-prefix (concat no-littering-var-directory "backup/" (format-time-string "%Y-%m-%d-%H%M%S") "-.saves-")))
+    `((tramp-default-method . "scp")
+      (tramp-verbose . 10)))
+
+  (leaf startup
+    :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
 #+end_src
 
 ** Utilities Package
 *** Extra Utilities
 
 #+begin_src emacs-lisp
-  ;; Enable visual-line-mode in text-mode buffers
-  (add-hook 'text-mode-hook #'visual-line-mode)
+  ;; Text and visual line modes
+  (leaf visual-line-mode
+    :hook (text-mode . visual-line-mode))
 
   ;; macOS clipboard integration
-  (use-package pbcopy
+  (leaf pbcopy
     :if (memq window-system '(mac ns))
     :straight t
     :config
     (turn-on-pbcopy))
 
   ;; Dired enhancements
-  (use-package dired-filter
-    :straight t)
-
-  (use-package dired-subtree
-    :straight t
+  (leaf dired-filter :straight t)
+  (leaf dired-subtree :straight t
     :after dired
-    :bind (:map dired-mode-map
-                ("i" . dired-subtree-insert)
-                ("TAB" . dired-subtree-toggle)))
+    :bind (:dired-mode-map
+           ("i" . dired-subtree-insert)
+           ("TAB" . dired-subtree-toggle)))
 
-  ;; Text editing enhancements
-  (use-package expand-region
-    :straight t)
-
-  (use-package aggressive-indent
+  ;; Text selection and editing tools
+  (leaf expand-region :straight t)
+  (leaf aggressive-indent
     :straight t
-    :init (global-aggressive-indent-mode 1))
+    :global-minor-mode global-aggressive-indent-mode)
+  (leaf delsel
+    :global-minor-mode delete-selection-mode)
 
-  (use-package delsel
-    :init (delete-selection-mode 1))
-
-  ;; Use ripgrep for grep
+  ;; Search tools
   (setq grep-program "rg")
+  (leaf rg :straight t)
 
-  (use-package rg
-    :straight t)
-
-  ;; Dumb Jump for code navigation
-  (use-package dumb-jump
+  ;; Code navigation
+  (leaf dumb-jump
     :straight t
     :hook (xref-backend-functions . dumb-jump-xref-activate)
     :custom
-    ((dumb-jump-force-searcher . 'rg)
-     (dumb-jump-prefer-searcher . 'rg)))
+    `((dumb-jump-force-searcher . 'rg)
+      (dumb-jump-prefer-searcher . 'rg)))
 
-  ;; Multiple cursors
-  (use-package multiple-cursors
-    :straight t)
+  (leaf multiple-cursors :straight t)
 
-  ;; Version control with Magit
-  (use-package magit
-    :straight t)
+  ;; Version control
+  (leaf magit :straight t)
 
   ;; Syntax and spell checking
-  (use-package flycheck
+  (leaf flycheck
     :straight t
     :hook (prog-mode . flycheck-mode))
 
-  (use-package flyspell
+  (leaf flyspell
     :straight t
-    :custom
-    (flyspell-default-dictionary "aspell")
-    (ispell-program-name "aspell")
-    (ispell-extra-args '("--sug-mode=ultra")))
+    :hook (text-mode . flyspell-mode)
+    :custom ((ispell-program-name . "aspell")))
 
   ;; Project management
-  (use-package projectile
+  (leaf projectile
     :straight t
-    :init (projectile-mode 1))
+    :global-minor-mode t)
 
-  ;; Snippet support
-  (use-package yasnippet
+  ;; Snippets
+  (leaf yasnippet
     :straight t
-    :init (yas-global-mode 1))
+    :global-minor-mode yas-global-mode)
 
-  (use-package yasnippet-snippets
+  (leaf yasnippet-snippets
     :straight t
     :after yasnippet)
 
+  ;;; Authentication Management
+  (leaf *authentication
+    :init
+    (defvar my:d:password-store
+      (or (getenv "PASSWORD_STORE_DIR")
+  	(concat no-littering-var-directory "password-store/"))
+      "Path to the password store.")
+
+    ;; Check for necessary environment variables and directories
+    (unless (getenv "GPG_KEY_ID")
+      (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
+    (unless (file-directory-p my:d:password-store)
+      (warn "Password store directory does not exist: %s" my:d:password-store))
+
+    ;; Encryption
+    (leaf epa-file
+      :config
+      (epa-file-enable)
+      (setq epa-pinentry-mode
+            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
+
+    ;; Configure authentication sources
+    (leaf auth-source
+      :config
+      (setq auth-source-gpg-encrypt-to
+            (or (getenv "GPG_KEY_ID")
+                (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
+
+    ;; Use password-store and auth-source-pass for password management
+    (leaf password-store :straight t)
+    (leaf auth-source-pass :straight t
+      :config
+      (when (executable-find "pass")
+        (auth-source-pass-enable)))
+
+    ;; Configure plstore for secure storage
+    (leaf plstore
+      :config
+      (setq plstore-secret-keys 'silent
+            plstore-encrypt-to (getenv "GPG_KEY_ID"))))
 #+end_src
 
 *** AI Configuration
 
 #+begin_src emacs-lisp
-  (use-package ellama
+  ;; ellama
+  (leaf ellama
     :straight t
     :after llm-ollama
     :init
-    (setq ellama-language "Japanese"
-          ellama-sessions-directory (concat no-littering-var-directory "ellama-sessions")
-          ellama-naming-scheme 'ellama-generate-name-by-llm
-          ellama-provider
-          (make-llm-ollama
-           :chat-model "codestral:22b-v0.1-q4_K_S"
-           :embedding-model "codestral:22b-v0.1-q4_K_S")
-          ellama-translation-provider
-          (make-llm-ollama
-           :chat-model "llama3:8b-instruct-q8_0"
-           :embedding-model "llama3:8b-instruct-q8_0")
-          ellama-providers
-          '(("codestral" . (make-llm-ollama
-                            :chat-model "codestral:22b-v0.1-q4_K_S"
-                            :embedding-model "codestral:22b-v0.1-q4_K_S"))
-            ("gemma2" . (make-llm-ollama
-                         :chat-model "gemma2:27b-instruct-q4_K_S"
-                         :embedding-model "gemma2:27b-instruct-q4_K_S"))
-            ("llama3.2-vision" . (make-llm-ollama
-                                  :chat-model "llama3:8b-instruct-q8_0"
-                                  :embedding-model "llama3:8b-instruct-q8_0"))))
+    ;; Set default language to Japanese
+    (setopt ellama-language "Japanese")
 
-    ;; Interactive command to change provider
+    ;; Define session directory for Ellama
+    (setopt ellama-sessions-directory (concat no-littering-var-directory "ellama-sessions"))
+
+    ;; Configure naming scheme for sessions
+    (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
+
+    ;; Set default provider
+    (setopt ellama-provider
+            (make-llm-ollama
+             :chat-model "codestral:22b-v0.1-q4_K_S"
+             :embedding-model "codestral:22b-v0.1-q4_K_S"))
+
+    ;; Define translation provider
+    (setopt ellama-translation-provider
+            (make-llm-ollama
+             :chat-model "llama3:8b-instruct-q8_0"
+             :embedding-model "llama3:8b-instruct-q8_0"))
+
+    ;; Define additional providers
+    (setopt ellama-providers
+            '(("codestral" . (make-llm-ollama
+                              :chat-model "codestral:22b-v0.1-q4_K_S"
+                              :embedding-model "codestral:22b-v0.1-q4_K_S"))
+              ("gemma2" . (make-llm-ollama
+                           :chat-model "gemma2:27b-instruct-q4_K_S"
+                           :embedding-model "gemma2:27b-instruct-q4_K_S"))
+              ("llama3.2-vision" . (make-llm-ollama
+                                    :chat-model "llama3:8b-instruct-q8_0"
+                                    :embedding-model "llama3:8b-instruct-q8_0"))))
+
+    ;; Add error handling for unsupported providers
     (defun ellama-set-provider (provider-name)
       "Set the active provider for Ellama by PROVIDER-NAME."
       (interactive
        (list (completing-read "Select provider: " (mapcar #'car ellama-providers))))
       (if-let* ((provider (cdr (assoc provider-name ellama-providers))))
           (progn
-            (setq ellama-provider provider)
+            (setopt ellama-provider provider)
             (message "Ellama provider set to: %s" provider-name))
         (progn
           (message "Provider '%s' not found. Using default provider." provider-name)
-          (setq ellama-provider (cdr (assoc "codestral" ellama-providers))))))
+          (setopt ellama-provider (cdr (assoc "codestral" ellama-providers))))))
 
     :config
+    ;; Ensure that Ellama initializes correctly
     (unless (and ellama-provider ellama-translation-provider)
       (message "Ellama configuration is incomplete. Verify providers.")))
 #+end_src
@@ -604,160 +665,173 @@ Below are the system details and Emacs build configurations for two machines.
 *** Programming Utilities
 
 #+begin_src emacs-lisp
-  (defvar my/use-lsp 'eglot) ;; Change to 'lsp if you prefer lsp-mode
+  (defvar my/use-lsp 'eglot) ;; Change to 'lsp if needed
 
-  ;; Eglot LSP client
   (when (eq my/use-lsp 'eglot)
-    (use-package eglot
-      :straight t
-      :config
-      (add-to-list 'eglot-server-programs '(python-mode . ("pylsp")))
-      :hook ((python-mode . eglot-ensure))))
-
-  ;; lsp-mode alternative
-  (when (eq my/use-lsp 'lsp)
-    (use-package lsp-mode
-      :straight t
-      :commands lsp
+    (leaf eglot
+      :hook (prog-mode . eglot-ensure)
       :custom
-      (lsp-keymap-prefix "C-c l")
-      :hook ((python-mode . lsp)
-             (go-mode . lsp)
-             (js-mode . lsp))))
+      `((eglot-autoshutdown . t)
+        (eglot-sync-connect . nil)
+        (eglot-events-buffer-size . 200))
+      :bind (:eglot-mode-map
+             ("C-c h" . eglot-help-at-point)
+             ("C-c r" . eglot-rename)
+             ("C-c a" . eglot-code-actions)
+             ("C-c d" . flymake-show-buffer-diagnostics))))
 
-  ;; lsp-ui (UI enhancements for lsp-mode)
-  (use-package lsp-ui
+  (when (eq my/use-lsp 'lsp)
+    (leaf lsp-mode
+      :straight t
+      :hook ((python-mode . lsp)
+             (rust-mode . lsp)
+             (go-mode . lsp)
+             (js-mode . lsp)
+             (typescript-mode . lsp)
+             (c-mode . lsp)
+             (c++-mode . lsp))
+      :custom
+      `((lsp-enable-snippet . t)
+        (lsp-idle-delay . 0.5)
+        (lsp-headerline-breadcrumb-enable . t)
+        (lsp-prefer-flymake . nil))
+      :config
+      (setq lsp-completion-provider :capf)))
+
+  (leaf lsp-ui
     :straight t
-    :commands lsp-ui-mode
+    :after lsp-mode
     :custom
-    (lsp-ui-doc-enable t)
-    (lsp-ui-doc-delay 0.5)
-    (lsp-ui-sideline-enable t))
+    `((lsp-ui-doc-enable . t)
+      (lsp-ui-sideline-enable . t)
+      (lsp-ui-sideline-show-hover . t)
+      (lsp-ui-sideline-show-code-actions . t)
+      (lsp-ui-sideline-show-diagnostics . t)))
 #+end_src
 
 *** Completion Framework
 
 #+begin_src emacs-lisp
-  ;;; Completion Settings (straight + use-package)
-
-  ;; Prescient: Sort and filter candidates based on usage history
-  (use-package prescient
-    :straight t
-    :custom
-    (prescient-aggressive-file-save t)  ;; Automatically save history
+  (leaf completion-settings
     :config
-    (prescient-persist-mode 1))
+    ;; Prescient: Sort and filter candidates based on usage history
+    (leaf prescient
+      :straight t
+      :custom
+      ((prescient-aggressive-file-save . t))  ;; Automatically save history
+      :global-minor-mode prescient-persist-mode)
 
-  ;; Vertico: Vertical completion menu
-  (use-package vertico
-    :straight t
-    :init
-    (vertico-mode 1)
-    :custom
-    (vertico-count 15))  ;; Show up to 15 candidates in the menu
+    ;; Vertico: Vertical completion menu
+    (leaf vertico
+      :straight t
+      :global-minor-mode vertico-mode
+      :custom
+      ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
+      :config
+      ;; Posframe integration for cleaner UI
+      (leaf vertico-posframe
+        :straight t
+        :if (display-graphic-p)
+        :custom
+        ((vertico-posframe-border-width . 2)
+         (vertico-posframe-parameters . '((left-fringe . 4)
+                                          (right-fringe . 4))))
+        :config
+        (vertico-posframe-mode 1)))
 
-  ;; Vertico-Posframe: Cleaner UI with floating window
-  (use-package vertico-posframe
-    :straight t
-    :if (display-graphic-p)
-    :after vertico
-    :custom
-    (vertico-posframe-border-width 2)
-    (vertico-posframe-parameters '((left-fringe . 4) (right-fringe . 4)))
-    :config
-    (vertico-posframe-mode 1))
+    (leaf vertico-prescient
+      :straight t
+      :after (vertico prescient)
+      :global-minor-mode t)
 
-  ;; Vertico + Prescient Integration
-  (use-package vertico-prescient
-    :straight t
-    :after (vertico prescient)
-    :config
-    (vertico-prescient-mode 1))
+    ;; Marginalia: Annotate candidates with additional context
+    (leaf marginalia
+      :straight t
+      :global-minor-mode marginalia-mode)
 
-  ;; Marginalia: Annotate candidates with additional context
-  (use-package marginalia
-    :straight t
-    :init
-    (marginalia-mode 1))
+    ;; Consult: Enhanced search and navigation commands
+    (leaf consult
+      :straight t
+      :custom
+      ((xref-show-xrefs-function . #'consult-xref)
+       (xref-show-definitions-function . #'consult-xref)))
 
-  ;; Embark + Consult Integration
-  (use-package embark-consult
-    :straight t
-    :after (embark consult)
-    :hook (embark-collect-mode . consult-preview-at-point-mode)
-    :custom
-    (consult-preview-key "M-."))
+    ;; Embark: Context-aware actions for completion candidates
+    (leaf embark
+      :straight t
+      :custom
+      ((prefix-help-command . #'embark-prefix-help-command)
+       (embark-collect-live-update . t))
+      :config
+      (add-hook 'embark-collect-mode-map #'embark-collect-live-mode)
+      (when (require 'all-the-icons nil t)
+        (setq embark-indicators
+              '(embark-minimal-indicator
+                embark-highlight-indicator
+                embark-isearch-highlight-indicator)))
 
-  ;; Consult: Enhanced search and navigation commands
-  (use-package consult
-    :straight t
-    :custom
-    (xref-show-xrefs-function #'consult-xref)
-    (xref-show-definitions-function #'consult-xref))
+      ;; Integrate Embark with Consult
+      (leaf embark-consult
+        :straight t
+        :after (embark consult)
+        :hook (embark-collect-mode . consult-preview-at-point-mode)
+        :custom (consult-preview-key . "M-.")))
 
-  ;; Embark: Context-aware actions for completion candidates
-  (use-package embark
-    :straight t
-    :custom
-    (prefix-help-command #'embark-prefix-help-command)
-    (embark-collect-live-update t)
-    :config
-    (add-hook 'embark-collect-mode-hook #'embark-collect-live-mode)
-
-    ;; Setup Embark keybindings in Vertico
     (defun my/setup-embark-vertico-directory ()
       "Integrate embark-act inside vertico-directory minibuffer."
       (when (and (boundp 'vertico-map) (require 'embark nil t))
         (define-key vertico-map (kbd "C-.") #'embark-act)
         (define-key vertico-map (kbd "C-;") #'embark-dwim)))
-    (add-hook 'vertico-mode-hook #'my/setup-embark-vertico-directory))
 
-  ;; Corfu: Popup-based completion for `completion-at-point`
-  (use-package corfu
-    :straight t
-    :init
-    (global-corfu-mode 1)
-    :custom
-    (corfu-auto t)            ;; Enable auto-completion
-    (corfu-auto-delay 0)      ;; No delay before showing candidates
-    (corfu-auto-prefix 2)     ;; Trigger completion after 2 characters
-    (corfu-cycle t)           ;; Cycle through candidates
-    (corfu-scroll-margin 4))  ;; Margin for scrolling
+    (add-hook 'vertico-mode-hook #'my/setup-embark-vertico-directory)
 
-  ;; Kind-Icon: Icons for Corfu
-  (use-package kind-icon
-    :straight t
-    :after corfu
-    :custom
-    (kind-icon-default-face 'corfu-default)
-    :config
-    (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
+    ;; Corfu: Popup-based completion for `completion-at-point`
+    (leaf corfu
+      :straight t
+      :init
+      (global-corfu-mode)  ;; Enable Corfu globally
+      :custom
+      ((corfu-auto . t)          ;; Enable auto-completion
+       (corfu-auto-delay . 0)    ;; No delay before showing candidates
+       (corfu-auto-prefix . 2)   ;; Trigger completion after 2 characters
+       (corfu-cycle . t))        ;; Cycle through candidates
+      :config
+      ;; Integrating cape completion sources into corfu
+      (add-to-list 'completion-at-point-functions #'cape-file)
+      (add-to-list 'completion-at-point-functions #'cape-dabbrev)
+      (add-to-list 'completion-at-point-functions #'cape-keyword)
 
-  ;; Cape: Additional completion sources for Corfu
-  (use-package cape
-    :straight t
-    :init
-    (add-to-list 'completion-at-point-functions #'cape-file)
-    (add-to-list 'completion-at-point-functions #'cape-dabbrev)
-    (add-to-list 'completion-at-point-functions #'cape-keyword))
+      ;; Add icons to completion candidates
+      (leaf kind-icon
+        :straight t
+        :after corfu
+        :custom
+        ((kind-icon-default-face . 'corfu-default))
+        :config
+        (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
 
-  ;; Orderless: Fuzzy matching for completion
-  (use-package orderless
-    :straight t
-    :custom
-    (completion-styles '(orderless basic))
-    (completion-category-overrides '((file (styles . (partial-completion))))))
+    ;; Cape: Additional completion sources for Corfu
+    (leaf cape
+      :straight t
+      :init
+      (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
+            '(cape-file cape-dabbrev cape-keyword)))
+
+    ;; Orderless: Fuzzy matching for completion
+    (leaf orderless
+      :straight t
+      :custom
+      ((completion-styles . '(orderless basic))
+       (completion-category-overrides . '((file (styles . (partial-completion))))))))
 #+end_src
 
 *** Org-kmode
 **** Org-mode Core Setup
 
 #+begin_src emacs-lisp
-  ;; Org-mode Core Setup
-  (use-package org
-    :defer t
+  (leaf org
+    :leaf-defer t
     :preface
-    ;; Set up cloud directory if not already defined
     (defvar warning-suppress-types nil)
     (unless (boundp 'my:d:cloud)
       (setq my:d:cloud (concat no-littering-var-directory "./")))
@@ -778,10 +852,8 @@ Below are the system details and Emacs build configurations for two machines.
             (switch-to-buffer (get-file-buffer filepath))
           (find-file filepath))))
 
-    :custom
-    ((org-support-shift-select . t))
+    :custom ((org-support-shift-select . t))
     :init
-    ;; Set Org directory and ensure it exists
     (setq org-directory (expand-file-name "org/" my:d:cloud))
     (my:ensure-directory-exists org-directory)
     (setq org-return-follows-link t
@@ -789,14 +861,15 @@ Below are the system details and Emacs build configurations for two machines.
     (setq warning-suppress-types (append warning-suppress-types '((org-element-cache))))
     (setq org-element-use-cache nil)
 
-    ;; Bind custom keybindings for Org files
-    :bind (:map org-mode-map
-                ("C-c a" . org-agenda)
-                ("C-c c" . org-capture)
-                ("C-c l" . org-store-link)
-                ("C-c b" . org-switchb)
+    :bind
+    (("C-M--" . #'(lambda () (interactive)
+                    (show-org-buffer "gtd.org")))
+     ("C-M-^" . #'(lambda () (interactive)
+                    (show-org-buffer "notes.org")))
+     ("C-M-~" . #'(lambda () (interactive)
+                    (show-org-buffer "kb.org"))))
+
     :config
-    ;; Configure Org-mode settings
     (setq org-agenda-files (list org-directory)
           org-cycle-emulate-tab 'white-space
           org-default-notes-file "notes.org"
@@ -807,21 +880,21 @@ Below are the system details and Emacs build configurations for two machines.
           org-startup-truncated nil
           org-use-speed-commands t)
 
-    ;; Set up Org file links and agenda files
     (setq org-link-frame-setup '((file . find-file)))
+
     (setq org-agenda-files
-          (seq-filter (lambda (file) (not (string-match-p "archives" file)))
+          (seq-filter (lambda (file)
+                        (not (string-match-p "archives" file)))
                       (directory-files-recursively org-directory "\\.org$")))
 
-    ;; Configure Org TODO keywords and refile targets
     (setq org-todo-keywords
           '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
-    (setq org-refile-targets
-          '((nil :maxlevel . 3)
-            (org-buffer-files :maxlevel . 1)
-            (org-agenda-files :maxlevel . 3)))
 
-    ;; Set up Org capture templates
+    (setq org-refile-targets
+          (quote ((nil :maxlevel . 3)
+                  (org-buffer-files :maxlevel . 1)
+                  (org-agenda-files :maxlevel . 3))))
+
     (setq org-capture-templates
           `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
              "* TODO %?\n %i\n %a")
@@ -831,31 +904,97 @@ Below are the system details and Emacs build configurations for two machines.
              "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
              "* MEETING with %? :meeting:\n  %U\n  %a"))))
+
+  (leaf org-modern
+    :config
+    (setopt
+     ;; Edit settings
+     org-startup-indented t
+     org-hide-leading-stars t
+     org-auto-align-tags nil
+     org-tags-column 0
+     org-catch-invisible-edits 'show-and-error
+     org-special-ctrl-a/e t
+     org-insert-heading-respect-content t
+
+     ;; Org styling, hide markup etc.
+     org-hide-emphasis-markers t
+     org-pretty-entities t
+
+     ;; Agenda styling
+     org-agenda-tags-column 0
+     org-agenda-block-separator ?─
+     org-agenda-time-grid
+     '((daily today require-timed)
+       (800 1000 1200 1400 1600 1800 2000)
+       " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+     org-agenda-current-time-string
+     "◀── now ─────────────────────────────────────────────────")
+
+    ;; Ellipsis styling
+    (setopt org-ellipsis " ▾")
+    (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil))
+#+end_src
+
+**** Org-mode Visual Enhancements
+
+#+begin_src emacs-lisp
+  (leaf org-superstar
+    :after org
+    :straight t
+    :custom
+    ;; Customize bullets for different headline levels
+    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
+    ;; Hide leading stars in headlines
+    (org-superstar-remove-leading-stars . nil)
+    ;; Show custom bullets in Org-mode buffers
+    :hook (org-mode . org-superstar-mode))
 #+end_src
 
 **** Additional Org-related packages
 
 #+begin_src emacs-lisp
-
-  ;; Org-mode Visual Enhancements (e.g., Org Superstar)
-  (use-package org-superstar
+  ;; Org LaTeX export
+  (leaf org-latex
     :after org
     :custom
-    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
-    (org-superstar-remove-leading-stars . nil)
-    :hook (org-mode . org-superstar-mode))
+    (org-latex-packages-alist '(("" "graphicx" t)
+                                ("" "longtable" nil)
+                                ("" "wrapfig" nil)))
+    (setq org-latex-pdf-process
+          '("pdflatex -interaction nonstopmode -output-directory %o %f"
+            "bibtex %b"
+            "pdflatex -interaction nonstopmode -output-directory %o %f"
+            "pdflatex -interaction nonstopmode -output-directory %o %f")))
 
-  (use-package org-journal
+  ;; Org-journal for daily notes
+  (leaf org-journal
     :straight t
     :after org
     :config
     (setq org-journal-dir (concat org-directory "/journal")
           org-journal-enable-agenda-integration t)
+
     (defun org-journal-find-location ()
       "Open today's journal entry."
       (org-journal-new-entry t)))
 
-  (use-package org-roam
+  ;; Babel for code execution in Org files
+  (leaf ob
+    :after org
+    :defun org-babel-do-load-languages
+    :config
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     '((emacs-lisp . t)
+       (shell . t)
+       (python . t)
+       (R . t)
+       (ditaa . t)
+       (plantuml . t))))
+
+  ;; Org-roam for networked notes
+  (leaf org-roam
     :straight t
     :after org
     :config
@@ -864,7 +1003,8 @@ Below are the system details and Emacs build configurations for two machines.
       (make-directory org-roam-directory t))
     (org-roam-db-autosync-mode))
 
-  (use-package org-download
+  ;; Download and manage images in Org files
+  (leaf org-download
     :straight t
     :after org
     :config
@@ -872,25 +1012,52 @@ Below are the system details and Emacs build configurations for two machines.
     (unless (file-directory-p org-download-image-dir)
       (make-directory org-download-image-dir t)))
 
-  (use-package toc-org
+  ;; Generate and navigate table of contents
+  (leaf toc-org
     :straight t
     :after org markdown-mode
     :config
     (add-hook 'org-mode-hook 'toc-org-enable)
     (add-hook 'markdown-mode-hook 'toc-org-mode))
 
-  (use-package org-cliplink
+  ;; Add clickable links from the clipboard
+  (leaf org-cliplink
     :straight t
     :after org
     :bind ("C-x p i" . org-cliplink))
 
-  (use-package ox-hugo
+  ;; Export Org files to Hugo markdown format
+  (leaf ox-hugo
     :straight t
+    :require t
     :after ox
-    :custom
-    (org-hugo-front-matter-format "toml"))
+    :custom ((org-hugo-front-matter-format . "toml")))
 
-  (use-package markdown-mode
+  ;; ox-hugo-capture
+  (leaf *ox-hugo--capture
+    :require org-capture
+    :defvar (org-capture-templates)
+    :config
+    (defun generate-safe-filename ()
+      "Generate a unique and safe filename for Hugo export."
+      (format "%s-%s" (format-time-string "%Y")
+              (shell-command-to-string "uuidgen | cut -c1-8")))
+    (add-to-list 'org-capture-templates
+                 '("b" "Create new blog post" entry
+                   (file+headline my:f:capture-blog-file "blog")
+                   "** TODO %?
+    :PROPERTIES:
+    :EXPORT_FILE_NAME: %(generate-safe-filename)
+    :EXPORT_DATE:
+    :EXPORT_HUGO_TAGS:
+    :EXPORT_HUGO_CATEGORIES:
+    :EXPORT_HUGO_LASTMOD:
+    :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
+    :END:
+    \n
+    ")))
+
+  (leaf markdown-mode
     :straight t
     :mode ("\\.md\\'" . markdown-mode))
 #+end_src
@@ -924,15 +1091,6 @@ Below are the system details and Emacs build configurations for two machines.
 
   (advice-add 'kill-buffer :after #'my/after-kill-buffer-advice)
 
-  (defun my:directory-access-safe-p (dir)
-    "Return t if DIR is not a protected directory."
-    (not (member dir my:excluded-directories)))
-
-  (advice-add 'dired :before
-              (lambda (dir &rest _args)
-                (unless (my:directory-access-safe-p dir)
-                  (error "Access to directory is not permitted: %s" dir))))
-
   ;; Window layout management
   (defvar my/saved-window-config nil
     "Stores the current window configuration for later restoration.")
@@ -959,6 +1117,18 @@ Below are the system details and Emacs build configurations for two machines.
       (set-window-dedicated-p window (not (window-dedicated-p window)))
       (message "Window dedication %s"
                (if (window-dedicated-p window) "enabled" "disabled"))))
+
+  ;; Desktop session management
+  (leaf desktop
+    :custom
+    `((desktop-dirname . ,(concat no-littering-var-directory "desktop"))
+      (desktop-save . 'if-exists)
+      (desktop-auto-save-timeout . 180)
+      (desktop-restore-eager . 10))
+    :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
+           (emacs-startup-hook . desktop-read))
+    :config
+    (desktop-save-mode 1))
 
   ;; Asynchronous task execution
   (defun my/safe-run-async (task)
@@ -1098,6 +1268,31 @@ Below are the system details and Emacs build configurations for two machines.
       (insert
        (format "|Options|%s|\n" system-configuration-options)))
     (view-mode))
+
+  ;; Keybinding documentation
+  (defun my/parse-leaf-config (file)
+    "Extract keybindings from FILE written in leaf syntax."
+    (with-temp-buffer
+      (insert-file-contents file)
+      (goto-char (point-min))
+      (let (keybinds)
+        (while (re-search-forward ":bind\\s-*(?\\([^)]*\\))" nil t)
+          (let ((keys (match-string 1)))
+            (push (split-string keys) keybinds)))
+        keybinds)))
+
+  (defun my/generate-org-keybind-table (input-file output-file)
+    "Generate an Org table from INPUT-FILE and save to OUTPUT-FILE."
+    (interactive "fInput File: \nFOutput Org File: ")
+    (let ((keybinds (my/parse-leaf-config input-file)))
+      (with-temp-buffer
+        (insert "#+TITLE: Keybindings\n\n* Keybind Table\n")
+        (insert "| Key Sequence | Command |\n")
+        (insert "|-------------+---------|\n")
+        (dolist (keybind keybinds)
+          (insert (format "| %s | %s |\n" (car keybind) (cadr keybind))))
+        (write-file output-file)))
+    (message "Org table saved to %s" output-file))
 
   ;; Auto-tangling for Org files
   (defun my/auto-tangle-init-org ()
