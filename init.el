@@ -79,10 +79,6 @@
 (require 'leaf-keywords)
 (leaf-keywords-init)
 
-(setq no-littering-etc-directory my:d:etc
-      no-littering-var-directory my:d:var)
-
-(leaf no-littering :straight t)
 (leaf org :straight t)
 
 ;; ---------------------------------------------------------------------------

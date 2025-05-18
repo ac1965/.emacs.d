@@ -89,7 +89,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/05/18 13:34:45 $
+  ;; $Lastupdate: 2025/05/18 15:18:02 $
 
   ;;; Commentary:
   ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -241,12 +241,6 @@ Below are the system details and Emacs build configurations for two machines.
   (display-time-mode 1)
   (display-battery-mode 1)
 
-  (run-with-timer 0 300
-                  (lambda ()
-                    (when (and (display-graphic-p)
-                               (< (battery-percentage) 20))
-                      (message "⚠️ Battery low: %d%%" (battery-percentage)))))
-
   ;; ---------------------------------------------------------------------------
   ;;; Tab Bar Configuration
   (leaf tab-bar
@@ -392,10 +386,26 @@ Below are the system details and Emacs build configurations for two machines.
 
   (add-hook 'before-save-hook #'my/save-buffer-wrapper)
 
+  (leaf no-littering
+    :straight t
+    :require t
+    :init
+    (setq no-littering-etc-directory my:d:etc
+  	no-littering-var-directory my:d:var))
+
+  (leaf tramp
+    :pre-setq
+    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
+    :custom
+    `((tramp-default-method . "scp")
+      (tramp-verbose . 10)))
+
   ;; Configure auto-save and backup settings
   (leaf files
     :custom
     `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+      (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
       (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
       (delete-old-versions . t)
       (auto-save-visited-interval . 1))
@@ -446,6 +456,20 @@ Below are the system details and Emacs build configurations for two machines.
   (leaf puni
     :straight t
     :global-minor-mode puni-global-mode)
+
+  (leaf tree-sitter
+    :straight t
+    :global-minor-mode global-tree-sitter-mode
+    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
+    :when (featurep 'treesit)
+    :config (setq treesit-font-lock-level 4))
+
+  (leaf tree-sitter-langs
+    :straight t
+    :config
+    (condition-case err
+        (tree-sitter-langs-install-grammars)
+      (error (message "Failed to install Tree-sitter grammars: %s" err))))
 #+end_src
 
 *** System Utilities
@@ -466,43 +490,6 @@ Below are the system details and Emacs build configurations for two machines.
     (setq exec-path-from-shell-check-startup-files nil)
     (setq exec-path-from-shell-variables my/shell-env-vars)
     (exec-path-from-shell-initialize))
-#+end_src
-
-*** Tree-Sitter
-
-#+begin_src emacs-lisp
-  (leaf tree-sitter
-    :straight t
-    :global-minor-mode global-tree-sitter-mode
-    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
-    :when (featurep 'treesit)
-    :config (setq treesit-font-lock-level 4))
-
-  (leaf tree-sitter-langs
-    :straight t
-    :config
-    (condition-case err
-        (tree-sitter-langs-install-grammars)
-      (error (message "Failed to install Tree-sitter grammars: %s" err))))
-#+end_src
-
-*** Miscellaneous
-
-#+begin_src emacs-lisp
-  (leaf no-littering
-    :straight t
-    :require t)
-
-  (leaf tramp
-    :pre-setq
-    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-    :custom
-    `((tramp-default-method . "scp")
-      (tramp-verbose . 10)))
-
-  (leaf startup
-    :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
 #+end_src
 
 ** Utilities Package
