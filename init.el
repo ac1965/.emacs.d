@@ -14,7 +14,9 @@
 (defun my:ensure-directory-exists (dir)
   "Ensure that the directory DIR exists, creating it if necessary."
   (unless (file-directory-p dir)
-    (make-directory dir t)))
+    (condition-case err
+        (make-directory dir t)
+      (error (warn "Failed to create directory: %s - %s" dir err)))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Directories
@@ -40,27 +42,8 @@
 ;;; Custom File Setup
 ;; Separate custom settings to a dedicated file
 (setq custom-file my:d:custom)
-(my:ensure-directory-exists (file-name-directory custom-file))
-
-;; Load custom file if it exists
-(when (file-exists-p custom-file)
-  (load custom-file))
-
-;; ---------------------------------------------------------------------------
-;;; Performance Optimization
-(setq gc-cons-threshold (* 128 1024 1024)) ;; 128MB during startup
-(add-hook 'emacs-startup-hook
-          (lambda () (setq gc-cons-threshold (* 32 1024 1024)))) ;; 32MB after startup
-
-;; ---------------------------------------------------------------------------
-;;; Native Compilation
-(when (and (fboundp 'native-comp-available-p)
-           (native-comp-available-p))
-  (let ((eln-cache-dir (expand-file-name "eln-cache/" my:d:cache)))
-    (setq native-comp-eln-load-path (list eln-cache-dir))
-    (my:ensure-directory-exists eln-cache-dir)
-    (when (fboundp 'startup-redirect-eln-cache)
-      (startup-redirect-eln-cache eln-cache-dir))))
+(when (and custom-file (file-exists-p custom-file))
+  (ignore-errors (load custom-file)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Package Settings
@@ -98,6 +81,7 @@
 
 (setq no-littering-etc-directory my:d:etc
       no-littering-var-directory my:d:var)
+
 (leaf no-littering :straight t)
 (leaf org :straight t)
 

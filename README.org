@@ -89,7 +89,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/05/18 09:41:28 $
+  ;; $Lastupdate: 2025/05/18 13:34:45 $
 
   ;;; Commentary:
   ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -99,62 +99,169 @@ Below are the system details and Emacs build configurations for two machines.
 #+end_src
 
 ** UI/Fonts/Keybind
+*** Fonts
+
+#+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Font Setup
+
+  ;; Utility function to check if a font exists on the system.
+  (defun font-exists-p (font-name)
+    "Check if FONT-NAME is available in the system."
+    (find-font (font-spec :family font-name)))
+
+  ;; Configure the default font and emoji font, adjusting for display or daemon mode.
+  (defvar my:emoji-font "Noto Color Emoji" "Default emoji font for Emacs.")
+
+  (defun font-setup (&optional frame)
+    "Apply font settings to FRAME or the current frame."
+    (when (and my:font-family (font-exists-p my:font-family))
+      (set-face-attribute 'default frame :family my:font-family
+                          :height (* my:font-size 10))
+      (when (and my:emoji-font (font-exists-p my:emoji-font))
+        (set-fontset-font t 'unicode
+                          (font-spec :family my:emoji-font) nil 'prepend))))
+
+  ;; Set default font family and size based on system
+  (defvar my:font-family
+    (or (getenv "EMACS_FONT_FAMILY")
+        (cond
+         ((eq system-type 'windows-nt) "Consolas")
+         ((eq system-type 'darwin) "SF Mono")
+         (t "Monospace")))
+    "Default font family for Emacs.")
+
+  (when (not (font-exists-p my:font-family))
+    (setq my:font-family (face-attribute 'default :family)))
+
+  (defvar my:font-size
+    (or (getenv "EMACS_FONT_SIZE")
+        (if (and (display-graphic-p)
+                 (display-pixel-width)
+                 (> (display-pixel-width) 1920))
+            18
+          16))
+    "Default font size for Emacs.")
+
+  ;; Apply font settings
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions
+                (lambda (frame)
+                  (when (display-graphic-p frame)
+                    (font-setup frame))))
+    (when (display-graphic-p)
+      (font-setup)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Nerd Icons Setup
+  (defvar my:nerd-icons-font "Symbols Nerd Font Mono" "Font for Nerd Icons.")
+
+  (leaf nerd-icons
+    :straight t
+    :if (display-graphic-p)
+    :config
+    (setq nerd-icons-color-icons (font-exists-p my:nerd-icons-font)))
+
+  (leaf nerd-icons-dired
+    :straight t
+    :if (display-graphic-p)
+    :hook (dired-mode . nerd-icons-dired-mode))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Ligature Setup (Programming Fonts)
+  (defvar my:ligature-font "Fira Code" "Default font for programming ligatures.")
+
+  (leaf ligature
+    :straight t
+    :config
+    (when (and (font-exists-p my:font-family) (font-exists-p my:ligature-font))
+      (ligature-set-ligatures 'prog-mode
+                              '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
+                                ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
+      (global-ligature-mode 1)))
+#+end_src
+
 *** UI
 
 #+begin_src emacs-lisp
-  ;; Enable fullscreen mode in graphical environments
-  (when (display-graphic-p)
+  ;; ---------------------------------------------------------------------------
+  ;;; Fullscreen Mode Configuration
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions
+                (lambda (frame)
+                  (when (display-graphic-p frame)
+                    (set-frame-parameter frame 'fullscreen 'fullboth))))
     (set-frame-parameter nil 'fullscreen 'fullboth))
 
-  ;; Dynamic window resizing using golden-ratio
+  ;; ---------------------------------------------------------------------------
+  ;;; Dynamic Window Resizing with Golden-Ratio
   (leaf golden-ratio
     :straight t
     :hook (after-init-hook . golden-ratio-mode)
     :custom ((golden-ratio-adjust-factor . 1.1)
              (golden-ratio-auto-scale . t)
-             (golden-ratio-exclude-modes . '("ediff-mode" "dired-mode"))))
+             (golden-ratio-exclude-modes . '("ediff-mode" "dired-mode" "treemacs-mode"))
+             (golden-ratio-exclude-buffer-names . '("*Messages*" "*Help*"))))
 
-  ;; Use ef-themes for consistent UI aesthetics
+  ;; ---------------------------------------------------------------------------
+  ;;; Theme Configuration: ef-themes
   (leaf ef-themes
     :straight t
+    :custom ((ef-themes-to-toggle . '(ef-frost ef-spring)))
     :config
-    (if (display-graphic-p)
-        (load-theme 'ef-frost t)
-      (load-theme 'deeper-blue t)))
+    (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t))
 
-  ;; Add spacious padding for better readability
+  ;; ---------------------------------------------------------------------------
+  ;;; Spacious Padding Configuration
   (leaf spacious-padding
     :straight t
+    :if (display-graphic-p)
     :custom
     ((spacious-padding-subtle-mode-line . '( :mode-line-active default
-                      :mode-line-inactive vertical-border))
+                                             :mode-line-inactive vertical-border))
      (spacious-padding-widths . '(:internal-border-width 10)))
     :config
     (spacious-padding-mode 1))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Minions: Mode Line Icon Management
   (leaf minions
     :straight t
+    :custom ((minions-mode-line-lighter . "⚙"))
     :config
-    (setq minions-mode-line-lighter "⚙")
     (minions-mode 1))
 
-  ;; Display time and battery status in the mode-line
+  ;; ---------------------------------------------------------------------------
+  ;;; Time and Battery Status in Mode-Line
   (setq display-time-interval 30
         display-time-day-and-date t
         display-time-24hr-format t)
+
   (setq battery-mode-line-format "[🔋 %p%%]")
   (display-time-mode 1)
   (display-battery-mode 1)
 
+  (run-with-timer 0 300
+                  (lambda ()
+                    (when (and (display-graphic-p)
+                               (< (battery-percentage) 20))
+                      (message "⚠️ Battery low: %d%%" (battery-percentage)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Tab Bar Configuration
   (leaf tab-bar
     :custom ((tab-bar-show . 1)
-             (tab-bar-new-tab-choice . "*scratch*"))
+             (tab-bar-new-tab-choice . "*scratch*")
+             (tab-bar-format . '(tab-bar-format-tabs tab-bar-separator tab-bar-format-align-right)))
     :config
     (tab-bar-mode 1)
     (global-tab-line-mode 1))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Treemacs Configuration
   (leaf treemacs
     :straight t
+    :if (display-graphic-p)
     :bind (:treemacs-mode-map
            ([mouse-1] . #'treemacs-single-click-expand-action))
     :custom
@@ -162,111 +269,40 @@ Below are the system details and Emacs build configurations for two machines.
      (treemacs-filewatch-mode . t)
      (treemacs-follow-mode . t)
      (treemacs-indentation . 2)
-     (treemacs-missing-project-action . 'remove))
-    :config
-    (setq treemacs-width 30)
-    :hook
-    (treemacs-mode-hook . (lambda ()
-                            (setq mode-line-format nil)
-                            (display-line-numbers-mode 0))))
-#+end_src
-
-*** Fonts
-
-#+begin_src emacs-lisp
-  ;; Define a utility function to check if a font exists on the system.
-  (defun font-exists-p (font-name)
-    "Check if FONT-NAME is available in the system."
-    (if (find-font (font-spec :family font-name))
-        t
-      nil))
-
-  ;; Configure the default font and emoji font, adjusting for display or daemon mode.
-  (defun font-setup (&optional frame)
-    "Apply font settings to FRAME or the current frame."
-    (when (font-exists-p my:font-family)
-      (set-face-attribute 'default frame :family my:font-family
-                          :height (* my:font-size 10))
-      (set-fontset-font t 'unicode
-                        (font-spec :family "Noto Color Emoji") nil 'prepend)))
-
-  ;; Define default font fallback and scaling depending on resolution.
-  (defvar my:font-family nil "Default font family for Emacs.")
-  (unless my:font-family
-    (setq my:font-family
-          (cond
-           ((eq system-type 'windows-nt) "Consolas")
-           ((eq system-type 'darwin) "SF Mono") ; macOS
-           (t "Monospace"))))                   ; Linux, other
-
-  (unless (font-exists-p my:font-family)
-    (setq my:font-family (face-attribute 'default :family)))
-
-  (defvar my:font-size 16 "Default font size for Emacs.")
-  (unless (boundp 'my:font-size)
-    (setq my:font-size (if (> (or (display-pixel-width) 1920)) 18 16)))
-
-  ;; Hook font setup appropriately based on GUI or daemon mode.
-  (if (daemonp)
-      (add-hook 'after-make-frame-functions #'font-setup)
-    (font-setup))
-
-  ;; Load Nerd Icons if graphics are supported and font is available.
-  (leaf nerd-icons
-    :straight t
-    :if (display-graphic-p)
-    :config
-    (setq nerd-icons-color-icons t)
-    (unless (font-exists-p "Symbols Nerd Font Mono")
-      (setq nerd-icons-color-icons nil)))
-
-  ;; Enable Nerd Icons in Dired mode for enhanced visuals.
-  (leaf nerd-icons-dired
-    :straight t
-    :if (display-graphic-p)
-    :hook (dired-mode . nerd-icons-dired-mode))
-
-  ;; Enable programming ligatures such as "->" and "==>" in coding buffers.
-  (leaf ligature
-    :straight t
-    :config
-    (ligature-set-ligatures 'prog-mode
-                            '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
-                              ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
-    (global-ligature-mode 1))
+     (treemacs-missing-project-action . 'remove)))
 #+end_src
 
 *** Key Bindings
 
 #+begin_src emacs-lisp
-  ;; Key binding utilities
+  ;; ---------------------------------------------------------------------------
+  ;;; Key Binding Utilities
   (leaf which-key
     :straight t
     :global-minor-mode t
-    :config
-    (setq which-key-idle-delay 0.5))
+    :custom ((which-key-idle-delay . 0.5)))
 
   (leaf undo-fu
     :straight t
-    :config
-    (setq undo-fu-allow-undo-in-region t))
+    :custom ((undo-fu-allow-undo-in-region . t)))
 
   (leaf hydra
-    :straight t
-    :config
-    ;; Text scaling hydra
-    (defhydra hydra-text-scale (:hint nil :color red)
-      "
+    :straight t)
+
+  ;; Text scaling hydra (outside of leaf)
+  (defhydra hydra-text-scale (:hint nil :color red)
+    "
   ^Text Scaling^
   ----------------------------
   [_+_] Increase   [_-_] Decrease   [_0_] Reset
   "
-      ("+" text-scale-increase)
-      ("-" text-scale-decrease)
-      ("0" (text-scale-set 0) :color blue)
-      ("q" nil "quit" :color blue)))
+    ("+" text-scale-increase)
+    ("-" text-scale-decrease)
+    ("0" (text-scale-set 0) :color blue)
+    ("q" nil "quit" :color blue))
 
-  ;; Common key bindings
+  ;; ---------------------------------------------------------------------------
+  ;;; Common Key Bindings
   (leaf-keys
    ;; Function keys and help
    (("<f1>"          . help)
