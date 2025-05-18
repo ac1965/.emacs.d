@@ -89,7 +89,7 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/05/18 15:31:59 $
+  ;; $Lastupdate: 2025/05/18 16:00:51 $
 
   ;;; Commentary:
   ;; This file provides a structured Emacs configuration setup using `leaf`.
@@ -422,84 +422,103 @@ Below are the system details and Emacs build configurations for two machines.
   (leaf *desktop
     :config
     (setq desktop-dirname (concat no-littering-var-directory "desktop")
-  	desktop-save 'if-exists
-  	desktop-auto-save-timeout 600
-  	desktop-restore-eager 5
-  	desktop-restore-frames t
-  	desktop-restore-reuses-frames t
-  	desktop-restore-in-current-display t
-  	desktop-restore-forces-onscreen t
-  	desktop-modes-not-to-save '(dired-mode ibuffer-mode magit-mode help-mode compilation-mode))
-
-    ;; Ensure the directory exists
-    (unless (file-directory-p desktop-dirname)
-      (make-directory desktop-dirname t))
-
-    ;; Save desktop on exit
-    (add-hook 'kill-emacs-hook #'desktop-save-in-desktop-dir)
-
-    (desktop-save-mode 1)
-    (winner-mode 1))
+          desktop-save 'if-exists
+          desktop-auto-save-timeout 600
+  	desktop-restore-eager 5)
+    (desktop-save-mode 1)  ;; Enable session saving
+    (winner-mode 1))       ;; Enable window configuration undo/redo
 #+end_src
 
 *** Editing Enhancements
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Saveplace (Cursor Position Persistence)
   (leaf saveplace
     :init
+    (setq save-place-file (concat no-littering-var-directory "saveplace"))
     (save-place-mode +1))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Recentf (Recent Files)
   (leaf recentf
     :init
-    (setq recentf-max-saved-items 100)
+    (setq recentf-max-saved-items 100
+          recentf-save-file (concat no-littering-var-directory "recentf"))
     (recentf-mode +1))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Savehist (History Persistence)
   (leaf savehist
-    :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
+    :custom
+    `((savehist-file . ,(concat no-littering-var-directory "savehist"))
+      (savehist-additional-variables '(kill-ring search-ring regexp-search-ring))
+      (savehist-autosave-interval . 300))  ;; Save every 5 minutes
     :global-minor-mode t)
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Auto-Revert (Automatic Reload)
   (leaf autorevert
-    :init
-    (global-auto-revert-mode +1))
+    :custom
+    ((auto-revert-interval . 2)  ;; Reload every 2 seconds
+     (auto-revert-verbose . nil))  ;; Suppress messages
+    :global-minor-mode global-auto-revert-mode)
 
-  (leaf elec-pair
-    :global-minor-mode electric-pair-mode)
-
+  ;; ---------------------------------------------------------------------------
+  ;;; Paren (Parenthesis Highlighting)
   (leaf paren
-    :custom ((show-paren-delay . 0)
-             (show-paren-style . 'expression))
+    :custom
+    ((show-paren-delay . 0)
+     (show-paren-style . 'expression)
+     (show-paren-highlight-openparen . t))
     :global-minor-mode show-paren-mode)
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Puni (Smart Pairing)
   (leaf puni
     :straight t
-    :global-minor-mode puni-global-mode)
+    :global-minor-mode puni-global-mode
+    :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Tree-Sitter (Syntax Highlighting)
   (leaf tree-sitter
     :straight t
     :global-minor-mode global-tree-sitter-mode
     :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
     :when (featurep 'treesit)
-    :config (setq treesit-font-lock-level 4))
+    :custom ((treesit-font-lock-level . 3)))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Tree-Sitter-Langs (Language Support)
   (leaf tree-sitter-langs
     :straight t
     :config
-    (condition-case err
-        (tree-sitter-langs-install-grammars)
-      (error (message "Failed to install Tree-sitter grammars: %s" err))))
+    (when (require 'tree-sitter-langs nil t)
+      (unless (ignore-errors (directory-files (concat tree-sitter-langs--bin-dir "grammars/")))
+        (condition-case err
+            (tree-sitter-langs-install-grammars)
+          (error (message "Failed to install Tree-sitter grammars: %s" err))))))
+
 #+end_src
 
 *** System Utilities
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Garbage Collection Management (GCMH)
   (leaf gcmh
     :straight t
-    :global-minor-mode t)
+    :global-minor-mode gcmh-mode)  ;; Enable GCMH globally
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Shell Environment Variables Configuration
   (defvar my/shell-env-vars
     '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY")
     "Environment variables to import from the shell.")
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Exec-Path-from-Shell Configuration
   (leaf exec-path-from-shell
     :straight t
     :if (memq window-system '(mac ns))
