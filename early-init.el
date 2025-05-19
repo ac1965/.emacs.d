@@ -3,7 +3,6 @@
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
 ;; Keywords: initialization, performance, macos
-;; Version: 1.2
 
 ;;; Commentary:
 ;; It is designed for Emacs 30 and above, providing essential settings while eliminating redundancy.
