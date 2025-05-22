@@ -53,33 +53,6 @@
 ;; Ensure package directory exists
 (my:ensure-directory-exists package-user-dir)
 
-;; Bootstrap straight.el for declarative package management.
-(setq straight-use-package-by-default t
-      straight-base-dir my:d:cache)
-(defvar bootstrap-version)
-(let ((bootstrap-file
-       (expand-file-name
-        "straight/repos/straight.el/bootstrap.el"
-        (or (bound-and-true-p straight-base-dir)
-            user-emacs-directory)))
-      (bootstrap-version 7))
-  (unless (file-exists-p bootstrap-file)
-    (with-current-buffer
-        (url-retrieve-synchronously
-         "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-         'silent 'inhibit-cookies)
-      (goto-char (point-max))
-      (eval-print-last-sexp)))
-  (load bootstrap-file nil 'nomessage))
-
-;; Configure leaf to use straight.el by default.
-(straight-use-package 'leaf)
-(straight-use-package 'leaf-keywords)
-(require 'leaf)
-(require 'leaf-keywords)
-(leaf-keywords-init)
-
-(leaf org :straight t)
 
 ;; ---------------------------------------------------------------------------
 ;;; Load Configuration from README.org
