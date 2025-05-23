@@ -1,3 +1,5 @@
+;;; README.org --- Emacs Configuration -*- lexical-binding: t; -*-
+
 #+title: ac1965's Emacs literate configuration =.emacs.d=
 #+startup: content
 #+author: YAMASHITA Takao
@@ -21,11 +23,10 @@ Make sure that the =~/.emacs.d= directory does not already exist, or back it up 
 
 ** Step 2: Build Emacs
 
-To build Emacs, use the provided =build-emacs.sh= script. You must set the =GITHUB_REPOS= environment variable to the location of your source repositories:
+To build Emacs, use the provided =build-emacs.sh= script.
 [[https://github.com/ac1965/dotfiles/blob/master/.local/bin/build-emacs.sh][ build-emacs.sh]]
 
 #+begin_src shell :eval never
-  export GITHUB_REPOS=/Users/ac1965/devel/src
   build-emacs.sh --native-compilation
 #+end_src
 
@@ -55,13 +56,13 @@ Below are the system details and Emacs build configurations for two machines.
 
 - GNU Emacs 31.0.50
 
-|Commit|9659f8aa344f73164bece7408d63991531fc115d|
+|Commit|0de59ded25aa9f1751edb7170c51a98be70b7edf|
 |Branch|master|
 |System|aarch64-apple-darwin24.4.0|
-|Date|2025-05-16 21:55:33 (JST)|
+|Date|2025-05-19 23:18:43 (JST)|
 |Patch|without ns-inline.patch|
 |Features|ACL DBUS GLIB GNUTLS LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB|
-|Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg --with-mailutils --with-native-image-api --with-cairo CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
+|Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg --with-mailutils --with-native-image-api --with-cairo --with-mac --with-ns CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
 
 *OLD Machine*
 
@@ -90,210 +91,300 @@ Below are the system details and Emacs build configurations for two machines.
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/05/17 12:01:44 $
+  ;; $Lastupdate: 2025/05/23 09:39:41 $
 
   ;;; Commentary:
-  ;; This file provides a structured Emacs configuration setup using `leaf`.
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
 #+end_src
 
-** Package Management with `leaf`
+** Install Package
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Package Setup
+
   (eval-and-compile
-    (require 'package)
     (customize-set-variable
-     'package-archives
-     '(("gnu" . "https://elpa.gnu.org/packages/")
-       ("melpa" . "https://melpa.org/packages/")))
+     'package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
+                         ("melpa" . "https://melpa.org/packages/")))
     (package-initialize)
+    (use-package leaf :ensure t)
 
-    (unless (package-installed-p 'leaf)
-      (package-refresh-contents)
-      (package-install 'leaf)))
+    (leaf leaf-keywords
+      :ensure t
+      :init
+      (leaf blackout :ensure t)
+      :config
+      (leaf-keywords-init)))
 
-  (require 'leaf)
-#+end_src
+  (leaf leaf-convert
+    :doc "Convert many format to leaf format"
+    :ensure t)
 
-** User-Specific Configuration
-
-#+begin_src emacs-lisp
-  ;; Loading user-specific settings.
-  (setq user-specific-config (concat my:d user-login-name ".el"))
-  (if (file-exists-p user-specific-config) (load user-specific-config))
+  ;; ---------------------------------------------------------------------------
+  ;;; No-Littering Setup
+  (leaf no-littering
+    :ensure t
+    :require t
+    :init
+    (setq no-littering-etc-directory my:d:etc
+  	no-littering-var-directory my:d:var))
 #+end_src
 
 ** UI/Fonts/Keybind
-*** UI
-
-#+begin_src emacs-lisp
-  ;; Enable fullscreen mode in graphical environments
-  (when (display-graphic-p)
-    (set-frame-parameter nil 'fullscreen 'fullboth))
-
-  ;; Dynamic window resizing using golden-ratio
-  (leaf golden-ratio
-    :ensure t
-    :hook (after-init-hook . golden-ratio-mode)
-    :custom ((golden-ratio-adjust-factor . 1.1)
-             (golden-ratio-auto-scale . t)
-             (golden-ratio-exclude-modes . '("ediff-mode" "dired-mode"))))
-
-  ;; Use ef-themes for consistent UI aesthetics
-  (leaf ef-themes
-    :ensure t
-    :config
-    (if (display-graphic-p)
-        (load-theme 'ef-frost t)
-      (load-theme 'deeper-blue t)))
-
-  ;; Add spacious padding for better readability
-  (leaf spacious-padding
-    :ensure t
-    :custom
-    ((spacious-padding-subtle-mode-line . '( :mode-line-active default
-                      :mode-line-inactive vertical-border))
-     (spacious-padding-widths . '(:internal-border-width 10)))
-    :config
-    (spacious-padding-mode 1))
-
-  (leaf minions
-    :ensure t
-    :config
-    (setq minions-mode-line-lighter "⚙")
-    (minions-mode 1))
-
-  ;; Display time and battery status in the mode-line
-  (setq display-time-interval 30
-        display-time-day-and-date t
-        display-time-24hr-format t)
-  (setq battery-mode-line-format "[🔋 %p%%]")
-  (display-time-mode 1)
-  (display-battery-mode 1)
-
-  (leaf tab-bar
-    :custom ((tab-bar-show . 1)
-             (tab-bar-new-tab-choice . "*scratch*"))
-    :config
-    (tab-bar-mode 1)
-    (global-tab-line-mode 1))
-
-  (leaf treemacs
-    :ensure t
-    :bind (:treemacs-mode-map
-           ([mouse-1] . #'treemacs-single-click-expand-action))
-    :custom
-    ((treemacs-no-png-images . nil)
-     (treemacs-filewatch-mode . t)
-     (treemacs-follow-mode . t)
-     (treemacs-indentation . 2)
-     (treemacs-missing-project-action . 'remove))
-    :config
-    (setq treemacs-width 30)
-    :hook
-    (treemacs-mode-hook . (lambda ()
-                            (setq mode-line-format nil)
-                            (display-line-numbers-mode 0))))
-#+end_src
-
 *** Fonts
 
 #+begin_src emacs-lisp
-  ;; Define a utility function to check if a font exists on the system.
+  ;; ---------------------------------------------------------------------------
+  ;;; Font Setup
+
+  ;; Utility function to check if a font exists on the system.
   (defun font-exists-p (font-name)
     "Check if FONT-NAME is available in the system."
-    (if (find-font (font-spec :family font-name))
-        t
-      nil))
+    (find-font (font-spec :family font-name)))
 
   ;; Configure the default font and emoji font, adjusting for display or daemon mode.
+  (defvar my:emoji-font "Noto Color Emoji" "Default emoji font for Emacs.")
+
   (defun font-setup (&optional frame)
     "Apply font settings to FRAME or the current frame."
-    (when (font-exists-p my:font-family)
+    (when (and my:font-family (font-exists-p my:font-family))
       (set-face-attribute 'default frame :family my:font-family
                           :height (* my:font-size 10))
-      (set-fontset-font t 'unicode
-                        (font-spec :family "Noto Color Emoji") nil 'prepend)))
+      (when (and my:emoji-font (font-exists-p my:emoji-font))
+        (set-fontset-font t 'unicode
+                          (font-spec :family my:emoji-font) nil 'prepend))))
 
-  ;; Define default font fallback and scaling depending on resolution.
-  (defvar my:font-family nil "Default font family for Emacs.")
-  (unless my:font-family
-    (setq my:font-family
-          (cond
-           ((eq system-type 'windows-nt) "Consolas")
-           ((eq system-type 'darwin) "SF Mono") ; macOS
-           (t "Monospace"))))                   ; Linux, other
+  ;; Set default font family and size based on system
+  (defvar my:font-family
+    (or (getenv "EMACS_FONT_FAMILY")
+        (cond
+         ((eq system-type 'windows-nt) "Consolas")
+         ((eq system-type 'darwin) "SF Mono")
+         (t "Monospace")))
+    "Default font family for Emacs.")
 
-  (unless (font-exists-p my:font-family)
+  (when (not (font-exists-p my:font-family))
     (setq my:font-family (face-attribute 'default :family)))
 
-  (defvar my:font-size 16 "Default font size for Emacs.")
-  (unless (boundp 'my:font-size)
-    (setq my:font-size (if (> (or (display-pixel-width) 1920)) 18 16)))
+  (defvar my:font-size
+    (or (getenv "EMACS_FONT_SIZE")
+        (if (and (display-graphic-p)
+                 (display-pixel-width)
+                 (> (display-pixel-width) 1920))
+            18
+          16))
+    "Default font size for Emacs.")
 
-  ;; Hook font setup appropriately based on GUI or daemon mode.
+  ;; Apply font settings
   (if (daemonp)
-      (add-hook 'after-make-frame-functions #'font-setup)
-    (font-setup))
+      (add-hook 'after-make-frame-functions
+                (lambda (frame)
+                  (when (display-graphic-p frame)
+                    (font-setup frame))))
+    (when (display-graphic-p)
+      (font-setup)))
 
-  ;; Load Nerd Icons if graphics are supported and font is available.
+  ;; ---------------------------------------------------------------------------
+  ;;; Nerd Icons Setup
+  (defvar my:nerd-icons-font "Symbols Nerd Font Mono" "Font for Nerd Icons.")
+
   (leaf nerd-icons
     :ensure t
     :if (display-graphic-p)
     :config
-    (setq nerd-icons-color-icons t)
-    (unless (font-exists-p "Symbols Nerd Font Mono")
-      (setq nerd-icons-color-icons nil)))
+    (setq nerd-icons-color-icons (font-exists-p my:nerd-icons-font)))
 
-  ;; Enable Nerd Icons in Dired mode for enhanced visuals.
   (leaf nerd-icons-dired
     :ensure t
     :if (display-graphic-p)
     :hook (dired-mode . nerd-icons-dired-mode))
 
-  ;; Enable programming ligatures such as "->" and "==>" in coding buffers.
+  ;; ---------------------------------------------------------------------------
+  ;;; Ligature Setup (Programming Fonts)
+  (defvar my:ligature-font "Fira Code" "Default font for programming ligatures.")
+
   (leaf ligature
     :ensure t
     :config
-    (ligature-set-ligatures 'prog-mode
-                            '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
-                              ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
-    (global-ligature-mode 1))
+    (when (and (font-exists-p my:font-family) (font-exists-p my:ligature-font))
+      (ligature-set-ligatures 'prog-mode
+                              '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
+                                ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
+      (global-ligature-mode 1)))
+#+end_src
+
+*** UI
+
+#+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Fullscreen Mode Configuration
+  (leaf fullscreen
+    :init
+    (if (daemonp)
+        (add-hook 'after-make-frame-functions
+                  (lambda (frame)
+                    (when (display-graphic-p frame)
+                      (set-frame-parameter frame 'fullscreen 'fullboth))))
+      (set-frame-parameter nil 'fullscreen 'fullboth)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Dynamic Window Resizing with Golden-Ratio
+  (leaf golden-ratio
+    :ensure t
+    :hook (after-init-hook . golden-ratio-mode)
+    :custom ((golden-ratio-adjust-factor . 1.1)
+             (golden-ratio-auto-scale . t)
+             (golden-ratio-exclude-modes . '("ediff-mode" "dired-mode" "treemacs-mode"))
+             (golden-ratio-exclude-buffer-names . '("*Messages*" "*Help*"))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Theme Configuration: ef-themes
+  (leaf ef-themes
+    :ensure t
+    :custom ((ef-themes-to-toggle . '(ef-frost ef-spring)))
+    :config
+    (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Spacious Padding Configuration
+  (leaf spacious-padding
+    :ensure t
+    :if (display-graphic-p)
+    :custom ((spacious-padding-subtle-mode-line . '(:mode-line-active default
+  								    :mode-line-inactive vertical-border))
+             (spacious-padding-widths . '(:internal-border-width 10)))
+    :config
+    (spacious-padding-mode 1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Minions: Mode Line Icon Management
+  (leaf minions
+    :ensure t
+    :custom ((minions-mode-line-lighter . "⚙"))
+    :config
+    (minions-mode 1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Time and Battery in Mode-Line
+  (leaf time-battery
+    :init
+    (setq display-time-interval 30
+          display-time-day-and-date t
+          display-time-24hr-format t
+          battery-mode-line-format "[🔋 %p%%]")
+    :config
+    (display-time-mode 1)
+    (display-battery-mode 1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Tab Bar Configuration
+  (leaf tab-bar
+    :custom ((tab-bar-show . 1)
+             (tab-bar-new-tab-choice . "*scratch*")
+             (tab-bar-format . '(tab-bar-format-tabs tab-bar-separator tab-bar-format-align-right)))
+    :config
+    (tab-bar-mode 1)
+    (global-tab-line-mode 1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Treemacs Configuration
+  (leaf treemacs
+    :ensure t
+    :if (display-graphic-p)
+    :bind (:treemacs-mode-map
+           ([mouse-1] . treemacs-single-click-expand-action))
+    :custom ((treemacs-no-png-images . nil)
+             (treemacs-filewatch-mode . t)
+             (treemacs-follow-mode . t)
+             (treemacs-indentation . 2)
+             (treemacs-missing-project-action . 'remove)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Desktop Session Management
+  (leaf desktop
+    :custom `((desktop-dirname . ,(concat no-littering-var-directory "desktop"))
+              (desktop-save . 'if-exists)
+              (desktop-auto-save-timeout . 180)
+              (desktop-restore-eager . 10))
+    :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
+           (after-init-hook . (lambda ()
+                                (make-directory (concat no-littering-var-directory "desktop") t)
+                                (desktop-read))))
+    :config
+    (desktop-save-mode 1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Winner Mode Configuration
+  (leaf winner
+    :doc "Window configuration undo/redo"
+    :bind (("M-[" . winner-undo)
+           ("M-]" . winner-redo))
+    :config
+    (winner-mode 1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Window Layout Utilities
+  (defvar my/saved-window-config nil
+    "Stores the current window configuration for later restoration.")
+
+  (defun my/save-window-layout ()
+    "Save the current window configuration persistently."
+    (interactive)
+    (setq my/saved-window-config (window-state-get nil t))
+    (message "Window configuration saved."))
+
+  (defun my/restore-window-layout ()
+    "Restore the saved window configuration."
+    (interactive)
+    (if my/saved-window-config
+        (progn
+          (window-state-put my/saved-window-config)
+          (message "Window configuration restored."))
+      (message "No saved window configuration found.")))
+
+  (defun my/toggle-window-dedication ()
+    "Toggle the dedicated status of the currently selected window."
+    (interactive)
+    (let ((window (selected-window)))
+      (set-window-dedicated-p window (not (window-dedicated-p window)))
+      (message "Window dedication %s"
+               (if (window-dedicated-p window) "enabled" "disabled"))))
 #+end_src
 
 *** Key Bindings
 
 #+begin_src emacs-lisp
-  ;; Key binding utilities
+  ;; ---------------------------------------------------------------------------
+  ;;; Key Binding Utilities
   (leaf which-key
     :ensure t
     :global-minor-mode t
-    :config
-    (setq which-key-idle-delay 0.5))
+    :custom ((which-key-idle-delay . 0.5)))
 
   (leaf undo-fu
     :ensure t
-    :config
-    (setq undo-fu-allow-undo-in-region t))
+    :custom ((undo-fu-allow-undo-in-region . t)))
 
   (leaf hydra
-    :ensure t
-    :config
-    ;; Text scaling hydra
-    (defhydra hydra-text-scale (:hint nil :color red)
-      "
+    :ensure t)
+
+  ;; Text scaling hydra (outside of leaf)
+  (defhydra hydra-text-scale (:hint nil :color red)
+    "
   ^Text Scaling^
   ----------------------------
   [_+_] Increase   [_-_] Decrease   [_0_] Reset
   "
-      ("+" text-scale-increase)
-      ("-" text-scale-decrease)
-      ("0" (text-scale-set 0) :color blue)
-      ("q" nil "quit" :color blue)))
+    ("+" text-scale-increase)
+    ("-" text-scale-decrease)
+    ("0" (text-scale-set 0) :color blue)
+    ("q" nil "quit" :color blue))
 
-  ;; Common key bindings
+  ;; ---------------------------------------------------------------------------
+  ;;; Common Key Bindings
   (leaf-keys
    ;; Function keys and help
    (("<f1>"          . help)
@@ -371,7 +462,8 @@ Below are the system details and Emacs build configurations for two machines.
 *** Save and Backup
 
 #+begin_src emacs-lisp
-  ;; Insert a timestamp before saving the buffer
+  ;; ---------------------------------------------------------------------------
+  ;;; Insert a timestamp before saving the buffer
   (defun my/save-buffer-wrapper ()
     "Insert a timestamp at the top of the buffer before saving."
     (interactive)
@@ -383,73 +475,118 @@ Below are the system details and Emacs build configurations for two machines.
 
   (add-hook 'before-save-hook #'my/save-buffer-wrapper)
 
-  ;; Configure auto-save and backup settings
+  ;; ---------------------------------------------------------------------------
+  ;;; TRAMP Configuration
+  (leaf tramp
+    :pre-setq
+    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
+    :custom
+    `((tramp-default-method . "scp")
+      (tramp-verbose . 10)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Configure auto-save and backup settings
   (leaf files
     :custom
     `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+      (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
       (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
       (delete-old-versions . t)
-      (auto-save-visited-interval . 1))
+      (auto-save-visited-interval . 2))
     :global-minor-mode auto-save-visited-mode)
-#+end_src
-
-*** Session Management
-
-#+begin_src emacs-lisp
-  (leaf *desktop
-    :config
-    (setq desktop-dirname (concat no-littering-var-directory "desktop")
-          desktop-save 'if-exists
-          desktop-auto-save-timeout 180
-          desktop-restore-eager 10)
-    (desktop-save-mode 1)  ;; Enable session saving
-    (winner-mode 1))       ;; Enable window configuration undo/redo
 #+end_src
 
 *** Editing Enhancements
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Saveplace (Cursor Position Persistence)
   (leaf saveplace
     :init
+    (setq save-place-file (concat no-littering-var-directory "saveplace"))
     (save-place-mode +1))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Recentf (Recent Files)
   (leaf recentf
     :init
-    (setq recentf-max-saved-items 100)
+    (setq recentf-max-saved-items 100
+          recentf-save-file (concat no-littering-var-directory "recentf"))
     (recentf-mode +1))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Savehist (History Persistence)
   (leaf savehist
-    :custom `((savehist-file . ,(concat no-littering-var-directory "savehist")))
+    :custom
+    `((savehist-file . ,(concat no-littering-var-directory "savehist"))
+      (savehist-additional-variables '(kill-ring search-ring regexp-search-ring))
+      (savehist-autosave-interval . 300))  ;; Save every 5 minutes
     :global-minor-mode t)
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Auto-Revert (Automatic Reload)
   (leaf autorevert
-    :init
-    (global-auto-revert-mode +1))
+    :custom
+    ((auto-revert-interval . 2)  ;; Reload every 2 seconds
+     (auto-revert-verbose . nil))  ;; Suppress messages
+    :global-minor-mode global-auto-revert-mode)
 
-  (leaf elec-pair
-    :global-minor-mode electric-pair-mode)
-
+  ;; ---------------------------------------------------------------------------
+  ;;; Paren (Parenthesis Highlighting)
   (leaf paren
-    :custom ((show-paren-delay . 0)
-             (show-paren-style . 'expression))
+    :custom
+    ((show-paren-delay . 0)
+     (show-paren-style . 'expression)
+     (show-paren-highlight-openparen . t))
     :global-minor-mode show-paren-mode)
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Puni (Smart Pairing)
   (leaf puni
     :ensure t
-    :global-minor-mode puni-global-mode)
+    :global-minor-mode puni-global-mode
+    :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Tree-Sitter (Syntax Highlighting)
+  (leaf tree-sitter
+    :ensure t
+    :global-minor-mode global-tree-sitter-mode
+    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
+    :when (featurep 'treesit)
+    :custom ((treesit-font-lock-level . 3)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Tree-Sitter-Langs (Language Support)
+  (leaf tree-sitter-langs
+    :ensure t
+    :config
+    (when (require 'tree-sitter-langs nil t)
+      (unless (ignore-errors (directory-files (concat tree-sitter-langs--bin-dir "grammars/")))
+        (condition-case err
+            (tree-sitter-langs-install-grammars)
+          (error (message "Failed to install Tree-sitter grammars: %s" err))))))
+
 #+end_src
 
 *** System Utilities
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Garbage Collection Management (GCMH)
   (leaf gcmh
     :ensure t
-    :global-minor-mode t)
+    :global-minor-mode gcmh-mode)  ;; Enable GCMH globally
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Shell Environment Variables Configuration
   (defvar my/shell-env-vars
     '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY")
     "Environment variables to import from the shell.")
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Exec-Path-from-Shell Configuration
   (leaf exec-path-from-shell
     :ensure t
     :if (memq window-system '(mac ns))
@@ -459,59 +596,25 @@ Below are the system details and Emacs build configurations for two machines.
     (exec-path-from-shell-initialize))
 #+end_src
 
-*** Tree-Sitter
-
-#+begin_src emacs-lisp
-  (leaf tree-sitter
-    :ensure t
-    :global-minor-mode global-tree-sitter-mode
-    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
-    :when (featurep 'treesit)
-    :config (setq treesit-font-lock-level 4))
-
-  (leaf tree-sitter-langs
-    :ensure t
-    :config
-    (condition-case err
-        (tree-sitter-langs-install-grammars)
-      (error (message "Failed to install Tree-sitter grammars: %s" err))))
-#+end_src
-
-*** Miscellaneous
-
-#+begin_src emacs-lisp
-  (leaf no-littering
-    :ensure t
-    :require t)
-
-  (leaf tramp
-    :pre-setq
-    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-    :custom
-    `((tramp-default-method . "scp")
-      (tramp-verbose . 10)))
-
-  (leaf startup
-    :custom `((auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))))
-#+end_src
-
 ** Utilities Package
 *** Extra Utilities
 
 #+begin_src emacs-lisp
-  ;; Text and visual line modes
+  ;; ---------------------------------------------------------------------------
+  ;;; Visual Line Mode (Soft Wrapping)
   (leaf visual-line-mode
     :hook (text-mode . visual-line-mode))
 
-  ;; macOS clipboard integration
+  ;; ---------------------------------------------------------------------------
+  ;;; macOS Clipboard Integration
   (leaf pbcopy
     :if (memq window-system '(mac ns))
     :ensure t
     :config
     (turn-on-pbcopy))
 
-  ;; Dired enhancements
+  ;; ---------------------------------------------------------------------------
+  ;;; Dired Enhancements
   (leaf dired-filter :ensure t)
   (leaf dired-subtree :ensure t
     :after dired
@@ -519,7 +622,8 @@ Below are the system details and Emacs build configurations for two machines.
            ("i" . dired-subtree-insert)
            ("TAB" . dired-subtree-toggle)))
 
-  ;; Text selection and editing tools
+  ;; ---------------------------------------------------------------------------
+  ;;; Text Selection and Editing Tools
   (leaf expand-region :ensure t)
   (leaf aggressive-indent
     :ensure t
@@ -527,11 +631,13 @@ Below are the system details and Emacs build configurations for two machines.
   (leaf delsel
     :global-minor-mode delete-selection-mode)
 
-  ;; Search tools
+  ;; ---------------------------------------------------------------------------
+  ;;; Search Tools
   (setq grep-program "rg")
   (leaf rg :ensure t)
 
-  ;; Code navigation
+  ;; ---------------------------------------------------------------------------
+  ;;; Code Navigation
   (leaf dumb-jump
     :ensure t
     :hook (xref-backend-functions . dumb-jump-xref-activate)
@@ -541,10 +647,12 @@ Below are the system details and Emacs build configurations for two machines.
 
   (leaf multiple-cursors :ensure t)
 
-  ;; Version control
+  ;; ---------------------------------------------------------------------------
+  ;;; Version Control with Magit
   (leaf magit :ensure t)
 
-  ;; Syntax and spell checking
+  ;; ---------------------------------------------------------------------------
+  ;;; Syntax and Spell Checking
   (leaf flycheck
     :ensure t
     :hook (prog-mode . flycheck-mode))
@@ -554,26 +662,40 @@ Below are the system details and Emacs build configurations for two machines.
     :hook (text-mode . flyspell-mode)
     :custom ((ispell-program-name . "aspell")))
 
-  ;; Project management
+  ;; ---------------------------------------------------------------------------
+  ;;; Project Management
   (leaf projectile
     :ensure t
     :global-minor-mode t)
 
-  ;; Snippets
+  ;; ---------------------------------------------------------------------------
+  ;;; Snippet Management with Yasnippet
   (leaf yasnippet
     :ensure t
-    :global-minor-mode yas-global-mode)
+    :global-minor-mode yas-global-mode
+    :init
+    (defvar my-yas-snippet-dir (concat my:d "snippets")
+      "Default directory for YASnippet user snippets.")
+
+    ;; Automatically create snippet directory if not exist
+    (unless (file-directory-p my-yas-snippet-dir)
+      (make-directory my-yas-snippet-dir t))
+
+    :config
+    (setq yas-snippet-dirs (list my-yas-snippet-dir))
+    (yas-reload-all))
 
   (leaf yasnippet-snippets
     :ensure t
     :after yasnippet)
 
+  ;; ---------------------------------------------------------------------------
   ;;; Authentication Management
   (leaf *authentication
     :init
     (defvar my:d:password-store
       (or (getenv "PASSWORD_STORE_DIR")
-  	(concat no-littering-var-directory "password-store/"))
+          (concat no-littering-var-directory "password-store/"))
       "Path to the password store.")
 
     ;; Check for necessary environment variables and directories
@@ -582,28 +704,28 @@ Below are the system details and Emacs build configurations for two machines.
     (unless (file-directory-p my:d:password-store)
       (warn "Password store directory does not exist: %s" my:d:password-store))
 
-    ;; Encryption
+    ;; Encryption Settings
     (leaf epa-file
       :config
       (epa-file-enable)
       (setq epa-pinentry-mode
             (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
 
-    ;; Configure authentication sources
+    ;; Configure Authentication Sources
     (leaf auth-source
       :config
       (setq auth-source-gpg-encrypt-to
             (or (getenv "GPG_KEY_ID")
                 (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
 
-    ;; Use password-store and auth-source-pass for password management
+    ;; Password Management with pass and auth-source-pass
     (leaf password-store :ensure t)
     (leaf auth-source-pass :ensure t
       :config
       (when (executable-find "pass")
         (auth-source-pass-enable)))
 
-    ;; Configure plstore for secure storage
+    ;; Secure Storage Configuration
     (leaf plstore
       :config
       (setq plstore-secret-keys 'silent
@@ -613,7 +735,8 @@ Below are the system details and Emacs build configurations for two machines.
 *** AI Configuration
 
 #+begin_src emacs-lisp
-  ;; ellama
+  ;; ---------------------------------------------------------------------------
+  ;;; Ellama Configuration
   (leaf ellama
     :ensure t
     :after llm-ollama
@@ -651,7 +774,7 @@ Below are the system details and Emacs build configurations for two machines.
                                     :chat-model "llama3:8b-instruct-q8_0"
                                     :embedding-model "llama3:8b-instruct-q8_0"))))
 
-    ;; Add error handling for unsupported providers
+    ;; Error Handling for Provider Selection
     (defun ellama-set-provider (provider-name)
       "Set the active provider for Ellama by PROVIDER-NAME."
       (interactive
@@ -665,7 +788,7 @@ Below are the system details and Emacs build configurations for two machines.
           (setopt ellama-provider (cdr (assoc "codestral" ellama-providers))))))
 
     :config
-    ;; Ensure that Ellama initializes correctly
+    ;; Verify that Ellama is correctly configured
     (unless (and ellama-provider ellama-translation-provider)
       (message "Ellama configuration is incomplete. Verify providers.")))
 #+end_src
@@ -673,8 +796,12 @@ Below are the system details and Emacs build configurations for two machines.
 *** Programming Utilities
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; LSP Configuration (Eglot or LSP-Mode)
   (defvar my/use-lsp 'eglot) ;; Change to 'lsp if needed
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Eglot Configuration (Default)
   (when (eq my/use-lsp 'eglot)
     (leaf eglot
       :hook (prog-mode . eglot-ensure)
@@ -688,6 +815,8 @@ Below are the system details and Emacs build configurations for two machines.
              ("C-c a" . eglot-code-actions)
              ("C-c d" . flymake-show-buffer-diagnostics))))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; LSP-Mode Configuration (Optional)
   (when (eq my/use-lsp 'lsp)
     (leaf lsp-mode
       :ensure t
@@ -706,6 +835,8 @@ Below are the system details and Emacs build configurations for two machines.
       :config
       (setq lsp-completion-provider :capf)))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; LSP UI Configuration (LSP-Mode Only)
   (leaf lsp-ui
     :ensure t
     :after lsp-mode
@@ -720,21 +851,24 @@ Below are the system details and Emacs build configurations for two machines.
 *** Completion Framework
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Completion Settings (Vertico, Corfu, and More)
   (leaf completion-settings
     :config
+
+    ;; ---------------------------------------------------------------------------
     ;; Prescient: Sort and filter candidates based on usage history
     (leaf prescient
       :ensure t
-      :custom
-      ((prescient-aggressive-file-save . t))  ;; Automatically save history
+      :custom ((prescient-aggressive-file-save . t))  ;; Automatically save history
       :global-minor-mode prescient-persist-mode)
 
+    ;; ---------------------------------------------------------------------------
     ;; Vertico: Vertical completion menu
     (leaf vertico
       :ensure t
       :global-minor-mode vertico-mode
-      :custom
-      ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
+      :custom ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
       :config
       ;; Posframe integration for cleaner UI
       (leaf vertico-posframe
@@ -742,8 +876,7 @@ Below are the system details and Emacs build configurations for two machines.
         :if (display-graphic-p)
         :custom
         ((vertico-posframe-border-width . 2)
-         (vertico-posframe-parameters . '((left-fringe . 4)
-                                          (right-fringe . 4))))
+         (vertico-posframe-parameters . '((left-fringe . 4) (right-fringe . 4))))
         :config
         (vertico-posframe-mode 1)))
 
@@ -752,11 +885,13 @@ Below are the system details and Emacs build configurations for two machines.
       :after (vertico prescient)
       :global-minor-mode t)
 
+    ;; ---------------------------------------------------------------------------
     ;; Marginalia: Annotate candidates with additional context
     (leaf marginalia
       :ensure t
       :global-minor-mode marginalia-mode)
 
+    ;; ---------------------------------------------------------------------------
     ;; Consult: Enhanced search and navigation commands
     (leaf consult
       :ensure t
@@ -764,6 +899,7 @@ Below are the system details and Emacs build configurations for two machines.
       ((xref-show-xrefs-function . #'consult-xref)
        (xref-show-definitions-function . #'consult-xref)))
 
+    ;; ---------------------------------------------------------------------------
     ;; Embark: Context-aware actions for completion candidates
     (leaf embark
       :ensure t
@@ -785,6 +921,7 @@ Below are the system details and Emacs build configurations for two machines.
         :hook (embark-collect-mode . consult-preview-at-point-mode)
         :custom (consult-preview-key . "M-.")))
 
+    ;; Embark keybindings within Vertico
     (defun my/setup-embark-vertico-directory ()
       "Integrate embark-act inside vertico-directory minibuffer."
       (when (and (boundp 'vertico-map) (require 'embark nil t))
@@ -793,6 +930,7 @@ Below are the system details and Emacs build configurations for two machines.
 
     (add-hook 'vertico-mode-hook #'my/setup-embark-vertico-directory)
 
+    ;; ---------------------------------------------------------------------------
     ;; Corfu: Popup-based completion for `completion-at-point`
     (leaf corfu
       :ensure t
@@ -818,6 +956,7 @@ Below are the system details and Emacs build configurations for two machines.
         :config
         (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
 
+    ;; ---------------------------------------------------------------------------
     ;; Cape: Additional completion sources for Corfu
     (leaf cape
       :ensure t
@@ -825,6 +964,7 @@ Below are the system details and Emacs build configurations for two machines.
       (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
             '(cape-file cape-dabbrev cape-keyword)))
 
+    ;; ---------------------------------------------------------------------------
     ;; Orderless: Fuzzy matching for completion
     (leaf orderless
       :ensure t
@@ -837,9 +977,12 @@ Below are the system details and Emacs build configurations for two machines.
 **** Org-mode Core Setup
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Mode Configuration
   (leaf org
     :leaf-defer t
     :preface
+    ;; Define Org Cloud Directory
     (defvar warning-suppress-types nil)
     (unless (boundp 'my:d:cloud)
       (setq my:d:cloud (concat no-littering-var-directory "./")))
@@ -862,22 +1005,23 @@ Below are the system details and Emacs build configurations for two machines.
 
     :custom ((org-support-shift-select . t))
     :init
+    ;; Set Org Directory
     (setq org-directory (expand-file-name "org/" my:d:cloud))
     (my:ensure-directory-exists org-directory)
+
+    ;; Link and Cache Settings
     (setq org-return-follows-link t
-          org-mouse-1-follows-link t)
-    (setq warning-suppress-types (append warning-suppress-types '((org-element-cache))))
-    (setq org-element-use-cache nil)
+          org-mouse-1-follows-link t
+          warning-suppress-types (append warning-suppress-types '((org-element-cache)))
+          org-element-use-cache nil)
 
     :bind
-    (("C-M--" . #'(lambda () (interactive)
-                    (show-org-buffer "gtd.org")))
-     ("C-M-^" . #'(lambda () (interactive)
-                    (show-org-buffer "notes.org")))
-     ("C-M-~" . #'(lambda () (interactive)
-                    (show-org-buffer "kb.org"))))
+    (("C-M--" . #'(lambda () (interactive) (show-org-buffer "gtd.org")))
+     ("C-M-^" . #'(lambda () (interactive) (show-org-buffer "notes.org")))
+     ("C-M-~" . #'(lambda () (interactive) (show-org-buffer "kb.org"))))
 
     :config
+    ;; General Org Settings
     (setq org-agenda-files (list org-directory)
           org-cycle-emulate-tab 'white-space
           org-default-notes-file "notes.org"
@@ -888,21 +1032,26 @@ Below are the system details and Emacs build configurations for two machines.
           org-startup-truncated nil
           org-use-speed-commands t)
 
+    ;; File Link Settings
     (setq org-link-frame-setup '((file . find-file)))
 
+    ;; Agenda File Configuration
     (setq org-agenda-files
           (seq-filter (lambda (file)
                         (not (string-match-p "archives" file)))
                       (directory-files-recursively org-directory "\\.org$")))
 
+    ;; TODO Keyword Configuration
     (setq org-todo-keywords
           '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
 
+    ;; Refile Targets
     (setq org-refile-targets
-          (quote ((nil :maxlevel . 3)
-                  (org-buffer-files :maxlevel . 1)
-                  (org-agenda-files :maxlevel . 3))))
+          '((nil :maxlevel . 3)
+            (org-buffer-files :maxlevel . 1)
+            (org-agenda-files :maxlevel . 3)))
 
+    ;; Capture Templates
     (setq org-capture-templates
           `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
              "* TODO %?\n %i\n %a")
@@ -913,6 +1062,8 @@ Below are the system details and Emacs build configurations for two machines.
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
              "* MEETING with %? :meeting:\n  %U\n  %a"))))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Modern Styling
   (leaf org-modern
     :config
     (setopt
@@ -947,47 +1098,55 @@ Below are the system details and Emacs build configurations for two machines.
 **** Org-mode Visual Enhancements
 
 #+begin_src emacs-lisp
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Superstar Configuration (Enhanced Headings)
   (leaf org-superstar
     :after org
-    :ensure t
     :custom
     ;; Customize bullets for different headline levels
     (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
-    ;; Hide leading stars in headlines
+    ;; Show leading stars in headlines (set to nil to hide)
     (org-superstar-remove-leading-stars . nil)
-    ;; Show custom bullets in Org-mode buffers
+    ;; Automatically enable in Org Mode
     :hook (org-mode . org-superstar-mode))
 #+end_src
 
 **** Additional Org-related packages
 
 #+begin_src emacs-lisp
-  ;; Org LaTeX export
+  ;; ---------------------------------------------------------------------------
+  ;;; Org LaTeX Export Configuration
   (leaf org-latex
     :after org
     :custom
+    ;; LaTeX packages for enhanced formatting
     (org-latex-packages-alist '(("" "graphicx" t)
                                 ("" "longtable" nil)
                                 ("" "wrapfig" nil)))
+    ;; PDF Export Process
     (setq org-latex-pdf-process
           '("pdflatex -interaction nonstopmode -output-directory %o %f"
             "bibtex %b"
             "pdflatex -interaction nonstopmode -output-directory %o %f"
             "pdflatex -interaction nonstopmode -output-directory %o %f")))
 
-  ;; Org-journal for daily notes
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Journal Configuration (Daily Notes)
   (leaf org-journal
     :ensure t
     :after org
     :config
+    ;; Set Journal Directory
     (setq org-journal-dir (concat org-directory "/journal")
           org-journal-enable-agenda-integration t)
 
+    ;; Quick access to today's journal entry
     (defun org-journal-find-location ()
       "Open today's journal entry."
       (org-journal-new-entry t)))
 
-  ;; Babel for code execution in Org files
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Babel (Executable Code Blocks)
   (leaf ob
     :after org
     :defun org-babel-do-load-languages
@@ -1001,7 +1160,8 @@ Below are the system details and Emacs build configurations for two machines.
        (ditaa . t)
        (plantuml . t))))
 
-  ;; Org-roam for networked notes
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Roam (Networked Notes)
   (leaf org-roam
     :ensure t
     :after org
@@ -1011,7 +1171,8 @@ Below are the system details and Emacs build configurations for two machines.
       (make-directory org-roam-directory t))
     (org-roam-db-autosync-mode))
 
-  ;; Download and manage images in Org files
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Download (Image Management)
   (leaf org-download
     :ensure t
     :after org
@@ -1020,7 +1181,8 @@ Below are the system details and Emacs build configurations for two machines.
     (unless (file-directory-p org-download-image-dir)
       (make-directory org-download-image-dir t)))
 
-  ;; Generate and navigate table of contents
+  ;; ---------------------------------------------------------------------------
+  ;;; TOC-Org (Table of Contents)
   (leaf toc-org
     :ensure t
     :after org markdown-mode
@@ -1028,20 +1190,23 @@ Below are the system details and Emacs build configurations for two machines.
     (add-hook 'org-mode-hook 'toc-org-enable)
     (add-hook 'markdown-mode-hook 'toc-org-mode))
 
-  ;; Add clickable links from the clipboard
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Cliplink (Insert Clickable Links)
   (leaf org-cliplink
     :ensure t
     :after org
     :bind ("C-x p i" . org-cliplink))
 
-  ;; Export Org files to Hugo markdown format
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Export to Hugo (Static Site Generation)
   (leaf ox-hugo
     :ensure t
     :require t
     :after ox
     :custom ((org-hugo-front-matter-format . "toml")))
 
-  ;; ox-hugo-capture
+  ;; ---------------------------------------------------------------------------
+  ;;; Hugo Blog Capture Template (Org-Capture)
   (leaf *ox-hugo--capture
     :require org-capture
     :defvar (org-capture-templates)
@@ -1049,22 +1214,14 @@ Below are the system details and Emacs build configurations for two machines.
     (defun generate-safe-filename ()
       "Generate a unique and safe filename for Hugo export."
       (format "%s-%s" (format-time-string "%Y")
-              (shell-command-to-string "uuidgen | cut -c1-8")))
+              (string-trim (shell-command-to-string "uuidgen | cut -c1-8"))))
     (add-to-list 'org-capture-templates
                  '("b" "Create new blog post" entry
                    (file+headline my:f:capture-blog-file "blog")
-                   "** TODO %?
-    :PROPERTIES:
-    :EXPORT_FILE_NAME: %(generate-safe-filename)
-    :EXPORT_DATE:
-    :EXPORT_HUGO_TAGS:
-    :EXPORT_HUGO_CATEGORIES:
-    :EXPORT_HUGO_LASTMOD:
-    :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false
-    :END:
-    \n
-    ")))
+                   "** TODO %?\n  :PROPERTIES:\n  :EXPORT_FILE_NAME: %(generate-safe-filename)\n  :EXPORT_DATE:\n  :EXPORT_HUGO_TAGS:\n  :EXPORT_HUGO_CATEGORIES:\n  :EXPORT_HUGO_LASTMOD:\n  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false\n  :END:\n\n")))
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Markdown Mode Configuration
   (leaf markdown-mode
     :ensure t
     :mode ("\\.md\\'" . markdown-mode))
@@ -1073,7 +1230,8 @@ Below are the system details and Emacs build configurations for two machines.
 *** Miscellaneous Helper Functions
 
 #+begin_src emacs-lisp
-  ;; `*scratch*` buffer utility
+  ;; ---------------------------------------------------------------------------
+  ;;; Scratch Buffer Utility
   (defun my/create-scratch-buffer ()
     "Ensure that a `*scratch*` buffer exists."
     (let ((scratch-buffer (get-buffer "*scratch*")))
@@ -1099,46 +1257,22 @@ Below are the system details and Emacs build configurations for two machines.
 
   (advice-add 'kill-buffer :after #'my/after-kill-buffer-advice)
 
-  ;; Window layout management
-  (defvar my/saved-window-config nil
-    "Stores the current window configuration for later restoration.")
+  (defun my/auto-insert-lexical-binding ()
+    "Automatically insert lexical-binding cookie in Emacs Lisp files under `no-littering-var-directory`."
+    (when (and (stringp buffer-file-name)
+               (boundp 'no-littering-var-directory)
+               (string-prefix-p (expand-file-name no-littering-var-directory)
+                                (expand-file-name buffer-file-name))
+               (string-match-p "\\.el\\'" buffer-file-name)
+               (not (save-excursion
+                      (goto-char (point-min))
+                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
+      (save-excursion
+        (goto-char (point-min))
+        (insert ";;; -*- lexical-binding: t; -*-\n"))))
 
-  (defun my/save-window-layout ()
-    "Save the current window configuration persistently."
-    (interactive)
-    (setq my/saved-window-config (window-state-get nil t))
-    (message "Window configuration saved."))
-
-  (defun my/restore-window-layout ()
-    "Restore the saved window configuration."
-    (interactive)
-    (if my/saved-window-config
-        (progn
-          (window-state-put my/saved-window-config)
-          (message "Window configuration restored."))
-      (message "No saved window configuration found. Please save a layout first.")))
-
-  (defun my/toggle-window-dedication ()
-    "Toggle the dedicated status of the currently selected window."
-    (interactive)
-    (let ((window (selected-window)))
-      (set-window-dedicated-p window (not (window-dedicated-p window)))
-      (message "Window dedication %s"
-               (if (window-dedicated-p window) "enabled" "disabled"))))
-
-  ;; Desktop session management
-  (leaf desktop
-    :custom
-    `((desktop-dirname . ,(concat no-littering-var-directory "desktop"))
-      (desktop-save . 'if-exists)
-      (desktop-auto-save-timeout . 180)
-      (desktop-restore-eager . 10))
-    :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
-           (emacs-startup-hook . desktop-read))
-    :config
-    (desktop-save-mode 1))
-
-  ;; Asynchronous task execution
+  ;; ---------------------------------------------------------------------------
+  ;;; Asynchronous Task Execution
   (defun my/safe-run-async (task)
     "Run TASK asynchronously and handle any errors gracefully."
     (run-at-time 0 nil
@@ -1147,7 +1281,8 @@ Below are the system details and Emacs build configurations for two machines.
                        (funcall task)
                      (error (message "An error occurred during asynchronous execution: %s" err))))))
 
-  ;; Backup file cleanup
+  ;; ---------------------------------------------------------------------------
+  ;;; Backup File Cleanup
   (defun my/delete-old-backups ()
     "Delete backup files older than 7 days asynchronously."
     (interactive)
@@ -1161,8 +1296,8 @@ Below are the system details and Emacs build configurations for two machines.
                         (> (float-time (file-attribute-modification-time (file-attributes file))) threshold))
                (delete-file file))))))))
 
-  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
-
+  ;; ---------------------------------------------------------------------------
+  ;;; Backup File Cleanup
   ;; View mode handling
   (defun my/enable-view-mode-on-read-only ()
     "Enable `view-mode` if the buffer is read-only, disable otherwise."
@@ -1277,42 +1412,11 @@ Below are the system details and Emacs build configurations for two machines.
        (format "|Options|%s|\n" system-configuration-options)))
     (view-mode))
 
-  ;; Keybinding documentation
-  (defun my/parse-leaf-config (file)
-    "Extract keybindings from FILE written in leaf syntax."
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-min))
-      (let (keybinds)
-        (while (re-search-forward ":bind\\s-*(?\\([^)]*\\))" nil t)
-          (let ((keys (match-string 1)))
-            (push (split-string keys) keybinds)))
-        keybinds)))
-
-  (defun my/generate-org-keybind-table (input-file output-file)
-    "Generate an Org table from INPUT-FILE and save to OUTPUT-FILE."
-    (interactive "fInput File: \nFOutput Org File: ")
-    (let ((keybinds (my/parse-leaf-config input-file)))
-      (with-temp-buffer
-        (insert "#+TITLE: Keybindings\n\n* Keybind Table\n")
-        (insert "| Key Sequence | Command |\n")
-        (insert "|-------------+---------|\n")
-        (dolist (keybind keybinds)
-          (insert (format "| %s | %s |\n" (car keybind) (cadr keybind))))
-        (write-file output-file)))
-    (message "Org table saved to %s" output-file))
-
-  ;; Auto-tangling for Org files
-  (defun my/auto-tangle-init-org ()
-    "Auto-tangle init.org when saving."
-    (when (string= (file-name-nondirectory (buffer-file-name)) "README.org")
-      (org-babel-tangle)))
-
-  ;; Hooks for common operations
+  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
+  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
   (add-hook 'before-save-hook 'delete-trailing-whitespace)
   (add-hook 'prog-mode-hook 'goto-address-prog-mode)
   (add-hook 'text-mode-hook 'goto-address-mode)
-  (add-hook 'after-save-hook #'my/auto-tangle-init-org)
 #+end_src
 
 ** Footer

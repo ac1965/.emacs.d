@@ -3,7 +3,6 @@
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
 ;; Keywords: initialization, performance, macos
-;; Version: 1.2
 
 ;;; Commentary:
 ;; It is designed for Emacs 30 and above, providing essential settings while eliminating redundancy.
@@ -24,38 +23,41 @@
 
 (defvar my:d:cache (expand-file-name ".cache/" my:d)
   "Cache directory for temporary files.")
-
 (make-directory my:d:cache t) ;; Ensure cache directory exists
 
 ;; ---------------------------------------------------------------------------
 ;;; Performance Optimization
 (setq gc-cons-threshold (* 128 1024 1024)
-      read-process-output-max (* 8 1024 1024)
-      file-name-handler-alist nil)
+      read-process-output-max (* 8 1024 1024))
 
-(let ((default-handlers file-name-handler-alist))
-  (setq file-name-handler-alist nil)
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (setq gc-cons-threshold (* 64 1024 1024))
-              (setq file-name-handler-alist default-handlers))))
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setq gc-cons-threshold (* 64 1024 1024))
+            (message "Emacs loaded in %.2f seconds with %d garbage collections."
+                     (float-time (time-subtract after-init-time before-init-time))
+                     gcs-done)))
 
 (setq package-enable-at-startup nil)
 
 ;; ---------------------------------------------------------------------------
 ;;; Native Compilation Optimization
-(setq native-comp-async-report-warnings-errors 'silent)
-
+(setq native-comp-async-report-warnings-errors 'error)
+(setq native-comp-async-jobs-number (or (getenv "EMACS_NATIVE_COMP_JOBS") 4))
+(setq native-comp-speed 2)
 (when (boundp 'native-comp-eln-load-path)
   (startup-redirect-eln-cache
    (expand-file-name "eln-cache/" my:d:cache)))
 
-(setq native-comp-async-jobs-number (or (getenv "EMACS_NATIVE_COMP_JOBS") 4)
-      native-comp-speed 2)
-
 ;; ---------------------------------------------------------------------------
 ;;; macOS Specific Settings
 (when (eq system-type 'darwin)
+  ;; Homebrew and GCC Paths
+  (dolist (path '("/opt/homebrew/bin" "/usr/local/bin"))
+    (when (file-directory-p path)
+      (add-to-list 'exec-path path)
+      (setenv "PATH" (concat path ":" (getenv "PATH")))))
+
+  ;; GNU ls (gls) for Dired
   (when (executable-find "gls")
     (setq insert-directory-program "gls"
           dired-use-ls-dired t
@@ -65,38 +67,16 @@
 ;;; UI Customization
 (setq frame-resize-pixelwise t)
 (add-to-list 'default-frame-alist '(fullscreen . maximized))
-(add-to-list 'default-frame-alist '(resize-pixelwise . t))
-(setq frame-title-format "%b")
-
 (menu-bar-mode -1)
 (tool-bar-mode -1)
 (scroll-bar-mode -1)
 (pixel-scroll-precision-mode 1)
 
 ;; ---------------------------------------------------------------------------
-;;; Backup and Auto-Save Settings
-(setq backup-directory-alist `(("." . ,(expand-file-name "backups" my:d:cache)))
-      auto-save-file-name-transforms `((".*" ,(expand-file-name "auto-save/" my:d:cache) t))
-      backup-by-copying t
-      version-control t
-      delete-old-versions t
-      kept-new-versions 6
-      kept-old-versions 2)
-
-;; ---------------------------------------------------------------------------
-;;; Enable Useful Global Modes
-(global-auto-revert-mode 1)
-(electric-pair-mode 1)
-(show-paren-mode 1)
-(global-prettify-symbols-mode 1)
-
-;; ---------------------------------------------------------------------------
-;;; Startup Metrics
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (message "Emacs loaded in %.2f seconds with %d garbage collections."
-                     (float-time (time-subtract after-init-time before-init-time))
-                     gcs-done)))
-
-(provide 'early-init)
-;;; early-init.el ends here
+;;; Miscellaneous Optimizations
+(setq inhibit-startup-screen t
+      initial-scratch-message nil
+      initial-major-mode 'text-mode
+      use-short-answers t
+      create-lockfiles nil
+      display-line-numbers-type 'relative)
