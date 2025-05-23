@@ -1,4 +1,5 @@
 ;;; init.el --- Main configuration file -*- lexical-binding: t; -*-
+
 ;; Author: YAMASHITA Takao <ac1965@ty07.net>
 ;; License: GNU General Public License version 3 or later
 ;; Keywords: initialization, modular
