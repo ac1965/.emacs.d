@@ -1,8 +1,9 @@
-;; -*- lexical-binding: t; -*-
+;;; early-init.el --- My early-init script -*- coding: utf-8 ; lexical-binding: t; -*-
 
-;; Author: YAMASHITA Takao <ac1965@ty07.net>
-;; License: GNU General Public License version 3 or later
-;; Keywords: initialization, performance, macos
+;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+;; Licensed under the GNU General Public License version 3 or later.
+
+;; $Lastupdate: 2025/05/24 11:16:40 $
 
 ;;; Commentary:
 ;; It is designed for Emacs 30 and above, providing essential settings while eliminating redundancy.

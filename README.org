@@ -1,4 +1,4 @@
-# README.org -- Emacs Configuration -*- lexical-binding: t; -*-
+# README.org -- Emacs Configuration -*-  coding: utf-8 ; lexical-binding: t; -*-
 
 #+LATEX_CLASS: article
 #+LATEX_HEADER: \usepackage[utf8]{inputenc}
@@ -8,11 +8,11 @@
 #+LATEX_HEADER: \usepackage{xcolor}
 #+LATEX_HEADER: \lstset{basicstyle=\ttfamily\footnotesize,breaklines=true,columns=fullflexible}
 
-#+title: ac1965's Emacs literate configuration =.emacs.d=
-#+startup: content
-#+author: YAMASHITA Takao
-#+options: auto-id:t H:6
-#+property: header-args:emacs-lisp :tangle README.el :results silent
+#+TITLE: ac1965's Emacs literate configuration =.emacs.d=
+#+STARTUP: content
+#+AUTHOR: YAMASHITA Takao
+#+OPTIONS: auto-id:t H:6
+#+PROPERTY: header-args :results silent :exports code
 
 [[file:demo.png]]
 
@@ -90,16 +90,194 @@ Below are the system details and Emacs build configurations for two machines.
 |Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg CFLAGS=-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include CPPFLAGS=-I/usr/local/opt/llvm/include 'LDFLAGS=-L/usr/local/opt/llvm/lib -L/usr/local/opt/llvm/lib/c++ -Wl,-rpath,/usr/local/opt/llvm/lib/c++'|
 
 * Emacs Configuration
+** Early Initialization
 
-** Header
-
-#+begin_src emacs-lisp
-  ;;; README.el --- Emacs Configuration -*- lexical-binding: t; -*-
+#+begin_src emacs-lisp :tangle early-init.el
+  ;;; early-init.el --- My early-init script -*- coding: utf-8 ; lexical-binding: t; -*-
 
   ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/05/23 23:57:06 $
+  ;; $Lastupdate: 2025/05/24 11:16:40 $
+
+  ;;; Commentary:
+  ;; It is designed for Emacs 30 and above, providing essential settings while eliminating redundancy.
+
+  ;;; Code:
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Compatibility Check (Emacs 30+)
+  (when (version< emacs-version "30")
+    (error "This configuration requires Emacs 30 or higher."))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Directories
+  (defvar my:d (if load-file-name
+                   (file-name-directory (file-chase-links load-file-name))
+                 user-emacs-directory)
+    "Base directory for user-specific configuration.")
+
+  (defvar my:d:cache (expand-file-name ".cache/" my:d)
+    "Cache directory for temporary files.")
+  (make-directory my:d:cache t) ;; Ensure cache directory exists
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Performance Optimization
+  (setq gc-cons-threshold (* 128 1024 1024)
+        read-process-output-max (* 8 1024 1024))
+
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (setq gc-cons-threshold (* 64 1024 1024))
+              (message "Emacs loaded in %.2f seconds with %d garbage collections."
+                       (float-time (time-subtract after-init-time before-init-time))
+                       gcs-done)))
+
+  (setq package-enable-at-startup nil)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Native Compilation Optimization
+  (setq native-comp-async-report-warnings-errors 'error)
+  (setq native-comp-async-jobs-number (or (getenv "EMACS_NATIVE_COMP_JOBS") 4))
+  (setq native-comp-speed 2)
+  (when (boundp 'native-comp-eln-load-path)
+    (startup-redirect-eln-cache
+     (expand-file-name "eln-cache/" my:d:cache)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; macOS Specific Settings
+  (when (eq system-type 'darwin)
+    ;; Homebrew and GCC Paths
+    (dolist (path '("/opt/homebrew/bin" "/usr/local/bin"))
+      (when (file-directory-p path)
+        (add-to-list 'exec-path path)
+        (setenv "PATH" (concat path ":" (getenv "PATH")))))
+
+    ;; GNU ls (gls) for Dired
+    (when (executable-find "gls")
+      (setq insert-directory-program "gls"
+            dired-use-ls-dired t
+            dired-listing-switches "-aBhl --group-directories-first")))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; UI Customization
+  (setq frame-resize-pixelwise t)
+  (add-to-list 'default-frame-alist '(fullscreen . maximized))
+  (menu-bar-mode -1)
+  (tool-bar-mode -1)
+  (scroll-bar-mode -1)
+  (pixel-scroll-precision-mode 1)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Miscellaneous Optimizations
+  (setq inhibit-startup-screen t
+        initial-scratch-message nil
+        initial-major-mode 'text-mode
+        use-short-answers t
+        create-lockfiles nil
+        display-line-numbers-type 'relative)
+
+#+end_src
+
+** Main Initialization
+
+#+begin_src emacs-lisp :tangle init.el
+  ;;; init.el --- Main configuration file -*- coding: utf-8 ; lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+  ;; Licensed under the GNU General Public License version 3 or later.
+  ;; Keywords: initialization, modular
+
+  ;; $Lastupdate: 2025/05/24 11:16:40 $
+
+  ;;; Commentary:
+  ;; This is the main configuration file for Emacs. It initializes directories,
+  ;; sets up packages, and loads modular configurations from `README.org`.
+
+  ;;; Code:
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Utility Functions
+  (defun my:ensure-directory-exists (dir)
+    "Ensure that the directory DIR exists, creating it if necessary."
+    (unless (file-directory-p dir)
+      (condition-case err
+          (make-directory dir t)
+        (error (warn "Failed to create directory: %s - %s" dir err)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Directories
+  ;; Define essential directories for configuration, cache, and variable data.
+  (defvar my:d (if load-file-name
+                   (file-name-directory (file-chase-links load-file-name))
+                 user-emacs-directory)
+    "Base directory for user-specific configuration.")
+
+  (defvar my:d:cache (expand-file-name ".cache/" my:d)
+    "Cache directory for temporary files.")
+  (defvar my:d:etc (expand-file-name ".etc/" my:d)
+    "Directory for storing configuration files.")
+  (defvar my:d:var (expand-file-name ".var/" my:d)
+    "Directory for storing variable data.")
+  (defvar my:d:custom (expand-file-name "custom.el" my:d:etc)
+    "File for storing user customizations (custom-file).")
+
+  ;; Ensure necessary directories exist
+  (mapc #'my:ensure-directory-exists (list my:d:cache my:d:etc my:d:var))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Custom File Setup
+  ;; Separate custom settings to a dedicated file
+  (setq custom-file my:d:custom)
+  (when (and custom-file (file-exists-p custom-file))
+    (ignore-errors (load custom-file)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Package Settings
+  ;; Configure directories for cleanup.
+  (setq package-user-dir (expand-file-name "elpa/" my:d:cache))
+
+  ;; Ensure package directory exists
+  (my:ensure-directory-exists package-user-dir)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Load Configuration from README.org
+  ;; Use org-babel to load additional configuration details.
+  (setq init-org-file (expand-file-name "README.org" my:d))
+
+  (when (file-exists-p init-org-file)
+    (condition-case err
+        (progn
+          (setq org-confirm-babel-evaluate nil)
+          (org-babel-load-file init-org-file))
+      (error
+       (display-warning 'init (format "Failed to load %s: %s" init-org-file (error-message-string err))
+                        :error))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Load Configuration from user-specific-config
+  ;; Loading user-specific settings.
+  (setq user-specific-config (concat my:d user-login-name ".el"))
+  (if (file-exists-p user-specific-config) (load user-specific-config))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Package Initialization
+  ;; (package-initialize) is not necessary in Emacs 29+
+
+  (provide 'init)
+  ;;; init.el ends here
+#+end_src
+
+*** README Header
+
+#+begin_src emacs-lisp :tangle README.el
+  ;;; README.el --- Emacs Configuration -*- coding: utf-8 ; lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+  ;; Licensed under the GNU General Public License version 3 or later.
+
+  ;; $Lastupdate: 2025/05/24 11:16:40 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -107,9 +285,9 @@ Below are the system details and Emacs build configurations for two machines.
   ;;; Code:
 #+end_src
 
-** Install Package
+*** Install Package
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Package Setup
 
@@ -141,10 +319,10 @@ Below are the system details and Emacs build configurations for two machines.
   	no-littering-var-directory my:d:var))
 #+end_src
 
-** UI/Fonts/Keybind
-*** Fonts
+*** UI/Fonts/Keybind
+**** Fonts
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Font Setup
 
@@ -224,9 +402,9 @@ Below are the system details and Emacs build configurations for two machines.
       (global-ligature-mode 1)))
 #+end_src
 
-*** UI
+**** UI
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Fullscreen Mode Configuration
   (leaf fullscreen
@@ -365,9 +543,9 @@ Below are the system details and Emacs build configurations for two machines.
                (if (window-dedicated-p window) "enabled" "disabled"))))
 #+end_src
 
-*** Key Bindings
+**** Key Bindings
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Key Binding Utilities
   (leaf which-key
@@ -469,10 +647,10 @@ Below are the system details and Emacs build configurations for two machines.
                           'my/dired-view-file-other-window)))
 #+end_src
 
-** Basic Configuration
-*** Save and Backup
+*** Basic Configuration
+**** Save and Backup
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Insert a timestamp before saving the buffer
   (defun my/save-buffer-wrapper ()
@@ -508,9 +686,9 @@ Below are the system details and Emacs build configurations for two machines.
     :global-minor-mode auto-save-visited-mode)
 #+end_src
 
-*** Editing Enhancements
+**** Editing Enhancements
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Saveplace (Cursor Position Persistence)
   (leaf saveplace
@@ -581,9 +759,9 @@ Below are the system details and Emacs build configurations for two machines.
 
 #+end_src
 
-*** System Utilities
+**** System Utilities
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Garbage Collection Management (GCMH)
   (leaf gcmh
@@ -607,10 +785,10 @@ Below are the system details and Emacs build configurations for two machines.
     (exec-path-from-shell-initialize))
 #+end_src
 
-** Utilities Package
-*** Extra Utilities
+*** Utilities Package
+**** Extra Utilities
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Visual Line Mode (Soft Wrapping)
   (leaf visual-line-mode
@@ -700,6 +878,24 @@ Below are the system details and Emacs build configurations for two machines.
     :ensure t
     :after yasnippet)
 
+  (leaf auctex
+    :ensure t
+    :init
+    (setq TeX-auto-save t)
+    (setq TeX-parse-self t)
+    (setq TeX-save-query nil)
+    (setq TeX-PDF-mode t) ;; Enable PDF mode by default
+    (setq-default TeX-master nil) ;; Prompt for master file when needed
+    :config
+    ;; Add latexmk as a compile command
+    (setq TeX-command-default "LatexMk")
+    (add-hook 'LaTeX-mode-hook
+              (lambda ()
+                (push
+                 '("LatexMk" "latexmk -pdf -interaction=nonstopmode -synctex=1 %s"
+                   TeX-run-TeX nil t :help "Run latexmk for automated PDF generation")
+                 TeX-command-list))))
+
   ;; ---------------------------------------------------------------------------
   ;;; Authentication Management
   (leaf *authentication
@@ -743,9 +939,9 @@ Below are the system details and Emacs build configurations for two machines.
             plstore-encrypt-to (getenv "GPG_KEY_ID"))))
 #+end_src
 
-*** AI Configuration
+**** AI Configuration
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Ellama Configuration
   (leaf ellama
@@ -804,9 +1000,9 @@ Below are the system details and Emacs build configurations for two machines.
       (message "Ellama configuration is incomplete. Verify providers.")))
 #+end_src
 
-*** Programming Utilities
+**** Programming Utilities
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; LSP Configuration (Eglot or LSP-Mode)
   (defvar my/use-lsp 'eglot) ;; Change to 'lsp if needed
@@ -859,9 +1055,9 @@ Below are the system details and Emacs build configurations for two machines.
       (lsp-ui-sideline-show-diagnostics . t)))
 #+end_src
 
-*** Completion Framework
+**** Completion Framework
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Completion Settings (Vertico, Corfu, and More)
   (leaf completion-settings
@@ -984,10 +1180,10 @@ Below are the system details and Emacs build configurations for two machines.
        (completion-category-overrides . '((file (styles . (partial-completion))))))))
 #+end_src
 
-*** Org-kmode
-**** Org-mode Core Setup
+**** Org-kmode
+***** Org-mode Core Setup
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Org Mode Configuration
   (leaf org
@@ -1106,9 +1302,9 @@ Below are the system details and Emacs build configurations for two machines.
     (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil))
 #+end_src
 
-**** Org-mode Visual Enhancements
+***** Org-mode Visual Enhancements
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Org Superstar Configuration (Enhanced Headings)
   (leaf org-superstar
@@ -1122,9 +1318,9 @@ Below are the system details and Emacs build configurations for two machines.
     :hook (org-mode . org-superstar-mode))
 #+end_src
 
-**** Additional Org-related packages
+***** Additional Org-related packages
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Org LaTeX Export Configuration
   (leaf org-latex
@@ -1238,9 +1434,9 @@ Below are the system details and Emacs build configurations for two machines.
     :mode ("\\.md\\'" . markdown-mode))
 #+end_src
 
-*** Miscellaneous Helper Functions
+**** Miscellaneous Helper Functions
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Scratch Buffer Utility
   (defun my/create-scratch-buffer ()
@@ -1280,7 +1476,7 @@ Below are the system details and Emacs build configurations for two machines.
                       (re-search-forward "lexical-binding" (line-end-position 5) t))))
       (save-excursion
         (goto-char (point-min))
-        (insert ";;; -*- lexical-binding: t; -*-\n"))))
+        (insert ";;; -*- coding: utf-8 ; lexical-binding: t; -*-\n"))))
 
   ;; ---------------------------------------------------------------------------
   ;;; Asynchronous Task Execution
@@ -1423,6 +1619,13 @@ Below are the system details and Emacs build configurations for two machines.
        (format "|Options|%s|\n" system-configuration-options)))
     (view-mode))
 
+  ;;
+  (defun my/org-auto-export-to-pdf ()
+    "Automatically export Org files to PDF on save."
+    (when (eq major-mode 'org-mode)
+      (let ((org-export-in-background nil)) ; foreground for debugging
+        (org-latex-export-to-pdf))))
+
   (add-hook 'emacs-startup-hook #'my/delete-old-backups)
   (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
   (add-hook 'before-save-hook 'delete-trailing-whitespace)
@@ -1430,8 +1633,8 @@ Below are the system details and Emacs build configurations for two machines.
   (add-hook 'text-mode-hook 'goto-address-mode)
 #+end_src
 
-** Footer
-#+begin_src emacs-lisp
+**** Footer
+#+begin_src emacs-lisp :tangle README.el
   (provide 'README)
   ;;; README.el ends here
 #+end_src
