@@ -1,10 +1,10 @@
-;;; init.el --- Main configuration file -*- coding: utf-8 ; lexical-binding: t; -*-
+;;; --- Main configuration file -*- mode: emacs-lisp; lexical-binding:t; coding: utf-8-emacs; -*-
 
 ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
 ;; Licensed under the GNU General Public License version 3 or later.
 ;; Keywords: initialization, modular
 
-;; $Lastupdate: 2025/05/25 10:33:25 $
+;; $Lastupdate: 2025/05/25 10:53:01 $
 
 ;;; Commentary:
 ;; This is the main configuration file for Emacs. It initializes directories,
