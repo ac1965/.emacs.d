@@ -4,7 +4,7 @@
 ;; Licensed under the GNU General Public License version 3 or later.
 ;; Keywords: initialization, modular
 
-;; $Lastupdate: 2025/05/25 10:10:27 $
+;; $Lastupdate: 2025/05/25 10:33:25 $
 
 ;;; Commentary:
 ;; This is the main configuration file for Emacs. It initializes directories,
@@ -20,7 +20,6 @@
     (condition-case err
         (make-directory dir t)
       (error (warn "Failed to create directory: %s - %s" dir err)))))
-
 
 (defun my/org-babel-tangle-on-save ()
   "Tangle org file automatically when saving."
@@ -64,7 +63,6 @@
 ;; Ensure package directory exists
 (my:ensure-directory-exists package-user-dir)
 
-
 ;; ---------------------------------------------------------------------------
 ;;; Load Configuration from README.org
 ;; Use org-babel to load additional configuration details.
@@ -79,15 +77,6 @@
      (display-warning 'init (format "Failed to load %s: %s" init-org-file (error-message-string err))
                       :error))))
 
-;; ---------------------------------------------------------------------------
-;;; Load Configuration from user-specific-config
-;; Loading user-specific settings.
-(setq user-specific-config (concat my:d user-login-name ".el"))
-(if (file-exists-p user-specific-config) (load user-specific-config))
-
-;; ---------------------------------------------------------------------------
-;;; Package Initialization
-;; (package-initialize) is not necessary in Emacs 29+
 
 (provide 'init)
 ;;; init.el ends here
