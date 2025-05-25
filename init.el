@@ -4,7 +4,7 @@
 ;; Licensed under the GNU General Public License version 3 or later.
 ;; Keywords: initialization, modular
 
-;; $Lastupdate: 2025/05/25 10:53:01 $
+;; $Lastupdate: 2025/05/25 13:32:08 $
 
 ;;; Commentary:
 ;; This is the main configuration file for Emacs. It initializes directories,
@@ -26,7 +26,10 @@
   (when (string= (file-name-extension buffer-file-name) "org")
     (org-babel-tangle)))
 
-(add-hook 'after-save-hook #'my/org-babel-tangle-on-save)
+(add-hook 'org-mode-hook
+          (lambda ()
+            (add-hook 'after-save-hook #'my/org-babel-tangle-on-save
+                      nil 'make-it-local)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Directories
