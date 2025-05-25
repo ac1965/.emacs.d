@@ -4,7 +4,7 @@
 ;; Licensed under the GNU General Public License version 3 or later.
 ;; Keywords: initialization, modular
 
-;; $Lastupdate: 2025/05/24 14:49:39 $
+;; $Lastupdate: 2025/05/25 10:10:27 $
 
 ;;; Commentary:
 ;; This is the main configuration file for Emacs. It initializes directories,
@@ -20,6 +20,14 @@
     (condition-case err
         (make-directory dir t)
       (error (warn "Failed to create directory: %s - %s" dir err)))))
+
+
+(defun my/org-babel-tangle-on-save ()
+  "Tangle org file automatically when saving."
+  (when (string= (file-name-extension buffer-file-name) "org")
+    (org-babel-tangle)))
+
+(add-hook 'after-save-hook #'my/org-babel-tangle-on-save)
 
 ;; ---------------------------------------------------------------------------
 ;;; Directories
