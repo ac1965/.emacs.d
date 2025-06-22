@@ -1,4 +1,4 @@
-;;; --- Personal Configuration -*- mode: emacs-lisp; lexical-binding:t; coding: utf-8-emacs; -*-
+;;; --- Personal Configuration -*- mode: emacs-lisp; lexical-binding:t; -*-
 
 ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
 ;; Licensed under the GNU General Public License version 3 or later.
