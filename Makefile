@@ -13,4 +13,3 @@ tangle: $(README_ORG)
 
 clean:
 	rm -f $(README_EL)
-
