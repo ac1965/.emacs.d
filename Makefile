@@ -7,7 +7,7 @@ README_ORG = README.org
 all: tangle
 
 tangle: $(README_ORG)
-	$(EMACS) --batch -Q -l early-init.el \
+	$(EMACS) --batch -Q \
 	      --eval "(require 'org)" \
 	      --eval "(org-babel-tangle-file \"$(README_ORG)\")"
 
