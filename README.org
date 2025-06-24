@@ -10,7 +10,7 @@
 
 #+TITLE: ac1965's Emacs literate configuration =.emacs.d=
 #+STARTUP: content
-#+AUTHOR: YAMASHITA Takao
+#+AUTHOR: YAMASHITA, Takao
 #+OPTIONS: auto-id:t H:6
 #+PROPERTY: header-args :results silent :exports code
 
@@ -777,7 +777,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
 #+begin_src emacs-lisp :tangle early-init.el
   ;;; --- My early-init script -*- mode: emacs-lisp; lexical-binding:t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
   ;;; Commentary:
@@ -878,7 +878,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
 #+begin_src emacs-lisp :tangle init.el
   ;;; --- Main configuration file -*- mode: emacs-lisp; lexical-binding:t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
   ;; Keywords: initialization, modular
 
@@ -914,6 +914,18 @@ such as adjusting garbage collection thresholds and compatibility checks.
       (condition-case err
           (make-directory dir t)
         (error (warn "Failed to create directory: %s - %s" dir err)))))
+
+  (defun my:auto-tangle-updated-src-blocks ()
+    "Automatically tangle only updated src blocks when saving README.org."
+    (when (and buffer-file-name
+               (string= (file-name-nondirectory buffer-file-name) "README.org"))
+      (let ((org-confirm-babel-evaluate nil))
+        (org-babel-tangle))))
+
+  (add-hook 'org-mode-hook
+            (lambda ()
+              (add-hook 'after-save-hook #'my:auto-tangle-updated-src-blocks
+                        nil 'make-it-local)))
 
   ;; ---------------------------------------------------------------------------
   ;;; Directories
@@ -974,7 +986,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
 #+begin_src emacs-lisp :tangle user.el
   ;;; --- Personal Configuration -*- mode: emacs-lisp; lexical-binding:t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
   ;; Keywords: personal, device configuration
@@ -997,8 +1009,8 @@ such as adjusting garbage collection thresholds and compatibility checks.
   (leaf *personal
     :config
     ;; User information
-    (setq user-full-name "YAMASHITA Takao"
-          user-mail-address "ac1965@ty07.net"
+    (setq user-full-name "YAMASHITA, Takao"
+          user-mail-address "tjy1965@gmail.com"
           my:font-family "Iosevka Nerd Font"
           my:font-size 18
           inhibit-compacting-font-caches t
@@ -1071,10 +1083,10 @@ such as adjusting garbage collection thresholds and compatibility checks.
 #+begin_src emacs-lisp :tangle README.el
   ;;; --- Emacs Configuration -*- mode: emacs-lisp; lexical-binding:t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA Takao <ac1965@ty07.net>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/06/24 09:13:40 $
+  ;; $Lastupdate: 2025/06/24 13:10:22 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -1089,18 +1101,10 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;;; Package Setup
 
   (eval-and-compile
-    ;; Package sources
     (customize-set-variable
-     'package-archives
-     '(("gnu"   . "https://elpa.gnu.org/packages/")
-       ("melpa" . "https://melpa.org/packages/")))
-
-    ;; Bootstrap leaf
-    (unless (package-installed-p 'leaf)
-      (package-refresh-contents)
-      (package-install 'leaf))
-
-    ;; Core leaf and keywords
+     'package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
+                         ("melpa" . "https://melpa.org/packages/")))
+    (package-initialize)
     (use-package leaf :ensure t)
 
     (leaf leaf-keywords
@@ -1110,7 +1114,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
       :config
       (leaf-keywords-init)))
 
-  ;; Extra leaf tools
   (leaf leaf-convert
     :doc "Convert many format to leaf format"
     :ensure t)
@@ -1134,6 +1137,583 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; Loading user-specific settings.
   (setq user-specific-config (concat my:d user-login-name ".el"))
   (if (file-exists-p user-specific-config) (load user-specific-config))
+#+end_src
+
+*** Basic Configuration
+**** Save and Backup
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Insert a timestamp before saving the buffer
+  (defun my:save-buffer-wrapper ()
+    "Insert a timestamp at the top of the buffer before saving."
+    (interactive)
+    (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
+          (replace-match tostr t nil)))))
+
+  (add-hook 'before-save-hook #'my:save-buffer-wrapper)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; TRAMP Configuration
+  (leaf tramp
+    :pre-setq
+    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
+    :custom
+    `((tramp-default-method . "scp")
+      (tramp-verbose . 10)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Configure auto-save and backup settings
+  (leaf files
+    :custom
+    `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+      (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
+      (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
+      (delete-old-versions . t)
+      (auto-save-visited-interval . 2))
+    :global-minor-mode auto-save-visited-mode)
+#+end_src
+
+**** Editing Enhancements
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Saveplace (Cursor Position Persistence)
+  (leaf saveplace
+    :init
+    (setq save-place-file (concat no-littering-var-directory "saveplace"))
+    (save-place-mode +1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Recentf (Recent Files)
+  (leaf recentf
+    :init
+    (setq recentf-max-saved-items 100
+          recentf-save-file (concat no-littering-var-directory "recentf"))
+    (recentf-mode +1))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Savehist (History Persistence)
+  (leaf savehist
+    :custom
+    `((savehist-file . ,(concat no-littering-var-directory "savehist"))
+      (savehist-additional-variables '(kill-ring search-ring regexp-search-ring))
+      (savehist-autosave-interval . 300))  ;; Save every 5 minutes
+    :global-minor-mode t)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Auto-Revert (Automatic Reload)
+  (leaf autorevert
+    :custom
+    ((auto-revert-interval . 2)  ;; Reload every 2 seconds
+     (auto-revert-verbose . nil))  ;; Suppress messages
+    :global-minor-mode global-auto-revert-mode)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Paren (Parenthesis Highlighting)
+  (leaf paren
+    :custom
+    ((show-paren-delay . 0)
+     (show-paren-style . 'expression)
+     (show-paren-highlight-openparen . t))
+    :global-minor-mode show-paren-mode)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Puni (Smart Pairing)
+  (leaf puni
+    :ensure t
+    :global-minor-mode puni-global-mode
+    :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Tree-Sitter (Syntax Highlighting)
+  (leaf tree-sitter
+    :ensure t
+    :global-minor-mode global-tree-sitter-mode
+    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
+    :when (featurep 'treesit)
+    :custom ((treesit-font-lock-level . 3)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Tree-Sitter-Langs (Language Support)
+  (leaf tree-sitter-langs
+    :ensure t
+    :config
+    (when (require 'tree-sitter-langs nil t)
+      (unless (ignore-errors (directory-files (concat tree-sitter-langs--bin-dir "grammars/")))
+        (condition-case err
+            (tree-sitter-langs-install-grammars)
+          (error (message "Failed to install Tree-sitter grammars: %s" err))))))
+
+#+end_src
+
+**** System Utilities
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Garbage Collection Management (GCMH)
+  (leaf gcmh
+    :ensure t
+    :global-minor-mode gcmh-mode)  ;; Enable GCMH globally
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Shell Environment Variables Configuration
+  (defvar my:shell-env-vars
+    '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY")
+    "Environment variables to import from the shell.")
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Exec-Path-from-Shell Configuration
+  (leaf exec-path-from-shell
+    :ensure t
+    :if (memq window-system '(mac ns))
+    :config
+    (setq exec-path-from-shell-check-startup-files nil)
+    (setq exec-path-from-shell-variables my:shell-env-vars)
+    (exec-path-from-shell-initialize))
+#+end_src
+
+**** Completion Framework
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Completion Settings (Vertico, Corfu, and More)
+  (leaf completion-settings
+    :config
+
+    ;; ---------------------------------------------------------------------------
+    ;; Prescient: Sort and filter candidates based on usage history
+    (leaf prescient
+      :ensure t
+      :custom ((prescient-aggressive-file-save . t))  ;; Automatically save history
+      :global-minor-mode prescient-persist-mode)
+
+    ;; ---------------------------------------------------------------------------
+    ;; Vertico: Vertical completion menu
+    (leaf vertico
+      :ensure t
+      :global-minor-mode vertico-mode
+      :custom ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
+      :config
+      ;; Posframe integration for cleaner UI
+      (leaf vertico-posframe
+        :ensure t
+        :if (display-graphic-p)
+        :custom
+        ((vertico-posframe-border-width . 2)
+         (vertico-posframe-parameters . '((left-fringe . 4) (right-fringe . 4))))
+        :config
+        (vertico-posframe-mode 1)))
+
+    (leaf vertico-prescient
+      :ensure t
+      :after (vertico prescient)
+      :global-minor-mode t)
+
+    ;; ---------------------------------------------------------------------------
+    ;; Marginalia: Annotate candidates with additional context
+    (leaf marginalia
+      :ensure t
+      :global-minor-mode marginalia-mode)
+
+    ;; ---------------------------------------------------------------------------
+    ;; Consult: Enhanced search and navigation commands
+    (leaf consult
+      :ensure t
+      :custom
+      ((xref-show-xrefs-function . #'consult-xref)
+       (xref-show-definitions-function . #'consult-xref)))
+
+    ;; ---------------------------------------------------------------------------
+    ;; Embark: Context-aware actions for completion candidates
+    (leaf embark
+      :ensure t
+      :custom
+      ((prefix-help-command . #'embark-prefix-help-command)
+       (embark-collect-live-update . t))
+      :config
+      (add-hook 'embark-collect-mode-map #'embark-collect-live-mode)
+      (when (require 'all-the-icons nil t)
+        (setq embark-indicators
+              '(embark-minimal-indicator
+                embark-highlight-indicator
+                embark-isearch-highlight-indicator)))
+
+      ;; Integrate Embark with Consult
+      (leaf embark-consult
+        :ensure t
+        :after (embark consult)
+        :hook (embark-collect-mode . consult-preview-at-point-mode)
+        :custom (consult-preview-key . "M-.")))
+
+    ;; Embark keybindings within Vertico
+    (defun my:setup-embark-vertico-directory ()
+      "Integrate embark-act inside vertico-directory minibuffer."
+      (when (and (boundp 'vertico-map) (require 'embark nil t))
+        (define-key vertico-map (kbd "C-.") #'embark-act)
+        (define-key vertico-map (kbd "C-;") #'embark-dwim)))
+
+    (add-hook 'vertico-mode-hook #'my:setup-embark-vertico-directory)
+
+    ;; ---------------------------------------------------------------------------
+    ;; Corfu: Popup-based completion for `completion-at-point`
+    (leaf corfu
+      :ensure t
+      :init
+      (global-corfu-mode)  ;; Enable Corfu globally
+      :custom
+      ((corfu-auto . t)          ;; Enable auto-completion
+       (corfu-auto-delay . 0)    ;; No delay before showing candidates
+       (corfu-auto-prefix . 2)   ;; Trigger completion after 2 characters
+       (corfu-cycle . t))        ;; Cycle through candidates
+      :config
+      ;; Integrating cape completion sources into corfu
+      (add-to-list 'completion-at-point-functions #'cape-file)
+      (add-to-list 'completion-at-point-functions #'cape-dabbrev)
+      (add-to-list 'completion-at-point-functions #'cape-keyword)
+
+      ;; Add icons to completion candidates
+      (leaf kind-icon
+        :ensure t
+        :after corfu
+        :custom
+        ((kind-icon-default-face . 'corfu-default))
+        :config
+        (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
+
+    ;; ---------------------------------------------------------------------------
+    ;; Cape: Additional completion sources for Corfu
+    (leaf cape
+      :ensure t
+      :init
+      (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
+            '(cape-file cape-dabbrev cape-keyword)))
+
+    ;; ---------------------------------------------------------------------------
+    ;; Orderless: Fuzzy matching for completion
+    (leaf orderless
+      :ensure t
+      :custom
+      ((completion-styles . '(orderless basic))
+       (completion-category-overrides . '((file (styles . (partial-completion))))))))
+#+end_src
+
+**** Programming Utilities
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; LSP Configuration (Eglot or LSP-Mode)
+  (defvar my:use-lsp 'eglot) ;; Change to 'lsp if needed
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Eglot Configuration (Default)
+  (when (eq my:use-lsp 'eglot)
+    (leaf eglot
+      :hook (prog-mode . eglot-ensure)
+      :custom
+      `((eglot-autoshutdown . t)
+        (eglot-sync-connect . nil)
+        (eglot-events-buffer-size . 200))
+      :bind (:eglot-mode-map
+             ("C-c h" . eglot-help-at-point)
+             ("C-c r" . eglot-rename)
+             ("C-c a" . eglot-code-actions)
+             ("C-c d" . flymake-show-buffer-diagnostics))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; LSP-Mode Configuration (Optional)
+  (when (eq my:use-lsp 'lsp)
+    (leaf lsp-mode
+      :ensure t
+      :hook ((python-mode . lsp)
+             (rust-mode . lsp)
+             (go-mode . lsp)
+             (js-mode . lsp)
+             (typescript-mode . lsp)
+             (c-mode . lsp)
+             (c++-mode . lsp))
+      :custom
+      `((lsp-enable-snippet . t)
+        (lsp-idle-delay . 0.5)
+        (lsp-headerline-breadcrumb-enable . t)
+        (lsp-prefer-flymake . nil))
+      :config
+      (setq lsp-completion-provider :capf)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; LSP UI Configuration (LSP-Mode Only)
+  (leaf lsp-ui
+    :ensure t
+    :after lsp-mode
+    :custom
+    `((lsp-ui-doc-enable . t)
+      (lsp-ui-sideline-enable . t)
+      (lsp-ui-sideline-show-hover . t)
+      (lsp-ui-sideline-show-code-actions . t)
+      (lsp-ui-sideline-show-diagnostics . t)))
+#+end_src
+
+**** Org-mode
+***** Org-mode Core Setup
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Mode Configuration
+  (leaf org
+    :leaf-defer t
+    :preface
+    ;; Define Org Cloud Directory
+    (defvar warning-suppress-types nil)
+    (unless (boundp 'my:d:cloud)
+      (setq my:d:cloud (concat no-littering-var-directory "./")))
+
+    ;; Return list of opened Org mode buffer files
+    (defun org-buffer-files ()
+      "Return a list of opened Org mode buffer files."
+      (delq nil
+            (mapcar (lambda (buf) (buffer-file-name buf))
+                    (org-buffer-list 'files))))
+
+    ;; Show Org buffer file in current window
+    (defun show-org-buffer (file)
+      "Show an org FILE in the current buffer."
+      (interactive (list (read-file-name "Org file: " org-directory nil t)))
+      (let ((filepath (expand-file-name file org-directory)))
+        (if (get-file-buffer filepath)
+            (switch-to-buffer (get-file-buffer filepath))
+          (find-file filepath))))
+
+    :custom ((org-support-shift-select . t))
+    :init
+    ;; Set Org Directory
+    (setq org-directory (expand-file-name "org/" my:d:cloud))
+    (my:ensure-directory-exists org-directory)
+
+    ;; Link and Cache Settings
+    (setq org-return-follows-link t
+          org-mouse-1-follows-link t
+          warning-suppress-types (append warning-suppress-types '((org-element-cache)))
+          org-element-use-cache nil)
+
+    ;; LaTex to PDF
+    (setq org-latex-pdf-process
+  	'("pdflatex -interaction nonstopmode -output-directory %o %f"
+            "pdflatex -interaction nonstopmode -output-directory %o %f"))
+
+    :bind
+    (("C-M--" . #'(lambda () (interactive) (show-org-buffer "gtd.org")))
+     ("C-M-^" . #'(lambda () (interactive) (show-org-buffer "notes.org")))
+     ("C-M-~" . #'(lambda () (interactive) (show-org-buffer "kb.org"))))
+
+    :config
+    ;; General Org Settings
+    (setq org-agenda-files (list org-directory)
+          org-cycle-emulate-tab 'white-space
+          org-default-notes-file "notes.org"
+          org-enforce-todo-dependencies t
+          org-idle-time 0.3
+          org-log-done 'time
+          org-startup-folded 'content
+          org-startup-truncated nil
+          org-use-speed-commands t)
+
+    ;; File Link Settings
+    (setq org-link-frame-setup '((file . find-file)))
+
+    ;; Agenda File Configuration
+    (setq org-agenda-files
+          (seq-filter (lambda (file)
+                        (not (string-match-p "archives" file)))
+                      (directory-files-recursively org-directory "\\.org$")))
+
+    ;; TODO Keyword Configuration
+    (setq org-todo-keywords
+          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
+
+    ;; Refile Targets
+    (setq org-refile-targets
+          '((nil :maxlevel . 3)
+            (org-buffer-files :maxlevel . 1)
+            (org-agenda-files :maxlevel . 3)))
+
+    ;; Capture Templates
+    (setq org-capture-templates
+          `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
+             "* TODO %?\n %i\n %a")
+            ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
+             "* %?\nEntered on %U\n %i\n %a")
+            ("j" "Journal" entry (function org-journal-find-location)
+             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+            ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
+             "* MEETING with %? :meeting:\n  %U\n  %a"))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Modern Styling
+  (leaf org-modern
+    :config
+    (setopt
+     ;; Edit settings
+     org-startup-indented t
+     org-hide-leading-stars t
+     org-auto-align-tags nil
+     org-tags-column 0
+     org-catch-invisible-edits 'show-and-error
+     org-special-ctrl-a/e t
+     org-insert-heading-respect-content t
+
+     ;; Org styling, hide markup etc.
+     org-hide-emphasis-markers t
+     org-pretty-entities t
+
+     ;; Agenda styling
+     org-agenda-tags-column 0
+     org-agenda-block-separator ?─
+     org-agenda-time-grid
+     '((daily today require-timed)
+       (800 1000 1200 1400 1600 1800 2000)
+       " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+     org-agenda-current-time-string
+     "◀── now ─────────────────────────────────────────────────")
+
+    ;; Ellipsis styling
+    (setopt org-ellipsis " ▾")
+    (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil))
+#+end_src
+
+***** Org-mode Visual Enhancements
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Superstar Configuration (Enhanced Headings)
+  (leaf org-superstar
+    :after org
+    :custom
+    ;; Customize bullets for different headline levels
+    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
+    ;; Show leading stars in headlines (set to nil to hide)
+    (org-superstar-remove-leading-stars . nil)
+    ;; Automatically enable in Org Mode
+    :hook (org-mode . org-superstar-mode))
+#+end_src
+
+***** Additional Org-related packages
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Org LaTeX Export Configuration
+  (leaf org-latex
+    :after org
+    :custom
+    ;; LaTeX packages for enhanced formatting
+    (org-latex-packages-alist '(("" "graphicx" t)
+                                ("" "longtable" nil)
+                                ("" "wrapfig" nil)))
+    ;; PDF Export Process
+    (setq org-latex-pdf-process
+          '("pdflatex -interaction nonstopmode -output-directory %o %f"
+            "bibtex %b"
+            "pdflatex -interaction nonstopmode -output-directory %o %f"
+            "pdflatex -interaction nonstopmode -output-directory %o %f")))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Journal Configuration (Daily Notes)
+  (leaf org-journal
+    :ensure t
+    :after org
+    :config
+    ;; Set Journal Directory
+    (setq org-journal-dir (concat org-directory "/journal")
+          org-journal-enable-agenda-integration t)
+
+    ;; Quick access to today's journal entry
+    (defun org-journal-find-location ()
+      "Open today's journal entry."
+      (org-journal-new-entry t)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Babel (Executable Code Blocks)
+  (leaf ob
+    :after org
+    :defun org-babel-do-load-languages
+    :config
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     '((emacs-lisp . t)
+       (shell . t)
+       (python . t)
+       (R . t)
+       (ditaa . t)
+       (plantuml . t))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Roam (Networked Notes)
+  (leaf org-roam
+    :ensure t
+    :after org
+    :config
+    (setq org-roam-directory (concat org-directory "/org-roam"))
+    (unless (file-directory-p org-roam-directory)
+      (make-directory org-roam-directory t))
+    (org-roam-db-autosync-mode))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Download (Image Management)
+  (leaf org-download
+    :ensure t
+    :after org
+    :config
+    (setq org-download-image-dir (expand-file-name "pictures" org-directory))
+    (unless (file-directory-p org-download-image-dir)
+      (make-directory org-download-image-dir t)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; TOC-Org (Table of Contents)
+  (leaf toc-org
+    :ensure t
+    :after org markdown-mode
+    :config
+    (add-hook 'org-mode-hook 'toc-org-enable)
+    (add-hook 'markdown-mode-hook 'toc-org-mode))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Org-Cliplink (Insert Clickable Links)
+  (leaf org-cliplink
+    :ensure t
+    :after org
+    :bind ("C-x p i" . org-cliplink))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Org Export to Hugo (Static Site Generation)
+  (leaf ox-hugo
+    :ensure t
+    :require t
+    :after ox
+    :custom ((org-hugo-front-matter-format . "toml")))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Hugo Blog Capture Template (Org-Capture)
+  (leaf *ox-hugo--capture
+    :require org-capture
+    :defvar (org-capture-templates)
+    :config
+    (defun generate-safe-filename ()
+      "Generate a unique and safe filename for Hugo export."
+      (format "%s-%s" (format-time-string "%Y")
+              (string-trim (shell-command-to-string "uuidgen | cut -c1-8"))))
+    (add-to-list 'org-capture-templates
+                 '("b" "Create new blog post" entry
+                   (file+headline my:f:capture-blog-file "blog")
+                   "** TODO %?\n  :PROPERTIES:\n  :EXPORT_FILE_NAME: %(generate-safe-filename)\n  :EXPORT_DATE:\n  :EXPORT_HUGO_TAGS:\n  :EXPORT_HUGO_CATEGORIES:\n  :EXPORT_HUGO_LASTMOD:\n  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false\n  :END:\n\n")))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Markdown Mode Configuration
+  (leaf markdown-mode
+    :ensure t
+    :mode ("\\.md\\'" . markdown-mode))
 #+end_src
 
 *** UI/Fonts/Keybind
@@ -1462,144 +2042,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
                           'my:dired-view-file-other-window)))
 #+end_src
 
-*** Basic Configuration
-**** Save and Backup
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Insert a timestamp before saving the buffer
-  (defun my:save-buffer-wrapper ()
-    "Insert a timestamp at the top of the buffer before saving."
-    (interactive)
-    (let ((tostr (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
-      (save-excursion
-        (goto-char (point-min))
-        (while (re-search-forward "\\$Lastupdate\\([0-9/: ]*\\)?\\$" nil t)
-          (replace-match tostr t nil)))))
-
-  (add-hook 'before-save-hook #'my:save-buffer-wrapper)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; TRAMP Configuration
-  (leaf tramp
-    :pre-setq
-    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-    :custom
-    `((tramp-default-method . "scp")
-      (tramp-verbose . 10)))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Configure auto-save and backup settings
-  (leaf files
-    :custom
-    `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
-      (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
-      (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
-      (delete-old-versions . t)
-      (auto-save-visited-interval . 2))
-    :global-minor-mode auto-save-visited-mode)
-#+end_src
-
-**** Editing Enhancements
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Saveplace (Cursor Position Persistence)
-  (leaf saveplace
-    :init
-    (setq save-place-file (concat no-littering-var-directory "saveplace"))
-    (save-place-mode +1))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Recentf (Recent Files)
-  (leaf recentf
-    :init
-    (setq recentf-max-saved-items 100
-          recentf-save-file (concat no-littering-var-directory "recentf"))
-    (recentf-mode +1))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Savehist (History Persistence)
-  (leaf savehist
-    :custom
-    `((savehist-file . ,(concat no-littering-var-directory "savehist"))
-      (savehist-additional-variables '(kill-ring search-ring regexp-search-ring))
-      (savehist-autosave-interval . 300))  ;; Save every 5 minutes
-    :global-minor-mode t)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Auto-Revert (Automatic Reload)
-  (leaf autorevert
-    :custom
-    ((auto-revert-interval . 2)  ;; Reload every 2 seconds
-     (auto-revert-verbose . nil))  ;; Suppress messages
-    :global-minor-mode global-auto-revert-mode)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Paren (Parenthesis Highlighting)
-  (leaf paren
-    :custom
-    ((show-paren-delay . 0)
-     (show-paren-style . 'expression)
-     (show-paren-highlight-openparen . t))
-    :global-minor-mode show-paren-mode)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Puni (Smart Pairing)
-  (leaf puni
-    :ensure t
-    :global-minor-mode puni-global-mode
-    :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Tree-Sitter (Syntax Highlighting)
-  (leaf tree-sitter
-    :ensure t
-    :global-minor-mode global-tree-sitter-mode
-    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
-    :when (featurep 'treesit)
-    :custom ((treesit-font-lock-level . 3)))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Tree-Sitter-Langs (Language Support)
-  (leaf tree-sitter-langs
-    :ensure t
-    :config
-    (when (require 'tree-sitter-langs nil t)
-      (unless (ignore-errors (directory-files (concat tree-sitter-langs--bin-dir "grammars/")))
-        (condition-case err
-            (tree-sitter-langs-install-grammars)
-          (error (message "Failed to install Tree-sitter grammars: %s" err))))))
-
-#+end_src
-
-**** System Utilities
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Garbage Collection Management (GCMH)
-  (leaf gcmh
-    :ensure t
-    :global-minor-mode gcmh-mode)  ;; Enable GCMH globally
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Shell Environment Variables Configuration
-  (defvar my:shell-env-vars
-    '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY")
-    "Environment variables to import from the shell.")
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Exec-Path-from-Shell Configuration
-  (leaf exec-path-from-shell
-    :ensure t
-    :if (memq window-system '(mac ns))
-    :config
-    (setq exec-path-from-shell-check-startup-files nil)
-    (setq exec-path-from-shell-variables my:shell-env-vars)
-    (exec-path-from-shell-initialize))
-#+end_src
-
 *** Utilities Package
 **** Extra Utilities
 
@@ -1833,506 +2275,9 @@ such as adjusting garbage collection thresholds and compatibility checks.
       (message "Ellama configuration is incomplete. Verify providers.")))
 #+end_src
 
-**** Programming Utilities
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; LSP Configuration (Eglot or LSP-Mode)
-  (defvar my:use-lsp 'eglot) ;; Change to 'lsp if needed
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Eglot Configuration (Default)
-  (when (eq my:use-lsp 'eglot)
-    (leaf eglot
-      :hook (prog-mode . eglot-ensure)
-      :custom
-      `((eglot-autoshutdown . t)
-        (eglot-sync-connect . nil)
-        (eglot-events-buffer-size . 200))
-      :bind (:eglot-mode-map
-             ("C-c h" . eglot-help-at-point)
-             ("C-c r" . eglot-rename)
-             ("C-c a" . eglot-code-actions)
-             ("C-c d" . flymake-show-buffer-diagnostics))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; LSP-Mode Configuration (Optional)
-  (when (eq my:use-lsp 'lsp)
-    (leaf lsp-mode
-      :ensure t
-      :hook ((python-mode . lsp)
-             (rust-mode . lsp)
-             (go-mode . lsp)
-             (js-mode . lsp)
-             (typescript-mode . lsp)
-             (c-mode . lsp)
-             (c++-mode . lsp))
-      :custom
-      `((lsp-enable-snippet . t)
-        (lsp-idle-delay . 0.5)
-        (lsp-headerline-breadcrumb-enable . t)
-        (lsp-prefer-flymake . nil))
-      :config
-      (setq lsp-completion-provider :capf)))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; LSP UI Configuration (LSP-Mode Only)
-  (leaf lsp-ui
-    :ensure t
-    :after lsp-mode
-    :custom
-    `((lsp-ui-doc-enable . t)
-      (lsp-ui-sideline-enable . t)
-      (lsp-ui-sideline-show-hover . t)
-      (lsp-ui-sideline-show-code-actions . t)
-      (lsp-ui-sideline-show-diagnostics . t)))
-#+end_src
-
-**** Completion Framework
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Completion Settings (Vertico, Corfu, and More)
-  (leaf completion-settings
-    :config
-
-    ;; ---------------------------------------------------------------------------
-    ;; Prescient: Sort and filter candidates based on usage history
-    (leaf prescient
-      :ensure t
-      :custom ((prescient-aggressive-file-save . t))  ;; Automatically save history
-      :global-minor-mode prescient-persist-mode)
-
-    ;; ---------------------------------------------------------------------------
-    ;; Vertico: Vertical completion menu
-    (leaf vertico
-      :ensure t
-      :global-minor-mode vertico-mode
-      :custom ((vertico-count . 15))  ;; Show up to 15 candidates in the menu
-      :config
-      ;; Posframe integration for cleaner UI
-      (leaf vertico-posframe
-        :ensure t
-        :if (display-graphic-p)
-        :custom
-        ((vertico-posframe-border-width . 2)
-         (vertico-posframe-parameters . '((left-fringe . 4) (right-fringe . 4))))
-        :config
-        (vertico-posframe-mode 1)))
-
-    (leaf vertico-prescient
-      :ensure t
-      :after (vertico prescient)
-      :global-minor-mode t)
-
-    ;; ---------------------------------------------------------------------------
-    ;; Marginalia: Annotate candidates with additional context
-    (leaf marginalia
-      :ensure t
-      :global-minor-mode marginalia-mode)
-
-    ;; ---------------------------------------------------------------------------
-    ;; Consult: Enhanced search and navigation commands
-    (leaf consult
-      :ensure t
-      :custom
-      ((xref-show-xrefs-function . #'consult-xref)
-       (xref-show-definitions-function . #'consult-xref)))
-
-    ;; ---------------------------------------------------------------------------
-    ;; Embark: Context-aware actions for completion candidates
-    (leaf embark
-      :ensure t
-      :custom
-      ((prefix-help-command . #'embark-prefix-help-command)
-       (embark-collect-live-update . t))
-      :config
-      (add-hook 'embark-collect-mode-map #'embark-collect-live-mode)
-      (when (require 'all-the-icons nil t)
-        (setq embark-indicators
-              '(embark-minimal-indicator
-                embark-highlight-indicator
-                embark-isearch-highlight-indicator)))
-
-      ;; Integrate Embark with Consult
-      (leaf embark-consult
-        :ensure t
-        :after (embark consult)
-        :hook (embark-collect-mode . consult-preview-at-point-mode)
-        :custom (consult-preview-key . "M-.")))
-
-    ;; Embark keybindings within Vertico
-    (defun my:setup-embark-vertico-directory ()
-      "Integrate embark-act inside vertico-directory minibuffer."
-      (when (and (boundp 'vertico-map) (require 'embark nil t))
-        (define-key vertico-map (kbd "C-.") #'embark-act)
-        (define-key vertico-map (kbd "C-;") #'embark-dwim)))
-
-    (add-hook 'vertico-mode-hook #'my:setup-embark-vertico-directory)
-
-    ;; ---------------------------------------------------------------------------
-    ;; Corfu: Popup-based completion for `completion-at-point`
-    (leaf corfu
-      :ensure t
-      :init
-      (global-corfu-mode)  ;; Enable Corfu globally
-      :custom
-      ((corfu-auto . t)          ;; Enable auto-completion
-       (corfu-auto-delay . 0)    ;; No delay before showing candidates
-       (corfu-auto-prefix . 2)   ;; Trigger completion after 2 characters
-       (corfu-cycle . t))        ;; Cycle through candidates
-      :config
-      ;; Integrating cape completion sources into corfu
-      (add-to-list 'completion-at-point-functions #'cape-file)
-      (add-to-list 'completion-at-point-functions #'cape-dabbrev)
-      (add-to-list 'completion-at-point-functions #'cape-keyword)
-
-      ;; Add icons to completion candidates
-      (leaf kind-icon
-        :ensure t
-        :after corfu
-        :custom
-        ((kind-icon-default-face . 'corfu-default))
-        :config
-        (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)))
-
-    ;; ---------------------------------------------------------------------------
-    ;; Cape: Additional completion sources for Corfu
-    (leaf cape
-      :ensure t
-      :init
-      (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
-            '(cape-file cape-dabbrev cape-keyword)))
-
-    ;; ---------------------------------------------------------------------------
-    ;; Orderless: Fuzzy matching for completion
-    (leaf orderless
-      :ensure t
-      :custom
-      ((completion-styles . '(orderless basic))
-       (completion-category-overrides . '((file (styles . (partial-completion))))))))
-#+end_src
-
-**** Org-kmode
-***** Org-mode Core Setup
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Org Mode Configuration
-  (leaf org
-    :leaf-defer t
-    :preface
-    ;; Define Org Cloud Directory
-    (defvar warning-suppress-types nil)
-    (unless (boundp 'my:d:cloud)
-      (setq my:d:cloud (concat no-littering-var-directory "./")))
-
-    ;; Return list of opened Org mode buffer files
-    (defun org-buffer-files ()
-      "Return a list of opened Org mode buffer files."
-      (delq nil
-            (mapcar (lambda (buf) (buffer-file-name buf))
-                    (org-buffer-list 'files))))
-
-    ;; Show Org buffer file in current window
-    (defun show-org-buffer (file)
-      "Show an org FILE in the current buffer."
-      (interactive (list (read-file-name "Org file: " org-directory nil t)))
-      (let ((filepath (expand-file-name file org-directory)))
-        (if (get-file-buffer filepath)
-            (switch-to-buffer (get-file-buffer filepath))
-          (find-file filepath))))
-
-    :custom ((org-support-shift-select . t))
-    :init
-    ;; Set Org Directory
-    (setq org-directory (expand-file-name "org/" my:d:cloud))
-    (my:ensure-directory-exists org-directory)
-
-    ;; Link and Cache Settings
-    (setq org-return-follows-link t
-          org-mouse-1-follows-link t
-          warning-suppress-types (append warning-suppress-types '((org-element-cache)))
-          org-element-use-cache nil)
-
-    ;; LaTex to PDF
-    (setq org-latex-pdf-process
-  	'("pdflatex -interaction nonstopmode -output-directory %o %f"
-            "pdflatex -interaction nonstopmode -output-directory %o %f"))
-
-    :bind
-    (("C-M--" . #'(lambda () (interactive) (show-org-buffer "gtd.org")))
-     ("C-M-^" . #'(lambda () (interactive) (show-org-buffer "notes.org")))
-     ("C-M-~" . #'(lambda () (interactive) (show-org-buffer "kb.org"))))
-
-    :config
-    ;; General Org Settings
-    (setq org-agenda-files (list org-directory)
-          org-cycle-emulate-tab 'white-space
-          org-default-notes-file "notes.org"
-          org-enforce-todo-dependencies t
-          org-idle-time 0.3
-          org-log-done 'time
-          org-startup-folded 'content
-          org-startup-truncated nil
-          org-use-speed-commands t)
-
-    ;; File Link Settings
-    (setq org-link-frame-setup '((file . find-file)))
-
-    ;; Agenda File Configuration
-    (setq org-agenda-files
-          (seq-filter (lambda (file)
-                        (not (string-match-p "archives" file)))
-                      (directory-files-recursively org-directory "\\.org$")))
-
-    ;; TODO Keyword Configuration
-    (setq org-todo-keywords
-          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
-
-    ;; Refile Targets
-    (setq org-refile-targets
-          '((nil :maxlevel . 3)
-            (org-buffer-files :maxlevel . 1)
-            (org-agenda-files :maxlevel . 3)))
-
-    ;; Capture Templates
-    (setq org-capture-templates
-          `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
-             "* TODO %?\n %i\n %a")
-            ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
-             "* %?\nEntered on %U\n %i\n %a")
-            ("j" "Journal" entry (function org-journal-find-location)
-             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-            ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
-             "* MEETING with %? :meeting:\n  %U\n  %a"))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Org Modern Styling
-  (leaf org-modern
-    :config
-    (setopt
-     ;; Edit settings
-     org-startup-indented t
-     org-hide-leading-stars t
-     org-auto-align-tags nil
-     org-tags-column 0
-     org-catch-invisible-edits 'show-and-error
-     org-special-ctrl-a/e t
-     org-insert-heading-respect-content t
-
-     ;; Org styling, hide markup etc.
-     org-hide-emphasis-markers t
-     org-pretty-entities t
-
-     ;; Agenda styling
-     org-agenda-tags-column 0
-     org-agenda-block-separator ?─
-     org-agenda-time-grid
-     '((daily today require-timed)
-       (800 1000 1200 1400 1600 1800 2000)
-       " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
-     org-agenda-current-time-string
-     "◀── now ─────────────────────────────────────────────────")
-
-    ;; Ellipsis styling
-    (setopt org-ellipsis " ▾")
-    (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil))
-#+end_src
-
-***** Org-mode Visual Enhancements
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Org Superstar Configuration (Enhanced Headings)
-  (leaf org-superstar
-    :after org
-    :custom
-    ;; Customize bullets for different headline levels
-    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
-    ;; Show leading stars in headlines (set to nil to hide)
-    (org-superstar-remove-leading-stars . nil)
-    ;; Automatically enable in Org Mode
-    :hook (org-mode . org-superstar-mode))
-#+end_src
-
-***** Additional Org-related packages
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Org LaTeX Export Configuration
-  (leaf org-latex
-    :after org
-    :custom
-    ;; LaTeX packages for enhanced formatting
-    (org-latex-packages-alist '(("" "graphicx" t)
-                                ("" "longtable" nil)
-                                ("" "wrapfig" nil)))
-    ;; PDF Export Process
-    (setq org-latex-pdf-process
-          '("pdflatex -interaction nonstopmode -output-directory %o %f"
-            "bibtex %b"
-            "pdflatex -interaction nonstopmode -output-directory %o %f"
-            "pdflatex -interaction nonstopmode -output-directory %o %f")))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Org-Journal Configuration (Daily Notes)
-  (leaf org-journal
-    :ensure t
-    :after org
-    :config
-    ;; Set Journal Directory
-    (setq org-journal-dir (concat org-directory "/journal")
-          org-journal-enable-agenda-integration t)
-
-    ;; Quick access to today's journal entry
-    (defun org-journal-find-location ()
-      "Open today's journal entry."
-      (org-journal-new-entry t)))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Org-Babel (Executable Code Blocks)
-  (leaf ob
-    :after org
-    :defun org-babel-do-load-languages
-    :config
-    (org-babel-do-load-languages
-     'org-babel-load-languages
-     '((emacs-lisp . t)
-       (shell . t)
-       (python . t)
-       (R . t)
-       (ditaa . t)
-       (plantuml . t))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Org-Roam (Networked Notes)
-  (leaf org-roam
-    :ensure t
-    :after org
-    :config
-    (setq org-roam-directory (concat org-directory "/org-roam"))
-    (unless (file-directory-p org-roam-directory)
-      (make-directory org-roam-directory t))
-    (org-roam-db-autosync-mode))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Org-Download (Image Management)
-  (leaf org-download
-    :ensure t
-    :after org
-    :config
-    (setq org-download-image-dir (expand-file-name "pictures" org-directory))
-    (unless (file-directory-p org-download-image-dir)
-      (make-directory org-download-image-dir t)))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; TOC-Org (Table of Contents)
-  (leaf toc-org
-    :ensure t
-    :after org markdown-mode
-    :config
-    (add-hook 'org-mode-hook 'toc-org-enable)
-    (add-hook 'markdown-mode-hook 'toc-org-mode))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Org-Cliplink (Insert Clickable Links)
-  (leaf org-cliplink
-    :ensure t
-    :after org
-    :bind ("C-x p i" . org-cliplink))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Org Export to Hugo (Static Site Generation)
-  (leaf ox-hugo
-    :ensure t
-    :require t
-    :after ox
-    :custom ((org-hugo-front-matter-format . "toml")))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Hugo Blog Capture Template (Org-Capture)
-  (leaf *ox-hugo--capture
-    :require org-capture
-    :defvar (org-capture-templates)
-    :config
-    (defun generate-safe-filename ()
-      "Generate a unique and safe filename for Hugo export."
-      (format "%s-%s" (format-time-string "%Y")
-              (string-trim (shell-command-to-string "uuidgen | cut -c1-8"))))
-    (add-to-list 'org-capture-templates
-                 '("b" "Create new blog post" entry
-                   (file+headline my:f:capture-blog-file "blog")
-                   "** TODO %?\n  :PROPERTIES:\n  :EXPORT_FILE_NAME: %(generate-safe-filename)\n  :EXPORT_DATE:\n  :EXPORT_HUGO_TAGS:\n  :EXPORT_HUGO_CATEGORIES:\n  :EXPORT_HUGO_LASTMOD:\n  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false\n  :END:\n\n")))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Markdown Mode Configuration
-  (leaf markdown-mode
-    :ensure t
-    :mode ("\\.md\\'" . markdown-mode))
-#+end_src
-
 **** Miscellaneous Helper Functions
 
 #+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Auto Tangle Updated Org Src Blocks
-  ;; This configuration automatically tangles only the updated
-  ;; source blocks in `README.org` when the file is saved.
-  ;; It calculates a hash for each src-block before saving,
-  ;; compares them after saving, and only tangles blocks whose
-  ;; content has changed.
-  ;; This reduces redundant tangling and improves performance
-  ;; in literate Emacs configurations.
-  (leaf my:org-auto-tangle
-    :hook
-    (org-mode . my:org-auto-tangle-setup)
-
-    :init
-    (defvar-local my:src-block-checksums nil
-      "An alist mapping org src-block positions to their content hash.")
-
-    :config
-    (defun my:compute-src-block-hashes ()
-      "Return an alist of src-block positions and their SHA1 content hashes."
-      (org-element-map (org-element-parse-buffer) 'src-block
-        (lambda (el)
-          (let ((begin (org-element-property :begin el))
-                (content (org-element-property :value el)))
-            (cons begin (secure-hash 'sha1 content))))))
-
-    (defun my:init-src-block-checksums ()
-      "Initialize src-block checksums before saving."
-      (when (my:readme-p)
-        (setq my:src-block-checksums (my:compute-src-block-hashes))))
-
-    (defun my:tangle-updated-src-blocks ()
-      "Tangle only the src blocks whose content has changed since last save."
-      (when (my:readme-p)
-        (let* ((org-confirm-babel-evaluate nil)
-               (current-hashes (my:compute-src-block-hashes)))
-          (dolist (entry current-hashes)
-            (let ((pos (car entry))
-                  (new-hash (cdr entry)))
-              (unless (equal new-hash (alist-get pos my:src-block-checksums))
-                (save-excursion
-                  (goto-char pos)
-                  (let ((info (org-babel-get-src-block-info)))
-                    (when info
-                      (org-babel-tangle-single-block 1)))))))
-          (setq my:src-block-checksums current-hashes))))
-
-    (defun my:readme-p ()
-      "Return non-nil if current buffer is README.org."
-      (and buffer-file-name
-           (string= (file-name-nondirectory buffer-file-name) "README.org")))
-
-    (defun my:org-auto-tangle-setup ()
-      "Setup hooks for auto tangling only updated src blocks."
-      (when (my:readme-p)
-        (add-hook 'before-save-hook #'my:init-src-block-checksums nil t)
-        (add-hook 'after-save-hook #'my:tangle-updated-src-blocks nil t))))
-
   ;; ---------------------------------------------------------------------------
   ;;; Scratch Buffer Utility
   (defun my:create-scratch-buffer ()
@@ -2529,7 +2474,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   (add-hook 'text-mode-hook 'goto-address-mode)
 #+end_src
 
-**** Footer
+*** Footer
 #+begin_src emacs-lisp :tangle README.el
   (provide 'README)
   ;;; README.el ends here
