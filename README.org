@@ -1006,7 +1006,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
 
 **
 
-** User Configuration
+** User Configuqration
 
 #+begin_src emacs-lisp :tangle user.el
   ;;; --- Personal Configuration -*- mode: emacs-lisp; lexical-binding:t; -*-
@@ -1022,7 +1022,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;;
   ;; Included settings:
   ;; - Personal identity (full name, email address)
-  ;; - Font customization using `my:font-family` and `my:font-size`
+  ;; - Font customization using `my:font-default` and `my:font-size`
   ;; - Directory constants for cloud documents and blog development
   ;; - Miscellaneous performance and compatibility settings
   ;;
@@ -1033,43 +1033,48 @@ such as adjusting garbage collection thresholds and compatibility checks.
 
   (leaf *personal
     :config
-    ;; User information
+    ;; User identity
     (setq user-full-name "YAMASHITA, Takao"
           user-mail-address "tjy1965@gmail.com"
-          my:font-family "Iosevka Nerd Font"
+          my:font-default "Iosevka Nerd Font"
+          my:font-alt "Iosevka"
           my:font-size 18
           inhibit-compacting-font-caches t
           plstore-cache-passphrase-for-symmetric-encryption t)
 
-    ;; Font settings
-    (set-face-attribute 'default nil
-                        :family my:font-family
-                        :height (* my:font-size 10))
-
-    ;; Define essential directories
+    ;; Directory definitions
     (defconst my:d:cloud "~/Documents/"
-      "Directory for cloud-synced documents.")
-    (defconst my:d:blog (concat my:d:cloud "devel/repos/mysite/")
+      "Top-level directory for cloud-synced documents.")
+
+    (defconst my:d:blog
+      (concat my:d:cloud "devel/repos/mysite/")
       "Directory for blog development.")
+
     (defconst my:f:capture-blog-file
       (expand-file-name "all-posts.org" my:d:blog)
-      "Path to the blog capture file.")
-    (defvar my:excluded-directories '("/Users/ac1965/Library/Accounts"))
+      "File path for blog post capture.")
 
-    ;; Function to ensure directories exist
+    (defvar my:excluded-directories
+      '("/Users/ac1965/Library/Accounts")
+      "List of directories to exclude from certain operations.")
+
+    ;; Ensure directory exists
     (defun ensure-directory (dir)
-      "Ensure that DIR exists, except for excluded directories."
-      (message "Checking directory: %s" dir)
+      "Ensure that DIR exists and is a directory.
+  Skips directories listed in `my:excluded-directories`."
       (unless (member dir my:excluded-directories)
-        (if (file-exists-p dir)
-            (unless (file-directory-p dir)
-              (warn "Path exists but is not a directory: %s" dir))
-          (warn "Directory does not exist: %s" dir))))
+        (message "Checking directory: %s" dir)
+        (cond
+         ((not (file-exists-p dir))
+          (warn "Directory does not exist: %s" dir))
+         ((not (file-directory-p dir))
+          (warn "Path exists but is not a directory: %s" dir)))))
 
-    ;; Ensure essential directories exist
-    (mapc #'ensure-directory (list my:d:cloud my:d:blog))
+    ;; Ensure key directories are valid
+    (let ((essential-dirs (list my:d:cloud my:d:blog)))
+      (mapc #'ensure-directory essential-dirs))
 
-    ;; Exclude directories in load-path
+    ;; Remove excluded directories from `load-path`
     (setq load-path
           (seq-remove (lambda (dir)
                         (member dir my:excluded-directories))
@@ -1111,7 +1116,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/11 09:06:09 $
+  ;; $Lastupdate: 2025/07/12 15:47:10 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -1229,6 +1234,14 @@ such as adjusting garbage collection thresholds and compatibility checks.
       (savehist-additional-variables '(kill-ring search-ring regexp-search-ring))
       (savehist-autosave-interval . 300))  ;; Save every 5 minutes
     :global-minor-mode t)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Smartparens
+  (leaf smartparens
+    :ensure t
+    :hook ((prog-mode . smartparens-mode))
+    :config
+    (require 'smartparens-config))
 
   ;; ---------------------------------------------------------------------------
   ;;; Auto-Revert (Automatic Reload)
@@ -1745,60 +1758,109 @@ such as adjusting garbage collection thresholds and compatibility checks.
 **** Fonts
 
 #+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Font Setup
+  ;;; Font Setup ---------------------------------------------------------------
 
   ;; Utility function to check if a font exists on the system.
   (defun font-exists-p (font-name)
     "Check if FONT-NAME is available in the system."
     (find-font (font-spec :family font-name)))
 
-  ;; Configure the default font and emoji font, adjusting for display or daemon mode.
-  (defvar my:emoji-font "Noto Color Emoji" "Default emoji font for Emacs.")
-
-  (defun font-setup (&optional frame)
-    "Apply font settings to FRAME or the current frame."
-    (when (and my:font-family (font-exists-p my:font-family))
-      (set-face-attribute 'default frame :family my:font-family
-                          :height (* my:font-size 10))
-      (when (and my:emoji-font (font-exists-p my:emoji-font))
-        (set-fontset-font t 'unicode
-                          (font-spec :family my:emoji-font) nil 'prepend))))
-
-  ;; Set default font family and size based on system
-  (defvar my:font-family
+  ;; Default font family
+  (defvar my:font-default
     (or (getenv "EMACS_FONT_FAMILY")
         (cond
          ((eq system-type 'windows-nt) "Consolas")
          ((eq system-type 'darwin) "SF Mono")
          (t "Monospace")))
-    "Default font family for Emacs.")
+    "Default font for Emacs.")
 
-  (when (not (font-exists-p my:font-family))
-    (setq my:font-family (face-attribute 'default :family)))
+  ;; Alternate font for variable-pitch, comments, etc.
+  (defvar my:font-alt
+    (or (getenv "EMACS_FONT_ALT")
+        (cond
+         ((eq system-type 'windows-nt) "Consolas")
+         ((eq system-type 'darwin) "SF Mono")
+         (t "Monospace")))
+    "Alternate font for Emacs (e.g., for comments).")
 
+  ;; Default font size
   (defvar my:font-size
-    (or (getenv "EMACS_FONT_SIZE")
+    (let ((env (getenv "EMACS_FONT_SIZE")))
+      (if env
+          (string-to-number env)
         (if (and (display-graphic-p)
                  (display-pixel-width)
                  (> (display-pixel-width) 1920))
-            18
-          16))
+            24
+          20)))
     "Default font size for Emacs.")
 
-  ;; Apply font settings
+  ;; Emoji font
+  (defvar my:emoji-font "Noto Color Emoji"
+    "Default emoji font for Emacs.")
+
+  (defun font-setup (&optional frame)
+    "Apply font settings to FRAME or the currently selected frame.
+  This includes default, variable-pitch, and emoji fonts if available."
+    (let ((target-frame (or frame (selected-frame))))
+      ;; Only proceed if in graphical mode
+      (when (display-graphic-p target-frame)
+        ;; Ensure font-exists-p is defined
+        (unless (fboundp 'font-exists-p)
+          (defun font-exists-p (font)
+            "Return non-nil if FONT is available on the system."
+            (if (find-font (font-spec :name font)) t nil)))
+
+        ;; Apply default font
+        (when (and (boundp 'my:font-default)
+                   (font-exists-p my:font-default))
+          (set-face-attribute 'default target-frame
+                              :family my:font-default
+                              :height (* my:font-size 10))
+          (message "✅ Default font set: %s (%dpt)" my:font-default my:font-size))
+
+        ;; Apply variable-pitch font
+        (when (and (boundp 'my:font-alt)
+                   (font-exists-p my:font-alt))
+          (set-face-attribute 'variable-pitch target-frame
+                              :family my:font-alt)
+          (message "✅ Variable-pitch font set: %s" my:font-alt))
+
+        ;; Apply emoji font if defined
+        (when (and (boundp 'my:emoji-font)
+                   (font-exists-p my:emoji-font))
+          (set-fontset-font t 'unicode
+                            (font-spec :family my:emoji-font) nil 'prepend)
+          (message "✅ Emoji font set: %s" my:emoji-font)))))
+
+  ;; Hook to apply font settings for daemon-created frames
+  (defun my:font-setup-on-frame (frame)
+    "Apply `font-setup` to newly created FRAME in daemon mode."
+    (when (display-graphic-p frame)
+      (with-selected-frame frame
+        (font-setup))))
+
+  ;; Apply font settings based on session type
   (if (daemonp)
-      (add-hook 'after-make-frame-functions
-                (lambda (frame)
-                  (when (display-graphic-p frame)
-                    (font-setup frame))))
+      (add-hook 'after-make-frame-functions #'my:font-setup-on-frame)
     (when (display-graphic-p)
       (font-setup)))
+
+  ;; Theme-dependent face configuration
+  (add-hook 'after-load-theme-hook
+            (lambda ()
+              (when (and my:font-alt (font-exists-p my:font-alt))
+                (set-face-attribute 'font-lock-comment-face nil
+                                    :family my:font-alt
+                                    :slant 'italic)
+                (set-face-attribute 'font-lock-doc-face nil
+                                    :family my:font-alt
+                                    :slant 'italic)
+                (message "Comment/doc font set to: %s" my:font-alt))))
 
   ;; ---------------------------------------------------------------------------
   ;;; Nerd Icons Setup
   (defvar my:nerd-icons-font "Symbols Nerd Font Mono" "Font for Nerd Icons.")
-
   (leaf nerd-icons
     :ensure t
     :if (display-graphic-p)
@@ -1810,14 +1872,16 @@ such as adjusting garbage collection thresholds and compatibility checks.
     :if (display-graphic-p)
     :hook (dired-mode . nerd-icons-dired-mode))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Ligature Setup (Programming Fonts)
-  (defvar my:ligature-font "Fira Code" "Default font for programming ligatures.")
+  ;;; Ligature Setup ------------------------------------------------------------
+
+  (defvar my:ligature-font "Fira Code"
+    "Default font for programming ligatures.")
 
   (leaf ligature
     :ensure t
     :config
-    (when (and (font-exists-p my:font-family) (font-exists-p my:ligature-font))
+    (when (and (font-exists-p my:font-default)
+               (font-exists-p my:ligature-font))
       (ligature-set-ligatures 'prog-mode
                               '("->" "=>" "::" "===" "!=" "&&" "||" "|||"
                                 ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
