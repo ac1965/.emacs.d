@@ -1036,9 +1036,9 @@ such as adjusting garbage collection thresholds and compatibility checks.
     ;; User identity
     (setq user-full-name "YAMASHITA, Takao"
           user-mail-address "tjy1965@gmail.com"
-          my:font-default "Iosevka Nerd Font"
-          my:font-alt "Iosevka"
-          my:font-size 18
+          my:font-default "JetBrains Mono"
+          my:font-alt "Iosevka Nerd Font"
+          my:font-size 16
           inhibit-compacting-font-caches t
           plstore-cache-passphrase-for-symmetric-encryption t)
 
@@ -1108,7 +1108,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
 #+end_src
 
 ** Main Configuration
-*** README Header
+*** Header
 
 #+begin_src emacs-lisp :tangle README.el
   ;;; --- Emacs Configuration -*- mode: emacs-lisp; lexical-binding:t; -*-
@@ -1116,7 +1116,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/12 16:10:56 $
+  ;; $Lastupdate: 2025/07/13 10:07:08 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -1159,12 +1159,12 @@ such as adjusting garbage collection thresholds and compatibility checks.
           no-littering-var-directory my:d:var))
 #+end_src
 
-*** Load Configuration
+*** Loading user-specific settings
 
 #+begin_src emacs-lisp :tangle README.el
   ;; ---------------------------------------------------------------------------
   ;;; Load Configuration from user-specific-config
-  ;; Loading user-specific settings.
+
   (setq user-specific-config (concat my:d user-login-name ".el"))
   (if (file-exists-p user-specific-config) (load user-specific-config))
 #+end_src
@@ -1753,6 +1753,449 @@ such as adjusting garbage collection thresholds and compatibility checks.
     :ensure t
     :mode ("\\.md\\'" . markdown-mode))
 #+end_src
+*** Utilities Package
+**** Extra Utilities
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Visual Line Mode (Soft Wrapping)
+  (leaf visual-line-mode
+    :hook (text-mode . visual-line-mode))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; macOS Clipboard Integration
+  (leaf pbcopy
+    :if (memq window-system '(mac ns))
+    :ensure t
+    :config
+    (turn-on-pbcopy))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Dired Enhancements
+  (leaf dired-filter :ensure t)
+  (leaf dired-subtree :ensure t
+    :after dired
+    :bind (:dired-mode-map
+           ("i" . dired-subtree-insert)
+           ("TAB" . dired-subtree-toggle)))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Text Selection and Editing Tools
+  (leaf expand-region :ensure t)
+  (leaf aggressive-indent
+    :ensure t
+    :global-minor-mode global-aggressive-indent-mode)
+  (leaf delsel
+    :global-minor-mode delete-selection-mode)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Search Tools
+  (setq grep-program "rg")
+  (leaf rg :ensure t)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Code Navigation
+  (leaf dumb-jump
+    :ensure t
+    :hook (xref-backend-functions . dumb-jump-xref-activate)
+    :custom
+    `((dumb-jump-force-searcher . 'rg)
+      (dumb-jump-prefer-searcher . 'rg)))
+
+  (leaf multiple-cursors :ensure t)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Version Control with Magit
+  (leaf magit :ensure t)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Syntax and Spell Checking
+  (leaf flycheck
+    :ensure t
+    :hook (prog-mode . flycheck-mode))
+
+  (leaf flyspell
+    :ensure t
+    :hook (text-mode . flyspell-mode)
+    :custom ((ispell-program-name . "aspell")))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Project Management
+  (leaf projectile
+    :ensure t
+    :global-minor-mode t)
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Snippet Management with Yasnippet
+  (leaf yasnippet
+    :ensure t
+    :global-minor-mode yas-global-mode
+    :init
+    (defvar my:yas-snippet-dir (concat my:d "snippets")
+      "Default directory for YASnippet user snippets.")
+
+    ;; Automatically create snippet directory if not exist
+    (unless (file-directory-p my:yas-snippet-dir)
+      (make-directory my:yas-snippet-dir t))
+
+    :config
+    (setq yas-snippet-dirs (list my:yas-snippet-dir))
+    (yas-reload-all))
+
+  (leaf yasnippet-snippets
+    :ensure t
+    :after yasnippet)
+
+  (leaf auctex
+    :ensure t
+    :init
+    (setq TeX-auto-save t)
+    (setq TeX-parse-self t)
+    (setq TeX-save-query nil)
+    (setq TeX-PDF-mode t) ;; Enable PDF mode by default
+    (setq-default TeX-master nil) ;; Prompt for master file when needed
+    :config
+    ;; Add latexmk as a compile command
+    (setq TeX-command-default "LatexMk")
+    (add-hook 'LaTeX-mode-hook
+              (lambda ()
+                (push
+                 '("LatexMk" "latexmk -pdf -interaction=nonstopmode -synctex=1 %s"
+                   TeX-run-TeX nil t :help "Run latexmk for automated PDF generation")
+                 TeX-command-list))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Authentication Management
+  (leaf *authentication
+    :init
+    (defvar my:d:password-store
+      (or (getenv "PASSWORD_STORE_DIR")
+          (concat no-littering-var-directory "password-store/"))
+      "Path to the password store.")
+
+    ;; Check for necessary environment variables and directories
+    (unless (getenv "GPG_KEY_ID")
+      (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
+    (unless (file-directory-p my:d:password-store)
+      (warn "Password store directory does not exist: %s" my:d:password-store))
+
+    ;; Encryption Settings
+    (leaf epa-file
+      :config
+      (epa-file-enable)
+      (setq epa-pinentry-mode
+            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
+
+    ;; Configure Authentication Sources
+    (leaf auth-source
+      :config
+      (setq auth-source-gpg-encrypt-to
+            (or (getenv "GPG_KEY_ID")
+                (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
+
+    ;; Password Management with pass and auth-source-pass
+    (leaf password-store :ensure t)
+    (leaf auth-source-pass :ensure t
+      :config
+      (when (executable-find "pass")
+        (auth-source-pass-enable)))
+
+    ;; Secure Storage Configuration
+    (leaf plstore
+      :config
+      (setq plstore-secret-keys 'silent
+            plstore-encrypt-to (getenv "GPG_KEY_ID"))))
+
+  (leaf auctex
+    :ensure t
+    :init
+    (setq TeX-auto-save t)
+    (setq TeX-parse-self t)
+    (setq TeX-save-query nil)
+    (setq TeX-PDF-mode t) ;; Enable PDF mode by default
+    (setq-default TeX-master nil) ;; Prompt for master file when needed
+    :config
+    ;; Add latexmk as a compile command
+    (setq TeX-command-default "LatexMk")
+    (add-hook 'LaTeX-mode-hook
+              (lambda ()
+                (push
+                 '("LatexMk" "latexmk -pdf -interaction=nonstopmode -synctex=1 %s"
+                   TeX-run-TeX nil t :help "Run latexmk for automated PDF generation")
+                 TeX-command-list))))
+#+end_src
+
+**** AI Configuration
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Ellama Configuration
+  (leaf ellama
+    :ensure t
+    :after llm-ollama
+    :config
+    ;; Set default language to Japanese
+    (ellama-language . "Japanese")
+    ;; Define session directory for Ellama
+    (ellama-sessions-dir . (concat no-littering-var-directory "ellama-sessions"))
+    :init
+
+    ;; Configure naming scheme for sessions
+    (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
+
+    ;; Set default provider
+    (setopt ellama-provider
+            (make-llm-ollama
+             :chat-model "codestral:22b-v0.1-q4_K_S"
+             :embedding-model "codestral:22b-v0.1-q4_K_S"))
+
+    ;; Define translation provider
+    (setopt ellama-translation-provider
+            (make-llm-ollama
+             :chat-model "llama3:8b-instruct-q8_0"
+             :embedding-model "llama3:8b-instruct-q8_0"))
+
+    ;; Define additional providers
+    (setopt ellama-providers
+            '(("codestral" . (make-llm-ollama
+                              :chat-model "codestral:22b-v0.1-q4_K_S"
+                              :embedding-model "codestral:22b-v0.1-q4_K_S"))
+              ("gemma2" . (make-llm-ollama
+                           :chat-model "gemma2:27b-instruct-q4_K_S"
+                           :embedding-model "gemma2:27b-instruct-q4_K_S"))
+              ("llama3.2-vision" . (make-llm-ollama
+                                    :chat-model "llama3:8b-instruct-q8_0"
+                                    :embedding-model "llama3:8b-instruct-q8_0"))))
+
+    ;; Error Handling for Provider Selection
+    (defun ellama-set-provider (provider-name)
+      "Set the active provider for Ellama by PROVIDER-NAME."
+      (interactive
+       (list (completing-read "Select provider: " (mapcar #'car ellama-providers))))
+      (if-let* ((provider (cdr (assoc provider-name ellama-providers))))
+          (progn
+            (setopt ellama-provider provider)
+            (message "Ellama provider set to: %s" provider-name))
+        (progn
+          (message "Provider '%s' not found. Using default provider." provider-name)
+          (setopt ellama-provider (cdr (assoc "codestral" ellama-providers))))))
+
+    :config
+    ;; Verify that Ellama is correctly configured
+    (unless (and ellama-provider ellama-translation-provider)
+      (message "Ellama configuration is incomplete. Verify providers.")))
+#+end_src
+
+**** Miscellaneous Helper Functions
+
+#+begin_src emacs-lisp :tangle README.el
+  ;; ---------------------------------------------------------------------------
+  ;;; Scratch Buffer Utility
+  (defun my:create-scratch-buffer ()
+    "Ensure that a `*scratch*` buffer exists."
+    (let ((scratch-buffer (get-buffer "*scratch*")))
+      (unless scratch-buffer
+        (with-current-buffer (get-buffer-create "*scratch*")
+          (funcall initial-major-mode)
+          (when (and initial-scratch-message
+                     (not (string-empty-p initial-scratch-message)))
+            (insert initial-scratch-message))
+          (current-buffer)))))
+
+  (defun my:recreate-scratch-buffer ()
+    "Kill the current `*scratch*` buffer and create a new one."
+    (interactive)
+    (when (get-buffer "*scratch*")
+      (kill-buffer "*scratch*"))
+    (my:create-scratch-buffer)
+    (switch-to-buffer "*scratch*"))
+
+  (defun my:after-kill-buffer-advice (&rest _)
+    "Ensure `*scratch*` buffer exists after killing it."
+    (run-at-time 0.1 nil #'my:create-scratch-buffer))
+
+  (advice-add 'kill-buffer :after #'my:after-kill-buffer-advice)
+
+  (defun my:auto-insert-lexical-binding ()
+    "Automatically insert lexical-binding cookie in Emacs Lisp files under `no-littering-var-directory`."
+    (when (and (stringp buffer-file-name)
+               (boundp 'no-littering-var-directory)
+               (string-prefix-p (expand-file-name no-littering-var-directory)
+                                (expand-file-name buffer-file-name))
+               (string-match-p "\\.el\\'" buffer-file-name)
+               (not (save-excursion
+                      (goto-char (point-min))
+                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
+      (save-excursion
+        (goto-char (point-min))
+        (insert ";; -*- lexical-binding: t; -*- \n"))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Asynchronous Task Execution
+  (defun my:safe-run-async (task)
+    "Run TASK asynchronously and handle any errors gracefully."
+    (run-at-time 0 nil
+                 (lambda ()
+                   (condition-case err
+                       (funcall task)
+                     (error (message "An error occurred during asynchronous execution: %s" err))))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Backup File Cleanup
+  (defun my:delete-old-backups ()
+    "Delete backup files older than 7 days asynchronously."
+    (interactive)
+    (my:safe-run-async
+     (lambda ()
+       (let ((backup-dir (concat no-littering-var-directory "backup/"))
+             (threshold (- (float-time (current-time)) (* 7 24 60 60))))
+         (when (file-directory-p backup-dir)
+           (dolist (file (directory-files backup-dir t nil t))
+             (when (and (file-regular-p file)
+                        (> (float-time (file-attribute-modification-time (file-attributes file))) threshold))
+               (delete-file file))))))))
+
+  ;; ---------------------------------------------------------------------------
+  ;;; Backup File Cleanup
+  ;; View mode handling
+  (defun my:enable-view-mode-on-read-only ()
+    "Enable `view-mode` if the buffer is read-only, disable otherwise."
+    (if buffer-read-only
+        (view-mode 1)
+      (view-mode -1)))
+  (add-hook 'read-only-mode-hook #'my:enable-view-mode-on-read-only)
+
+  ;; Toggle line number display
+  (defun my:toggle-linum-lines ()
+    "Toggle line number display using `display-line-numbers-mode`."
+    (interactive)
+    (display-line-numbers-mode 'toggle))
+
+  ;; Toggle window split orientation
+  (defun my:toggle-window-split ()
+    "Toggle between horizontal and vertical split with two windows."
+    (interactive)
+    ;; Only proceed if there are exactly two windows
+    (when (= (count-windows) 2)
+      ;; Get the buffers and edge positions of both windows
+      (let* ((this-win-buffer (window-buffer))
+             (next-win-buffer (window-buffer (next-window)))
+             (this-win-edges (window-edges (selected-window)))
+             (next-win-edges (window-edges (next-window)))
+             ;; Determine if current layout is vertical (split top/bottom)
+             (split-vertically
+              (= (car this-win-edges)
+                 (car next-win-edges)))
+             ;; Choose the opposite split function
+             (new-split
+              (if split-vertically
+                  #'split-window-horizontally
+                #'split-window-vertically)))
+        ;; Remove all other windows
+        (delete-other-windows)
+        ;; Create new split
+        (funcall new-split)
+        ;; Restore original buffers
+        (set-window-buffer (selected-window) this-win-buffer)
+        (set-window-buffer (next-window) next-win-buffer)
+        ;; Reselect the original window
+        (select-window (selected-window)))))
+
+  ;; Find keybinding conflicts
+  (defun my:find-keybinding-conflicts ()
+    "Detect and display keybinding conflicts across active keymaps."
+    (interactive)
+    (let ((conflicts (make-hash-table :test 'equal))
+          (buffer-name "*Keybinding Conflicts*"))
+      (mapatoms (lambda (sym)
+                  (when (and (boundp sym) (keymapp (symbol-value sym)))
+                    (map-keymap
+                     (lambda (key cmd)
+                       (when (commandp cmd)
+                         (let* ((key-desc (key-description (vector key)))
+                                (existing (gethash key-desc conflicts)))
+                           (puthash key-desc (delete-dups (cons cmd existing)) conflicts))))
+                     (symbol-value sym)))))
+      (with-current-buffer (get-buffer-create buffer-name)
+        (read-only-mode -1)
+        (erase-buffer)
+        (insert "* Keybinding Conflicts *\n\n")
+        (maphash (lambda (key cmds)
+                   (when (> (length cmds) 1)
+                     (insert (format "%s => %s\n"
+                                     key
+                                     (mapconcat #'symbol-name cmds ", ")))))
+                 conflicts)
+        (read-only-mode 1))
+      (switch-to-buffer buffer-name)))
+
+  ;; Dired file and directory viewing
+  (defun my:dired-view-file-other-window ()
+    "Open the selected file or directory in another window."
+    (interactive)
+    (let ((file (dired-get-file-for-visit)))
+      (if (file-directory-p file)
+          (or (and (cdr dired-subdir-alist)
+                   (dired-goto-subdir file))
+              (dired file))
+        (view-file-other-window file))))
+
+  ;; External editor integration
+  (defun my:open-by-vscode ()
+    "Open the current file in Visual Studio Code at the current line and column."
+    (interactive)
+    (when (buffer-file-name)
+      (async-shell-command
+       (format "code -r -g %s:%d:%d"
+               (buffer-file-name)
+               (line-number-at-pos)
+               (current-column)))))
+
+  ;; Displau the value of environment
+  (defun my:show-env-variable (var)
+    "Display the value of environment variable VAR in the minibuffer."
+    (interactive "sEnvironment variable: ")
+    (let ((value (getenv var)))
+      (if value
+          (message "%s = %s" var value)
+        (message "Environment variable %s is not set." var))))
+
+  ;; Emacs build information
+  (defun my:print-build-info ()
+    "Display detailed information about the current Emacs build."
+    (interactive)
+    (switch-to-buffer (get-buffer-create "*Build info*"))
+    (let ((buffer-read-only nil))
+      (erase-buffer)
+      (insert
+       (format "- GNU Emacs %s\n\n|Commit|%s|\n|Branch|%s|\n|System|%s|\n|Date|%s|\n"
+               emacs-version
+               (emacs-repository-get-version)
+               (when (version< "27.0" emacs-version)
+                 (emacs-repository-get-branch))
+               system-configuration
+               (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
+      (insert (format "|Patch|%s ns-inline.patch|\n"
+                      (if (boundp 'mac-ime--cursor-type) "with" "without")))
+      (insert
+       (format "|Features|%s|\n" system-configuration-features))
+      (insert
+       (format "|Options|%s|\n" system-configuration-options)))
+    (view-mode))
+
+  ;;
+  (defun my:org-auto-export-to-pdf ()
+    "Automatically export Org files to PDF on save."
+    (when (eq major-mode 'org-mode)
+      (let ((org-export-in-background nil)) ; foreground for debugging
+        (org-latex-export-to-pdf))))
+
+  (add-hook 'emacs-startup-hook #'my:delete-old-backups)
+  (add-hook 'find-file-hook #'my:auto-insert-lexical-binding)
+  (add-hook 'before-save-hook 'delete-trailing-whitespace)
+  (add-hook 'prog-mode-hook 'goto-address-prog-mode)
+  (add-hook 'text-mode-hook 'goto-address-mode)
+#+end_src
 
 *** UI/Fonts/Keybind
 **** Fonts
@@ -2135,438 +2578,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
             (lambda ()
               (define-key dired-mode-map "z"
                           'my:dired-view-file-other-window)))
-#+end_src
-
-*** Utilities Package
-**** Extra Utilities
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Visual Line Mode (Soft Wrapping)
-  (leaf visual-line-mode
-    :hook (text-mode . visual-line-mode))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; macOS Clipboard Integration
-  (leaf pbcopy
-    :if (memq window-system '(mac ns))
-    :ensure t
-    :config
-    (turn-on-pbcopy))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Dired Enhancements
-  (leaf dired-filter :ensure t)
-  (leaf dired-subtree :ensure t
-    :after dired
-    :bind (:dired-mode-map
-           ("i" . dired-subtree-insert)
-           ("TAB" . dired-subtree-toggle)))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Text Selection and Editing Tools
-  (leaf expand-region :ensure t)
-  (leaf aggressive-indent
-    :ensure t
-    :global-minor-mode global-aggressive-indent-mode)
-  (leaf delsel
-    :global-minor-mode delete-selection-mode)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Search Tools
-  (setq grep-program "rg")
-  (leaf rg :ensure t)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Code Navigation
-  (leaf dumb-jump
-    :ensure t
-    :hook (xref-backend-functions . dumb-jump-xref-activate)
-    :custom
-    `((dumb-jump-force-searcher . 'rg)
-      (dumb-jump-prefer-searcher . 'rg)))
-
-  (leaf multiple-cursors :ensure t)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Version Control with Magit
-  (leaf magit :ensure t)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Syntax and Spell Checking
-  (leaf flycheck
-    :ensure t
-    :hook (prog-mode . flycheck-mode))
-
-  (leaf flyspell
-    :ensure t
-    :hook (text-mode . flyspell-mode)
-    :custom ((ispell-program-name . "aspell")))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Project Management
-  (leaf projectile
-    :ensure t
-    :global-minor-mode t)
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Snippet Management with Yasnippet
-  (leaf yasnippet
-    :ensure t
-    :global-minor-mode yas-global-mode
-    :init
-    (defvar my:yas-snippet-dir (concat my:d "snippets")
-      "Default directory for YASnippet user snippets.")
-
-    ;; Automatically create snippet directory if not exist
-    (unless (file-directory-p my:yas-snippet-dir)
-      (make-directory my:yas-snippet-dir t))
-
-    :config
-    (setq yas-snippet-dirs (list my:yas-snippet-dir))
-    (yas-reload-all))
-
-  (leaf yasnippet-snippets
-    :ensure t
-    :after yasnippet)
-
-  (leaf auctex
-    :ensure t
-    :init
-    (setq TeX-auto-save t)
-    (setq TeX-parse-self t)
-    (setq TeX-save-query nil)
-    (setq TeX-PDF-mode t) ;; Enable PDF mode by default
-    (setq-default TeX-master nil) ;; Prompt for master file when needed
-    :config
-    ;; Add latexmk as a compile command
-    (setq TeX-command-default "LatexMk")
-    (add-hook 'LaTeX-mode-hook
-              (lambda ()
-                (push
-                 '("LatexMk" "latexmk -pdf -interaction=nonstopmode -synctex=1 %s"
-                   TeX-run-TeX nil t :help "Run latexmk for automated PDF generation")
-                 TeX-command-list))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Authentication Management
-  (leaf *authentication
-    :init
-    (defvar my:d:password-store
-      (or (getenv "PASSWORD_STORE_DIR")
-          (concat no-littering-var-directory "password-store/"))
-      "Path to the password store.")
-
-    ;; Check for necessary environment variables and directories
-    (unless (getenv "GPG_KEY_ID")
-      (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
-    (unless (file-directory-p my:d:password-store)
-      (warn "Password store directory does not exist: %s" my:d:password-store))
-
-    ;; Encryption Settings
-    (leaf epa-file
-      :config
-      (epa-file-enable)
-      (setq epa-pinentry-mode
-            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
-
-    ;; Configure Authentication Sources
-    (leaf auth-source
-      :config
-      (setq auth-source-gpg-encrypt-to
-            (or (getenv "GPG_KEY_ID")
-                (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
-
-    ;; Password Management with pass and auth-source-pass
-    (leaf password-store :ensure t)
-    (leaf auth-source-pass :ensure t
-      :config
-      (when (executable-find "pass")
-        (auth-source-pass-enable)))
-
-    ;; Secure Storage Configuration
-    (leaf plstore
-      :config
-      (setq plstore-secret-keys 'silent
-            plstore-encrypt-to (getenv "GPG_KEY_ID"))))
-
-  (leaf auctex
-    :ensure t
-    :init
-    (setq TeX-auto-save t)
-    (setq TeX-parse-self t)
-    (setq TeX-save-query nil)
-    (setq TeX-PDF-mode t) ;; Enable PDF mode by default
-    (setq-default TeX-master nil) ;; Prompt for master file when needed
-    :config
-    ;; Add latexmk as a compile command
-    (setq TeX-command-default "LatexMk")
-    (add-hook 'LaTeX-mode-hook
-              (lambda ()
-                (push
-                 '("LatexMk" "latexmk -pdf -interaction=nonstopmode -synctex=1 %s"
-                   TeX-run-TeX nil t :help "Run latexmk for automated PDF generation")
-                 TeX-command-list))))
-#+end_src
-
-**** AI Configuration
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Ellama Configuration
-  (leaf ellama
-    :ensure t
-    :after llm-ollama
-    :config
-    ;; Set default language to Japanese
-    (ellama-language . "Japanese")
-    ;; Define session directory for Ellama
-    (ellama-sessions-dir . (concat no-littering-var-directory "ellama-sessions"))
-    :init
-
-    ;; Configure naming scheme for sessions
-    (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
-
-    ;; Set default provider
-    (setopt ellama-provider
-            (make-llm-ollama
-             :chat-model "codestral:22b-v0.1-q4_K_S"
-             :embedding-model "codestral:22b-v0.1-q4_K_S"))
-
-    ;; Define translation provider
-    (setopt ellama-translation-provider
-            (make-llm-ollama
-             :chat-model "llama3:8b-instruct-q8_0"
-             :embedding-model "llama3:8b-instruct-q8_0"))
-
-    ;; Define additional providers
-    (setopt ellama-providers
-            '(("codestral" . (make-llm-ollama
-                              :chat-model "codestral:22b-v0.1-q4_K_S"
-                              :embedding-model "codestral:22b-v0.1-q4_K_S"))
-              ("gemma2" . (make-llm-ollama
-                           :chat-model "gemma2:27b-instruct-q4_K_S"
-                           :embedding-model "gemma2:27b-instruct-q4_K_S"))
-              ("llama3.2-vision" . (make-llm-ollama
-                                    :chat-model "llama3:8b-instruct-q8_0"
-                                    :embedding-model "llama3:8b-instruct-q8_0"))))
-
-    ;; Error Handling for Provider Selection
-    (defun ellama-set-provider (provider-name)
-      "Set the active provider for Ellama by PROVIDER-NAME."
-      (interactive
-       (list (completing-read "Select provider: " (mapcar #'car ellama-providers))))
-      (if-let* ((provider (cdr (assoc provider-name ellama-providers))))
-          (progn
-            (setopt ellama-provider provider)
-            (message "Ellama provider set to: %s" provider-name))
-        (progn
-          (message "Provider '%s' not found. Using default provider." provider-name)
-          (setopt ellama-provider (cdr (assoc "codestral" ellama-providers))))))
-
-    :config
-    ;; Verify that Ellama is correctly configured
-    (unless (and ellama-provider ellama-translation-provider)
-      (message "Ellama configuration is incomplete. Verify providers.")))
-#+end_src
-
-**** Miscellaneous Helper Functions
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; ---------------------------------------------------------------------------
-  ;;; Scratch Buffer Utility
-  (defun my:create-scratch-buffer ()
-    "Ensure that a `*scratch*` buffer exists."
-    (let ((scratch-buffer (get-buffer "*scratch*")))
-      (unless scratch-buffer
-        (with-current-buffer (get-buffer-create "*scratch*")
-          (funcall initial-major-mode)
-          (when (and initial-scratch-message
-                     (not (string-empty-p initial-scratch-message)))
-            (insert initial-scratch-message))
-          (current-buffer)))))
-
-  (defun my:recreate-scratch-buffer ()
-    "Kill the current `*scratch*` buffer and create a new one."
-    (interactive)
-    (when (get-buffer "*scratch*")
-      (kill-buffer "*scratch*"))
-    (my:create-scratch-buffer)
-    (switch-to-buffer "*scratch*"))
-
-  (defun my:after-kill-buffer-advice (&rest _)
-    "Ensure `*scratch*` buffer exists after killing it."
-    (run-at-time 0.1 nil #'my:create-scratch-buffer))
-
-  (advice-add 'kill-buffer :after #'my:after-kill-buffer-advice)
-
-  (defun my:auto-insert-lexical-binding ()
-    "Automatically insert lexical-binding cookie in Emacs Lisp files under `no-littering-var-directory`."
-    (when (and (stringp buffer-file-name)
-               (boundp 'no-littering-var-directory)
-               (string-prefix-p (expand-file-name no-littering-var-directory)
-                                (expand-file-name buffer-file-name))
-               (string-match-p "\\.el\\'" buffer-file-name)
-               (not (save-excursion
-                      (goto-char (point-min))
-                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
-      (save-excursion
-        (goto-char (point-min))
-        (insert ";; -*- lexical-binding: t; -*- \n"))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Asynchronous Task Execution
-  (defun my:safe-run-async (task)
-    "Run TASK asynchronously and handle any errors gracefully."
-    (run-at-time 0 nil
-                 (lambda ()
-                   (condition-case err
-                       (funcall task)
-                     (error (message "An error occurred during asynchronous execution: %s" err))))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Backup File Cleanup
-  (defun my:delete-old-backups ()
-    "Delete backup files older than 7 days asynchronously."
-    (interactive)
-    (my:safe-run-async
-     (lambda ()
-       (let ((backup-dir (concat no-littering-var-directory "backup/"))
-             (threshold (- (float-time (current-time)) (* 7 24 60 60))))
-         (when (file-directory-p backup-dir)
-           (dolist (file (directory-files backup-dir t nil t))
-             (when (and (file-regular-p file)
-                        (> (float-time (file-attribute-modification-time (file-attributes file))) threshold))
-               (delete-file file))))))))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Backup File Cleanup
-  ;; View mode handling
-  (defun my:enable-view-mode-on-read-only ()
-    "Enable `view-mode` if the buffer is read-only, disable otherwise."
-    (if buffer-read-only
-        (view-mode 1)
-      (view-mode -1)))
-  (add-hook 'read-only-mode-hook #'my:enable-view-mode-on-read-only)
-
-  ;; Toggle line number display
-  (defun my:toggle-linum-lines ()
-    "Toggle line number display using `display-line-numbers-mode`."
-    (interactive)
-    (display-line-numbers-mode 'toggle))
-
-  ;; Toggle window split orientation
-  (defun my:toggle-window-split ()
-    "Toggle the window split between horizontal and vertical."
-    (interactive)
-    (if (= (count-windows) 2)
-        (let* ((this-win-buffer (window-buffer))
-               (next-win-buffer (window-buffer (next-window)))
-               (splitter (if (window-combined-p)
-                             'split-window-vertically
-                           'split-window-horizontally)))
-          (delete-other-windows)
-          (let ((first-win (selected-window)))
-            (funcall splitter)
-            (set-window-buffer (selected-window) this-win-buffer)
-            (set-window-buffer (next-window) next-win-buffer)
-            (select-window first-win)))
-      (message "This function only works when exactly two windows are open.")))
-
-  ;; Find keybinding conflicts
-  (defun my:find-keybinding-conflicts ()
-    "Detect and display keybinding conflicts across active keymaps."
-    (interactive)
-    (let ((conflicts (make-hash-table :test 'equal))
-          (buffer-name "*Keybinding Conflicts*"))
-      (mapatoms (lambda (sym)
-                  (when (and (boundp sym) (keymapp (symbol-value sym)))
-                    (map-keymap
-                     (lambda (key cmd)
-                       (when (commandp cmd)
-                         (let* ((key-desc (key-description (vector key)))
-                                (existing (gethash key-desc conflicts)))
-                           (puthash key-desc (delete-dups (cons cmd existing)) conflicts))))
-                     (symbol-value sym)))))
-      (with-current-buffer (get-buffer-create buffer-name)
-        (read-only-mode -1)
-        (erase-buffer)
-        (insert "* Keybinding Conflicts *\n\n")
-        (maphash (lambda (key cmds)
-                   (when (> (length cmds) 1)
-                     (insert (format "%s => %s\n"
-                                     key
-                                     (mapconcat #'symbol-name cmds ", ")))))
-                 conflicts)
-        (read-only-mode 1))
-      (switch-to-buffer buffer-name)))
-
-  ;; Dired file and directory viewing
-  (defun my:dired-view-file-other-window ()
-    "Open the selected file or directory in another window."
-    (interactive)
-    (let ((file (dired-get-file-for-visit)))
-      (if (file-directory-p file)
-          (or (and (cdr dired-subdir-alist)
-                   (dired-goto-subdir file))
-              (dired file))
-        (view-file-other-window file))))
-
-  ;; External editor integration
-  (defun my:open-by-vscode ()
-    "Open the current file in Visual Studio Code at the current line and column."
-    (interactive)
-    (when (buffer-file-name)
-      (async-shell-command
-       (format "code -r -g %s:%d:%d"
-               (buffer-file-name)
-               (line-number-at-pos)
-               (current-column)))))
-
-  ;; Displau the value of environment
-  (defun my:show-env-variable (var)
-    "Display the value of environment variable VAR in the minibuffer."
-    (interactive "sEnvironment variable: ")
-    (let ((value (getenv var)))
-      (if value
-          (message "%s = %s" var value)
-        (message "Environment variable %s is not set." var))))
-
-  ;; Emacs build information
-  (defun my:print-build-info ()
-    "Display detailed information about the current Emacs build."
-    (interactive)
-    (switch-to-buffer (get-buffer-create "*Build info*"))
-    (let ((buffer-read-only nil))
-      (erase-buffer)
-      (insert
-       (format "- GNU Emacs %s\n\n|Commit|%s|\n|Branch|%s|\n|System|%s|\n|Date|%s|\n"
-               emacs-version
-               (emacs-repository-get-version)
-               (when (version< "27.0" emacs-version)
-                 (emacs-repository-get-branch))
-               system-configuration
-               (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
-      (insert (format "|Patch|%s ns-inline.patch|\n"
-                      (if (boundp 'mac-ime--cursor-type) "with" "without")))
-      (insert
-       (format "|Features|%s|\n" system-configuration-features))
-      (insert
-       (format "|Options|%s|\n" system-configuration-options)))
-    (view-mode))
-
-  ;;
-  (defun my:org-auto-export-to-pdf ()
-    "Automatically export Org files to PDF on save."
-    (when (eq major-mode 'org-mode)
-      (let ((org-export-in-background nil)) ; foreground for debugging
-        (org-latex-export-to-pdf))))
-
-  (add-hook 'emacs-startup-hook #'my:delete-old-backups)
-  (add-hook 'find-file-hook #'my:auto-insert-lexical-binding)
-  (add-hook 'before-save-hook 'delete-trailing-whitespace)
-  (add-hook 'prog-mode-hook 'goto-address-prog-mode)
-  (add-hook 'text-mode-hook 'goto-address-mode)
 #+end_src
 
 *** Footer
