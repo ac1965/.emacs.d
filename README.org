@@ -447,7 +447,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/21 00:06:08 $
+  ;; $Lastupdate: 2025/07/21 00:50:52 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -2073,94 +2073,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
       (set-window-dedicated-p window (not (window-dedicated-p window)))
       (message "Window dedication %s"
                (if (window-dedicated-p window) "enabled" "disabled"))))
-#+end_src
-
-*** Git Utilities
-#+begin_src emacs-lisp :tangle README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Git Diff Summary
-  ;; Functions to generate commit messages from git diff output
-  ;; and integrate Aidermacs for AI-powered commit messages.
-
-  (require 'aider) ;; Aideremacs is required (install from MELPA)
-
-  (defun my:git-diff-output ()
-    "Get the current git diff output for staged changes."
-    (shell-command-to-string "git diff --cached --unified=0"))
-
-  (defun my:parse-git-diff (diff-output)
-    "Parse git diff OUTPUT and return a list of (filename additions deletions)."
-    (let ((changes nil)
-          (current-file nil)
-          (additions 0)
-          (deletions 0))
-      (dolist (line (split-string diff-output "\n"))
-        (cond
-         ((string-prefix-p "diff --git" line)
-          (when current-file
-            (push (list current-file additions deletions) changes))
-          (when (string-match " b/\\(.*\\)" line)
-            (setq current-file (match-string 1 line)))
-          (setq additions 0 deletions 0))
-         ((and (string-prefix-p "+" line)
-               (not (string-prefix-p "+++" line)))
-          (setq additions (1+ additions)))
-         ((and (string-prefix-p "-" line)
-               (not (string-prefix-p "---" line)))
-          (setq deletions (1+ deletions)))))
-      (when current-file
-        (push (list current-file additions deletions) changes))
-      (nreverse changes)))
-
-  (defun my:generate-commit-message ()
-    "Generate a commit message summarizing staged changes."
-    (interactive)
-    (let* ((diff-output (my:git-diff-output))
-           (changes (my:parse-git-diff diff-output))
-           (total-files (length changes))
-           (total-additions (apply '+ (mapcar #'cadr changes)))
-           (total-deletions (apply '+ (mapcar #'caddr changes)))
-           (summary (format "Changed %d files (+%d, -%d):\n\n"
-                            total-files total-additions total-deletions)))
-      (dolist (change changes)
-        (let ((filename (nth 0 change))
-              (adds (nth 1 change))
-              (dels (nth 2 change)))
-          (setq summary (concat summary
-                                (format "- %s (%s%s%s)\n"
-                                        filename
-                                        (if (> adds 0) (format "+%d" adds) "")
-                                        (if (and (> adds 0) (> dels 0)) " " "")
-                                        (if (> dels 0) (format "-%d" dels) ""))))))
-      (if (called-interactively-p 'any)
-          (with-current-buffer (get-buffer-create "*Commit Message*")
-            (erase-buffer)
-            (insert summary)
-            (display-buffer (current-buffer)))
-        summary)))
-
-  (global-set-key (kbd "C-c g m") 'my:generate-commit-message)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Aidermacs Integration
-  ;; Use Aidermacs to generate AI-based commit messages and insert them into Magit.
-
-  (defun my:magit-aider-insert-commit-message ()
-    "Use Aidermacs to insert an AI-generated commit message into the commit buffer."
-    (interactive)
-    (let ((diff (my:git-diff-output)))
-      (aider-command
-       (concat "/diff\n" diff "\n/commit")
-       :callback (lambda (response)
-                   (let ((msg (when (stringp response) response)))
-                     (when (and msg (buffer-live-p (current-buffer)))
-                       (goto-char (point-min))
-                       (insert msg "\n\n")))))))
-
-  (add-hook 'git-commit-setup-hook #'my:magit-aider-insert-commit-message)
-
-  ;; Optional: A global key to generate AI commit messages in any buffer
-  (global-set-key (kbd "C-c g a") 'my:magit-aider-insert-commit-message)
 #+end_src
 
 *** Footer
