@@ -14,6 +14,8 @@
 #+OPTIONS: auto-id:t H:6
 #+PROPERTY: header-args :results silent :exports code
 
+My Emacs [[https://github.com/ac1965/.emacs.d/blob/master/README.org][README.org]] in [[http://orgmode.org/][Org Mode]]'s [[http://orgmode.org/worg/org-contrib/babel][Babel]] format.
+
 [[file:demo.png]]
 
 * Introduction
@@ -1111,7 +1113,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/20 09:55:10 $
+  ;; $Lastupdate: 2025/07/20 13:36:06 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -1476,6 +1478,9 @@ such as adjusting garbage collection thresholds and compatibility checks.
     ("C-c d i" . org-roam-node-insert)
     ("C-c d f" . org-roam-node-find)
 
+    ;; Aider
+    ("C-c a a" . aidermacs-transient-menu)
+
     ;; Misc
     ("M-x"     . execute-extended-command)
     ("C-x g"   . magit-status)
@@ -1512,7 +1517,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; (mainly for macOS and GUI Emacs).
 
   (defvar my:shell-env-vars
-    '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY")
+    '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY" "OPENAI_API_KEY")
     "Environment variables to import from the shell.")
 
   ;; -----------------------------------------------------------------------------
@@ -1528,6 +1533,11 @@ such as adjusting garbage collection thresholds and compatibility checks.
     (setq exec-path-from-shell-check-startup-files nil)
     (setq exec-path-from-shell-variables my:shell-env-vars)
     (exec-path-from-shell-initialize))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Vterm
+
+  (leaf vterm :ensure t)
 #+end_src
 
 **** Completion Framework
@@ -1712,6 +1722,25 @@ such as adjusting garbage collection thresholds and compatibility checks.
       (lsp-ui-sideline-show-hover . t)
       (lsp-ui-sideline-show-code-actions . t)
       (lsp-ui-sideline-show-diagnostics . t)))
+
+  ;; -----------------------------------------------------------------------------
+  ;; Aidermacs configuration
+  (leaf aidermacs
+    :vc (:url "https://github.com/MatthewZMD/aidermacs.git"
+              :branch "main"
+              :files ("*.el"))
+    :config
+    ;; Default model
+    (setq aidermacs-default-model "openai/gpt-4o")
+    ;; Set custom API endpoint and API key
+    (setenv "OPENAI_API_BASE" "http://ipads.chat.gpt:3006/v1")
+    (setenv "OPENAI_API_KEY" (getenv "OPENAI_API_KEY"))
+    ;; Backend and key settings
+    (setq aidermacs-backend 'vterm)
+    (setq aidermacs-comint-multiline-newline-key "C-<return>")
+    ;; Auto commit and architect mode settings
+    (setq aidermacs-auto-commits t)
+    (setq aidermacs-use-architect-mode nil))
 #+end_src
 
 **** Org-mode
@@ -2169,70 +2198,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
       :config
       (setq plstore-secret-keys 'silent
             plstore-encrypt-to (getenv "GPG_KEY_ID"))))
-#+end_src
-
-**** AI Configuration
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Ellama Configuration (AI Integration)
-  ;; Integrates the Ellama package with LLM backends (e.g., Ollama).
-  ;; Provides translation and language tasks with multiple provider options.
-
-  (leaf ellama
-    :ensure t
-    :after llm-ollama
-    :custom
-    ;; Default language for Ellama tasks (used for translations, etc.)
-    (ellama-language . "Japanese")
-
-    ;; Directory for storing Ellama session logs and history
-    (ellama-sessions-dir . (concat no-littering-var-directory "ellama-sessions"))
-
-    :init
-    ;; Use LLM-based naming scheme for sessions
-    (setopt ellama-naming-scheme 'ellama-generate-name-by-llm)
-
-    ;; Default provider (main LLM)
-    (setopt ellama-provider
-            (make-llm-ollama
-             :chat-model "codestral:22b-v0.1-q4_K_S"
-             :embedding-model "codestral:22b-v0.1-q4_K_S"))
-
-    ;; Translation provider (optimized for language translation tasks)
-    (setopt ellama-translation-provider
-            (make-llm-ollama
-             :chat-model "llama3:8b-instruct-q8_0"
-             :embedding-model "llama3:8b-instruct-q8_0"))
-
-    ;; Define multiple available providers
-    (setopt ellama-providers
-            '(("codestral" . (make-llm-ollama
-                              :chat-model "codestral:22b-v0.1-q4_K_S"
-                              :embedding-model "codestral:22b-v0.1-q4_K_S"))
-              ("gemma2" . (make-llm-ollama
-                           :chat-model "gemma2:27b-instruct-q4_K_S"
-                           :embedding-model "gemma2:27b-instruct-q4_K_S"))
-              ("llama3.2-vision" . (make-llm-ollama
-                                    :chat-model "llama3:8b-instruct-q8_0"
-                                    :embedding-model "llama3:8b-instruct-q8_0"))))
-
-    ;; Command to switch between available providers interactively
-    (defun ellama-set-provider (provider-name)
-      "Set Ellama provider to PROVIDER-NAME (from `ellama-providers`)."
-      (interactive
-       (list (completing-read "Select provider: " (mapcar #'car ellama-providers))))
-      (if-let* ((provider (cdr (assoc provider-name ellama-providers))))
-          (progn
-            (setopt ellama-provider provider)
-            (message "Ellama provider set to: %s" provider-name))
-        (progn
-          (message "Provider '%s' not found. Defaulting to 'codestral'." provider-name)
-          (setopt ellama-provider (cdr (assoc "codestral" ellama-providers))))))
-
-    ;; Sanity check for provider configuration
-    (unless (and ellama-provider ellama-translation-provider)
-      (message "Ellama configuration is incomplete. Verify providers.")))
 #+end_src
 
 **** Miscellaneous Helper Functions
