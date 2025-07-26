@@ -159,10 +159,19 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; - A modular `init.el` should handle further initialization after startup.
   ;;
   ;;; Code:
+
   ;; ---------------------------------------------------------------------------
   ;;; Compatibility Check (Require Emacs 30+)
   (when (version< emacs-version "30")
     (error "This configuration requires Emacs 30 or higher."))
+
+  ;;; Utility Functions
+  (defun my:ensure-directory-exists (dir)
+    "Ensure that directory DIR exists, creating it if necessary."
+    (unless (file-directory-p dir)
+      (condition-case err
+          (make-directory dir t)
+        (error (warn "Failed to create directory: %s - %s" dir err)))))
 
   ;; ---------------------------------------------------------------------------
   ;;; Directories
@@ -172,10 +181,17 @@ such as adjusting garbage collection thresholds and compatibility checks.
       user-emacs-directory)
     "Base directory for user-specific configuration files.")
 
-  (defvar my:d:cache
-    (expand-file-name ".cache/" my:d)
-    "Directory for temporary and cache files.")
-  (make-directory my:d:cache t)  ;; Ensure cache directory exists
+  (defvar my:d:cache (expand-file-name ".cache/" my:d)
+    "Cache directory for temporary files.")
+  (defvar my:d:etc (expand-file-name ".etc/" my:d)
+    "Directory for configuration files.")
+  (defvar my:d:var (expand-file-name ".var/" my:d)
+    "Directory for variable runtime data.")
+  (defvar my:f:custom (expand-file-name "custom.el" my:d:etc)
+    "File for storing user customizations (`custom-file`).")
+
+  ;; Create required directories
+  (mapc #'my:ensure-directory-exists (list my:d:cache my:d:etc my:d:var))
 
   ;; ---------------------------------------------------------------------------
   ;;; Performance Optimization
@@ -190,9 +206,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
               (message "Emacs loaded in %.2f seconds with %d garbage collections."
                        (float-time (time-subtract after-init-time before-init-time))
                        gcs-done)))
-
-  ;; Disable automatic package initialization at startup.
-  (setq package-enable-at-startup nil)
 
   ;; ---------------------------------------------------------------------------
   ;;; Native Compilation Optimization
@@ -227,7 +240,73 @@ such as adjusting garbage collection thresholds and compatibility checks.
   (setq frame-resize-pixelwise t)
   (add-to-list 'default-frame-alist '(fullscreen . maximized))
 
-  ;; ---------------------------------------------------------------------------
+  ;; Disable automatic package initialization at startup.
+  (setq package-enable-at-startup nil)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Package Setup
+  ;; - Sets up the `package-archives` for GNU ELPA and MELPA.
+  ;; - Initializes the `package` system.
+  ;; - Installs and configures `leaf` for structured package configuration.
+
+  (setq package-user-dir (expand-file-name "elpa/" my:d:cache))
+  (my:ensure-directory-exists package-user-dir)
+
+  (eval-and-compile
+    (customize-set-variable
+     'package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
+                         ("melpa" . "https://melpa.org/packages/")))
+    (package-initialize)
+    (use-package leaf :ensure t)
+
+    (leaf leaf-keywords
+      :ensure t
+      :init
+      (leaf blackout :ensure t)
+      :config
+      (leaf-keywords-init)))
+
+  (leaf leaf-convert
+    :doc "Convert existing configurations into `leaf` format."
+    :ensure t)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; No-Littering Setup
+  ;; - Configures `no-littering` to keep Emacs configuration clean
+  ;;   by redirecting auto-generated files (e.g., cache, backups) into a
+  ;;   user-defined directory structure.
+
+  (leaf no-littering
+    :ensure t
+    :require t
+    :init
+    (setq no-littering-etc-directory my:d:etc
+          no-littering-var-directory my:d:var))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Shell Environment Variables
+  ;; List of environment variables to import from the user's shell
+  ;; (mainly for macOS and GUI Emacs).
+
+  (defvar my:shell-env-vars
+    '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY" "OPENAI_API_KEY")
+    "Environment variables to import from the shell.")
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Exec-Path-from-Shell
+  ;; Ensures Emacs inherits essential environment variables on macOS.
+  ;; This is particularly important when Emacs is launched as a GUI app,
+  ;; since GUI apps do not automatically inherit the user's shell environment.
+
+  (leaf exec-path-from-shell
+    :ensure t
+    :if (memq window-system '(mac ns))
+    :config
+    (setq exec-path-from-shell-check-startup-files nil)
+    (setq exec-path-from-shell-variables my:shell-env-vars)
+    (exec-path-from-shell-initialize))
+
+
   (provide 'early-init)
   ;;; early-init.el ends here
 #+end_src
@@ -267,15 +346,9 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; setup to `README.org` and modular components.
   ;;
   ;;; Code:
+
   ;; ---------------------------------------------------------------------------
   ;;; Utility Functions
-
-  (defun my:ensure-directory-exists (dir)
-    "Ensure that directory DIR exists, creating it if necessary."
-    (unless (file-directory-p dir)
-      (condition-case err
-          (make-directory dir t)
-        (error (warn "Failed to create directory: %s - %s" dir err)))))
 
   (defun my:auto-tangle-updated-src-blocks ()
     "Automatically tangle updated Org source blocks when saving `README.org`."
@@ -295,30 +368,12 @@ such as adjusting garbage collection thresholds and compatibility checks.
   (unless (boundp 'my:d)
     (error "`my:d` is not defined. Ensure early-init.el was loaded first."))
 
-  (defvar my:d:cache (expand-file-name ".cache/" my:d)
-    "Cache directory for temporary files.")
-  (defvar my:d:etc (expand-file-name ".etc/" my:d)
-    "Directory for configuration files.")
-  (defvar my:d:var (expand-file-name ".var/" my:d)
-    "Directory for variable runtime data.")
-  (defvar my:f:custom (expand-file-name "custom.el" my:d:etc)
-    "File for storing user customizations (`custom-file`).")
-
-  ;; Create required directories
-  (mapc #'my:ensure-directory-exists (list my:d:cache my:d:etc my:d:var))
-
   ;; ---------------------------------------------------------------------------
   ;;; Custom File Setup
   ;; Store `customize` variables in a separate file.
   (setq custom-file my:f:custom)
   (when (and custom-file (file-exists-p custom-file))
     (ignore-errors (load custom-file)))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Package Configuration
-  ;; Place installed packages in `.cache/elpa/`.
-  (setq package-user-dir (expand-file-name "elpa/" my:d:cache))
-  (my:ensure-directory-exists package-user-dir)
 
   ;; ---------------------------------------------------------------------------
   ;;; Load Configuration from README.org
@@ -449,53 +504,12 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/26 09:13:37 $
+  ;; $Lastupdate: 2025/07/26 12:16:53 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
-#+end_src
-
-*** Install Package
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Package Setup
-  ;; - Sets up the `package-archives` for GNU ELPA and MELPA.
-  ;; - Initializes the `package` system.
-  ;; - Installs and configures `leaf` for structured package configuration.
-
-  (eval-and-compile
-    (customize-set-variable
-     'package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
-                         ("melpa" . "https://melpa.org/packages/")))
-    (package-initialize)
-    (use-package leaf :ensure t)
-
-    (leaf leaf-keywords
-      :ensure t
-      :init
-      (leaf blackout :ensure t)
-      :config
-      (leaf-keywords-init)))
-
-  (leaf leaf-convert
-    :doc "Convert existing configurations into `leaf` format."
-    :ensure t)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; No-Littering Setup
-  ;; - Configures `no-littering` to keep Emacs configuration clean
-  ;;   by redirecting auto-generated files (e.g., cache, backups) into a
-  ;;   user-defined directory structure.
-
-  (leaf no-littering
-    :ensure t
-    :require t
-    :init
-    (setq no-littering-etc-directory my:d:etc
-          no-littering-var-directory my:d:var))
 #+end_src
 
 *** Loading user-specific settings
@@ -860,29 +874,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
   (leaf gcmh
     :ensure t
     :global-minor-mode gcmh-mode)  ;; Enable GCMH globally
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Shell Environment Variables
-  ;; List of environment variables to import from the user's shell
-  ;; (mainly for macOS and GUI Emacs).
-
-  (defvar my:shell-env-vars
-    '("PATH" "MANPATH" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY" "OPENAI_API_KEY")
-    "Environment variables to import from the shell.")
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Exec-Path-from-Shell
-  ;; Ensures Emacs inherits essential environment variables on macOS.
-  ;; This is particularly important when Emacs is launched as a GUI app,
-  ;; since GUI apps do not automatically inherit the user's shell environment.
-
-  (leaf exec-path-from-shell
-    :ensure t
-    :if (memq window-system '(mac ns))
-    :config
-    (setq exec-path-from-shell-check-startup-files nil)
-    (setq exec-path-from-shell-variables my:shell-env-vars)
-    (exec-path-from-shell-initialize))
 
   ;; -----------------------------------------------------------------------------
   ;;; Vterm
