@@ -1,23 +1,25 @@
 # -*- mode: org; coding: utf-8; lexical-binding: t -*-
 
-#+TITLE: ac1965's Emacs literate configuration =.emacs.d=
+#+TITLE: ac1965's Emacs Configuration =.emacs.d=
 #+AUTHOR: YAMASHITA, Takao
 #+EMAIL: tjy1965@gmail.com
-#+DATE: 2025-07-20
+#+DATE: 2025-07-27
 #+LANGUAGE: en
 #+OPTIONS: toc:3 num:t
 #+STARTUP: content
 #+PROPERTY: header-args :results silent :exports code
+#+PROPERTY: header-args:emacs-lisp :lexical t
 
 * Overview
 
 This is a modern, literate Emacs configuration using [[http://orgmode.org/][Org Mode]]'s [[http://orgmode.org/worg/org-contrib/babel][Babel]] format.
 The configuration emphasizes:
 
-- Clean, modular organization
-- Performance optimization
-- Modern development tools
-- Extensive documentation
+- Native Compilation & Performance Optimization
+- LSP Integration (Eglot/LSP-Mode)
+- AI Integration (OpenAI/Anthropic via Aidermacs)
+- Modern UI with Tree-Sitter support
+- Extensive documentation and modular design
 
 [[file:demo.png]]
 
@@ -539,7 +541,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/26 21:26:22 $
+  ;; $Lastupdate: 2025/07/27 08:13:47 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -564,22 +566,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
 
 #+begin_src emacs-lisp :tangle README.el
   ;; -----------------------------------------------------------------------------
-  ;;; Electric Pair Mode
-  ;; - Automatically inserts matching brackets/quotes.
-
-  (leaf electric-pair
-    :doc "Auto insert matching parentheses"
-    :init (electric-pair-mode 1))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Display Line Numbers
-  ;; - Enables relative line numbers in both programming and text modes.
-
-  (leaf display-line-numbers
-    :hook ((prog-mode text-mode) . display-line-numbers-mode)
-    :init (setq display-line-numbers-type 'relative))
-
-  ;; -----------------------------------------------------------------------------
   ;;; Insert Timestamp on Save
   ;; This automatically updates a `$Lastupdate` timestamp in the file
   ;; before saving. It searches for `$Lastupdate ...$` and replaces the
@@ -595,6 +581,22 @@ such as adjusting garbage collection thresholds and compatibility checks.
           (replace-match timestamp t nil)))))
 
   (add-hook 'before-save-hook #'my:save-buffer-wrapper)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Electric Pair Mode
+  ;; - Automatically inserts matching brackets/quotes.
+
+  (leaf electric-pair
+    :doc "Auto insert matching parentheses"
+    :init (electric-pair-mode 1))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Display Line Numbers
+  ;; - Enables relative line numbers in both programming and text modes.
+
+  (leaf display-line-numbers
+    :hook ((prog-mode text-mode) . display-line-numbers-mode)
+    :init (setq display-line-numbers-type 'relative))
 
   ;; -----------------------------------------------------------------------------
   ;;; TRAMP Setup
@@ -758,6 +760,118 @@ such as adjusting garbage collection thresholds and compatibility checks.
      (aw-background . t))
     :config
     (ace-window-display-mode 1))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Visual Line Mode
+  ;; Enables soft line wrapping for text-based buffers.
+
+  (leaf visual-line-mode
+    :hook (text-mode . visual-line-mode))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; macOS Clipboard Integration
+  ;; Ensures Emacs uses the macOS clipboard via `pbcopy`.
+
+  (leaf pbcopy
+    :if (memq window-system '(mac ns))
+    :ensure t
+    :config
+    (turn-on-pbcopy))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Dired Enhancements
+  ;; Adds filtering and subtree expansion to Dired.
+
+  (leaf dired-filter :ensure t)
+  (leaf dired-subtree
+    :ensure t
+    :after dired
+    :bind (:dired-mode-map
+           ("i"   . dired-subtree-insert)
+           ("TAB" . dired-subtree-toggle)))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Editing Tools
+  ;; Region expansion, aggressive indentation, and selection overwrite.
+
+  (leaf expand-region :ensure t)
+  (leaf aggressive-indent
+    :ensure t
+    :global-minor-mode global-aggressive-indent-mode)
+  (leaf delsel
+    :global-minor-mode delete-selection-mode)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Search Tools
+  ;; Configures `rg` (ripgrep) as the default search backend.
+
+  (setq grep-program "rg")
+  (leaf rg :ensure t)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Code Navigation
+  ;; Uses Dumb-Jump with `rg` for fast symbol navigation.
+
+  (leaf dumb-jump
+    :ensure t
+    :hook (xref-backend-functions . dumb-jump-xref-activate)
+    :custom
+    `((dumb-jump-force-searcher  . 'rg)
+      (dumb-jump-prefer-searcher . 'rg)))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Multiple Cursors
+  ;; Enables simultaneous editing with multiple cursors.
+
+  (leaf multiple-cursors :ensure t)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Magit (Git Integration)
+  ;; A powerful and user-friendly Git interface.
+
+  (leaf magit :ensure t)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Syntax & Spell Checking
+  ;; Configures Flycheck (syntax) and Flyspell (spelling).
+
+  (leaf flycheck
+    :ensure t
+    :hook (prog-mode . flycheck-mode))
+
+  (leaf flyspell
+    :ensure t
+    :hook (text-mode . flyspell-mode)
+    :custom ((ispell-program-name . "aspell")))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Project Management
+  ;; Projectile for project navigation and search.
+
+  (leaf projectile
+    :ensure t
+    :global-minor-mode t)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Snippet Management (YASnippet)
+  ;; Loads user-defined snippets from `my:yas-snippet-dir`.
+
+  (leaf yasnippet
+    :ensure t
+    :global-minor-mode yas-global-mode
+    :init
+    (defvar my:yas-snippet-dir (concat my:d "snippets")
+      "Default directory for YASnippet user snippets.")
+    ;; Create snippet directory if it doesn't exist
+    (unless (file-directory-p my:yas-snippet-dir)
+      (make-directory my:yas-snippet-dir t))
+    :config
+    (setq yas-snippet-dirs (list my:yas-snippet-dir))
+    (yas-reload-all))
+
+  (leaf yasnippet-snippets
+    :ensure t
+    :after yasnippet)
 #+end_src
 
 **** Completion Framework
@@ -1227,11 +1341,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
      "◀── now ─────────────────────────────────────────────────")
     (setopt org-ellipsis " ▾")
     (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil))
-#+end_src
 
-**** Org-mode Visual Enhancements
-
-#+begin_src emacs-lisp :tangle README.el
   ;; -----------------------------------------------------------------------------
   ;;; Org Superstar (Pretty Headings)
   ;; Enhances the visual appearance of Org headlines by replacing the default
@@ -1253,38 +1363,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
 
 #+begin_src emacs-lisp :tangle README.el
   ;; -----------------------------------------------------------------------------
-  ;;; Org LaTeX Export Configuration
-  ;; Adds common LaTeX packages and defines a multi-pass `pdflatex` build pipeline
-  ;; with BibTeX integration for high-quality PDF exports.
-
-  (leaf org-latex
-    :after org
-    :custom
-    (org-latex-packages-alist
-     '(("" "graphicx" t)
-       ("" "longtable" nil)
-       ("" "wrapfig" nil)))
-    (setq org-latex-pdf-process
-          '("pdflatex -interaction nonstopmode -output-directory %o %f"
-            "bibtex %b"
-            "pdflatex -interaction nonstopmode -output-directory %o %f"
-            "pdflatex -interaction nonstopmode -output-directory %o %f")))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Org Journal
-  ;; Daily journaling with agenda integration.
-
-  (leaf org-journal
-    :ensure t
-    :after org
-    :config
-    (setq org-journal-dir (concat org-directory "/journal")
-          org-journal-enable-agenda-integration t)
-    (defun org-journal-find-location ()
-      "Open today's journal entry."
-      (org-journal-new-entry t)))
-
-  ;; -----------------------------------------------------------------------------
   ;;; Org Babel (Code Execution in Org)
   ;; Enables execution of code blocks in multiple languages.
 
@@ -1300,6 +1378,20 @@ such as adjusting garbage collection thresholds and compatibility checks.
        (R . t)
        (ditaa . t)
        (plantuml . t))))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Org Journal
+  ;; Daily journaling with agenda integration.
+
+  (leaf org-journal
+    :ensure t
+    :after org
+    :config
+    (setq org-journal-dir (concat org-directory "/journal")
+          org-journal-enable-agenda-integration t)
+    (defun org-journal-find-location ()
+      "Open today's journal entry."
+      (org-journal-new-entry t)))
 
   ;; -----------------------------------------------------------------------------
   ;;; Org Roam (Networked Note-Taking)
@@ -1348,6 +1440,24 @@ such as adjusting garbage collection thresholds and compatibility checks.
     :bind ("C-x p i" . org-cliplink))
 
   ;; -----------------------------------------------------------------------------
+  ;;; Org LaTeX Export Configuration
+  ;; Adds common LaTeX packages and defines a multi-pass `pdflatex` build pipeline
+  ;; with BibTeX integration for high-quality PDF exports.
+
+  (leaf org-latex
+    :after org
+    :custom
+    (org-latex-packages-alist
+     '(("" "graphicx" t)
+       ("" "longtable" nil)
+       ("" "wrapfig" nil)))
+    (setq org-latex-pdf-process
+          '("pdflatex -interaction nonstopmode -output-directory %o %f"
+            "bibtex %b"
+            "pdflatex -interaction nonstopmode -output-directory %o %f"
+            "pdflatex -interaction nonstopmode -output-directory %o %f")))
+
+  ;; -----------------------------------------------------------------------------
   ;;; Org Export to Hugo (Static Site Generation)
   ;; Exports Org content to the Hugo static site generator format.
 
@@ -1386,118 +1496,6 @@ such as adjusting garbage collection thresholds and compatibility checks.
 **** Extra Utilities
 
 #+begin_src emacs-lisp :tangle README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Visual Line Mode
-  ;; Enables soft line wrapping for text-based buffers.
-
-  (leaf visual-line-mode
-    :hook (text-mode . visual-line-mode))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; macOS Clipboard Integration
-  ;; Ensures Emacs uses the macOS clipboard via `pbcopy`.
-
-  (leaf pbcopy
-    :if (memq window-system '(mac ns))
-    :ensure t
-    :config
-    (turn-on-pbcopy))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Dired Enhancements
-  ;; Adds filtering and subtree expansion to Dired.
-
-  (leaf dired-filter :ensure t)
-  (leaf dired-subtree
-    :ensure t
-    :after dired
-    :bind (:dired-mode-map
-           ("i"   . dired-subtree-insert)
-           ("TAB" . dired-subtree-toggle)))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Editing Tools
-  ;; Region expansion, aggressive indentation, and selection overwrite.
-
-  (leaf expand-region :ensure t)
-  (leaf aggressive-indent
-    :ensure t
-    :global-minor-mode global-aggressive-indent-mode)
-  (leaf delsel
-    :global-minor-mode delete-selection-mode)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Search Tools
-  ;; Configures `rg` (ripgrep) as the default search backend.
-
-  (setq grep-program "rg")
-  (leaf rg :ensure t)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Code Navigation
-  ;; Uses Dumb-Jump with `rg` for fast symbol navigation.
-
-  (leaf dumb-jump
-    :ensure t
-    :hook (xref-backend-functions . dumb-jump-xref-activate)
-    :custom
-    `((dumb-jump-force-searcher  . 'rg)
-      (dumb-jump-prefer-searcher . 'rg)))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Multiple Cursors
-  ;; Enables simultaneous editing with multiple cursors.
-
-  (leaf multiple-cursors :ensure t)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Magit (Git Integration)
-  ;; A powerful and user-friendly Git interface.
-
-  (leaf magit :ensure t)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Syntax & Spell Checking
-  ;; Configures Flycheck (syntax) and Flyspell (spelling).
-
-  (leaf flycheck
-    :ensure t
-    :hook (prog-mode . flycheck-mode))
-
-  (leaf flyspell
-    :ensure t
-    :hook (text-mode . flyspell-mode)
-    :custom ((ispell-program-name . "aspell")))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Project Management
-  ;; Projectile for project navigation and search.
-
-  (leaf projectile
-    :ensure t
-    :global-minor-mode t)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Snippet Management (YASnippet)
-  ;; Loads user-defined snippets from `my:yas-snippet-dir`.
-
-  (leaf yasnippet
-    :ensure t
-    :global-minor-mode yas-global-mode
-    :init
-    (defvar my:yas-snippet-dir (concat my:d "snippets")
-      "Default directory for YASnippet user snippets.")
-    ;; Create snippet directory if it doesn't exist
-    (unless (file-directory-p my:yas-snippet-dir)
-      (make-directory my:yas-snippet-dir t))
-    :config
-    (setq yas-snippet-dirs (list my:yas-snippet-dir))
-    (yas-reload-all))
-
-  (leaf yasnippet-snippets
-    :ensure t
-    :after yasnippet)
-
   ;; -----------------------------------------------------------------------------
   ;;; AUCTeX (LaTeX Editing)
   ;; Configures AUCTeX for PDF-based workflows with `latexmk`.
@@ -1787,7 +1785,7 @@ such as adjusting garbage collection thresholds and compatibility checks.
   (add-hook 'text-mode-hook 'goto-address-mode)
 #+end_src
 
-*** UI/Fonts/Keybind
+*** Fonts/UI
 **** Fonts
 
 #+begin_src emacs-lisp :tangle README.el
