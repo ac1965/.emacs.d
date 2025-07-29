@@ -645,29 +645,35 @@ This configuration file defines personal and device-specific settings that are l
     (leaf apple-music
       :doc "Apple Music control via AppleScript"
       :config
-      ;; -----------------------
-      ;; Core AppleScript Runner
-      ;; -----------------------
+      ;; -----------------------------------
+      ;; AppleScript Executor (Async/Sync)
+      ;; -----------------------------------
       (defun apple-music-osascript-async (script &optional callback)
         "Run AppleScript SCRIPT asynchronously to control Apple Music.
-  If CALLBACK is provided, it is called with the script output."
+  If CALLBACK is provided, it will be called with the script output."
         (let* ((proc-name "apple-music-async")
                (buffer-name "*Apple Music Async*")
                (osascript-cmd (list "osascript" "-e" script))
                (proc (apply 'start-process proc-name buffer-name osascript-cmd)))
-          (when callback
-            (set-process-sentinel
-             proc
-             (lambda (process event)
+  	(when callback
+  	  (set-process-sentinel
+  	   proc
+  	   (lambda (process event)
                (when (string= event "finished\n")
                  (with-current-buffer (process-buffer process)
-                   (let ((output (string-trim (buffer-string))))
-                     (funcall callback output)))
+  		 (let ((output (string-trim (buffer-string))))
+  		   (funcall callback output)))
                  (kill-buffer (process-buffer process))))))))
 
-      ;; -----------------------
+      (defun apple-music-osascript-sync (script)
+        "Run AppleScript SCRIPT synchronously and return output as string."
+        (string-trim
+         (shell-command-to-string
+  	(format "osascript -e '%s'" script))))
+
+      ;; -----------------------------------
       ;; Basic Player Controls
-      ;; -----------------------
+      ;; -----------------------------------
       (defun apple-music-play-pause ()
         "Toggle play/pause."
         (interactive)
@@ -688,19 +694,19 @@ This configuration file defines personal and device-specific settings that are l
         (interactive)
         (apple-music-osascript-async
          "tell application \"Music\"
-            if player state is playing then
-              set t to current track
-              return name of t & \" — \" & artist of t
-            else
-              return \"Music is not playing\"
-            end if
-          end tell"
+        if player state is playing then
+          set t to current track
+          return name of t & \" — \" & artist of t
+        else
+          return \"Music is not playing\"
+        end if
+      end tell"
          (lambda (result)
-           (message "%s" result))))
+  	 (message "%s" result))))
 
-      ;; -----------------------
+      ;; -----------------------------------
       ;; Volume Controls
-      ;; -----------------------
+      ;; -----------------------------------
       (defun apple-music-set-volume (level)
         "Set volume to LEVEL (0–100)."
         (interactive "nVolume (0-100): ")
@@ -712,7 +718,7 @@ This configuration file defines personal and device-specific settings that are l
         (interactive "p")
         (apple-music-osascript-async
          (format "tell application \"Music\"
-                    set sound volume to (sound volume + %d)"
+                set sound volume to (sound volume + %d)"
                  (or step 10))))
 
       (defun apple-music-volume-down (&optional step)
@@ -720,12 +726,12 @@ This configuration file defines personal and device-specific settings that are l
         (interactive "p")
         (apple-music-osascript-async
          (format "tell application \"Music\"
-                    set sound volume to (sound volume - %d)"
+                set sound volume to (sound volume - %d)"
                  (or step 10))))
 
-      ;; -----------------------
+      ;; -----------------------------------
       ;; Shuffle & Repeat
-      ;; -----------------------
+      ;; -----------------------------------
       (defun apple-music-shuffle-on ()
         "Enable shuffle mode."
         (interactive)
@@ -756,18 +762,88 @@ This configuration file defines personal and device-specific settings that are l
         (apple-music-osascript-async
          "tell application \"Music\" to set song repeat to all"))
 
-      ;; -----------------------
-      ;; Playlist Control
-      ;; -----------------------
+      ;; -----------------------------------
+      ;; Playlist Management
+      ;; -----------------------------------
+      (defun apple-music-get-playlists-sync ()
+        "Get Apple Music playlist names synchronously."
+        (split-string
+         (apple-music-osascript-sync
+  	"tell application \"Music\" to get name of every playlist")
+         ", " t))
+
       (defun apple-music-play-playlist (playlist)
         "Play a playlist named PLAYLIST."
-        (interactive "sPlaylist name: ")
+        (interactive
+         (list (completing-read "Select playlist: " (apple-music-get-playlists-sync))))
         (apple-music-osascript-async
          (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
 
-      ;; -----------------------
+      ;; -----------------------------------
+      ;; Org Export (Flexible)
+      ;; -----------------------------------
+      (defgroup apple-music-org-export nil
+        "Org export settings for Apple Music playlists."
+        :group 'apple-music)
+
+      (defcustom apple-music-org-export-fields
+        '("ARTIST" "ALBUM" "TRACK" "DURATION" "YEAR")
+        "List of track properties to include in Org export.
+  Available fields: ARTIST, ALBUM, TRACK, DURATION, YEAR."
+        :type '(repeat (choice (const "ARTIST")
+                               (const "ALBUM")
+                               (const "TRACK")
+                               (const "DURATION")
+                               (const "YEAR"))))
+
+      (defun apple-music-get-playlist-tracks-dynamic (playlist callback)
+        "Get track info from PLAYLIST based on `apple-music-org-export-fields`."
+        (let ((fields '(("ARTIST"   . "artist of t")
+                        ("ALBUM"    . "album of t")
+                        ("TRACK"    . "track number of t")
+                        ("DURATION" . "time of t")
+                        ("YEAR"     . "year of t"))))
+  	(let ((script (concat
+                         "tell application \"Music\"\n"
+                         "  set trackInfo to \"\"\n"
+                         "  repeat with t in tracks of playlist \"" playlist "\"\n"
+                         "    set trackInfo to trackInfo & (name of t)")))
+  	  (dolist (field apple-music-org-export-fields)
+              (setq script (concat script " & \"|\" & (" (cdr (assoc field fields)) ")")))
+  	  (setq script (concat script " & linefeed\n  end repeat\n  return trackInfo\nend tell"))
+  	  (apple-music-osascript-async
+  	   script
+  	   (lambda (result)
+               (let ((lines (split-string result "\n" t)))
+                 (funcall callback
+  			(mapcar (lambda (line) (split-string line "|")) lines))))))))
+
+      (defun apple-music-save-playlist-org-dynamic (playlist filename)
+        "Save PLAYLIST as Org file at FILENAME with dynamic fields."
+        (interactive
+         (list
+  	(completing-read "Select playlist: " (apple-music-get-playlists-sync))
+  	(read-file-name "Save Org file: ")))
+        (apple-music-get-playlist-tracks-dynamic
+         playlist
+         (lambda (tracks)
+  	 (with-temp-buffer
+  	   (insert (format "#+TITLE: %s\n\n" playlist))
+  	   (insert "* Tracks\n")
+  	   (dolist (track tracks)
+               (let ((title (car track))
+  		   (props (cdr track)))
+                 (insert (format "** %s\n   :PROPERTIES:\n" title))
+                 (cl-loop for field in apple-music-org-export-fields
+  			for value in props
+  			do (insert (format "   :%s: %s\n" field value)))
+                 (insert "   :END:\n")))
+  	   (write-file filename))
+  	 (message "Playlist '%s' saved to %s" playlist filename))))
+
+      ;; -----------------------------------
       ;; Mode-line Integration
-      ;; -----------------------
+      ;; -----------------------------------
       (defvar apple-music-mode-line-string ""
         "String to display in the mode line for Apple Music.")
 
@@ -778,44 +854,44 @@ This configuration file defines personal and device-specific settings that are l
         "Update `apple-music-mode-line-string` asynchronously."
         (apple-music-osascript-async
          "tell application \"Music\"
-            if player state is playing then
-              set t to current track
-              return name of t & \" — \" & artist of t
-            else
-              return \"Music is not playing\"
-            end if
-          end tell"
+        if player state is playing then
+          set t to current track
+          return name of t & \" — \" & artist of t
+        else
+          return \"Music is not playing\"
+        end if
+      end tell"
          (lambda (result)
-           (setq apple-music-mode-line-string (format " ♫ %s " result))
-           (force-mode-line-update))))
+  	 (setq apple-music-mode-line-string (format " ♫ %s " result))
+  	 (force-mode-line-update))))
 
       (define-minor-mode apple-music-mode
         "Minor mode for controlling Apple Music."
         :global t
         :lighter ""
         (if apple-music-mode
-            (progn
+  	  (progn
               (setq apple-music-mode-line-timer
-                    (run-at-time 0 10 'apple-music-update-mode-line))
+  		  (run-at-time 0 10 'apple-music-update-mode-line))
               (unless (member 'apple-music-mode-line-string global-mode-string)
                 (setq global-mode-string
                       (append global-mode-string '(apple-music-mode-line-string)))))
-          (when apple-music-mode-line-timer
-            (cancel-timer apple-music-mode-line-timer)
-            (setq apple-music-mode-line-timer nil))
-          (setq global-mode-string (delete 'apple-music-mode-line-string global-mode-string))
-          (force-mode-line-update)))
+  	(when apple-music-mode-line-timer
+  	  (cancel-timer apple-music-mode-line-timer)
+  	  (setq apple-music-mode-line-timer nil))
+  	(setq global-mode-string (delete 'apple-music-mode-line-string global-mode-string))
+  	(force-mode-line-update)))
 
-      ;; -----------------------
+      ;; -----------------------------------
       ;; Hydra Keybindings
-      ;; -----------------------
+      ;; -----------------------------------
       (defhydra hydra-apple-music (:hint nil)
         "
     Apple Music:
    _p_: Play/Pause   _n_: Next   _b_: Back   _i_: Info
    _+_: Vol Up       _-_: Vol Down   _v_: Set Vol
-   _s_: Shuffle      _r_: Repeat     _l_: Playlist
-   _q_: Quit
+   _s_: Shuffle      _r_: Repeat     _l_: Play Playlist
+   _O_: Save Playlist (Org)   _q_: Quit
   "
         ("p" apple-music-play-pause)
         ("n" apple-music-next-track)
@@ -827,16 +903,17 @@ This configuration file defines personal and device-specific settings that are l
         ("s" (lambda ()
                (interactive)
                (if (y-or-n-p "Enable shuffle? ")
-                   (apple-music-shuffle-on)
+  		 (apple-music-shuffle-on)
                  (apple-music-shuffle-off))))
         ("r" (lambda ()
                (interactive)
                (let ((choice (completing-read "Repeat mode: " '("off" "one" "all"))))
                  (pcase choice
-                   ("off" (apple-music-repeat-off))
-                   ("one" (apple-music-repeat-one))
-                   ("all" (apple-music-repeat-all))))))
+  		 ("off" (apple-music-repeat-off))
+  		 ("one" (apple-music-repeat-one))
+  		 ("all" (apple-music-repeat-all))))))
         ("l" apple-music-play-playlist)
+        ("O" apple-music-save-playlist-org-dynamic)
         ("q" nil "quit"))
 
       (global-set-key (kbd "C-c m") 'hydra-apple-music/body)))
@@ -866,7 +943,7 @@ This Emacs configuration is designed for flexibility, maintainability, and produ
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/30 00:57:11 $
+  ;; $Lastupdate: 2025/07/30 01:28:44 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -905,7 +982,7 @@ and relative line numbers.
   ;; -----------------------------------------------------------------------------
   ;;; Basic Editor Configuration
 
-  ;; Insert timestamp on save
+  ;; nIsert timestamp on save
   (defun my:save-buffer-wrapper ()
     "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
     (interactive)
