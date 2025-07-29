@@ -449,6 +449,13 @@ such as adjusting garbage collection thresholds and compatibility checks.
           use-short-answers t
           create-lockfiles nil))
 
+  ;; -----------------------------------------------------------------------------
+  ;;; Hydra (Keybinding Framework)
+  ;; Defines transient keymaps for repeating related commands.
+
+  (leaf hydra
+    :ensure t)
+
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -631,6 +638,210 @@ This configuration file defines personal and device-specific settings that are l
     (global-set-key [mouse-5] 'next-buffer))     ;; Extra button 2
 
 
+  ;; ---------------------------------------------------------------------------
+  ;;; Apple Music Controller
+
+  (when (eq system-type 'darwin)
+    (leaf apple-music
+      :doc "Apple Music control via AppleScript"
+      :config
+      ;; -----------------------
+      ;; Core AppleScript Runner
+      ;; -----------------------
+      (defun apple-music-osascript-async (script &optional callback)
+        "Run AppleScript SCRIPT asynchronously to control Apple Music.
+  If CALLBACK is provided, it is called with the script output."
+        (let* ((proc-name "apple-music-async")
+               (buffer-name "*Apple Music Async*")
+               (osascript-cmd (list "osascript" "-e" script))
+               (proc (apply 'start-process proc-name buffer-name osascript-cmd)))
+          (when callback
+            (set-process-sentinel
+             proc
+             (lambda (process event)
+               (when (string= event "finished\n")
+                 (with-current-buffer (process-buffer process)
+                   (let ((output (string-trim (buffer-string))))
+                     (funcall callback output)))
+                 (kill-buffer (process-buffer process))))))))
+
+      ;; -----------------------
+      ;; Basic Player Controls
+      ;; -----------------------
+      (defun apple-music-play-pause ()
+        "Toggle play/pause."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to playpause"))
+
+      (defun apple-music-next-track ()
+        "Skip to the next track."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to next track"))
+
+      (defun apple-music-previous-track ()
+        "Go to the previous track."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to previous track"))
+
+      (defun apple-music-get-info ()
+        "Show current track info in minibuffer."
+        (interactive)
+        (apple-music-osascript-async
+         "tell application \"Music\"
+            if player state is playing then
+              set t to current track
+              return name of t & \" — \" & artist of t
+            else
+              return \"Music is not playing\"
+            end if
+          end tell"
+         (lambda (result)
+           (message "%s" result))))
+
+      ;; -----------------------
+      ;; Volume Controls
+      ;; -----------------------
+      (defun apple-music-set-volume (level)
+        "Set volume to LEVEL (0–100)."
+        (interactive "nVolume (0-100): ")
+        (apple-music-osascript-async
+         (format "tell application \"Music\" to set sound volume to %d" level)))
+
+      (defun apple-music-volume-up (&optional step)
+        "Increase volume by STEP (default: 10)."
+        (interactive "p")
+        (apple-music-osascript-async
+         (format "tell application \"Music\"
+                    set sound volume to (sound volume + %d)"
+                 (or step 10))))
+
+      (defun apple-music-volume-down (&optional step)
+        "Decrease volume by STEP (default: 10)."
+        (interactive "p")
+        (apple-music-osascript-async
+         (format "tell application \"Music\"
+                    set sound volume to (sound volume - %d)"
+                 (or step 10))))
+
+      ;; -----------------------
+      ;; Shuffle & Repeat
+      ;; -----------------------
+      (defun apple-music-shuffle-on ()
+        "Enable shuffle mode."
+        (interactive)
+        (apple-music-osascript-async
+         "tell application \"Music\" to set shuffle enabled to true"))
+
+      (defun apple-music-shuffle-off ()
+        "Disable shuffle mode."
+        (interactive)
+        (apple-music-osascript-async
+         "tell application \"Music\" to set shuffle enabled to false"))
+
+      (defun apple-music-repeat-off ()
+        "Turn repeat off."
+        (interactive)
+        (apple-music-osascript-async
+         "tell application \"Music\" to set song repeat to off"))
+
+      (defun apple-music-repeat-one ()
+        "Repeat the current song."
+        (interactive)
+        (apple-music-osascript-async
+         "tell application \"Music\" to set song repeat to one"))
+
+      (defun apple-music-repeat-all ()
+        "Repeat all songs."
+        (interactive)
+        (apple-music-osascript-async
+         "tell application \"Music\" to set song repeat to all"))
+
+      ;; -----------------------
+      ;; Playlist Control
+      ;; -----------------------
+      (defun apple-music-play-playlist (playlist)
+        "Play a playlist named PLAYLIST."
+        (interactive "sPlaylist name: ")
+        (apple-music-osascript-async
+         (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
+
+      ;; -----------------------
+      ;; Mode-line Integration
+      ;; -----------------------
+      (defvar apple-music-mode-line-string ""
+        "String to display in the mode line for Apple Music.")
+
+      (defvar apple-music-mode-line-timer nil
+        "Timer for updating the mode line with Apple Music info.")
+
+      (defun apple-music-update-mode-line ()
+        "Update `apple-music-mode-line-string` asynchronously."
+        (apple-music-osascript-async
+         "tell application \"Music\"
+            if player state is playing then
+              set t to current track
+              return name of t & \" — \" & artist of t
+            else
+              return \"Music is not playing\"
+            end if
+          end tell"
+         (lambda (result)
+           (setq apple-music-mode-line-string (format " ♫ %s " result))
+           (force-mode-line-update))))
+
+      (define-minor-mode apple-music-mode
+        "Minor mode for controlling Apple Music."
+        :global t
+        :lighter ""
+        (if apple-music-mode
+            (progn
+              (setq apple-music-mode-line-timer
+                    (run-at-time 0 10 'apple-music-update-mode-line))
+              (unless (member 'apple-music-mode-line-string global-mode-string)
+                (setq global-mode-string
+                      (append global-mode-string '(apple-music-mode-line-string)))))
+          (when apple-music-mode-line-timer
+            (cancel-timer apple-music-mode-line-timer)
+            (setq apple-music-mode-line-timer nil))
+          (setq global-mode-string (delete 'apple-music-mode-line-string global-mode-string))
+          (force-mode-line-update)))
+
+      ;; -----------------------
+      ;; Hydra Keybindings
+      ;; -----------------------
+      (defhydra hydra-apple-music (:hint nil)
+        "
+    Apple Music:
+   _p_: Play/Pause   _n_: Next   _b_: Back   _i_: Info
+   _+_: Vol Up       _-_: Vol Down   _v_: Set Vol
+   _s_: Shuffle      _r_: Repeat     _l_: Playlist
+   _q_: Quit
+  "
+        ("p" apple-music-play-pause)
+        ("n" apple-music-next-track)
+        ("b" apple-music-previous-track)
+        ("i" apple-music-get-info)
+        ("+" apple-music-volume-up)
+        ("-" apple-music-volume-down)
+        ("v" apple-music-set-volume)
+        ("s" (lambda ()
+               (interactive)
+               (if (y-or-n-p "Enable shuffle? ")
+                   (apple-music-shuffle-on)
+                 (apple-music-shuffle-off))))
+        ("r" (lambda ()
+               (interactive)
+               (let ((choice (completing-read "Repeat mode: " '("off" "one" "all"))))
+                 (pcase choice
+                   ("off" (apple-music-repeat-off))
+                   ("one" (apple-music-repeat-one))
+                   ("all" (apple-music-repeat-all))))))
+        ("l" apple-music-play-playlist)
+        ("q" nil "quit"))
+
+      (global-set-key (kbd "C-c m") 'hydra-apple-music/body)))
+
+
   (provide 'user)
   ;;; user.el ends here
 #+end_src
@@ -655,7 +866,7 @@ This Emacs configuration is designed for flexibility, maintainability, and produ
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/07/30 00:13:51 $
+  ;; $Lastupdate: 2025/07/30 00:57:11 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -846,13 +1057,6 @@ and relative line numbers.
   (leaf undo-fu
     :ensure t
     :custom ((undo-fu-allow-undo-in-region . t)))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Hydra (Keybinding Framework)
-  ;; Defines transient keymaps for repeating related commands.
-
-  (leaf hydra
-    :ensure t)
 
   ;; -----------------------------------------------------------------------------
   ;;; Ace Window (Window Navigation)
@@ -1200,9 +1404,9 @@ and relative line numbers.
     ("C-c a a" . aidermacs-transient-menu)
 
     ;; Misc
-    ("M-x"     . execute-extended-command)
     ("C-x g"   . magit-status)
-    ("s-r"     . restart-emacs)))
+    ("s-r"     . restart-emacs)
+    ("M-x"     . execute-extended-command)))
 
   ;; Enable directional window navigation with Shift + arrow keys.
   (windmove-default-keybindings)
