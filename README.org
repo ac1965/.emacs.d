@@ -504,7 +504,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/08/31 21:09:01 $
+  ;; $Lastupdate: 2025/08/31 23:24:30 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -699,24 +699,33 @@ Core Emacs configuration with modular design.
   ;;; Fullscreen Mode Configuration
   ;; Ensures Emacs starts in fullscreen mode.
   (leaf fullscreen
+    ;; Use startup hook so the first frame surely exists (non-daemon).
     :init
     (if (daemonp)
         (add-hook 'after-make-frame-functions
                   (lambda (frame)
                     (when (display-graphic-p frame)
                       (set-frame-parameter frame 'fullscreen 'fullboth))))
-      (set-frame-parameter nil 'fullscreen 'fullboth)))
+      (add-hook 'emacs-startup-hook
+                (lambda ()
+                  (when (display-graphic-p)
+                    (set-frame-parameter nil 'fullscreen 'fullboth))))))
 
   ;; ---------------------------------------------------------------------------
-  ;;; Dynamic Window Resizing (Golden Ratio)
+  ;;; Dynamic Window Resizing (Zoom)
   ;; Automatically resizes windows, focusing the current one.
-  (leaf golden-ratio
+  (leaf zoom
     :ensure t
-    :hook (after-init-hook . golden-ratio-mode)
-    :custom ((golden-ratio-adjust-factor . 1.1)
-             (golden-ratio-auto-scale . t)
-             (golden-ratio-exclude-modes . '("ediff-mode" "dired-mode" "treemacs-mode"))
-             (golden-ratio-exclude-buffer-names . '("*Messages*" "*Help*"))))
+    :hook (after-init-hook . zoom-mode)
+    :custom
+    ;; Keep the selected window around golden-ratio size (width . height).
+    ((zoom-size . '(0.62 . 0.62))
+     ;; Ignore auxiliary modes/buffers.
+     (zoom-ignored-major-modes . '(ediff-mode dired-mode treemacs-mode))
+     (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))
+     ;; Safety: skip in minibuffer or when only one window.
+     (zoom-ignored-predicates . '((lambda () (window-minibuffer-p))
+                                  (lambda () (< (count-windows) 2))))))
 
   ;; ---------------------------------------------------------------------------
   ;;; Theme Configuration (ef-themes)
@@ -733,15 +742,10 @@ Core Emacs configuration with modular design.
   (leaf spacious-padding
     :ensure t
     :if (display-graphic-p)
-    :init
-    (setq spacious-padding-widths
-          '((left . 15)
-            (right . 15)
-            (top . 10)
-            (bottom . 10))
-          spacious-padding-subtle-mode-line t
-          spacious-padding-mode-line-active-border-width 1
-          spacious-padding-mode-line-inactive-border-width 0)
+    :custom ((spacious-padding-widths . '((left . 15) (right . 15) (top . 10) (bottom . 10)))
+             (spacious-padding-subtle-mode-line . t)
+             (spacious-padding-mode-line-active-border-width . 1)
+             (spacious-padding-mode-line-inactive-border-width . 0))
     :config
     (spacious-padding-mode 1))
 
@@ -751,28 +755,25 @@ Core Emacs configuration with modular design.
   (leaf minions
     :ensure t
     :custom ((minions-mode-line-lighter . "⚙"))
-    :config
-    (minions-mode 1))
+    :hook (after-init-hook . minions-mode))
 
   ;; ---------------------------------------------------------------------------
   ;;; Doom-modeline
   (leaf doom-modeline
     :ensure t
-    :config
-    (doom-modeline-mode 1))
+    :hook (after-init-hook . doom-modeline-mode))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Time and Battery in Mode-Line
-  ;; Displays time and battery status in the mode line.
-  (leaf time-battery
+  (leaf time-and-battery
+    :after doom-modeline
     :init
     (setq display-time-interval 30
           display-time-day-and-date t
           display-time-24hr-format t
-          battery-mode-line-format "[🔋 %p%%]")
+          ;; Use default battery format; doom-modeline reads display-battery-mode.
+          )
     :config
-    (display-time-mode 1)
-    (display-battery-mode 1))
+    (display-time-mode 1)     ;; enable time in mode-line
+    (display-battery-mode 1)) ;; enable battery in mode-line
 
   ;; ---------------------------------------------------------------------------
   ;;; Tab Bar & Tab Line
@@ -781,9 +782,11 @@ Core Emacs configuration with modular design.
     :custom ((tab-bar-show . 1)
              (tab-bar-new-tab-choice . "*scratch*")
              (tab-bar-format . '(tab-bar-format-tabs tab-bar-separator tab-bar-format-align-right)))
-    :config
-    (tab-bar-mode 1)
-    (global-tab-line-mode 1))
+    :hook (after-init-hook . tab-bar-mode))
+
+  (leaf tab-line
+    ;; Consider disabling one of bar/line if UI feels redundant.
+    :hook (after-init-hook . global-tab-line-mode))
 
   ;; ---------------------------------------------------------------------------
   ;;; Treemacs (Project Drawer)
@@ -791,29 +794,39 @@ Core Emacs configuration with modular design.
   (leaf treemacs
     :ensure t
     :if (display-graphic-p)
-    :bind (:treemacs-mode-map
-           ([mouse-1] . treemacs-single-click-expand-action))
     :custom ((treemacs-no-png-images . nil)
-             (treemacs-filewatch-mode . t)
-             (treemacs-follow-mode . t)
              (treemacs-indentation . 2)
-             (treemacs-missing-project-action . 'remove)))
+             (treemacs-missing-project-action . 'remove))
+    :config
+    ;; Run after Treemacs is loaded to avoid void-function errors.
+    (with-eval-after-load 'treemacs
+      ;; keymap (defined only after treemacs loads)
+      (when (boundp 'treemacs-mode-map)
+        (keymap-set treemacs-mode-map "<mouse-1>"
+                    #'treemacs-single-click-expand-action))
+      ;; minor modes (defined by treemacs and its modules)
+      (when (fboundp 'treemacs-filewatch-mode)
+        (treemacs-filewatch-mode t))
+      (when (fboundp 'treemacs-follow-mode)
+        (treemacs-follow-mode t))))
 
   ;; ---------------------------------------------------------------------------
   ;;; Desktop Session Management
   ;; Saves and restores window layouts and open files.
   (leaf desktop
-    :custom `((desktop-dirname . ,(concat no-littering-var-directory "desktop"))
-              (desktop-save . 'if-exists)
-              (desktop-load-locked-desktop . t)
-              (desktop-auto-save-timeout . 180)
-              (desktop-restore-eager . 10))
+    :after no-littering
+    :init
+    (setq desktop-dirname (no-littering-expand-var-file-name "desktop/")
+          desktop-save 'if-exists
+          desktop-load-locked-desktop t
+          desktop-auto-save-timeout 180
+          desktop-restore-eager 10)
     :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
            (after-init-hook . (lambda ()
-                                (make-directory (concat no-littering-var-directory "desktop") t)
-                                (desktop-read))))
-    :config
-    (desktop-save-mode 1))
+                                (make-directory (no-littering-expand-var-file-name "desktop/") t)
+                                (desktop-read)
+                                (desktop-save-mode 1)))))
+
 
   ;; ---------------------------------------------------------------------------
   ;;; Winner Mode
@@ -821,22 +834,25 @@ Core Emacs configuration with modular design.
   (leaf winner
     :bind (("M-[" . winner-undo)
            ("M-]" . winner-redo))
-    :config
-    (winner-mode 1))
+    :hook (after-init-hook . winner-mode))
 
   ;; ---------------------------------------------------------------------------
   ;;; Custom Window Layout Utilities
-  (defvar my:saved-window-config nil
-    "Stores the current window configuration for later restoration.")
+  ;; Lightweight utilities for window layout management.
 
+  (defvar my:saved-window-config nil
+    "Cached window configuration for restoration.")
+
+  ;;;###autoload
   (defun my:save-window-layout ()
-    "Save the current window configuration persistently."
+    "Save current window configuration (frame-local)."
     (interactive)
     (setq my:saved-window-config (window-state-get nil t))
     (message "Window configuration saved."))
 
+  ;;;###autoload
   (defun my:restore-window-layout ()
-    "Restore the previously saved window configuration."
+    "Restore previously saved window configuration."
     (interactive)
     (if my:saved-window-config
         (progn
@@ -844,13 +860,14 @@ Core Emacs configuration with modular design.
           (message "Window configuration restored."))
       (message "No saved window configuration found.")))
 
+  ;;;###autoload
   (defun my:toggle-window-dedication ()
-    "Toggle the dedicated status of the currently selected window."
+    "Toggle dedicated state of the selected window."
     (interactive)
-    (let ((window (selected-window)))
-      (set-window-dedicated-p window (not (window-dedicated-p window)))
+    (let ((win (selected-window)))
+      (set-window-dedicated-p win (not (window-dedicated-p win)))
       (message "Window dedication %s"
-               (if (window-dedicated-p window) "enabled" "disabled"))))
+               (if (window-dedicated-p win) "enabled" "disabled"))))
 #+end_src
 
 *** Essetial Configuration
@@ -2226,15 +2243,15 @@ and relative line numbers.
 :CUSTOM_ID: layout
 :END:
 
-- *early-init.el* :: Startup-time tuning only (GC, file-name-handler, native-comp, frame defaults).  
-- *init.el*       :: Packages & leaf-based modules; UI toggles are deferred via hooks.  
-- *user.el*       :: Personal or machine-specific overrides (optional; loaded from init).  
-- *README.el*     :: Unified, auto-generated; can be loaded quickly in production.  
+- *early-init.el* :: Startup-time tuning only (GC, file-name-handler, native-comp, frame defaults).
+- *init.el*       :: Packages & leaf-based modules; UI toggles are deferred via hooks.
+- *user.el*       :: Personal or machine-specific overrides (optional; loaded from init).
+- *README.el*     :: Unified, auto-generated; can be loaded quickly in production.
 - *Makefile*      :: Reproducible tangle/clean; optional byte-compile target.
 
-** Boot Sequence (Emacs 30+)  
-1. Emacs loads `early-init.el` before frame creation.  
-2. Emacs loads `init.el`.  
+** Boot Sequence (Emacs 30+)
+1. Emacs loads `early-init.el` before frame creation.
+2. Emacs loads `init.el`.
 3. `init.el` may load `README.el` or fall back to `(org-babel-load-file "README.org")`.
 
 ** Loading Strategy
