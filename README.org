@@ -115,99 +115,165 @@ build-emacs.sh --native-compilation
 Performance optimizations and environment setup executed before main initialization.
 
 #+begin_src emacs-lisp :tangle early-init.el
-;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
-;;; Commentary:
-;; Minimal, side-effect free startup tweaks for Emacs 30+.
-;; - No package loading here; package.el is initialized once in init.el.
-;; - Speed up startup (GC, file-name handlers); restore after init.
-;; - Set native-comp & frame params early.
-;;; Code:
+  ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Early-stage optimizations for Emacs 30+
+  ;; - GC tuning: 128MB startup, 64MB runtime
+  ;; - Process I/O: 8MB buffer size
+  ;; - Native compilation: Async with speed level 2
+  ;; - Platform integration: macOS paths, GNU ls
+  ;;; Code:
 
-;; Require Emacs 30+
-(when (version< emacs-version "30")
-  (error "This configuration requires Emacs 30 or newer"))
+  ;; Compatibility Check
+  (when (version< emacs-version "30")
+    (error "This configuration requires Emacs 30+"))
 
-;; Small helper
-(defun my:ensure-directory-exists (dir)
-  "Ensure DIR exists, creating if necessary."
-  (unless (file-directory-p dir)
-    (condition-case err
-        (make-directory dir t)
-      (error (warn "Failed to create directory: %s - %s" dir err)))))
+  ;; Utility Functions
+  (defun my:ensure-directory-exists (dir)
+    "Ensure DIR exists, creating if necessary."
+    (unless (file-directory-p dir)
+      (condition-case err
+          (make-directory dir t)
+        (error (warn "Failed to create directory: %s - %s" dir err)))))
 
-;;;; Directory layout (align with init.el / no-littering)
-(defvar my:d (or (and load-file-name
-                      (file-name-directory (file-chase-links load-file-name)))
-                 user-emacs-directory)
-  "Root of this Emacs configuration.")
+  ;; Directory Structure
+  (defvar my:d (or (and load-file-name
+                         (file-name-directory (file-chase-links load-file-name)))
+                    user-emacs-directory)
+    "Base configuration directory.")
 
-(defvar my:d:etc (expand-file-name ".etc/" my:d))
-(defvar my:d:var (expand-file-name ".var/" my:d))
-(defvar my:d:elpa (expand-file-name "elpa/" my:d:var))
-(defvar my:d:eln  (expand-file-name "eln-cache/" my:d:var))
-(defvar my:f:custom (expand-file-name "custom.el" my:d:etc))
+  (defvar my:d:cache (expand-file-name ".cache/" my:d))
+  (defvar my:d:etc (expand-file-name ".etc/" my:d))
+  (defvar my:d:var (expand-file-name ".var/" my:d))
+  (defvar my:f:custom (expand-file-name "custom.el" my:d:etc))
 
-(mapc #'my:ensure-directory-exists (list my:d:etc my:d:var my:d:elpa my:d:eln))
+  (mapc #'my:ensure-directory-exists (list my:d:cache my:d:etc my:d:var))
 
-;;;; Package system (defer activation to init.el, but decide dirs early)
-(setq package-enable-at-startup nil
-      package-user-dir my:d:elpa)
+  ;; Performance Optimization
+  (setq gc-cons-threshold (* 128 1024 1024)
+        read-process-output-max (* 8 1024 1024))
 
-;;;; Startup performance toggles
-(defconst my--gc-cons-threshold-start (* 128 1024 1024) "128MiB during startup.")
-(defconst my--gc-cons-threshold-normal (* 64 1024 1024)  "64MiB after startup.")
-(setq gc-cons-threshold my--gc-cons-threshold-start
-      gc-cons-percentage 0.6)
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (setq gc-cons-threshold (* 64 1024 1024))
+              (message "Emacs loaded in %.2f seconds with %d garbage collections."
+                       (float-time (time-subtract after-init-time before-init-time))
+                       gcs-done)))
 
-(defvar my--saved-file-name-handler-alist file-name-handler-alist)
-(setq file-name-handler-alist nil)
+  ;; Native Compilation
+  (setq native-comp-async-report-warnings-errors 'error
+        native-comp-async-jobs-number (string-to-number (or (getenv "EMACS_NATIVE_COMP_JOBS") "4"))
+        native-comp-speed 2)
 
-;; Larger pipe buffer helps LSP/VCS subprocess throughput.
-(setq read-process-output-max (* 8 1024 1024)) ; 8MiB
+  (when (boundp 'native-comp-eln-load-path)
+    (startup-redirect-eln-cache (expand-file-name "eln-cache/" my:d:cache)))
 
-;;;; Native compilation (configure, do not load packages)
-(when (native-comp-available-p)
-  (setq native-comp-async-report-warnings-errors 'silent
-        native-comp-async-jobs-number
-        (let ((e (getenv "EMACS_NATIVE_COMP_JOBS"))) (if e (string-to-number e) 4))
-        native-comp-speed 2))
-(when (boundp 'native-comp-eln-load-path)
-  (startup-redirect-eln-cache my:d:eln))
+  ;; macOS Configuration
+  (when (eq system-type 'darwin)
+    (dolist (path '("/opt/homebrew/bin" "/usr/local/bin"))
+      (when (file-directory-p path)
+        (add-to-list 'exec-path path)
+        (setenv "PATH" (concat path ":" (getenv "PATH")))))
 
-;;;; Early UI: minimal params only (full UI in init.el)
-(setq frame-inhibit-implied-resize t
-      frame-resize-pixelwise t
-      inhibit-startup-screen t
-      inhibit-startup-message t
-      inhibit-startup-echo-area-message user-login-name)
+    (when (executable-find "gls")
+      (setq insert-directory-program "gls"
+            dired-use-ls-dired t
+            dired-listing-switches "-aBhl --group-directories-first")))
 
-;; Idempotent frame params for first & subsequent GUI frames
-(dolist (kv '((menu-bar-lines . 0)
-              (tool-bar-lines . 0)
-              (vertical-scroll-bars . nil)
-              (fullscreen . maximized)))
-  (setf (alist-get (car kv) default-frame-alist) (cdr kv))
-  (setf (alist-get (car kv) initial-frame-alist) (cdr kv)))
+  ;; Frame Settings
+  (setq frame-resize-pixelwise t)
+  (add-to-list 'default-frame-alist '(fullscreen . maximized))
 
-;; Daemon: ensure GUI client frames are maximized too
-(when (daemonp)
-  (add-hook 'after-make-frame-functions
-            (lambda (f)
-              (when (display-graphic-p f)
-                (set-frame-parameter f 'fullscreen 'maximized)))))
+  ;; Unbind Unnecessary Keys
+  (global-set-key (kbd "C-z") nil)
+  (global-set-key (kbd "M-z") nil)
+  (global-set-key (kbd "M-m") nil)
+  (global-set-key (kbd "C-x C-z") nil)
+  (global-set-key (kbd "M-/") nil)
 
-;;;; Restore toggles after init
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (setq gc-cons-threshold my--gc-cons-threshold-normal
-                  gc-cons-percentage 0.1
-                  file-name-handler-alist my--saved-file-name-handler-alist)
-            (message "Startup: %.2fs, GC: %d"
-                     (float-time (time-subtract after-init-time before-init-time))
-                     gcs-done)))
+  ;; Package System
+  (setq package-enable-at-startup nil
+        package-user-dir (expand-file-name "elpa/" my:d:cache))
 
-(provide 'early-init)
-;;; early-init.el ends here
+  (my:ensure-directory-exists package-user-dir)
+
+  (eval-and-compile
+    (customize-set-variable
+     'package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
+                         ("melpa" . "https://melpa.org/packages/")))
+    (package-initialize)
+    (use-package leaf :ensure t)
+
+    (leaf leaf-keywords
+      :ensure t
+      :init (leaf blackout :ensure t)
+      :config (leaf-keywords-init)))
+
+  (leaf leaf-convert :ensure t)
+
+  (leaf emacs
+    :ensure nil
+    :init
+    ;; Basic behavior
+    (menu-bar-mode -1)
+    (tool-bar-mode -1)
+    (scroll-bar-mode -1)
+    (pixel-scroll-precision-mode)
+
+    (setq inhibit-startup-screen t
+  	initial-scratch-message nil
+  	use-short-answers t
+  	create-lockfiles nil
+  	make-backup-files t
+  	delete-old-versions t
+  	version-control t
+  	vc-make-backup-files t)
+
+    ;; Performance
+    (setq idle-time 0.2)
+
+    ;; Electric pairs
+    (electric-pair-mode 1)
+
+    ;; Line numbers
+    (add-hook 'prog-mode-hook #'display-line-numbers-mode)
+    (setq display-line-numbers-type 'relative)
+
+    ;; Auto-save
+    (setq auto-save-default t
+  	auto-save-visited-interval 2)
+    (auto-save-visited-mode 1))
+
+  ;; No-Littering
+  (leaf no-littering
+    :ensure t
+    :require t
+    :init
+    (setq no-littering-etc-directory my:d:etc
+          no-littering-var-directory my:d:var))
+
+  ;; Environment Variables
+  (defvar my:shell-env-vars
+    '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
+
+  (when (eq system-type 'darwin)
+    (leaf exec-path-from-shell
+      :ensure t
+      :config
+      (setq exec-path-from-shell-check-startup-files nil
+            exec-path-from-shell-arguments '("-l" "-i")
+            exec-path-from-shell-variables my:shell-env-vars)
+      (exec-path-from-shell-initialize)))
+
+  ;; Garbage Collection Magic Hack
+  (leaf gcmh
+    :ensure t
+    :global-minor-mode gcmh-mode)
+
+  (leaf hydra :ensure t)
+
+  (provide 'early-init)
+  ;;; early-init.el ends here
 #+end_src
 
 ** Main Initialization
@@ -218,118 +284,34 @@ Performance optimizations and environment setup executed before main initializat
 Minimal init.el that loads the main configuration from README.org.
 
 #+begin_src emacs-lisp :tangle init.el
-;;; init.el --- Main initialization -*- lexical-binding: t; -*-
-;;; Commentary:
-;; Packages and user config live here. Early boot tweaks are in early-init.el.
-;;; Code:
+  ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Delegates configuration to README.org via Org Babel
+  ;;; Code:
 
-;;;; Fallbacks for directory variables (in case early-init didn't define them)
-(defvar my:d user-emacs-directory "Root of this Emacs config.")
-(defvar my:d:etc (expand-file-name ".etc/" my:d))
-(defvar my:d:var (expand-file-name ".var/" my:d))
-(defvar my:f:custom (expand-file-name "custom.el" my:d))
+  (unless (boundp 'my:d)
+    (error "`my:d` is not defined. Ensure early-init.el was loaded first."))
 
-;;;; package.el bootstrap (initialize exactly once)
-(require 'package)
-(setq package-archives
-      '(("gnu"   . "https://elpa.gnu.org/packages/")
-        ("melpa" . "https://melpa.org/packages/")))
-(unless package--initialized
-  (package-initialize))
+  (setq custom-file my:f:custom)
+  (when (and custom-file (file-exists-p custom-file))
+    (ignore-errors (load custom-file)))
 
-;;;; Install leaf (+ keywords) if missing
-(dolist (pkg '(leaf leaf-keywords))
-  (unless (package-installed-p pkg)
-    (package-refresh-contents)
-    (package-install pkg)))
-(require 'leaf)
-(require 'leaf-keywords)
-(leaf-keywords-init)
+  (setq init-org-file (expand-file-name "README.org" my:d))
 
-;;;; Keep files tidy (no-littering)
-(leaf no-littering
-  :ensure t
-  :require t
-  :config
-  ;; Use our dirs if present; otherwise no-littering's defaults still work.
-  (setq no-littering-etc-directory my:d:etc
-        no-littering-var-directory my:d:var)
-  ;; Put Custom into etc/, load it if it exists.
-  (setq custom-file (no-littering-expand-etc-file-name "custom.el"))
-  (when (file-exists-p custom-file)
-    (ignore-errors (load custom-file))))
+  (when (file-exists-p init-org-file)
+    (condition-case err
+        (progn
+          (setq org-confirm-babel-evaluate nil)
+          (org-babel-load-file init-org-file))
+      (error
+       (display-warning
+        'init
+        (format "Failed to load %s: %s"
+                init-org-file (error-message-string err))
+        :error))))
 
-;;;; macOS integration
-;; 1) Import shell environment for GUI Emacs
-(leaf exec-path-from-shell
-  :ensure t
-  :if   (and (memq window-system '(mac ns))
-             (display-graphic-p)
-             (not noninteractive))
-  :custom ((exec-path-from-shell-check-startup-files . nil)
-           (exec-path-from-shell-arguments . '("-l" "-i"))
-           (exec-path-from-shell-variables .
-            '("PATH" "MANPATH" "LANG" "LC_ALL"
-              "PASSWORD_STORE_DIR" "GPG_KEY_ID"
-              "OPENROUTER_API_KEY" "OPENAI_API_KEY")))
-  :config
-  (exec-path-from-shell-initialize))
-
-;; 2) Fallback PATH for CLI/edge cases (was in early-init; moved here)
-(when (eq system-type 'darwin)
-  (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
-    (when (and (file-directory-p p)
-               (not (member p exec-path)))
-      (add-to-list 'exec-path p)
-      (setenv "PATH" (concat p ":" (getenv "PATH"))))))
-
-;; 3) Dired + GNU ls (gls) integration (was in early-init; moved here)
-(leaf dired
-  :custom ((dired-listing-switches . "-aBhl --group-directories-first"))
-  :config
-  (when (and (eq system-type 'darwin) (executable-find "gls"))
-    (setq insert-directory-program "gls"
-          dired-use-ls-dired t)))
-
-;;;; GC management (runtime; early boot tweaks are in early-init.el)
-(leaf gcmh
-  :ensure t
-  :hook (emacs-startup-hook . gcmh-mode)
-  ;; Avoid list-mutation error: use :setq with immediates (not expressions).
-  :setq ((gcmh-high-cons-threshold . 67108864) ; 64 MiB
-         (gcmh-idle-delay . 1.0)))
-
-;;;; Hydra on-demand
-(leaf hydra :ensure t :commands (defhydra))
-
-;;;; Global key unsets (were in early-init; do here to keep early side-effect free)
-(dolist (key '("C-z" "M-z" "M-m" "C-x C-z" "M-/"))
-  (keymap-global-unset key))
-
-;;;; Light UI chrome (defer to avoid redraws during startup)
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (when (fboundp 'menu-bar-mode)   (menu-bar-mode -1))
-            (when (fboundp 'tool-bar-mode)   (tool-bar-mode -1))
-            (when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))))
-
-;;;; Load literate config safely
-(require 'org) ;; load org first to avoid dynamic/lexical conflict on its vars
-(let ((init-org (expand-file-name "README.org" my:d)))
-  (when (file-exists-p init-org)
-    ;; Bind dynamic var *after* org is loaded; keep scope local to this call.
-    (let ((org-confirm-babel-evaluate nil))
-      (condition-case err
-          (org-babel-load-file init-org) ; tangle + load
-        (error
-         (display-warning
-          'init
-          (format "Failed to load %s: %s"
-                  init-org (error-message-string err))
-          :error))))))
-
-(provide 'init)
-;;; init.el ends here
+  (provide 'init)
+  ;;; init.el ends here
 #+end_src
 
 ** User Configuration
@@ -504,7 +486,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/08/31 23:24:30 $
+  ;; $Lastupdate: 2025/09/01 00:46:38 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -794,39 +776,29 @@ Core Emacs configuration with modular design.
   (leaf treemacs
     :ensure t
     :if (display-graphic-p)
+    :bind (:treemacs-mode-map
+           ([mouse-1] . treemacs-single-click-expand-action))
     :custom ((treemacs-no-png-images . nil)
+             (treemacs-filewatch-mode . t)
+             (treemacs-follow-mode . t)
              (treemacs-indentation . 2)
-             (treemacs-missing-project-action . 'remove))
-    :config
-    ;; Run after Treemacs is loaded to avoid void-function errors.
-    (with-eval-after-load 'treemacs
-      ;; keymap (defined only after treemacs loads)
-      (when (boundp 'treemacs-mode-map)
-        (keymap-set treemacs-mode-map "<mouse-1>"
-                    #'treemacs-single-click-expand-action))
-      ;; minor modes (defined by treemacs and its modules)
-      (when (fboundp 'treemacs-filewatch-mode)
-        (treemacs-filewatch-mode t))
-      (when (fboundp 'treemacs-follow-mode)
-        (treemacs-follow-mode t))))
+             (treemacs-missing-project-action . 'remove)))
 
   ;; ---------------------------------------------------------------------------
   ;;; Desktop Session Management
   ;; Saves and restores window layouts and open files.
   (leaf desktop
-    :after no-littering
-    :init
-    (setq desktop-dirname (no-littering-expand-var-file-name "desktop/")
-          desktop-save 'if-exists
-          desktop-load-locked-desktop t
-          desktop-auto-save-timeout 180
-          desktop-restore-eager 10)
+    :custom `((desktop-dirname . ,(concat no-littering-var-directory "desktop"))
+              (desktop-save . 'if-exists)
+              (desktop-load-locked-desktop . t)
+              (desktop-auto-save-timeout . 180)
+              (desktop-restore-eager . 10))
     :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
            (after-init-hook . (lambda ()
-                                (make-directory (no-littering-expand-var-file-name "desktop/") t)
-                                (desktop-read)
-                                (desktop-save-mode 1)))))
-
+                                (make-directory (concat no-littering-var-directory "desktop") t)
+                                (desktop-read))))
+    :config
+    (desktop-save-mode 1))
 
   ;; ---------------------------------------------------------------------------
   ;;; Winner Mode
@@ -834,25 +806,22 @@ Core Emacs configuration with modular design.
   (leaf winner
     :bind (("M-[" . winner-undo)
            ("M-]" . winner-redo))
-    :hook (after-init-hook . winner-mode))
+    :config
+    (winner-mode 1))
 
   ;; ---------------------------------------------------------------------------
   ;;; Custom Window Layout Utilities
-  ;; Lightweight utilities for window layout management.
-
   (defvar my:saved-window-config nil
-    "Cached window configuration for restoration.")
+    "Stores the current window configuration for later restoration.")
 
-  ;;;###autoload
   (defun my:save-window-layout ()
-    "Save current window configuration (frame-local)."
+    "Save the current window configuration persistently."
     (interactive)
     (setq my:saved-window-config (window-state-get nil t))
     (message "Window configuration saved."))
 
-  ;;;###autoload
   (defun my:restore-window-layout ()
-    "Restore previously saved window configuration."
+    "Restore the previously saved window configuration."
     (interactive)
     (if my:saved-window-config
         (progn
@@ -860,14 +829,13 @@ Core Emacs configuration with modular design.
           (message "Window configuration restored."))
       (message "No saved window configuration found.")))
 
-  ;;;###autoload
   (defun my:toggle-window-dedication ()
-    "Toggle dedicated state of the selected window."
+    "Toggle the dedicated status of the currently selected window."
     (interactive)
-    (let ((win (selected-window)))
-      (set-window-dedicated-p win (not (window-dedicated-p win)))
+    (let ((window (selected-window)))
+      (set-window-dedicated-p window (not (window-dedicated-p window)))
       (message "Window dedication %s"
-               (if (window-dedicated-p win) "enabled" "disabled"))))
+               (if (window-dedicated-p window) "enabled" "disabled"))))
 #+end_src
 
 *** Essetial Configuration
@@ -2237,7 +2205,6 @@ and relative line numbers.
   (provide 'README)
   ;;; README.el ends here
 #+end_src
-
 ** Configuration Layout
 :PROPERTIES:
 :CUSTOM_ID: layout
