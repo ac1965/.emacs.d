@@ -1,0 +1,2 @@
+;;   -*- mode: lisp-data; -*-
+((:container ((elisp org-element--headline-cache) (elisp org-element--cache) (version "2.3")) :persist-file "57/e5dcc5-0d3c-4dc5-aaf1-0d7da9507cb5" :associated (:hash "6bf96d08fd95592759c304081552579e" :file "/Users/ac1965/.emacs.d/README.org" :inode 26872000) :expiry 30 :last-access 1756645224.687091 :last-access-hr "2025-08-31T22:00:24+0900") (:container ((index "3.2")) :persist-file "5c/8c4d96-5684-48fa-b133-18fc7395b874" :associated nil :expiry never :last-access 1756645422.855237 :last-access-hr "2025-08-31T22:03:42+0900"))
