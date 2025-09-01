@@ -50,21 +50,34 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 *** Makefile
 
 #+begin_src text :tangle Makefile
-  EMACS ?= emacs
-  README_EL = README.el
-  README_ORG = README.org
+  EMACS   ?= emacs
+  ORG     ?= README.org
+  ELFILES = early-init.el init.el README.el
 
-  .PHONY: all tangle clean
+  .PHONY: all tangle compile clean
 
-  all: tangle
+  all: tangle compile
 
-  tangle: $(README_ORG)
+  tangle:
   	$(EMACS) --batch -Q \
-  	      --eval "(require 'org)" \
-  	      --eval "(org-babel-tangle-file \"$(README_ORG)\")"
+  	  --eval "(require 'org)" \
+  	  --eval "(org-babel-tangle-file \"$(ORG)\")"
+
+  compile: $(ELFILES)
+  	$(EMACS) --batch -Q \
+  	  --eval "(progn \
+  	    (require 'package) \
+  	    (setq package-archives '((\"gnu\" . \"https://elpa.gnu.org/packages/\") \
+  	                             (\"melpa\" . \"https://melpa.org/packages/\")) \
+  	          package-vc-allow-clone t) \
+  	    (package-initialize) \
+  	    (unless (package-installed-p 'leaf) \
+  	      (package-refresh-contents) \
+  	      (package-install 'leaf)))" \
+  	  --eval "(mapc #'byte-compile-file '($(patsubst %,\"%\",$(ELFILES))))"
 
   clean:
-  	rm -f $(README_EL)
+  	rm -f *.elc
 #+end_src
 
 *** Quick Start
@@ -235,8 +248,55 @@ Minimal init.el that loads the main configuration from README.org.
   ;; Delegates configuration to README.org via Org Babel
   ;;; Code:
 
-  (unless (boundp 'my:d)
-    (error "`my:d` is not defined. Ensure early-init.el was loaded first."))
+  ;; -------------------------------------------------------------------
+  ;; Fallbacks for variables/functions usually defined in early-init.el
+  ;; These only take effect if the symbols are not already bound/defined.
+  ;; -------------------------------------------------------------------
+  (eval-and-compile
+    ;; Base dir (use existing value if already set by early-init).
+    (defvar my:d
+      (or (and (boundp 'my:d) my:d)
+          (and load-file-name (file-name-directory (file-chase-links load-file-name)))
+          user-emacs-directory)
+      "Base configuration directory (fallback when early-init.el not loaded).")
+
+    ;; Subdirs
+    (defvar my:d:cache (or (and (boundp 'my:d:cache) my:d:cache)
+                           (expand-file-name ".cache/" my:d)))
+    (defvar my:d:etc   (or (and (boundp 'my:d:etc)   my:d:etc)
+                           (expand-file-name ".etc/"   my:d)))
+    (defvar my:d:var   (or (and (boundp 'my:d:var)   my:d:var)
+                           (expand-file-name ".var/"   my:d)))
+    (defvar my:d:elpa  (or (and (boundp 'my:d:elpa)  my:d:elpa)
+                           (expand-file-name "elpa/"   my:d:var)))
+    (defvar my:d:eln   (or (and (boundp 'my:d:eln)   my:d:eln)
+                           (expand-file-name "eln-cache/" my:d:var)))
+    (defvar my:f:custom (or (and (boundp 'my:f:custom) my:f:custom)
+                            (expand-file-name "custom.el" my:d:etc)))
+
+    ;; Utility from early-init (define only if missing)
+    (unless (fboundp 'my:ensure-directory-exists)
+      (defun my:ensure-directory-exists (dir)
+        "Ensure DIR exists, creating if necessary."
+        (unless (file-directory-p dir)
+          (condition-case err
+              (make-directory dir t)
+            (error (ignore-errors
+                     (message "Failed to create directory: %s (%s)" dir err)))))))
+
+    (mapc #'my:ensure-directory-exists (list my:d:cache my:d:etc my:d:var my:d:elpa my:d:eln))
+
+    ;; Ensure package.el respects our elpa dir even if early-init wasn't loaded.
+    (with-eval-after-load 'package
+      (unless (and (boundp 'package-user-dir) package-user-dir)
+        (setq package-user-dir my:d:elpa)))
+
+    ;; Byte-compiler friendliness (silence unknown/obsolete warnings)
+    (defvar display-line-numbers-type nil)
+    (defvar no-littering-etc-directory (expand-file-name ".etc/" my:d))
+    (defvar no-littering-var-directory (expand-file-name ".var/" my:d))
+    (declare-function leaf-keywords-init "leaf-keywords")
+    (declare-function exec-path-from-shell-initialize "exec-path-from-shell"))
 
   ;; Unbind disruptive or unused default keys
   (keymap-set global-map "C-z" nil)      ;; suspend-frame: often accidental
@@ -551,7 +611,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/01 12:08:46 $
+  ;; $Lastupdate: 2025/09/01 16:52:43 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -689,13 +749,12 @@ Core Emacs configuration with modular design.
   (leaf nerd-icons
     :ensure t
     :if (display-graphic-p)
-    :config
-    (setq nerd-icons-color-icons (font-exists-p my:nerd-icons-font)))
+    :custom ((nerd-icons-color-icons . (font-exists-p my:nerd-icons-font))))
 
   (leaf nerd-icons-dired
     :ensure t
     :if (display-graphic-p)
-    :hook (dired-mode-hook . nerd-icons-dired-mode))
+    :hook (dired-mode . nerd-icons-dired-mode))
 
   ;; -----------------------------------------------------------------------------
   ;;; Ligature Setup
