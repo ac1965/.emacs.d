@@ -175,11 +175,12 @@ Performance optimizations and environment setup executed before main initializat
   (setq file-name-handler-alist nil)
 
   ;; Larger pipe buffer helps LSP/VCS subprocess throughput.
-  (setq read-process-output-max (* 8 1024 1024)) ; 8MiB
+  ;; Emacs 27+; safe on 30+.
+  (setopt read-process-output-max (* 8 1024 1024)) ; 8MiB
 
   ;;;; Native compilation (configure, do not load packages)
   (defun my--restore-startup-toggles ()
-    "Restore GC and file-name-handler safely after init."
+    "Restore GC/file-name-handler after init (idempotent)."
     (setq gc-cons-threshold  my--gc-cons-threshold-normal
           gc-cons-percentage 0.1
           file-name-handler-alist my--saved-file-name-handler-alist)
@@ -187,11 +188,13 @@ Performance optimizations and environment setup executed before main initializat
              (float-time (time-subtract after-init-time before-init-time))
              gcs-done))
 
-  ;; Ensure ELN dir exists before redirect
+  ;; Call the single, well-defined restore function.
+  (add-hook 'emacs-startup-hook #'my--restore-startup-toggles)
+
+  ;; Redirect native-compilation cache before packages load.
   (when (fboundp 'startup-redirect-eln-cache)
     (startup-redirect-eln-cache my:d:eln))
 
-  (add-hook 'emacs-startup-hook #'my--restore-startup-toggles)
   (add-hook 'after-init-hook     #'my--restore-startup-toggles) ;; redundancy for safety
 
   ;;;; Early UI: minimal params only (full UI in init.el)
@@ -219,16 +222,6 @@ Performance optimizations and environment setup executed before main initializat
   ;; Package System
   (setq package-enable-at-startup nil
         package-user-dir my:d:elpa) ;; unify under .var/elpa/
-
-  ;;;; Restore toggles after init
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (setq gc-cons-threshold  my--gc-cons-threshold-normal
-                    gc-cons-percentage 0.1
-                    file-name-handler-alist my--saved-file-name-handler-alist)
-              (message "Emacs ready in %.2fs with %d GCs"
-                       (float-time (time-subtract after-init-time before-init-time))
-                       gcs-done)))
 
 
   (provide 'early-init)
@@ -307,18 +300,17 @@ Minimal init.el that loads the main configuration from README.org.
 
   ;; Initialize package.el exactly once to avoid double-boot.
   (require 'package)
-  (setopt package-archives
-          '(("gnu"   . "https://elpa.gnu.org/packages/")
-            ("melpa" . "https://melpa.org/packages/"))
+  (setopt package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
+                             ("melpa" . "https://melpa.org/packages/"))
           package-vc-allow-clone t)
 
   (unless (bound-and-true-p package--initialized)
     (package-initialize))
 
-  ;; Bootstrap leaf if missing.
+  ;; Bootstrap leaf (and friends) if missing.
   (unless (package-installed-p 'leaf)
-    (package-refresh-contents)
-    (package-install 'leaf)) ;; let it signal on failure (visible)
+    (package-refresh-contents) ; refresh once here
+    (package-install 'leaf))
 
   (eval-when-compile (require 'leaf))
   (leaf leaf-keywords :ensure t
@@ -371,9 +363,7 @@ Minimal init.el that loads the main configuration from README.org.
   ;; 1) Import shell environment for GUI Emacs
   (leaf exec-path-from-shell
     :ensure t
-    :if   (and (memq window-system '(mac ns))
-               (display-graphic-p)
-               (not noninteractive))
+    :if (and (memq window-system '(mac ns)) (display-graphic-p))
     :custom ((exec-path-from-shell-check-startup-files . nil)
              (exec-path-from-shell-arguments . '("-l" "-i"))
              (exec-path-from-shell-variables .
@@ -381,7 +371,8 @@ Minimal init.el that loads the main configuration from README.org.
   					     "PASSWORD_STORE_DIR" "GPG_KEY_ID"
   					     "OPENROUTER_API_KEY" "OPENAI_API_KEY")))
     :config
-    (exec-path-from-shell-initialize))
+    (unless noninteractive
+      (exec-path-from-shell-initialize)))
 
   ;; 2) Fallback PATH for CLI/edge cases (was in early-init; moved here)
   (when (eq system-type 'darwin)
@@ -412,6 +403,12 @@ Minimal init.el that loads the main configuration from README.org.
   (setq custom-file my:f:custom)
   (when (and custom-file (file-exists-p custom-file))
     (ignore-errors (load custom-file nil 'nomessage)))
+
+  ;; Load User-Specific Configurations
+  ;; - Dynamically loads an additional configuration file specific to the current
+  ;;   user (e.g., "username.el") if it exists.
+  (setq user-specific-config (concat my:d user-login-name ".el"))
+  (if (file-exists-p user-specific-config) (load user-specific-config))
 
   ;; Load README.org via Org Babel
   (let ((init-org-file (expand-file-name "README.org" my:d)))
@@ -611,24 +608,12 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/01 17:29:45 $
+  ;; $Lastupdate: 2025/09/01 21:02:15 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
-#+end_src
-
-*** Loading user-specific settings
-
-#+begin_src emacs-lisp :tangle README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Load User-Specific Configurations
-  ;; - Dynamically loads an additional configuration file specific to the current
-  ;;   user (e.g., "username.el") if it exists.
-
-  (setq user-specific-config (concat my:d user-login-name ".el"))
-  (if (file-exists-p user-specific-config) (load user-specific-config))
 #+end_src
 
 *** Fonts/UI
@@ -2312,7 +2297,7 @@ and relative line numbers.
     )
 #+end_src
 
-** Footer
+*** Footer
 #+begin_src emacs-lisp :tangle README.el
   (provide 'README)
   ;;; README.el ends here
