@@ -17,7 +17,6 @@
 # - README.el     : Unified output for quick test/byte-compile.
 # - Makefile      : Reproducible tangle/clean/compile pipeline.
 
-
 * Introduction
 :PROPERTIES:
   :CUSTOM_ID: introduction
@@ -39,7 +38,7 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 [[file:demo.png]]
 
 ** Installation
-:PROPERTIES:
+:PROPERTIES
    :CUSTOM_ID: installation
    :END:
 
@@ -47,6 +46,26 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 - Emacs 30.0+ with native compilation support
 - Git, make, gcc (10+), libgccjit
 - Optional: ripgrep, aspell, pass, Homebrew (macOS)
+
+*** Makefile
+
+#+begin_src text :tangle Makefile
+  EMACS ?= emacs
+  README_EL = README.el
+  README_ORG = README.org
+
+  .PHONY: all tangle clean
+
+  all: tangle
+
+  tangle: $(README_ORG)
+  	$(EMACS) --batch -Q \
+  	      --eval "(require 'org)" \
+  	      --eval "(org-babel-tangle-file \"$(README_ORG)\")"
+
+  clean:
+  	rm -f $(README_EL)
+#+end_src
 
 *** Quick Start
 
@@ -60,26 +79,6 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
    cd ~/.emacs.d/
    EMACS=/Applications/Emacs.app/Contents/MacOS/Emacs make
    #+end_src
-
-*** Makefile
-
-#+begin_src text :tangle Makefile
-EMACS ?= emacs
-README_EL = README.el
-README_ORG = README.org
-
-.PHONY: all tangle clean
-
-all: tangle
-
-tangle: $(README_ORG)
-	$(EMACS) --batch -Q \
-	      --eval "(require 'org)" \
-	      --eval "(org-babel-tangle-file \"$(README_ORG)\")"
-
-clean:
-	rm -f $(README_EL)
-#+end_src
 
 *** Building Emacs
 
@@ -125,7 +124,8 @@ Performance optimizations and environment setup executed before main initializat
   ;;; Code:
 
   ;; Compatibility Check
-  (when (version< emacs-version "30")
+  ;; Guard: Emacs 30+ only (faster than parsing full version string)
+  (when (< emacs-major-version 30)
     (error "This configuration requires Emacs 30+"))
 
   ;; Utility Functions
@@ -138,8 +138,8 @@ Performance optimizations and environment setup executed before main initializat
 
   ;; Directory Structure
   (defvar my:d (or (and load-file-name
-                         (file-name-directory (file-chase-links load-file-name)))
-                    user-emacs-directory)
+                        (file-name-directory (file-chase-links load-file-name)))
+                   user-emacs-directory)
     "Base configuration directory.")
 
   (defvar my:d:cache (expand-file-name ".cache/" my:d))
@@ -157,6 +157,7 @@ Performance optimizations and environment setup executed before main initializat
   (setq gc-cons-threshold my--gc-cons-threshold-start
         gc-cons-percentage 0.6)
 
+  ;; Save & clear to speed up startup, then robustly restore later.
   (defvar my--saved-file-name-handler-alist file-name-handler-alist)
   (setq file-name-handler-alist nil)
 
@@ -164,16 +165,21 @@ Performance optimizations and environment setup executed before main initializat
   (setq read-process-output-max (* 8 1024 1024)) ; 8MiB
 
   ;;;; Native compilation (configure, do not load packages)
-  (when (native-comp-available-p)
-    (setq native-comp-async-report-warnings-errors 'silent
-          native-comp-async-jobs-number
-          (let ((e (getenv "EMACS_NATIVE_COMP_JOBS")))
-            (if (and e (string-match-p "\\`[0-9]+\\'" e)) (string-to-number e) 4))
-          native-comp-speed 2))
+  (defun my--restore-startup-toggles ()
+    "Restore GC and file-name-handler safely after init."
+    (setq gc-cons-threshold  my--gc-cons-threshold-normal
+          gc-cons-percentage 0.1
+          file-name-handler-alist my--saved-file-name-handler-alist)
+    (message "Emacs ready in %.2fs with %d GCs"
+             (float-time (time-subtract after-init-time before-init-time))
+             gcs-done))
 
   ;; Ensure ELN dir exists before redirect
   (when (fboundp 'startup-redirect-eln-cache)
     (startup-redirect-eln-cache my:d:eln))
+
+  (add-hook 'emacs-startup-hook #'my--restore-startup-toggles)
+  (add-hook 'after-init-hook     #'my--restore-startup-toggles) ;; redundancy for safety
 
   ;;;; Early UI: minimal params only (full UI in init.el)
   (setq frame-inhibit-implied-resize t
@@ -239,25 +245,26 @@ Minimal init.el that loads the main configuration from README.org.
   (keymap-set global-map "M-m" nil)      ;; back-to-indentation: rarely used, free key
   (keymap-set global-map "M-/" nil)      ;; dabbrev-expand: replaced by modern completion
 
-  (eval-and-compile
-    ;; Configure archives once; init.el is the single package init point.
-    (customize-set-variable
-     'package-archives
-     '(("gnu"   . "https://elpa.gnu.org/packages/")
-       ("melpa" . "https://melpa.org/packages/")))
-    (package-initialize)
+  ;; Initialize package.el exactly once to avoid double-boot.
+  (require 'package)
+  (setopt package-archives
+          '(("gnu"   . "https://elpa.gnu.org/packages/")
+            ("melpa" . "https://melpa.org/packages/"))
+          package-vc-allow-clone t)
 
-    ;; Bootstrap leaf without use-package dependency
-    (unless (package-installed-p 'leaf)
-      (package-refresh-contents)
-      (ignore-errors (package-install 'leaf)))
+  (unless (bound-and-true-p package--initialized)
+    (package-initialize))
 
-    (eval-when-compile (require 'leaf))
-    (leaf leaf-keywords :ensure t
-      :init (leaf blackout :ensure t)   ;; provides modeline hiding integrations
-      :config (leaf-keywords-init))
+  ;; Bootstrap leaf if missing.
+  (unless (package-installed-p 'leaf)
+    (package-refresh-contents)
+    (package-install 'leaf)) ;; let it signal on failure (visible)
 
-    (leaf leaf-convert :ensure t))      ;; optional: migrate use-package -> leaf
+  (eval-when-compile (require 'leaf))
+  (leaf leaf-keywords :ensure t
+    :init (leaf blackout :ensure t)
+    :config (leaf-keywords-init))
+  (leaf leaf-convert :ensure t)
 
   (leaf emacs
     :ensure nil
@@ -544,13 +551,12 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/01 10:00:31 $
+  ;; $Lastupdate: 2025/09/01 12:08:46 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
-
 #+end_src
 
 *** Loading user-specific settings
@@ -896,7 +902,7 @@ Core Emacs configuration with modular design.
                (if (window-dedicated-p window) "enabled" "disabled"))))
 #+end_src
 
-*** Essetial Configuration
+*** Essential Configuration
 **** Minimum setting
 
 This section contains basic enhancements such as automatic timestamps, electric pairs,
@@ -914,7 +920,7 @@ and relative line numbers.
   ;; -----------------------------------------------------------------------------
   ;;; Basic Editor Configuration
 
-  ;; nIsert timestamp on save
+  ;; Insert timestamp on save
   (defun my:save-buffer-wrapper ()
     "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
     (interactive)
@@ -1022,23 +1028,15 @@ and relative line numbers.
     ;;; Tree-Sitter Configuration
 
   ;; Modern syntax highlighting and parsing
-  (leaf tree-sitter
-    :ensure t
-    :global-minor-mode global-tree-sitter-mode
-    :hook (tree-sitter-after-on-hook . tree-sitter-hl-mode)
-    :when (featurep 'treesit)
-    :custom ((treesit-font-lock-level . 3)))
-
-  ;; Tree-Sitter language grammars
-  (leaf tree-sitter-langs
-    :ensure t
-    :config
-    (when (require 'tree-sitter-langs nil t)
-      (unless (ignore-errors
-                (directory-files (concat tree-sitter-langs--bin-dir "grammars/")))
-        (condition-case err
-            (tree-sitter-langs-install-grammars)
-          (error (message "Failed to install Tree-Sitter grammars: %s" err))))))
+  ;; Prefer built-in treesit on Emacs 30+. Ensure the package is loaded before using its API.
+  (when (featurep 'treesit)
+    (leaf treesit-auto
+      :ensure t
+      :require t
+      :custom ((treesit-auto-install . t))  ;; auto-install grammars interactively
+      :config
+      (global-treesit-auto-mode 1)
+      (setopt treesit-font-lock-level 3)))
 
   ;; -----------------------------------------------------------------------------
     ;;; Auto-Revert
@@ -1124,8 +1122,9 @@ and relative line numbers.
     ;;; Search Tools
   ;; Configures `rg` (ripgrep) as the default search backend.
 
-  (setq grep-program "rg")
-  (leaf rg :ensure t)
+  (when (executable-find "rg")
+    (setopt grep-program "rg")
+    (leaf rg :ensure t))
 
   ;; -----------------------------------------------------------------------------
     ;;; Code Navigation
@@ -1221,11 +1220,11 @@ and relative line numbers.
       (leaf vertico-posframe
         :ensure t
         :if (display-graphic-p)
-        :custom
-        ((vertico-posframe-border-width . 2)
-         (vertico-posframe-parameters . '((left-fringe . 4) (right-fringe . 4))))
-        :config
-        (vertico-posframe-mode 1)))
+        :after vertico
+        :require posframe
+        :custom ((vertico-posframe-border-width . 2)
+                 (vertico-posframe-parameters . '((left-fringe . 4) (right-fringe . 4))))
+        :config (vertico-posframe-mode 1)))
 
     (leaf vertico-prescient
       :ensure t
@@ -1251,7 +1250,8 @@ and relative line numbers.
       ((prefix-help-command . #'embark-prefix-help-command)
        (embark-collect-live-update . t))
       :config
-      (add-hook 'embark-collect-mode-map #'embark-collect-live-mode)
+      ;; Enable live updates in Embark collect buffers.
+      (add-hook 'embark-collect-mode-hook #'embark-collect-live-mode)
       (when (require 'all-the-icons nil t)
         (setq embark-indicators
               '(embark-minimal-indicator
@@ -1349,7 +1349,7 @@ and relative line numbers.
                   (setq eww-hl-search-word nil))))
 
     ;; Toggle images on/off
-    (defun my/eww-toggle-images ()
+    (defun my:eww-toggle-images ()
       "Toggle whether images are loaded in EWW."
       (interactive)
       (setq shr-inhibit-images (not shr-inhibit-images))
@@ -1463,7 +1463,7 @@ and relative line numbers.
     ("C-c w r" . eww-readable)       ;; Readable mode
     ("C-c w u" . eww-back-url)       ;; Back
     ("C-c w f" . eww-forward-url)    ;; Forward
-    ("C-c w I" . my/eww-toggle-images) ;; Toggle Image
+    ("C-c w I" . my:eww-toggle-images) ;; Toggle Image
 
     ;; Misc
     ("C-x g"   . magit-status)
@@ -1556,66 +1556,40 @@ and relative line numbers.
   ;; - Adds inline documentation, diagnostics, and code action hints.
   ;; - Works only when using LSP-Mode.
 
-  (leaf lsp-ui
-    :ensure t
-    :after lsp-mode
-    :custom
-    `((lsp-ui-doc-enable . t)
-      (lsp-ui-sideline-enable . t)
-      (lsp-ui-sideline-show-hover . t)
-      (lsp-ui-sideline-show-code-actions . t)
-      (lsp-ui-sideline-show-diagnostics . t)))
+  (when (eq my:use-lsp 'lsp)
+    (leaf lsp-ui
+      :ensure t
+      :after lsp-mode
+      :custom
+      `((lsp-ui-doc-enable . t)
+        (lsp-ui-sideline-enable . t)
+        (lsp-ui-sideline-show-hover . t)
+        (lsp-ui-sideline-show-code-actions . t)
+        (lsp-ui-sideline-show-diagnostics . t))))
 
   ;; -----------------------------------------------------------------------------
   ;; Aidermacs configuration
 
   (leaf aidermacs
-    :vc (:url "https://github.com/MatthewZMD/aidermacs.git"
-              :branch "main")
+    :ensure t
+    :vc (:url "https://github.com/MatthewZMD/aidermacs.git" :branch "main")
     :init
-    ;; API Configuration with fallback options
+    ;; Prefer OpenRouter when available; fallback to OpenAI.
     (cond
-     ;; Primary: OpenRouter (if API key is available)
      ((getenv "OPENROUTER_API_KEY")
       (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-      (setenv "OPENAI_API_KEY" (getenv "OPENROUTER_API_KEY"))
-      (setq aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
-
-     ;; Fallback: Direct OpenAI (if API key is available)
+      (setenv "OPENAI_API_KEY"  (getenv "OPENROUTER_API_KEY"))
+      (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
      ((getenv "OPENAI_API_KEY")
       (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-      (setq aidermacs-default-model "gpt-4o-mini"))
-
-     ;; Warning if no API keys found
+      (setopt aidermacs-default-model "gpt-4o-mini"))
      (t
-      (warn "No API keys found for Aidermacs. Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variables.")))
-
-    ;; Rate limit handling
-    (setq aidermacs-retry-attempts 3
-          aidermacs-retry-delay 2.0)
-
-    ;; Use vterm backend (default is comint)
-    (setq aidermacs-backend 'vterm)
-    ;; don't match emacs theme colors
-    (setopt aidermacs-vterm-use-theme-colors nil)
-
-    ;; Alternative model configurations (commented out by default)
-    ;; Uncomment and modify as needed:
-
-    ;; For OpenRouter alternatives:
-    ;; (setq aidermacs-default-model "openrouter/anthropic/claude-3-haiku")  ; Cheaper option
-    ;; (setq aidermacs-default-model "openrouter/meta-llama/llama-3.1-8b-instruct")  ; Open source
-    ;; (setq aidermacs-default-model "openrouter/google/gemini-pro")  ; Google's model
-
-    ;; For direct OpenAI:
-    ;; (setq aidermacs-default-model "gpt-3.5-turbo")  ; Cheaper OpenAI option
-    ;; (setq aidermacs-default-model "gpt-4o")  ; Latest OpenAI model
-
-    ;; Architect/Editor mode (uncomment to enable)
-    ;; (setq aidermacs-use-architect-mode t)
-    ;; (setq aidermacs-architect-model "openrouter/anthropic/claude-3.5-sonnet")
-    ;; (setq aidermacs-editor-model "openrouter/anthropic/claude-3-haiku")
-    )
+      (display-warning 'aidermacs
+                       "No API keys set. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")))
+    (setopt aidermacs-retry-attempts 3
+            aidermacs-retry-delay   2.0
+            aidermacs-backend       'vterm
+            aidermacs-vterm-use-theme-colors nil))
 
   ;; -----------------------------------------------------------------------------
   ;;; Vterm
@@ -1921,6 +1895,7 @@ and relative line numbers.
     :ensure t
     :mode ("\\.md\\'" . markdown-mode))
 #+end_src
+
 *** Utilities Package
 **** Extra Utilities
 
@@ -2263,45 +2238,3 @@ and relative line numbers.
   (provide 'README)
   ;;; README.el ends here
 #+end_src
-** Configuration Layout
-:PROPERTIES:
-:CUSTOM_ID: layout
-:END:
-
-- *early-init.el* :: Startup-time tuning only (GC, file-name-handler, native-comp, frame defaults).
-- *init.el*       :: Packages & leaf-based modules; UI toggles are deferred via hooks.
-- *user.el*       :: Personal or machine-specific overrides (optional; loaded from init).
-- *README.el*     :: Unified, auto-generated; can be loaded quickly in production.
-- *Makefile*      :: Reproducible tangle/clean; optional byte-compile target.
-
-** Boot Sequence (Emacs 30+)
-1. Emacs loads `early-init.el` before frame creation.
-2. Emacs loads `init.el`.
-3. `init.el` may load `README.el` or fall back to `(org-babel-load-file "README.org")`.
-
-** Loading Strategy
-:PROPERTIES:
-:CUSTOM_ID: loading-strategy
-:END:
-
-During development, you may load `README.org` directly via `org-babel-load-file`
-for convenience (auto-tangle + load). For production or fast startup, prefer
-loading pre-tangled files (`early-init.el`, `init.el`, `user.el`, and/or `README.el`)
-that are generated by the Makefile.
-
-** Build / Tangle / Compile
-:PROPERTIES:
-:CUSTOM_ID: build
-:END:
-
-The Makefile provides reproducible tangling. By default it tangles `README.org`
-into all declared :tangle targets (e.g., `early-init.el`, `init.el`, `user.el`, `README.el`).
-
-- `make` / `make tangle` :: Tangle all outputs from `README.org`.
-- `make clean`           :: Remove generated `.el` files to force a fresh tangle.
-- `make compile`         :: Byte-compile the pre-tangled files (optional).
-
-** UI & OS Integration Notes
-- UI toggles (menu/tool/scroll bars) are deferred to `emacs-startup-hook` to avoid early redraw overhead.
-- On macOS, environment synchronization (`exec-path-from-shell`) is limited to GUI sessions to avoid side effects in batch mode.
-- Global key unsets live in `init.el` (not early-init) to keep the early phase side-effect free.
