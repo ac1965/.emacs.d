@@ -1,18 +1,21 @@
-EMACS   ?= emacs
-ORG     ?= README.org
-ELFILES = early-init.el init.el README.el
+EMACS     ?= emacs
+ORG       ?= README.org
+LISP_DIR  ?= lisp
+ELFILES   := early-init.el init.el $(LISP_DIR)/README.el
 
 .PHONY: all tangle compile clean
 
 all: tangle compile
 
 tangle:
+	@mkdir -p $(LISP_DIR)
 	$(EMACS) --batch -Q \
 	  --eval "(require 'org)" \
+	  --eval "(setq org-confirm-babel-evaluate nil)" \
 	  --eval "(org-babel-tangle-file \"$(ORG)\")"
 
 compile: $(ELFILES)
-	$(EMACS) --batch -Q \
+	$(EMACS) --batch -Q -L $(LISP_DIR) \
 	  --eval "(require 'package)" \
 	  --eval "(setq package-archives '((\"gnu\" . \"https://elpa.gnu.org/packages/\") \
 	                                   (\"melpa\" . \"https://melpa.org/packages/\")) \
@@ -23,4 +26,4 @@ compile: $(ELFILES)
 	  --eval "(mapc #'byte-compile-file '($(patsubst %,\"%\",$(ELFILES))))"
 
 clean:
-	rm -f *.elc
+	rm -f *.elc $(LISP_DIR)/*.elc
