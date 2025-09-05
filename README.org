@@ -50,21 +50,24 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 *** Makefile
 
 #+begin_src text :tangle Makefile :comments no
-  EMACS   ?= emacs
-  ORG     ?= README.org
-  ELFILES = early-init.el init.el README.el
+  EMACS     ?= emacs
+  ORG       ?= README.org
+  LISP_DIR  ?= lisp
+  ELFILES   := early-init.el init.el $(LISP_DIR)/README.el
 
   .PHONY: all tangle compile clean
 
   all: tangle compile
 
   tangle:
+  	@mkdir -p $(LISP_DIR)
   	$(EMACS) --batch -Q \
   	  --eval "(require 'org)" \
+  	  --eval "(setq org-confirm-babel-evaluate nil)" \
   	  --eval "(org-babel-tangle-file \"$(ORG)\")"
 
   compile: $(ELFILES)
-  	$(EMACS) --batch -Q \
+  	$(EMACS) --batch -Q -L $(LISP_DIR) \
   	  --eval "(require 'package)" \
   	  --eval "(setq package-archives '((\"gnu\" . \"https://elpa.gnu.org/packages/\") \
   	                                   (\"melpa\" . \"https://melpa.org/packages/\")) \
@@ -75,7 +78,7 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
   	  --eval "(mapc #'byte-compile-file '($(patsubst %,\"%\",$(ELFILES))))"
 
   clean:
-  	rm -f *.elc
+  	rm -f *.elc $(LISP_DIR)/*.elc
 #+end_src
 
 *** Quick Start
@@ -427,26 +430,43 @@ Minimal init.el that loads the main configuration from README.org.
   (setq user-specific-config (concat my:d user-login-name ".el"))
   (if (file-exists-p user-specific-config) (load user-specific-config))
 
-  ;; Load README.org via Org Babel
-  (let ((init-org-file (expand-file-name "README.org" my:d)))
-    (when (file-exists-p init-org-file)
-      ;; 1) Declare as special before Org defines defcustom (avoid lexical clash).
+  ;; Respect each block's :tangle; never override TARGET-FILE from code.
+  (let* ((root (cond
+                ((and (boundp 'my:d) (stringp my:d) (file-directory-p my:d))
+                 (file-name-as-directory my:d))
+                (t (file-name-as-directory user-emacs-directory))))
+         (lisp-dir (expand-file-name "lisp" root))
+         (org-file (expand-file-name "README.org" root))
+         (el-file  (expand-file-name "README.el"  lisp-dir)))
+    (when (file-exists-p org-file)
+      ;; Ensure dedicated load path (avoid adding root itself).
+      (unless (file-directory-p lisp-dir)
+        (make-directory lisp-dir t))
+      (dolist (p (list (file-name-as-directory user-emacs-directory)
+                       (directory-file-name user-emacs-directory)))
+        (setq load-path (delete p load-path)))
+      (add-to-list 'load-path lisp-dir)
+
+      ;; Tangle only when needed, honoring per-block :tangle destinations.
       (defvar org-confirm-babel-evaluate)
+      (require 'org)
+      (require 'ob-tangle)
+      (let* ((org-confirm-babel-evaluate nil)
+             (case-fold-search t)
+             (lang-re "\\`\\(?:emacs-lisp\\|elisp\\)\\'"))
+        (when (or (not (file-exists-p el-file))
+                  (file-newer-than-file-p org-file el-file))
+          ;; ✅ Do not pass TARGET-FILE -> respect each block's :tangle.
+          (org-babel-tangle-file org-file nil lang-re)))
 
-      ;; 2) Load Org and ob-tangle explicitly; autoload may be unavailable.
-      (require 'org)         ;; safe: we only do this when README.org exists
-      (require 'ob-tangle)   ;; defines `org-babel-load-file`
-
-      ;; 3) Non-interactive tangle/load without prompts.
-      (let ((org-confirm-babel-evaluate nil))
-        (condition-case err
-            (org-babel-load-file init-org-file)
-          (error
-           (display-warning
-            'init
-            (format "Failed to load %s: %s"
-                    init-org-file (error-message-string err))
-            :error))))))
+      ;; Load README feature idempotently.
+      (unless (or (featurep 'README)
+                  (require 'README nil 'noerror))
+        (let ((generated el-file))
+          (when (file-exists-p generated)
+            (load generated nil 'nomessage)))
+        (unless (featurep 'README)
+          (provide 'README)))))
 
 
   (provide 'init)
@@ -619,13 +639,13 @@ Core Emacs configuration with modular design.
 
 *** Header
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;;; --- Emacs Configuration -*- mode: emacs-lisp; lexical-binding:t; -*-
 
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/05 13:19:46 $
+  ;; $Lastupdate: 2025/09/05 15:59:11 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -646,7 +666,7 @@ Core Emacs configuration with modular design.
 - Ligature Setup
   Configures programming ligatures (e.g., `->`, `=>`, `===`) using the `ligature` package.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;;; Font Setup ---------------------------------------------------------------
 
   ;; -----------------------------------------------------------------------------
@@ -801,7 +821,7 @@ Core Emacs configuration with modular design.
 - Custom Window Layout Utilities
   Adds functions for saving/restoring layouts and toggling window dedication.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; ---------------------------------------------------------------------------
   ;;; Fullscreen Mode Configuration
   ;; Ensures Emacs starts in fullscreen mode.
@@ -974,7 +994,7 @@ and relative line numbers.
 - Relative Line Numbers
   Enable relative line numbers in programming and text modes for easier navigation.
 
-  #+begin_src emacs-lisp :tangle README.el
+  #+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
   ;;; Basic Editor Configuration
 
@@ -1035,7 +1055,7 @@ and relative line numbers.
 - Editing Tools and Navigation
   Includes tools for undo/redo, window switching, multiple cursors, Git, and search.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
     ;;; Saveplace (Remember Cursor Positions)
   ;; Restores the last cursor position when reopening files.
@@ -1253,7 +1273,7 @@ and relative line numbers.
   This section configures a *modern completion stack* built around =Vertico=, =Corfu=, and =Orderless=.
   It also integrates *Prescient* for persistent sorting, *Consult* for navigation, and *Embark* for context-aware actions.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
   ;;; Completion Frameworks
   ;; - Configures a modern completion stack: Vertico, Corfu, Orderless, etc.
@@ -1374,7 +1394,7 @@ and relative line numbers.
 
 **** EWW configuration
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   (leaf eww
     :ensure nil
     :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
@@ -1423,7 +1443,7 @@ and relative line numbers.
 - Vterm
   Enables a fast, full-featured terminal emulator inside Emacs.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
   ;;; LSP Configuration (Eglot or LSP-Mode)
   ;; Provides Language Server Protocol (LSP) support for intelligent code features.
@@ -1535,7 +1555,7 @@ and relative line numbers.
 - Org Superstar (Pretty Headings)
   Enhances Org headlines by replacing the default asterisks with a set of Unicode symbols.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
   ;;; Org Mode Configuration
   ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
@@ -1692,7 +1712,7 @@ and relative line numbers.
 - Markdown Mode
   Enables =markdown-mode= for editing =.md= files.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
   ;;; Org Babel (Code Execution in Org)
   ;; Enables execution of code blocks in multiple languages.
@@ -1834,7 +1854,7 @@ and relative line numbers.
   This section handles secure authentication and credential management using =auth-source=, =pass=, and GPG.
   It validates environment variables, integrates with =auth-source-pass=, and configures GPG encryption.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
   ;;; AUCTeX (LaTeX Editing)
   ;; Configures AUCTeX for PDF-based workflows with `latexmk`.
@@ -1925,7 +1945,7 @@ and relative line numbers.
 - Hooks
   Various hooks for startup, file opening, saving, and mode-specific behaviors.
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;;; ---------------------------------------------------------------------------
   ;;; Utility Functions
 
@@ -2176,7 +2196,7 @@ and relative line numbers.
   - *Git* (magit)
   - *Miscellaneous* (restart, execute commands)
 
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
   ;;; Hydra for Text Scaling
   ;; Provides quick keybindings to increase, decrease, or reset text size.
@@ -2315,7 +2335,7 @@ and relative line numbers.
 #+end_src
 
 *** Footer
-#+begin_src emacs-lisp :tangle README.el
+#+begin_src emacs-lisp :tangle lisp/README.el
   (provide 'README)
   ;;; README.el ends here
 #+end_src
