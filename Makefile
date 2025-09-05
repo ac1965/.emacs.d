@@ -13,15 +13,13 @@ tangle:
 
 compile: $(ELFILES)
 	$(EMACS) --batch -Q \
-	  --eval "(progn \
-	    (require 'package) \
-	    (setq package-archives '((\"gnu\" . \"https://elpa.gnu.org/packages/\") \
-	                             (\"melpa\" . \"https://melpa.org/packages/\")) \
-	          package-vc-allow-clone t) \
-	    (package-initialize) \
-	    (unless (package-installed-p 'leaf) \
-	      (package-refresh-contents) \
-	      (package-install 'leaf)))" \
+	  --eval "(require 'package)" \
+	  --eval "(setq package-archives '((\"gnu\" . \"https://elpa.gnu.org/packages/\") \
+	                                   (\"melpa\" . \"https://melpa.org/packages/\")) \
+	                  package-vc-allow-clone t)" \
+	  --eval "(unless (package-installed-p 'leaf) \
+	            (package-refresh-contents) \
+	            (package-install 'leaf))" \
 	  --eval "(mapc #'byte-compile-file '($(patsubst %,\"%\",$(ELFILES))))"
 
 clean:
