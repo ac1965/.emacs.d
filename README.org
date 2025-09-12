@@ -641,7 +641,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/12 22:29:38 $
+  ;; $Lastupdate: 2025/09/12 23:07:41 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -1708,6 +1708,92 @@ and relative line numbers.
   ;;; Vterm
 
   (leaf vterm :ensure t)
+
+  ;; --- Makefile productivity --------------------------------------------------
+  (leaf make-mode
+    :doc "Built-in makefile-mode with strict tabs and better compile UX."
+    :mode (("\\`Makefile\\'" . makefile-gmake-mode)
+           ("\\`GNUmakefile\\'" . makefile-gmake-mode)
+           ("\\`makefile\\'" . makefile-gmake-mode))
+    :hook ((makefile-mode . (lambda ()
+                              ;; Makefiles require hard tabs.
+                              (setq-local indent-tabs-mode t)
+                              (setq-local tab-width 8)
+                              ;; Show trailing whitespace to catch mistakes.
+                              (setq-local show-trailing-whitespace t))))
+    :config
+    ;; Compilation quality-of-life.
+    (leaf compile
+      :bind (("C-c m c" . compile)            ; run compile
+             ("C-c m r" . recompile)          ; rerun last
+             ("C-c m p" . project-compile))   ; project-aware
+      :custom
+      ;; Scroll compilation output automatically until first error.
+      ((compilation-scroll-output . t)
+       ;; Keep previous compilation buffer position.
+       (compilation-skip-threshold . 2))
+      :init
+      ;; Prefer `make -k` when a Makefile is present; do not clobber globally.
+      (defun my/set-make-compile-command ()
+        "Use `make -k` by default when in a Makefile/project."
+        (when (or (derived-mode-p 'makefile-mode)
+                  (locate-dominating-file default-directory "Makefile")
+                  (locate-dominating-file default-directory "GNUmakefile"))
+          (setq-local compile-command "make -k")))
+      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
+    ;; Colorize ANSI escapes in *Compilation* buffer.
+    (leaf ansi-color
+      :hook (compilation-filter . (lambda ()
+                                    ;; Apply color to the chunk just inserted.
+                                    (let ((inhibit-read-only t))
+                                      (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
+
+  ;; --- Docker: files, TRAMP, and TUI -----------------------------------------
+  (leaf dockerfile-mode :ensure t
+    :doc "Major mode for editing Dockerfiles."
+    :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
+           ("\\.dockerfile\\'"         . dockerfile-mode))
+    :custom ((dockerfile-mode-command . "docker")))
+  ;; For compose files we start minimal with yaml-mode.
+  (leaf yaml-mode :ensure t
+    :mode (("\\`docker-compose\\(-\\w+\\)?\\.ya?ml\\'" . yaml-mode)
+           ("\\.ya?ml\\'"                               . yaml-mode)))
+
+  (leaf docker :ensure t :commands (docker docker-containers docker-images docker-volumes docker-networks)
+    :doc "Manage Docker from Emacs: containers/images/volumes/networks."
+    :bind (("C-c d d" . docker)             ; main dashboard
+           ("C-c d c" . docker-containers)
+           ("C-c d i" . docker-images)
+           ("C-c d v" . docker-volumes)
+           ("C-c d n" . docker-networks))
+    :custom ((docker-container-shell-file-name . "/bin/sh")))
+
+  (leaf docker-tramp :ensure t
+    :doc "TRAMP method docker: to edit files inside running containers."
+    :init
+    ;; Usage example: C-x C-f /docker:root@container:/path
+    (with-eval-after-load 'tramp
+      (add-to-list 'tramp-methods
+                   '("docker" (tramp-login-program "docker")
+                     (tramp-login-args (("exec" "-it") ("%h") ("/bin/sh")))
+                     (tramp-remote-shell "/bin/sh")
+                     (tramp-remote-shell-args ("-i" "-c"))))))
+
+  ;; Optional: quick insertion helpers for common Dockerfile snippets.
+  (leaf tempel :ensure t
+    :doc "Lightweight templates for quick boilerplate."
+    :commands (tempel-insert)
+    :bind (dockerfile-mode-map
+           ("C-c d t" . tempel-insert))
+    :init
+    (with-eval-after-load 'tempel
+      (defvar my/tempel-docker-templates
+        '((dockerfile "FROM " p n
+                      "WORKDIR /app" n
+                      "COPY . /app" n
+                      "RUN " p n
+                      "CMD [" p "]" n)))
+      (add-to-list 'tempel-user-elements my/tempel-docker-templates)))
 #+end_src
 
 *** Org-mode
