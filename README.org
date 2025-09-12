@@ -156,9 +156,13 @@ Performance optimizations and environment setup executed before main initializat
   (defvar my:d:var (expand-file-name ".var/" my:d))
   (defvar my:d:elpa (expand-file-name "elpa/" my:d:cache))
   (defvar my:d:eln  (expand-file-name "eln-cache/" my:d:cache))
+  (defvar my:d:treesit (expand-file-name "tree-sitter/" my:d:var)
+    "Directory to store tree-sitter grammars (.so/.dylib/.dll).")
   (defvar my:f:custom (expand-file-name "custom.el" my:d:etc))
 
-  (mapc #'my:ensure-directory-exists (list my:d:cache my:d:etc my:d:var my:d:elpa my:d:eln))
+  ;; Ensure directories exist as early as possible (no-op if present).
+  (mapc #'my:ensure-directory-exists
+        (list my:d:cache my:d:etc my:d:var my:d:elpa my:d:eln my:d:treesit))
 
   ;;;; Startup performance toggles
   (defconst my--gc-cons-threshold-start (* 128 1024 1024) "128MiB during startup.")
@@ -637,7 +641,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/11 21:34:22 $
+  ;; $Lastupdate: 2025/09/12 22:29:38 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -645,7 +649,7 @@ Core Emacs configuration with modular design.
   ;;; Code:
 #+end_src
 
-*** Fonts/UI
+*** Fonts/UI/Keybind
 **** Fonts
 
 - Font Setup
@@ -976,6 +980,159 @@ Core Emacs configuration with modular design.
                (if (window-dedicated-p window) "enabled" "disabled"))))
 #+end_src
 
+**** Key Bindings
+
+- Hydra for Text Scaling
+  Hydra provides a quick, transient keymap for text scaling.
+  This hydra allows increasing, decreasing, or resetting the font size.
+- Common Key Bindings
+  This section defines frequently used keybindings for:
+  - *Navigation* (buffers, windows)
+  - *File operations*
+  - *Text editing* (scaling, commenting, alignment)
+  - *Search* (consult, ripgrep)
+  - *Org mode* (agenda, capture, roam)
+  - *Git* (magit)
+  - *Miscellaneous* (restart, execute commands)
+
+#+begin_src emacs-lisp :tangle lisp/README.el
+  ;; -----------------------------------------------------------------------------
+  ;;; Hydra for Text Scaling
+  ;; Provides quick keybindings to increase, decrease, or reset text size.
+
+  (defhydra hydra-text-scale (:hint nil :color red)
+    "
+  ^Text Scaling^
+  ----------------------------
+  [_+_] Increase   [_-_] Decrease   [_0_] Reset
+  "
+    ("+" text-scale-increase)
+    ("-" text-scale-decrease)
+    ("0" (text-scale-set 0) :color blue)
+    ("q" nil "quit" :color blue))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Common Key Bindings
+
+  ;; Centralized keybindings with proper load order.
+  (leaf my:keys
+    :doc "Centralized keybindings via `leaf-keys`, ordered by map lifetime."
+    :emacs>= 30.0
+    :init
+    ;; Global keys that depend on packages: bind after the package is ready
+    (with-eval-after-load 'winner
+      (leaf-keys
+       (global-map
+        ("M-[" . winner-undo)
+        ("M-]" . winner-redo))))
+
+    ;; Mode-local keys: bind after the mode package loads
+    (with-eval-after-load 'treemacs
+      (leaf-keys
+       (treemacs-mode-map
+        ([mouse-1] . treemacs-single-click-expand-action))))
+
+    ;; Dired and its extensions
+    (with-eval-after-load 'dired
+      (leaf-keys
+       (dired-mode-map
+        ("i"   . dired-subtree-insert)
+        ("TAB" . dired-subtree-toggle))))
+
+    ;; Global key bindings
+    (leaf-keys
+     ;; Function keys and help
+     (("<f1>"    . help)
+      ("<f5>"    . revert-buffer-quick)
+      ("<f8>"    . treemacs)
+      ("C-h"     . backward-delete-char)
+
+      ;; Undo/redo
+      ("C-/"     . undo-fu-only-undo)
+      ("C-?"     . undo-fu-only-redo)
+
+      ;; Text scaling
+      ("C-+"     . text-scale-increase)
+      ("C--"     . text-scale-decrease)
+      ("C-0"     . (lambda () (interactive) (text-scale-set 0)))
+      ("C-c z"   . hydra-text-scale/body)
+
+      ;; Buffer navigation
+      ("C-c b"   . consult-buffer)
+      ("M-n"     . forward-paragraph)
+      ("M-p"     . backward-paragraph)
+      ("s-<down>". end-of-buffer)
+      ("s-<up>"  . beginning-of-buffer)
+      ("s-<right>" . next-buffer)
+      ("s-<left>"  . previous-buffer)
+
+      ;; Window management
+      ("C-."     . other-window)
+      ("C-c 2"   . my:toggle-window-split)
+      ("s-."     . ace-window)
+      ("s-w"     . ace-swap-window)
+      ("s-d"     . delete-frame)
+      ("s-m"     . (lambda () (interactive)
+                     (let ((frame (make-frame)))
+                       (with-selected-frame frame
+                         (switch-to-buffer (generate-new-buffer "untitled"))))))
+
+      ;; File operations
+      ("s-j"     . find-file-other-window)
+      ("s-o"     . find-file-other-frame)
+      ("C-c o"   . find-file)
+      ("C-c v"   . find-file-read-only)
+      ("C-c V"   . view-file-other-window)
+      ("C-c k"   . kill-buffer-and-window)
+
+      ;; Search
+      ("C-s"     . consult-line)
+      ("C-c r"   . consult-ripgrep)
+
+      ;; Text manipulation
+      ("C-="     . er/expand-region)
+      ("C-c M-a" . align-regexp)
+      ("C-c ;"   . comment-or-uncomment-region)
+      ("C-c l"   . display-line-numbers-mode)
+
+      ;; Org mode & Roam
+      ("C-c d a" . org-agenda)
+      ("C-c d c" . org-capture)
+      ("C-c d i" . org-roam-node-insert)
+      ("C-c d f" . org-roam-node-find)
+
+      ;; Aider
+      ("C-c a a" . aidermacs-transient-menu)
+
+      ;; EWW (global bindings for browsing)
+      ("C-c w w" . eww)                ;; Open EWW (prompt URL/search)
+      ("C-c w s" . eww-search)         ;; Search + start isearch
+      ("C-c w o" . eww-open-file)      ;; Open local HTML
+      ("C-c w b" . eww-list-bookmarks) ;; Bookmarks
+      ("C-c w r" . eww-readable)       ;; Readable mode
+      ("C-c w u" . eww-back-url)       ;; Back
+      ("C-c w f" . eww-forward-url)    ;; Forward
+      ("C-c w I" . my:eww-toggle-images) ;; Toggle Image
+
+      ;; Misc
+      ("C-x g"   . magit-status)
+      ("s-r"     . restart-emacs)
+      ("M-x"     . execute-extended-command)))
+
+    ;; Enable directional window navigation with Shift + arrow keys.
+    (windmove-default-keybindings)
+
+    ;; -----------------------------------------------------------------------------
+    ;; Dired Enhancements
+    ;; Adds a custom `z` key in Dired to open files in another window.
+
+    (add-hook 'dired-mode-hook
+              (lambda ()
+                (define-key dired-mode-map "z"
+  			  'my:dired-view-file-other-window)))
+    )
+#+end_src
+
 *** Essential Configuration
 **** Minimum setting
 
@@ -1101,13 +1258,23 @@ and relative line numbers.
   ;; -----------------------------------------------------------------------------
     ;;; Tree-Sitter Configuration
 
-  ;; Modern syntax highlighting and parsing
-  ;; Prefer built-in treesit on Emacs 30+. Ensure the package is loaded before using its API.
   (when (featurep 'treesit)
+    ;; 1) Teach Emacs to look in my:d:var first for grammars.
+    ;;    Emacs searches treesit-extra-load-path first, then UED/tree-sitter, then system libs.
+    ;;    Keeping our grammars in my:d:var keeps ~/.emacs.d tidy and portable.
+    (add-to-list 'treesit-extra-load-path my:d:treesit)
+
+    ;; Optionally: define language sources here (kept minimal to respect user's setup).
+    ;; (setopt treesit-language-source-alist
+    ;;         '((bash "https://github.com/tree-sitter/tree-sitter-bash")
+    ;;           (json "https://github.com/tree-sitter/tree-sitter-json")
+    ;;           ...))
+
     (leaf treesit-auto
       :ensure t
       :require t
-      :custom ((treesit-auto-install . t))  ;; auto-install grammars interactively
+      :custom
+      ((treesit-auto-install . t))            ;; auto-install missing grammars
       :config
       (global-treesit-auto-mode 1)
       (setopt treesit-font-lock-level 3)))
@@ -1243,19 +1410,21 @@ and relative line numbers.
 
   ;; -----------------------------------------------------------------------------
     ;;; Snippet Management (YASnippet)
-  ;; Loads user-defined snippets from `my:yas-snippet-dir`.
+  ;; Loads user-defined snippets from `my:d:yas-snippet` under `my:d:var`.
 
   (leaf yasnippet
     :ensure t
     :global-minor-mode yas-global-mode
     :init
-    (defvar my:yas-snippet-dir (concat my:d "snippets")
-      "Default directory for YASnippet user snippets.")
-    ;; Create snippet directory if it doesn't exist
-    (unless (file-directory-p my:yas-snippet-dir)
-      (make-directory my:yas-snippet-dir t))
+    ;; Store user snippets under my:d:var for portability and cleanup.
+    (defvar my:d:yas-snippet (expand-file-name "snippets/" my:d:var)
+      "Default directory for YASnippet user snippets under my:d:var.")
+    ;; Create snippet dir if it doesn't exist (idempotent).
+    (unless (file-directory-p my:d:yas-snippet)
+      (make-directory my:d:yas-snippet t))
     :config
-    (setq yas-snippet-dirs (list my:yas-snippet-dir))
+    ;; Use only our centralized snippet dir.
+    (setq yas-snippet-dirs (list my:d:yas-snippet))
     (yas-reload-all))
 
   (leaf yasnippet-snippets
@@ -2181,159 +2350,6 @@ and relative line numbers.
   (add-hook 'before-save-hook 'delete-trailing-whitespace)
   (add-hook 'prog-mode-hook 'goto-address-prog-mode)
   (add-hook 'text-mode-hook 'goto-address-mode)
-#+end_src
-
-***** Key Bindings
-
-- Hydra for Text Scaling
-  Hydra provides a quick, transient keymap for text scaling.
-  This hydra allows increasing, decreasing, or resetting the font size.
-- Common Key Bindings
-  This section defines frequently used keybindings for:
-  - *Navigation* (buffers, windows)
-  - *File operations*
-  - *Text editing* (scaling, commenting, alignment)
-  - *Search* (consult, ripgrep)
-  - *Org mode* (agenda, capture, roam)
-  - *Git* (magit)
-  - *Miscellaneous* (restart, execute commands)
-
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Hydra for Text Scaling
-  ;; Provides quick keybindings to increase, decrease, or reset text size.
-
-  (defhydra hydra-text-scale (:hint nil :color red)
-    "
-  ^Text Scaling^
-  ----------------------------
-  [_+_] Increase   [_-_] Decrease   [_0_] Reset
-  "
-    ("+" text-scale-increase)
-    ("-" text-scale-decrease)
-    ("0" (text-scale-set 0) :color blue)
-    ("q" nil "quit" :color blue))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Common Key Bindings
-
-  ;; Centralized keybindings with proper load order.
-  (leaf my:keys
-    :doc "Centralized keybindings via `leaf-keys`, ordered by map lifetime."
-    :emacs>= 30.0
-    :init
-    ;; Global keys that depend on packages: bind after the package is ready
-    (with-eval-after-load 'winner
-      (leaf-keys
-       (global-map
-        ("M-[" . winner-undo)
-        ("M-]" . winner-redo))))
-
-    ;; Mode-local keys: bind after the mode package loads
-    (with-eval-after-load 'treemacs
-      (leaf-keys
-       (treemacs-mode-map
-        ([mouse-1] . treemacs-single-click-expand-action))))
-
-    ;; Dired and its extensions
-    (with-eval-after-load 'dired
-      (leaf-keys
-       (dired-mode-map
-        ("i"   . dired-subtree-insert)
-        ("TAB" . dired-subtree-toggle))))
-
-    ;; Global key bindings
-    (leaf-keys
-     ;; Function keys and help
-     (("<f1>"    . help)
-      ("<f5>"    . revert-buffer-quick)
-      ("<f8>"    . treemacs)
-      ("C-h"     . backward-delete-char)
-
-      ;; Undo/redo
-      ("C-/"     . undo-fu-only-undo)
-      ("C-?"     . undo-fu-only-redo)
-
-      ;; Text scaling
-      ("C-+"     . text-scale-increase)
-      ("C--"     . text-scale-decrease)
-      ("C-0"     . (lambda () (interactive) (text-scale-set 0)))
-      ("C-c z"   . hydra-text-scale/body)
-
-      ;; Buffer navigation
-      ("C-c b"   . consult-buffer)
-      ("M-n"     . forward-paragraph)
-      ("M-p"     . backward-paragraph)
-      ("s-<down>". end-of-buffer)
-      ("s-<up>"  . beginning-of-buffer)
-      ("s-<right>" . next-buffer)
-      ("s-<left>"  . previous-buffer)
-
-      ;; Window management
-      ("C-."     . other-window)
-      ("C-c 2"   . my:toggle-window-split)
-      ("s-."     . ace-window)
-      ("s-w"     . ace-swap-window)
-      ("s-d"     . delete-frame)
-      ("s-m"     . (lambda () (interactive)
-                     (let ((frame (make-frame)))
-                       (with-selected-frame frame
-                         (switch-to-buffer (generate-new-buffer "untitled"))))))
-
-      ;; File operations
-      ("s-j"     . find-file-other-window)
-      ("s-o"     . find-file-other-frame)
-      ("C-c o"   . find-file)
-      ("C-c v"   . find-file-read-only)
-      ("C-c V"   . view-file-other-window)
-      ("C-c k"   . kill-buffer-and-window)
-
-      ;; Search
-      ("C-s"     . consult-line)
-      ("C-c r"   . consult-ripgrep)
-
-      ;; Text manipulation
-      ("C-="     . er/expand-region)
-      ("C-c M-a" . align-regexp)
-      ("C-c ;"   . comment-or-uncomment-region)
-      ("C-c l"   . display-line-numbers-mode)
-
-      ;; Org mode & Roam
-      ("C-c d a" . org-agenda)
-      ("C-c d c" . org-capture)
-      ("C-c d i" . org-roam-node-insert)
-      ("C-c d f" . org-roam-node-find)
-
-      ;; Aider
-      ("C-c a a" . aidermacs-transient-menu)
-
-      ;; EWW (global bindings for browsing)
-      ("C-c w w" . eww)                ;; Open EWW (prompt URL/search)
-      ("C-c w s" . eww-search)         ;; Search + start isearch
-      ("C-c w o" . eww-open-file)      ;; Open local HTML
-      ("C-c w b" . eww-list-bookmarks) ;; Bookmarks
-      ("C-c w r" . eww-readable)       ;; Readable mode
-      ("C-c w u" . eww-back-url)       ;; Back
-      ("C-c w f" . eww-forward-url)    ;; Forward
-      ("C-c w I" . my:eww-toggle-images) ;; Toggle Image
-
-      ;; Misc
-      ("C-x g"   . magit-status)
-      ("s-r"     . restart-emacs)
-      ("M-x"     . execute-extended-command)))
-
-    ;; Enable directional window navigation with Shift + arrow keys.
-    (windmove-default-keybindings)
-
-    ;; -----------------------------------------------------------------------------
-    ;; Dired Enhancements
-    ;; Adds a custom `z` key in Dired to open files in another window.
-
-    (add-hook 'dired-mode-hook
-              (lambda ()
-                (define-key dired-mode-map "z"
-  			  'my:dired-view-file-other-window)))
-    )
 #+end_src
 
 *** Footer
