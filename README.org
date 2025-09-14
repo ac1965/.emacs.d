@@ -151,18 +151,22 @@ Performance optimizations and environment setup executed before main initializat
                    user-emacs-directory)
     "Base configuration directory.")
 
-  (defvar my:d:cache (expand-file-name ".cache/" my:d))
-  (defvar my:d:etc (expand-file-name ".etc/" my:d))
-  (defvar my:d:var (expand-file-name ".var/" my:d))
-  (defvar my:d:elpa (expand-file-name "elpa/" my:d:cache))
-  (defvar my:d:eln  (expand-file-name "eln-cache/" my:d:cache))
+  (defvar my:d:cache   (expand-file-name ".cache/"     my:d))
+  (defvar my:d:etc     (expand-file-name ".etc/"       my:d))
+  (defvar my:d:var     (expand-file-name ".var/"       my:d))
+  (defvar my:d:elpa    (expand-file-name "elpa/"       my:d:cache))
+  (defvar my:d:eln     (expand-file-name "eln-cache/"  my:d:cache))
   (defvar my:d:treesit (expand-file-name "tree-sitter/" my:d:var)
     "Directory to store tree-sitter grammars (.so/.dylib/.dll).")
-  (defvar my:f:custom (expand-file-name "custom.el" my:d:etc))
+  (defvar my:f:custom  (expand-file-name "custom.el"   my:d:etc))
+
+  ;; Dedicated temp/build dir for treesit to avoid polluting default-directory.
+  (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache)
+    "Temporary working directory used while building tree-sitter grammars.")
 
   ;; Ensure directories exist as early as possible (no-op if present).
   (mapc #'my:ensure-directory-exists
-        (list my:d:cache my:d:etc my:d:var my:d:elpa my:d:eln my:d:treesit))
+        (list my:d:cache my:d:etc my:d:var my:d:elpa my:d:eln my:d:treesit my:d:treesit-build))
 
   ;;;; Startup performance toggles
   (defconst my--gc-cons-threshold-start (* 128 1024 1024) "128MiB during startup.")
@@ -645,12 +649,293 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/13 10:06:01 $
+  ;; $Lastupdate: 2025/09/14 16:16:23 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
+#+end_src
+
+*** Miscellaneous Helper Functions
+
+- Scratch Buffer Management
+  Ensures that the =*scratch*= buffer always exists.
+  Provides commands to recreate or maintain the scratch buffer even after it is closed.
+- Automatic Lexical Binding
+  Automatically inserts a =lexical-binding: t= header into =.el= files located under =no-littering-var-directory=.
+- Asynchronous Task Execution Helper
+  Utility function to safely run tasks asynchronously with error handling.
+- Backup File Cleanup
+  Automatically deletes old backup files (older than 7 days) in the backup directory.
+- Read-Only Buffer Handling
+  Enables =view-mode= automatically for read-only buffers.
+- UI & Navigation Helpers
+  Includes helper functions for line numbers, window splitting, and finding conflicting keybindings.
+- Dired Helper
+  Adds a helper command to open Dired files in another window.
+- External Integration
+  Commands to interact with external tools like Visual Studio Code, environment variables, and Emacs build info.
+- Org Mode Folding Shortcuts
+  Defines custom keybindings for folding and unfolding Org subtrees.
+- Hooks
+  Various hooks for startup, file opening, saving, and mode-specific behaviors.
+
+#+begin_src emacs-lisp :tangle lisp/README.el
+  ;;; ---------------------------------------------------------------------------
+  ;;; Utility Functions
+
+  (defun my:auto-tangle-updated-src-blocks ()
+    "Automatically tangle updated Org source blocks when saving `README.org`."
+    (when (and buffer-file-name
+               (string= (file-name-nondirectory buffer-file-name) "README.org"))
+      (let ((org-confirm-babel-evaluate nil))
+        (org-babel-tangle))))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Scratch Buffer Management
+  ;; Ensures that the `*scratch*` buffer always exists, and allows recreation.
+
+  (defun my:create-scratch-buffer ()
+    "Ensure that a `*scratch*` buffer exists."
+    (unless (get-buffer "*scratch*")
+      (with-current-buffer (get-buffer-create "*scratch*")
+        (funcall initial-major-mode)
+        (when (and initial-scratch-message
+                   (not (string-empty-p initial-scratch-message)))
+          (insert initial-scratch-message))
+        (current-buffer))))
+
+  (defun my:recreate-scratch-buffer ()
+    "Kill and recreate the `*scratch*` buffer."
+    (interactive)
+    (when (get-buffer "*scratch*")
+      (kill-buffer "*scratch*"))
+    (my:create-scratch-buffer)
+    (switch-to-buffer "*scratch*"))
+
+  (defun my:after-kill-buffer-advice (&rest _)
+    "Ensure `*scratch*` buffer exists after any buffer is killed."
+    (run-at-time 0.1 nil #'my:create-scratch-buffer))
+
+  (advice-add 'kill-buffer :after #'my:after-kill-buffer-advice)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Automatic Lexical Binding
+  ;; Inserts a `lexical-binding: t` header into `.el` files in `no-littering-var-directory`.
+
+  (defun my:auto-insert-lexical-binding ()
+    "Automatically insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
+    (when (and (stringp buffer-file-name)
+               (boundp 'no-littering-var-directory)
+               (string-prefix-p (expand-file-name no-littering-var-directory)
+                                (expand-file-name buffer-file-name))
+               (string-match-p "\\.el\\'" buffer-file-name)
+               (not (save-excursion
+                      (goto-char (point-min))
+                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
+      (save-excursion
+        (goto-char (point-min))
+        (insert ";; -*- lexical-binding: t; -*- \n"))))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Asynchronous Task Execution Helper
+
+  (defun my:safe-run-async (task)
+    "Run TASK asynchronously, catching and reporting any errors."
+    (run-at-time 0 nil
+                 (lambda ()
+                   (condition-case err
+                       (funcall task)
+                     (error (message "Async error: %s" err))))))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Backup File Cleanup
+  ;; Deletes old backup files (older than 7 days) asynchronously.
+
+  (defun my:delete-old-backups ()
+    "Delete backup files older than 7 days."
+    (interactive)
+    (my:safe-run-async
+     (lambda ()
+       (let ((backup-dir (concat no-littering-var-directory "backup/"))
+             (threshold (- (float-time (current-time)) (* 7 24 60 60))))
+         (when (file-directory-p backup-dir)
+           (dolist (file (directory-files backup-dir t))
+             (when (and (file-regular-p file)
+                        (< (float-time (file-attribute-modification-time
+                                        (file-attributes file)))
+                           threshold))
+               (delete-file file))))))))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Read-Only Buffer Handling
+  ;; Automatically enables `view-mode` for read-only buffers.
+
+  (defun my:enable-view-mode-on-read-only ()
+    "Enable `view-mode` when buffer is read-only."
+    (if buffer-read-only
+        (view-mode 1)
+      (view-mode -1)))
+  (add-hook 'read-only-mode-hook #'my:enable-view-mode-on-read-only)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; UI & Navigation Helpers
+
+  (defun my:toggle-linum-lines ()
+    "Toggle line numbers using `display-line-numbers-mode`."
+    (interactive)
+    (display-line-numbers-mode 'toggle))
+
+  (defun my:toggle-window-split ()
+    "Toggle between horizontal and vertical split for two windows."
+    (interactive)
+    (when (= (count-windows) 2)
+      (let* ((this-buf (window-buffer))
+             (next-buf (window-buffer (next-window)))
+             (this-edges (window-edges))
+             (next-edges (window-edges (next-window)))
+             (split-vert (= (car this-edges) (car next-edges)))
+             (split-fn (if split-vert
+                           #'split-window-horizontally
+                         #'split-window-vertically)))
+        (delete-other-windows)
+        (funcall split-fn)
+        (set-window-buffer (selected-window) this-buf)
+        (set-window-buffer (next-window) next-buf)
+        (select-window (selected-window)))))
+
+  (defun my:find-keybinding-conflicts ()
+    "Find and display conflicting keybindings across active keymaps."
+    (interactive)
+    (let ((conflicts (make-hash-table :test 'equal))
+          (buffer-name "*Keybinding Conflicts*"))
+      (mapatoms (lambda (sym)
+                  (when (and (boundp sym) (keymapp (symbol-value sym)))
+                    (map-keymap
+                     (lambda (key cmd)
+                       (when (commandp cmd)
+                         (let ((desc (key-description (vector key)))
+                               (existing (gethash desc conflicts)))
+                           (puthash desc (delete-dups (cons cmd existing))
+                                    conflicts))))
+                     (symbol-value sym)))))
+      (with-current-buffer (get-buffer-create buffer-name)
+        (read-only-mode -1)
+        (erase-buffer)
+        (insert "* Keybinding Conflicts *\n\n")
+        (maphash (lambda (key cmds)
+                   (when (> (length cmds) 1)
+                     (insert (format "%s => %s\n"
+                                     key
+                                     (mapconcat #'symbol-name cmds ", ")))))
+                 conflicts)
+        (read-only-mode 1))
+      (switch-to-buffer buffer-name)))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Dired Helper
+
+  (defun my:dired-view-file-other-window ()
+    "Open selected Dired file or directory in another window."
+    (interactive)
+    (let ((file (dired-get-file-for-visit)))
+      (if (file-directory-p file)
+          (or (and (cdr dired-subdir-alist)
+                   (dired-goto-subdir file))
+              (dired file))
+        (view-file-other-window file))))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; External Integration
+
+  (defun my:treesit--call-with-outdir (orig-fn &rest args)
+    "Advice ORIG-FN to force OUT-DIR to `my:d:treesit` when omitted.
+  Also run the build in `my:d:treesit-build` to avoid polluting `default-directory`."
+    ;; treesit-install-language-grammar signature (Emacs 29/30):
+    ;; (LANG &optional URL REV SRC CC CXX OUT-DIR)
+    (let* ((len (length args))
+           (have-out-dir (>= len 7))
+           ;; Pad args to at least 7 elements so nth 6 is safe
+           (args* (append args (make-list (max 0 (- 7 len)) nil)))
+           (out-dir (or (nth 6 args*) my:d:treesit)))
+      (setf (nth 6 args*) out-dir)
+      (my:ensure-directory-exists out-dir)
+      (let ((default-directory my:d:treesit-build))
+        (apply orig-fn args*))))
+
+  (defun my:open-by-vscode ()
+    "Open current file in Visual Studio Code at line/column."
+    (interactive)
+    (when (buffer-file-name)
+      (async-shell-command
+       (format "code -r -g %s:%d:%d"
+               (buffer-file-name)
+               (line-number-at-pos)
+               (current-column)))))
+
+  (defun my:show-env-variable (var)
+    "Display the value of environment variable VAR."
+    (interactive "sEnvironment variable: ")
+    (let ((val (getenv var)))
+      (message "%s = %s" var (or val "Not set"))))
+
+  (defun my:print-build-info ()
+    "Display Emacs build details (commit, branch, system, features, options)."
+    (interactive)
+    (let ((buf (get-buffer-create "*Build Info*")))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          ;; Core info
+          (insert (format "- GNU Emacs *%s*\n\n" emacs-version))
+          (insert "|Property|Value|\n|--------|-----|\n")
+          (insert (format "|Commit|%s|\n" (emacs-repository-get-version)))
+          (insert (format "|Branch|%s|\n" (emacs-repository-get-branch)))
+          (insert (format "|System|%s|\n" system-configuration))
+          (insert (format "|Date|%s|\n"
+                          (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
+          ;; Patch detection
+          (insert (format "|Patch|%s ns-inline.patch|\n"
+                          (cond
+                           ((boundp 'mac-ime--cursor-type) "with")
+                           (t "N/A"))))
+          ;; Features & options
+          (insert (format "|Features|%s|\n" system-configuration-features))
+          (insert (format "|Options|%s|\n" system-configuration-options)))
+        (view-mode 1))
+      (switch-to-buffer buf)))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Org Mode Folding Shortcuts
+  (with-eval-after-load 'org
+    (require 'org-fold)
+    (defun my-org-fold-subtree ()   (interactive) (org-fold-subtree t))
+    (defun my-org-unfold-subtree () (interactive) (org-show-subtree))
+    (defun my-org-toggle-fold ()
+      "Toggle fold for current Org subtree."
+      (interactive)
+      (save-excursion
+        (org-back-to-heading t)
+        (if (org-fold-folded-p (point))
+            (org-show-subtree)
+          (org-fold-subtree t))))
+    (define-key org-mode-map (kbd "C-c C-f") #'my-org-fold-subtree)
+    (define-key org-mode-map (kbd "C-c C-e") #'my-org-unfold-subtree)
+    (define-key org-mode-map (kbd "C-c C-t") #'my-org-toggle-fold))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Hooks
+
+  (add-hook 'org-mode-hook
+            (lambda ()
+              (add-hook 'after-save-hook #'my:auto-tangle-updated-src-blocks
+                        nil 'make-it-local)))
+  (add-hook 'emacs-startup-hook #'my:delete-old-backups)
+  (add-hook 'find-file-hook #'my:auto-insert-lexical-binding)
+  (add-hook 'before-save-hook 'delete-trailing-whitespace)
+  (add-hook 'prog-mode-hook 'goto-address-prog-mode)
+  (add-hook 'text-mode-hook 'goto-address-mode)
 #+end_src
 
 *** Fonts/UI/Keybind
@@ -1266,7 +1551,15 @@ and relative line numbers.
     ;; 1) Teach Emacs to look in my:d:var first for grammars.
     ;;    Emacs searches treesit-extra-load-path first, then UED/tree-sitter, then system libs.
     ;;    Keeping our grammars in my:d:var keeps ~/.emacs.d tidy and portable.
-    (add-to-list 'treesit-extra-load-path my:d:treesit)
+    (with-eval-after-load 'treesit
+      (add-to-list 'treesit-extra-load-path my:d:treesit)
+      (advice-add 'treesit-install-language-grammar :around #'my:treesit--call-with-outdir))
+
+    (defun my:treesit-install (lang)
+      (interactive
+       (list (intern (completing-read "Language: "
+                                      (mapcar #'car treesit-language-source-alist)))))
+      (treesit-install-language-grammar lang))
 
     ;; Optionally: define language sources here (kept minimal to respect user's setup).
     ;; (setopt treesit-language-source-alist
@@ -1738,13 +2031,13 @@ and relative line numbers.
        (compilation-skip-threshold . 2))
       :init
       ;; Prefer `make -k` when a Makefile is present; do not clobber globally.
-      (defun my/set-make-compile-command ()
+      (defun my:set-make-compile-command ()
         "Use `make -k` by default when in a Makefile/project."
         (when (or (derived-mode-p 'makefile-mode)
                   (locate-dominating-file default-directory "Makefile")
                   (locate-dominating-file default-directory "GNUmakefile"))
           (setq-local compile-command "make -k")))
-      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
+      (add-hook 'after-change-major-mode-hook #'my:set-make-compile-command))
     ;; Colorize ANSI escapes in *Compilation* buffer.
     (leaf ansi-color
       :hook (compilation-filter . (lambda ()
@@ -1791,13 +2084,13 @@ and relative line numbers.
            ("C-c d t" . tempel-insert))
     :init
     (with-eval-after-load 'tempel
-      (defvar my/tempel-docker-templates
+      (defvar my:tempel-docker-templates
         '((dockerfile "FROM " p n
                       "WORKDIR /app" n
                       "COPY . /app" n
                       "RUN " p n
                       "CMD [" p "]" n)))
-      (add-to-list 'tempel-user-elements my/tempel-docker-templates)))
+      (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
 #+end_src
 
 *** Org-mode
@@ -2174,272 +2467,6 @@ and relative line numbers.
       :config
       (setq plstore-secret-keys 'silent
             plstore-encrypt-to (getenv "GPG_KEY_ID"))))
-#+end_src
-
-**** Miscellaneous Helper Functions
-
-- Scratch Buffer Management
-  Ensures that the =*scratch*= buffer always exists.
-  Provides commands to recreate or maintain the scratch buffer even after it is closed.
-- Automatic Lexical Binding
-  Automatically inserts a =lexical-binding: t= header into =.el= files located under =no-littering-var-directory=.
-- Asynchronous Task Execution Helper
-  Utility function to safely run tasks asynchronously with error handling.
-- Backup File Cleanup
-  Automatically deletes old backup files (older than 7 days) in the backup directory.
-- Read-Only Buffer Handling
-  Enables =view-mode= automatically for read-only buffers.
-- UI & Navigation Helpers
-  Includes helper functions for line numbers, window splitting, and finding conflicting keybindings.
-- Dired Helper
-  Adds a helper command to open Dired files in another window.
-- External Integration
-  Commands to interact with external tools like Visual Studio Code, environment variables, and Emacs build info.
-- Org Mode Folding Shortcuts
-  Defines custom keybindings for folding and unfolding Org subtrees.
-- Hooks
-  Various hooks for startup, file opening, saving, and mode-specific behaviors.
-
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;;; ---------------------------------------------------------------------------
-  ;;; Utility Functions
-
-  (defun my:auto-tangle-updated-src-blocks ()
-    "Automatically tangle updated Org source blocks when saving `README.org`."
-    (when (and buffer-file-name
-               (string= (file-name-nondirectory buffer-file-name) "README.org"))
-      (let ((org-confirm-babel-evaluate nil))
-        (org-babel-tangle))))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Scratch Buffer Management
-  ;; Ensures that the `*scratch*` buffer always exists, and allows recreation.
-
-  (defun my:create-scratch-buffer ()
-    "Ensure that a `*scratch*` buffer exists."
-    (unless (get-buffer "*scratch*")
-      (with-current-buffer (get-buffer-create "*scratch*")
-        (funcall initial-major-mode)
-        (when (and initial-scratch-message
-                   (not (string-empty-p initial-scratch-message)))
-          (insert initial-scratch-message))
-        (current-buffer))))
-
-  (defun my:recreate-scratch-buffer ()
-    "Kill and recreate the `*scratch*` buffer."
-    (interactive)
-    (when (get-buffer "*scratch*")
-      (kill-buffer "*scratch*"))
-    (my:create-scratch-buffer)
-    (switch-to-buffer "*scratch*"))
-
-  (defun my:after-kill-buffer-advice (&rest _)
-    "Ensure `*scratch*` buffer exists after any buffer is killed."
-    (run-at-time 0.1 nil #'my:create-scratch-buffer))
-
-  (advice-add 'kill-buffer :after #'my:after-kill-buffer-advice)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Automatic Lexical Binding
-  ;; Inserts a `lexical-binding: t` header into `.el` files in `no-littering-var-directory`.
-
-  (defun my:auto-insert-lexical-binding ()
-    "Automatically insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
-    (when (and (stringp buffer-file-name)
-               (boundp 'no-littering-var-directory)
-               (string-prefix-p (expand-file-name no-littering-var-directory)
-                                (expand-file-name buffer-file-name))
-               (string-match-p "\\.el\\'" buffer-file-name)
-               (not (save-excursion
-                      (goto-char (point-min))
-                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
-      (save-excursion
-        (goto-char (point-min))
-        (insert ";; -*- lexical-binding: t; -*- \n"))))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Asynchronous Task Execution Helper
-
-  (defun my:safe-run-async (task)
-    "Run TASK asynchronously, catching and reporting any errors."
-    (run-at-time 0 nil
-                 (lambda ()
-                   (condition-case err
-                       (funcall task)
-                     (error (message "Async error: %s" err))))))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Backup File Cleanup
-  ;; Deletes old backup files (older than 7 days) asynchronously.
-
-  (defun my:delete-old-backups ()
-    "Delete backup files older than 7 days."
-    (interactive)
-    (my:safe-run-async
-     (lambda ()
-       (let ((backup-dir (concat no-littering-var-directory "backup/"))
-             (threshold (- (float-time (current-time)) (* 7 24 60 60))))
-         (when (file-directory-p backup-dir)
-           (dolist (file (directory-files backup-dir t))
-             (when (and (file-regular-p file)
-                        (< (float-time (file-attribute-modification-time
-                                        (file-attributes file)))
-                           threshold))
-               (delete-file file))))))))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Read-Only Buffer Handling
-  ;; Automatically enables `view-mode` for read-only buffers.
-
-  (defun my:enable-view-mode-on-read-only ()
-    "Enable `view-mode` when buffer is read-only."
-    (if buffer-read-only
-        (view-mode 1)
-      (view-mode -1)))
-  (add-hook 'read-only-mode-hook #'my:enable-view-mode-on-read-only)
-
-  ;; -----------------------------------------------------------------------------
-  ;;; UI & Navigation Helpers
-
-  (defun my:toggle-linum-lines ()
-    "Toggle line numbers using `display-line-numbers-mode`."
-    (interactive)
-    (display-line-numbers-mode 'toggle))
-
-  (defun my:toggle-window-split ()
-    "Toggle between horizontal and vertical split for two windows."
-    (interactive)
-    (when (= (count-windows) 2)
-      (let* ((this-buf (window-buffer))
-             (next-buf (window-buffer (next-window)))
-             (this-edges (window-edges))
-             (next-edges (window-edges (next-window)))
-             (split-vert (= (car this-edges) (car next-edges)))
-             (split-fn (if split-vert
-                           #'split-window-horizontally
-                         #'split-window-vertically)))
-        (delete-other-windows)
-        (funcall split-fn)
-        (set-window-buffer (selected-window) this-buf)
-        (set-window-buffer (next-window) next-buf)
-        (select-window (selected-window)))))
-
-  (defun my:find-keybinding-conflicts ()
-    "Find and display conflicting keybindings across active keymaps."
-    (interactive)
-    (let ((conflicts (make-hash-table :test 'equal))
-          (buffer-name "*Keybinding Conflicts*"))
-      (mapatoms (lambda (sym)
-                  (when (and (boundp sym) (keymapp (symbol-value sym)))
-                    (map-keymap
-                     (lambda (key cmd)
-                       (when (commandp cmd)
-                         (let ((desc (key-description (vector key)))
-                               (existing (gethash desc conflicts)))
-                           (puthash desc (delete-dups (cons cmd existing))
-                                    conflicts))))
-                     (symbol-value sym)))))
-      (with-current-buffer (get-buffer-create buffer-name)
-        (read-only-mode -1)
-        (erase-buffer)
-        (insert "* Keybinding Conflicts *\n\n")
-        (maphash (lambda (key cmds)
-                   (when (> (length cmds) 1)
-                     (insert (format "%s => %s\n"
-                                     key
-                                     (mapconcat #'symbol-name cmds ", ")))))
-                 conflicts)
-        (read-only-mode 1))
-      (switch-to-buffer buffer-name)))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Dired Helper
-
-  (defun my:dired-view-file-other-window ()
-    "Open selected Dired file or directory in another window."
-    (interactive)
-    (let ((file (dired-get-file-for-visit)))
-      (if (file-directory-p file)
-          (or (and (cdr dired-subdir-alist)
-                   (dired-goto-subdir file))
-              (dired file))
-        (view-file-other-window file))))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; External Integration
-
-  (defun my:open-by-vscode ()
-    "Open current file in Visual Studio Code at line/column."
-    (interactive)
-    (when (buffer-file-name)
-      (async-shell-command
-       (format "code -r -g %s:%d:%d"
-               (buffer-file-name)
-               (line-number-at-pos)
-               (current-column)))))
-
-  (defun my:show-env-variable (var)
-    "Display the value of environment variable VAR."
-    (interactive "sEnvironment variable: ")
-    (let ((val (getenv var)))
-      (message "%s = %s" var (or val "Not set"))))
-
-  (defun my:print-build-info ()
-    "Display Emacs build details (commit, branch, system, features, options)."
-    (interactive)
-    (let ((buf (get-buffer-create "*Build Info*")))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          ;; Core info
-          (insert (format "- GNU Emacs *%s*\n\n" emacs-version))
-          (insert "|Property|Value|\n|--------|-----|\n")
-          (insert (format "|Commit|%s|\n" (emacs-repository-get-version)))
-          (insert (format "|Branch|%s|\n" (emacs-repository-get-branch)))
-          (insert (format "|System|%s|\n" system-configuration))
-          (insert (format "|Date|%s|\n"
-                          (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
-          ;; Patch detection
-          (insert (format "|Patch|%s ns-inline.patch|\n"
-                          (cond
-                           ((boundp 'mac-ime--cursor-type) "with")
-                           (t "N/A"))))
-          ;; Features & options
-          (insert (format "|Features|%s|\n" system-configuration-features))
-          (insert (format "|Options|%s|\n" system-configuration-options)))
-        (view-mode 1))
-      (switch-to-buffer buf)))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Org Mode Folding Shortcuts
-  (with-eval-after-load 'org
-    (require 'org-fold)
-    (defun my-org-fold-subtree ()   (interactive) (org-fold-subtree t))
-    (defun my-org-unfold-subtree () (interactive) (org-show-subtree))
-    (defun my-org-toggle-fold ()
-      "Toggle fold for current Org subtree."
-      (interactive)
-      (save-excursion
-        (org-back-to-heading t)
-        (if (org-fold-folded-p (point))
-            (org-show-subtree)
-          (org-fold-subtree t))))
-    (define-key org-mode-map (kbd "C-c C-f") #'my-org-fold-subtree)
-    (define-key org-mode-map (kbd "C-c C-e") #'my-org-unfold-subtree)
-    (define-key org-mode-map (kbd "C-c C-t") #'my-org-toggle-fold))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Hooks
-
-  (add-hook 'org-mode-hook
-            (lambda ()
-              (add-hook 'after-save-hook #'my:auto-tangle-updated-src-blocks
-                        nil 'make-it-local)))
-  (add-hook 'emacs-startup-hook #'my:delete-old-backups)
-  (add-hook 'find-file-hook #'my:auto-insert-lexical-binding)
-  (add-hook 'before-save-hook 'delete-trailing-whitespace)
-  (add-hook 'prog-mode-hook 'goto-address-prog-mode)
-  (add-hook 'text-mode-hook 'goto-address-mode)
 #+end_src
 
 *** Footer
