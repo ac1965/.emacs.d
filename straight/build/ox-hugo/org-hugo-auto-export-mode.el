@@ -1,0 +1,1 @@
+/Users/ac1965/.emacs.d/straight/repos/ox-hugo/org-hugo-auto-export-mode.el

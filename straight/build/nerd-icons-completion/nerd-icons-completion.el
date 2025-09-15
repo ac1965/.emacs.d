@@ -1,0 +1,1 @@
+/Users/ac1965/.emacs.d/straight/repos/nerd-icons-completion/nerd-icons-completion.el
