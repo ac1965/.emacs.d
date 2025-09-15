@@ -1,1 +1,0 @@
-/Users/ac1965/.emacs.d/straight/repos/f.el/f-shortdoc.el
