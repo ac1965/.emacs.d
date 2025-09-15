@@ -298,12 +298,12 @@ Minimal init.el that loads the main configuration from README.org.
   ;; Delegates configuration to README.org via Org Babel
   ;;; Code:
 
-  ;; -------------------------------------------------------------------
-  ;; Fallbacks for variables/functions usually defined in early-init.el
+  ;; ----nn---------------------------------------------------------------
+  ;; Fallbacks fsnor variables/functions usually defined in early-init.el
   ;; These only take effect if the symbols are not already bound/defined.
   ;; -------------------------------------------------------------------
   (eval-and-compile
-    ;; Base dir (use existing value if already set by early-init).
+    ;; Basdir (use existing value if already set by early-init).
     (defvar my:d
       (or (and (boundp 'my:d) my:d)
           (and load-file-name (file-name-directory (file-chase-links load-file-name)))
@@ -312,7 +312,7 @@ Minimal init.el that loads the main configuration from README.org.
 
     ;; Subdirs
     (defvar my:d:cache (or (and (boundp 'my:d:cache) my:d:cache)
-                           (expand-file-name ".cache/" my:d)))
+                           ))
     (defvar my:d:etc   (or (and (boundp 'my:d:etc)   my:d:etc)
                            (expand-file-name ".etc/"   my:d)))
     (defvar my:d:var   (or (and (boundp 'my:d:var)   my:d:var)
@@ -350,27 +350,33 @@ Minimal init.el that loads the main configuration from README.org.
   (keymap-global-unset "M-m")       ; free a handy prefix
   (keymap-global-unset "M-/")       ; prefer modern completion
 
-  ;; Initialize package.el exactly once to avoid double-boot.
-  (require 'package)
-  (setopt package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
-                             ("melpa" . "https://melpa.org/packages/"))
-  	package-gnupghome-dir (expand-file-name ".gnupg" my:d:var)
-  	package-user-dir my:d:elpa
-          package-vc-allow-clone t)
+  ;; Disable package.el to avoid double initialization (straight.el will manage).
+  (setq package-enable-at-startup nil)
 
-  (unless (bound-and-true-p package--initialized)
-    (package-initialize))
+  ;; Bootstrap straight.el
+  (defvar bootstrap-version)
+  (let ((bootstrap-file
+         (expand-file-name "straight/repos/straight.el/bootstrap.el" my:d:var))
+        (bootstrap-version 6))
+    (unless (file-exists-p bootstrap-file)
+      (with-current-buffer
+          (url-retrieve-synchronously
+           "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+           'silent 'inhibit-cookies)
+        (goto-char (point-max))
+        (eval-print-last-sexp)))
+    (load bootstrap-file nil 'nomessage))
 
-  ;; Bootstrap leaf (and friends) if missing.
-  (unless (package-installed-p 'leaf)
-    (package-refresh-contents) ; refresh once here
-    (package-install 'leaf))
+  ;; Integrate straight.el with leaf
+  (straight-use-package 'leaf)
+  (straight-use-package 'leaf-keywords)
+  (straight-use-package 'leaf-convert)
+  (straight-use-package 'blackout)
 
-  (eval-when-compile (require 'leaf))
-  (leaf leaf-keywords :ensure t
-    :init (leaf blackout :ensure t)
-    :config (leaf-keywords-init))
-  (leaf leaf-convert :ensure t)
+  (eval-when-compile
+    (require 'leaf)
+    (require 'leaf-keywords))
+  (leaf-keywords-init)
 
   (leaf emacs
     :ensure nil
@@ -410,7 +416,7 @@ Minimal init.el that loads the main configuration from README.org.
 
   ;; No-Littering
   (leaf no-littering
-    :ensure t
+    :straight t
     :require t
     :init
     ;; Set directories before package loads things that compute paths.
@@ -420,7 +426,7 @@ Minimal init.el that loads the main configuration from README.org.
   ;;;; macOS integration
   ;; 1) Import shell environment for GUI Emacs
   (leaf exec-path-from-shell
-    :ensure t
+    :straight t
     :if (and (memq window-system '(mac ns)) (display-graphic-p))
     :custom ((exec-path-from-shell-check-startup-files . nil)
              (exec-path-from-shell-arguments . '("-l" "-i"))
@@ -450,11 +456,11 @@ Minimal init.el that loads the main configuration from README.org.
 
   ;; Garbage Collection Magic Hack
   (leaf gcmh
-    :ensure t
+    :straight t
     :hook (emacs-startup . gcmh-mode))
 
   (leaf hydra
-    :ensure t
+    :straight t
     :commands (defhydra))
 
   ;; custom-file early, but load only if present
@@ -552,7 +558,7 @@ Personal and device-specific settings.
   ;; Smart Input Source (auto switch input source, e.g. English <-> Japanese)
   ;; macOS requirement: `brew tap laishulu/homebre && brew install macism`
   (leaf sis
-    :ensure t
+    :straight t
     :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
   				    sis-global-respect-mode sis-global-inline-mode)
     :hook (emacs-startup-hook .
@@ -682,7 +688,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/15 20:46:57 $
+  ;; $Lastupdate: 2025/09/15 20:57:54 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -1087,13 +1093,13 @@ Core Emacs configuration with modular design.
     "Font used for Nerd Icons.")
 
   (leaf nerd-icons
-    :ensure t
+    :straight t
     :if (display-graphic-p)
     :custom ((nerd-icons-color-icons . (font-exists-p my:nerd-icons-font))))
 
   ;; Show icons in Dired using nerd-icons.
   (leaf nerd-icons-dired
-    :ensure t
+    :straight t
     :hook (dired-mode . nerd-icons-dired-mode)
     :config
     ;; Run once manually if fonts are missing:
@@ -1106,7 +1112,7 @@ Core Emacs configuration with modular design.
     "Font used for programming ligatures.")
 
   (leaf ligature
-    :ensure t
+    :straight t
     :config
     (when (and (font-exists-p my:font-default)
                (font-exists-p my:ligature-font))
@@ -1164,7 +1170,7 @@ Core Emacs configuration with modular design.
   ;;; Dynamic Window Resizing (Zoom)
   ;; Automatically resizes windows, focusing the current one.
   (leaf zoom
-    :ensure t
+    :straight t
     :hook (after-init-hook . zoom-mode)
     :custom
     ;; Keep the selected window around golden-ratio size (width . height).
@@ -1180,7 +1186,7 @@ Core Emacs configuration with modular design.
   ;;; Theme Configuration (ef-themes)
   ;; Loads `ef-frost` in GUI or `deeper-blue` in terminal.
   (leaf ef-themes
-    :ensure t
+    :straight t
     :custom ((ef-themes-to-toggle . '(ef-frost ef-spring)))
     :config
     (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t))
@@ -1189,7 +1195,7 @@ Core Emacs configuration with modular design.
   ;;; Spacious Padding
   ;; Adds extra padding around UI elements for a clean look.
   (leaf spacious-padding
-    :ensure t
+    :straight t
     :if (display-graphic-p)
     :custom ((spacious-padding-widths . '((left . 15) (right . 15) (top . 10) (bottom . 10)))
              (spacious-padding-subtle-mode-line . t)
@@ -1202,14 +1208,14 @@ Core Emacs configuration with modular design.
   ;;; Minions (Mode Line Management)
   ;; Consolidates minor modes into a single menu.
   (leaf minions
-    :ensure t
+    :straight t
     :custom ((minions-mode-line-lighter . "⚙"))
     :hook (after-init-hook . minions-mode))
 
   ;; ---------------------------------------------------------------------------
   ;;; Doom-modeline
   (leaf doom-modeline
-    :ensure t
+    :straight t
     :hook (after-init-hook . doom-modeline-mode))
 
   (leaf time-and-battery
@@ -1241,7 +1247,7 @@ Core Emacs configuration with modular design.
   ;;; Treemacs (Project Drawer)
   ;; Provides a sidebar file explorer.
   (leaf treemacs
-    :ensure t
+    :straight t
     :if (display-graphic-p)
     :custom ((treemacs-no-png-images . nil)
              (treemacs-filewatch-mode . t)
@@ -1560,7 +1566,7 @@ and relative line numbers.
 
   ;; Structured editing for Emacs Lisp
   (leaf paredit
-    :ensure t
+    :straight t
     :hook (emacs-lisp-mode . enable-paredit-mode))
 
   ;; Highlight matching parentheses
@@ -1573,7 +1579,7 @@ and relative line numbers.
 
   ;; Smart pair handling (disabled in minibuffer)
   (leaf puni
-    :ensure t
+    :straight t
     :global-minor-mode puni-global-mode
     :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
 
@@ -1601,7 +1607,7 @@ and relative line numbers.
     ;;           ...))
 
     (leaf treesit-auto
-      :ensure t
+      :straight t
       :require t
       :custom
       ((treesit-auto-install . t))            ;; auto-install missing grammars
@@ -1624,7 +1630,7 @@ and relative line numbers.
   ;; Shows available keybindings in a popup for the current prefix.
 
   (leaf which-key
-    :ensure t
+    :straight t
     :global-minor-mode t
     :custom ((which-key-idle-delay . 0.5)))
 
@@ -1633,7 +1639,7 @@ and relative line numbers.
   ;; Provides linear undo/redo history with better region handling.
 
   (leaf undo-fu
-    :ensure t
+    :straight t
     :custom ((undo-fu-allow-undo-in-region . t)))
 
   ;; -----------------------------------------------------------------------------
@@ -1641,7 +1647,7 @@ and relative line numbers.
   ;; Provides quick window switching with visual hints.
 
   (leaf ace-window
-    :ensure t
+    :straight t
     :custom
     ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
      (aw-scope . 'frame)
@@ -1662,7 +1668,7 @@ and relative line numbers.
 
   (leaf pbcopy
     :if (memq window-system '(mac ns))
-    :ensure t
+    :straight t
     :config
     (turn-on-pbcopy))
 
@@ -1670,7 +1676,7 @@ and relative line numbers.
     ;;; Dired Enhancements
   ;; Adds filtering and subtree expansion to Dired.
 
-  (leaf dired-filter :ensure t)
+  (leaf dired-filter :straight t)
   (leaf dired-subtree
     :after dired)
   ;; key bindings are centralized (see my:keys below)
@@ -1680,10 +1686,10 @@ and relative line numbers.
   ;; Region expansion, aggressive indentation, and selection overwrite.
 
   (leaf expand-region
-    :ensure t
+    :straight t
     :after treesit)
   (leaf aggressive-indent
-    :ensure t
+    :straight t
     :global-minor-mode global-aggressive-indent-mode)
   (leaf delsel
     :global-minor-mode delete-selection-mode)
@@ -1694,14 +1700,14 @@ and relative line numbers.
 
   (when (executable-find "rg")
     (setopt grep-program "rg")
-    (leaf rg :ensure t))
+    (leaf rg :straight t))
 
   ;; -----------------------------------------------------------------------------
     ;;; Code Navigation
   ;; Uses Dumb-Jump with `rg` for fast symbol navigation.
 
   (leaf dumb-jump
-    :ensure t
+    :straight t
     :hook (xref-backend-functions . dumb-jump-xref-activate)
     :custom
     `((dumb-jump-force-searcher  . 'rg)
@@ -1711,24 +1717,24 @@ and relative line numbers.
     ;;; Multiple Cursors
   ;; Enables simultaneous editing with multiple cursors.
 
-  (leaf multiple-cursors :ensure t)
+  (leaf multiple-cursors :straight t)
 
   ;; -----------------------------------------------------------------------------
     ;;; Magit (Git Integration)
   ;; A powerful and user-friendly Git interface.
 
-  (leaf magit :ensure t)
+  (leaf magit :straight t)
 
   ;; -----------------------------------------------------------------------------
     ;;; Syntax & Spell Checking
   ;; Configures Flycheck (syntax) and Flyspell (spelling).
 
   (leaf flycheck
-    :ensure t
+    :straight t
     :hook (prog-mode . flycheck-mode))
 
   (leaf flyspell
-    :ensure t
+    :straight t
     :hook (text-mode . flyspell-mode)
     :custom ((ispell-program-name . "aspell")))
 
@@ -1737,7 +1743,7 @@ and relative line numbers.
   ;; Projectile for project navigation and search.
 
   (leaf projectile
-    :ensure t
+    :straight t
     :global-minor-mode t)
 
   ;; -----------------------------------------------------------------------------
@@ -1745,7 +1751,7 @@ and relative line numbers.
   ;; Loads user-defined snippets from `my:d:yas-snippet` under `my:d:var`.
 
   (leaf yasnippet
-    :ensure t
+    :straight t
     :global-minor-mode yas-global-mode
     :init
     ;; Store user snippets under my:d:var for portability and cleanup.
@@ -1760,7 +1766,7 @@ and relative line numbers.
     (yas-reload-all))
 
   (leaf yasnippet-snippets
-    :ensure t
+    :straight t
     :after yasnippet)
 #+end_src
 
@@ -1779,18 +1785,18 @@ and relative line numbers.
     :init
     ;; Prescient: persistent sorting & filtering
     (leaf prescient
-      :ensure t
+      :straight t
       :custom ((prescient-aggressive-file-save . t))
       :global-minor-mode prescient-persist-mode)
 
     ;; Vertico: vertical completion UI
     (leaf vertico
-      :ensure t
+      :straight t
       :global-minor-mode vertico-mode
       :custom ((vertico-count . 15))
       :config
       (leaf vertico-posframe
-        :ensure t
+        :straight t
         :if (display-graphic-p)
         :after vertico
         :require posframe
@@ -1799,25 +1805,25 @@ and relative line numbers.
         :config (vertico-posframe-mode 1)))
 
     (leaf vertico-prescient
-      :ensure t
+      :straight t
       :after (vertico prescient)
       :global-minor-mode t)
 
     ;; Marginalia: add annotations to completion candidates
     (leaf marginalia
-      :ensure t
+      :straight t
       :global-minor-mode marginalia-mode)
 
     ;; Consult: powerful search & navigation
     (leaf consult
-      :ensure t
+      :straight t
       :custom
       ((xref-show-xrefs-function . #'consult-xref)
        (xref-show-definitions-function . #'consult-xref)))
 
     ;; Embark: context-sensitive actions
     (leaf embark
-      :ensure t
+      :straight t
       :custom
       ((prefix-help-command . #'embark-prefix-help-command)
        (embark-collect-live-update . t))
@@ -1832,7 +1838,7 @@ and relative line numbers.
 
     ;; Integration: Embark + Consult
     (leaf embark-consult
-      :ensure t
+      :straight t
       :after (embark consult)
       :hook (embark-collect-mode . consult-preview-at-point-mode)
       :custom (consult-preview-key . "M-."))
@@ -1848,7 +1854,7 @@ and relative line numbers.
 
     ;; Corfu: popup completions
     (leaf corfu
-      :ensure t
+      :straight t
       :init
       (global-corfu-mode)
       :custom
@@ -1859,7 +1865,7 @@ and relative line numbers.
       :config
       ;; Add icons to Corfu completions
       (leaf kind-icon
-        :ensure t
+        :straight t
         :after corfu
         :custom
         ((kind-icon-default-face . 'corfu-default))
@@ -1868,24 +1874,24 @@ and relative line numbers.
 
     ;; Cape: extra completion sources for Corfu
     (leaf cape
-      :ensure t
+      :straight t
       :init
       (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
             '(cape-file cape-dabbrev cape-keyword)))
 
     ;; Orderless: fuzzy matching
     (leaf orderless
-      :ensure t
+      :straight t
       :custom
       ((completion-styles . '(orderless basic))
        (completion-category-overrides . '((file (styles . (partial-completion)))))))
 
     ;; nerd-icons-{ibuffer,completion}
     (leaf nerd-icons-ibuffer
-      :ensure t
+      :straight t
       :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
     (leaf nerd-icons-completion
-      :ensure t
+      :straight t
       :hook (marginalia-mode-hook . nerd-icons-completion-marginalia-setup)
       :config
       (nerd-icons-completion-mode)))
@@ -1982,7 +1988,7 @@ and relative line numbers.
 
   (when (eq my:use-lsp 'lsp)
     (leaf lsp-mode
-      :ensure t
+      :straight t
       :hook ((python-mode      . lsp)
              (rust-mode        . lsp)
              (go-mode          . lsp)
@@ -2005,7 +2011,7 @@ and relative line numbers.
 
   (when (eq my:use-lsp 'lsp)
     (leaf lsp-ui
-      :ensure t
+      :straight t
       :after lsp-mode
       :custom
       `((lsp-ui-doc-enable . t)
@@ -2018,7 +2024,7 @@ and relative line numbers.
   ;; Aidermacs configuration
 
   (leaf aidermacs
-    :ensure t
+    :straight t
     :vc (:url "https://github.com/MatthewZMD/aidermacs.git" :branch "main")
     :init
     ;; Prefer OpenRouter when available; fallback to OpenAI.
@@ -2041,7 +2047,7 @@ and relative line numbers.
   ;; -----------------------------------------------------------------------------
   ;;; Vterm
 
-  (leaf vterm :ensure t)
+  (leaf vterm :straight t)
 
   ;; --- Makefile productivity --------------------------------------------------
   (leaf make-mode
@@ -2083,17 +2089,17 @@ and relative line numbers.
                                       (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
 
   ;; --- Docker: files, TRAMP, and TUI -----------------------------------------
-  (leaf dockerfile-mode :ensure t
+  (leaf dockerfile-mode :straight t
     :doc "Major mode for editing Dockerfiles."
     :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
            ("\\.dockerfile\\'"         . dockerfile-mode))
     :custom ((dockerfile-mode-command . "docker")))
   ;; For compose files we start minimal with yaml-mode.
-  (leaf yaml-mode :ensure t
+  (leaf yaml-mode :straight t
     :mode (("\\`docker-compose\\(-\\w+\\)?\\.ya?ml\\'" . yaml-mode)
            ("\\.ya?ml\\'"                               . yaml-mode)))
 
-  (leaf docker :ensure t :commands (docker docker-containers docker-images docker-volumes docker-networks)
+  (leaf docker :straight t :commands (docker docker-containers docker-images docker-volumes docker-networks)
     :doc "Manage Docker from Emacs: containers/images/volumes/networks."
     :bind (("C-c d d" . docker)             ; main dashboard
            ("C-c d c" . docker-containers)
@@ -2104,7 +2110,7 @@ and relative line numbers.
 
   ;; Container-based TRAMP support (builtin since Emacs 29)
   (leaf tramp-container
-    ;; Do NOT use :ensure t because it's not an external package in most archives
+    ;; Do NOT use :straight t because it's not an external package in most archives
     :commands (tramp-container-tramp-file-p)
     :after tramp
     :init
@@ -2112,7 +2118,7 @@ and relative line numbers.
     (setq tramp-container-method "docker"))
 
   ;; Optional: quick insertion helpers for common Dockerfile snippets.
-  (leaf tempel :ensure t
+  (leaf tempel :straight t
     :doc "Lightweight templates for quick boilerplate."
     :commands (tempel-insert)
     :bind (dockerfile-mode-map
@@ -2144,7 +2150,7 @@ and relative line numbers.
   ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
 
   (leaf org
-    :ensure t
+    :straight t
     :leaf-defer t
     :preface
     ;; Org directory setup
@@ -2235,7 +2241,7 @@ and relative line numbers.
   ;; Improves Org visual style with cleaner headings, ellipsis, and agenda tweaks.
 
   (leaf org-modern
-    :ensure t
+    :straight t
     :commands (org-modern-mode)
     :hook (org-mode . org-modern-mode)
     :custom
@@ -2319,7 +2325,7 @@ and relative line numbers.
   ;; Daily journaling with agenda integration.
 
   (leaf org-journal
-    :ensure t
+    :straight t
     :after org
     :config
     (setq org-journal-dir (concat org-directory "/journal")
@@ -2333,7 +2339,7 @@ and relative line numbers.
   ;; A personal knowledge base with backlinks and a graph-based view.
 
   (leaf org-roam
-    :ensure t
+    :straight t
     :after org
     :config
     (setq org-roam-directory (concat org-directory "/org-roam"))
@@ -2347,7 +2353,7 @@ and relative line numbers.
   ;; Images are stored in an "pictures" directory under `org-directory`.
 
   (leaf org-download
-    :ensure t
+    :straight t
     :after org
     :config
     (setq org-download-image-dir (expand-file-name "pictures" org-directory))
@@ -2359,7 +2365,7 @@ and relative line numbers.
   ;; Automatically generates and updates tables of contents for Org and Markdown.
 
   (leaf toc-org
-    :ensure t
+    :straight t
     :after org markdown-mode
     :config
     (add-hook 'org-mode-hook 'toc-org-enable)
@@ -2370,7 +2376,7 @@ and relative line numbers.
   ;; Fetches the title of a webpage and inserts a properly formatted Org link.
 
   (leaf org-cliplink
-    :ensure t
+    :straight t
     :after org
     :bind ("C-x p i" . org-cliplink))
 
@@ -2397,7 +2403,7 @@ and relative line numbers.
   ;; Exports Org content to the Hugo static site generator format.
 
   (leaf ox-hugo
-    :ensure t
+    :straight t
     :require t
     :after ox
     :custom ((org-hugo-front-matter-format . "toml")))
@@ -2424,7 +2430,7 @@ and relative line numbers.
   ;; Enables `markdown-mode` for `.md` files.
 
   (leaf markdown-mode
-    :ensure t
+    :straight t
     :mode ("\\.md\\'" . markdown-mode))
 #+end_src
 
@@ -2444,7 +2450,7 @@ and relative line numbers.
   ;; Configures AUCTeX for PDF-based workflows with `latexmk`.
 
   (leaf auctex
-    :ensure t
+    :straight t
     :init
     (setq TeX-auto-save t
           TeX-parse-self t
@@ -2496,9 +2502,9 @@ and relative line numbers.
   		(user-error "GPG_KEY_ID is not set. Authentication will not work.")))))
 
     ;; Password-store and auth-source-pass
-    (leaf password-store :ensure t)
+    (leaf password-store :straight t)
     (leaf auth-source-pass
-      :ensure t
+      :straight t
       :commands (auth-source-pass-enable)
       :hook (emacs-startup-hook .
   			      (lambda ()
