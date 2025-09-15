@@ -137,6 +137,40 @@ Performance optimizations and environment setup executed before main initializat
   (when (< emacs-major-version 30)
     (error "This configuration requires Emacs 30+"))
 
+  ;; This block ensures Emacs finds Homebrew-installed binaries and GCC libraries
+  ;; from the very beginning of startup. Putting this in early-init.el guarantees
+  ;; that `PATH`, `exec-path`, and `LIBRARY_PATH` are consistent before packages
+  ;; or compilation features (like native-comp) are loaded.
+
+  (when (eq system-type 'darwin)
+    ;; Utility: prepend directory to ENV-VAR safely and keep exec-path in sync.
+    ;; This function is idempotent: calling it multiple times won't duplicate entries.
+    (defun my-prepend-env-path (env-var dir)
+      "Prepend DIR to ENV-VAR and sync exec-path if ENV-VAR is PATH."
+      (when (file-directory-p dir)
+        (let* ((current (split-string (or (getenv env-var) "") ":" t))
+               (new (delete-dups (cons dir current))))
+          (setenv env-var (string-join new ":"))
+          (when (string-equal env-var "PATH")
+            (setq exec-path (delete-dups (cons dir exec-path)))))))
+
+    ;; Configure GCC-related library paths (for libgccjit / native-comp).
+    ;; Only existing directories are added to LIBRARY_PATH.
+    (let* ((gcc-base-paths '("/opt/homebrew/opt/gcc/lib/gcc/current"
+                             "/opt/homebrew/opt/libgccjit/lib/gcc/current"
+                             "/opt/homebrew/opt/gcc/lib/gcc/current/gcc/aarch64-apple-darwin/14"
+                             "/usr/local/opt/gcc/lib/gcc/current"
+                             "/usr/local/opt/libgccjit/lib/gcc/current"
+                             "/usr/local/opt/gcc/lib/gcc/current/gcc/x86_64-apple-darwin/14"))
+  	 (gcc-paths (seq-filter #'file-directory-p gcc-base-paths)))
+      (dolist (dir gcc-paths)
+        (my-prepend-env-path "LIBRARY_PATH" dir)))
+
+    ;; Prepend Homebrew binary paths so `exec-path` and `PATH` are correct early.
+    ;; This ensures commands like `clang` or `g++` are resolved from Homebrew first.
+    (dolist (path '("/opt/homebrew/bin" "/usr/local/bin"))
+      (my-prepend-env-path "PATH" path)))
+
   ;; Utility Functions
   (defun my:ensure-directory-exists (dir)
     "Ensure DIR exists, creating if necessary."
