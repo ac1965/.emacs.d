@@ -1,1 +1,0 @@
-/Users/ac1965/.emacs.d/straight/repos/ef-themes/ef-maris-dark-theme.el
