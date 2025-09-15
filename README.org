@@ -202,7 +202,7 @@ Performance optimizations and environment setup executed before main initializat
   (mapc #'my:ensure-directory-exists
         (list my:d:cache my:d:etc my:d:var my:d:elpa my:d:eln my:d:treesit my:d:treesit-build))
 
-  ;;;; Startup performance toggles
+  ;; Startup performance toggles
   (defconst my--gc-cons-threshold-start (* 128 1024 1024) "128MiB during startup.")
   (defconst my--gc-cons-threshold-normal (* 64 1024 1024)  "64MiB after startup.")
   (setq gc-cons-threshold my--gc-cons-threshold-start
@@ -254,7 +254,7 @@ Performance optimizations and environment setup executed before main initializat
 
   (add-hook 'after-init-hook     #'my--restore-startup-toggles) ;; redundancy for safety
 
-  ;;;; Early UI: minimal params only (full UI in init.el)
+  ;; Early UI: minimal params only (full UI in init.el)
   (setq frame-inhibit-implied-resize t
         frame-resize-pixelwise t
         inhibit-startup-screen t
@@ -350,103 +350,77 @@ Minimal init.el that loads the main configuration from README.org.
   (keymap-global-unset "M-m")       ; free a handy prefix
   (keymap-global-unset "M-/")       ; prefer modern completion
 
-  ;; Bootstrap elpaca
-  (defvar elpaca-installer-version 0.11)
-  (defvar elpaca-directory (expand-file-name "elpaca/" my:d:cache))
-  (defvar elpaca-builds-directory (expand-file-name "builds/" elpaca-directory))
-  (defvar elpaca-repos-directory (expand-file-name "repos/" elpaca-directory))
-  (defvar elpaca-order '(elpaca :repo "https://github.com/progfolio/elpaca.git"
-                                :ref nil :depth 1 :inherit ignore
-                                :files (:defaults "elpaca-test.el" (:exclude "extensions"))
-                                :build (:not elpaca--activate-package)))
-  (let* ((repo  (expand-file-name "elpaca/" elpaca-repos-directory))
-         (build (expand-file-name "elpaca/" elpaca-builds-directory))
-         (order (cdr elpaca-order))
-         (default-directory repo))
-    (add-to-list 'load-path (if (file-exists-p build) build repo))
-    (unless (file-exists-p repo)
-      (make-directory repo t)
-      (when (<= emacs-major-version 28) (require 'subr-x))
-      (condition-case-unless-debug err
-          (if-let* ((buffer (pop-to-buffer-same-window "*elpaca-bootstrap*"))
-                    ((zerop (apply #'call-process `("git" nil ,buffer t "clone"
-                                                    ,@(when-let* ((depth (plist-get order :depth)))
-                                                        (list (format "--depth=%d" depth) "--no-single-branch"))
-                                                    ,(plist-get order :repo) ,repo))))
-                    ((zerop (call-process "git" nil buffer t "checkout"
-                                          (or (plist-get order :ref) "--"))))
-                    (emacs (concat invocation-directory invocation-name))
-                    ((zerop (call-process emacs nil buffer nil "-Q" "-L" "." "--batch"
-                                          "--eval" "(byte-recompile-directory \".\" 0 'force)")))
-                    ((require 'elpaca))
-                    ((elpaca-generate-autoloads "elpaca" repo)))
-              (progn (message "%s" (buffer-string)) (kill-buffer buffer))
-            (error "%s" (with-current-buffer buffer (buffer-string))))
-        ((error) (warn "%s" err) (delete-directory repo 'recursive))))
-    (unless (require 'elpaca-autoloads nil t)
-      (require 'elpaca)
-      (elpaca-generate-autoloads "elpaca" repo)
-      (let ((load-source-file-function nil)) (load "./elpaca-autoloads"))))
-  (add-hook 'after-init-hook #'elpaca-process-queues)
-  (elpaca `(,@elpaca-order))
+  ;; Initialize package.el exactly once to avoid double-boot.
+  (require 'package)
+  (setopt package-archives '(("gnu" . "https://elpa.gnu.org/packages/")
+                             ("melpa" . "https://melpa.org/packages/"))
+  	package-gnupghome-dir (expand-file-name ".gnupg" my:d:var)
+  	package-user-dir my:d:elpa
+          package-vc-allow-clone t)
 
-  ;; Install setup.el via elpaca and load it
-  (elpaca `(setup :host github :repo "radian-software/setup"))
-  (require 'setup)
+  (unless (bound-and-true-p package--initialized)
+    (package-initialize))
 
-  ;; Convenience keyword: (:elpaca t) in `setup' forms
-  (setup-define :elpaca (name)
-  	      (:ensure (elpaca name)))
+  ;; Bootstrap leaf (and friends) if missing.
+  (unless (package-installed-p 'leaf)
+    (package-refresh-contents) ; refresh once here
+    (package-install 'leaf))
 
-  (setup emacs
-         :elpace nil
-         :init
-         ;; UI toggles are in early-init to avoid flicker.
-         (pixel-scroll-precision-mode)
+  (eval-when-compile (require 'leaf))
+  (leaf leaf-keywords :ensure t
+    :init (leaf blackout :ensure t)
+    :config (leaf-keywords-init))
+  (leaf leaf-convert :ensure t)
 
-         ;; Basic behavior
-         (setopt inhibit-startup-screen  t
-  	       initial-scratch-message nil
-  	       use-short-answers       t
-  	       create-lockfiles        nil
-  	       make-backup-files       t
-  	       delete-old-versions     t
-  	       version-control         t
-  	       vc-make-backup-files    t)
+  (leaf emacs
+    :ensure nil
+    :init
+    ;; UI toggles are in early-init to avoid flicker.
+    (pixel-scroll-precision-mode)
 
-         ;; Replace audible beep with visible bell (flash)
-         (setq ring-bell-function #'ignore
-  	     visible-bell t)
+    ;; Basic behavior
+    (setopt inhibit-startup-screen  t
+            initial-scratch-message nil
+            use-short-answers       t
+            create-lockfiles        nil
+            make-backup-files       t
+            delete-old-versions     t
+            version-control         t
+            vc-make-backup-files    t)
 
-         ;; Performance (fix: `idle-time` -> `idle-update-delay`)
-         ;; Smaller value updates redisplay during idle more frequently.
-         (setq idle-update-delay 0.2)
+    ;; Replace audible beep with visible bell (flash)
+    (setq ring-bell-function #'ignore
+          visible-bell t)
 
-         ;; Electric pairs
-         (electric-pair-mode 1)
+    ;; Performance (fix: `idle-time` -> `idle-update-delay`)
+    ;; Smaller value updates redisplay during idle more frequently.
+    (setq idle-update-delay 0.2)
 
-         ;; Line numbers
-         (setq display-line-numbers-type 'relative)
-         (add-hook 'prog-mode-hook #'display-line-numbers-mode)
+    ;; Electric pairs
+    (electric-pair-mode 1)
 
-         ;; Auto-save
-         (setq auto-save-default t
-  	     auto-save-visited-interval 2)
-         (auto-save-visited-mode 1))
+    ;; Line numbers
+    (setq display-line-numbers-type 'relative)
+    (add-hook 'prog-mode-hook #'display-line-numbers-mode)
+
+    ;; Auto-save
+    (setq auto-save-default t
+          auto-save-visited-interval 2)
+    (auto-save-visited-mode 1))
 
   ;; No-Littering
-  (setup no-littering
-         :elpaca t
-         :require t
-         :init
-         ;; Set directories before package loads things that compute paths.
-         (setq no-littering-etc-directory my:d:etc
-               no-littering-var-directory my:d:var))
+  (leaf no-littering
+    :ensure t
+    :require t
+    :init
+    ;; Set directories before package loads things that compute paths.
+    (setq no-littering-etc-directory my:d:etc
+          no-littering-var-directory my:d:var))
 
   ;;;; macOS integration
   ;; 1) Import shell environment for GUI Emacs
   (leaf exec-path-from-shell
-    :elpaca t
+    :ensure t
     :if (and (memq window-system '(mac ns)) (display-graphic-p))
     :custom ((exec-path-from-shell-check-startup-files . nil)
              (exec-path-from-shell-arguments . '("-l" "-i"))
@@ -476,11 +450,11 @@ Minimal init.el that loads the main configuration from README.org.
 
   ;; Garbage Collection Magic Hack
   (leaf gcmh
-    :elpaca t
+    :ensure t
     :hook (emacs-startup . gcmh-mode))
 
   (leaf hydra
-    :elpaca t
+    :ensure t
     :commands (defhydra))
 
   ;; custom-file early, but load only if present
@@ -552,149 +526,149 @@ Personal and device-specific settings.
   ;;; Code:
 
   ;; Personal Settings
-  (setup *personals
-         :config
-         (setq user-full-name "YAMASHITA, Takao"
-               user-mail-address "tjy1965@gmail.com"
-               my:font-default "JetBrains Mono NL"
-               my:font-alt "Noto Sans JP"
-               my:emoji-font "MesloLGS NF"
-               my:font-size 16
-               inhibit-compacting-font-caches t
-               plstore-cache-passphrase-for-symmetric-encryption t)
+  (leaf *personals
+    :config
+    (setq user-full-name "YAMASHITA, Takao"
+          user-mail-address "tjy1965@gmail.com"
+          my:font-default "JetBrains Mono NL"
+          my:font-alt "Noto Sans JP"
+          my:emoji-font "MesloLGS NF"
+          my:font-size 16
+          inhibit-compacting-font-caches t
+          plstore-cache-passphrase-for-symmetric-encryption t)
 
-         (defconst my:d:cloud "~/Documents/")
-         (defconst my:d:blog (concat my:d:cloud "devel/repos/mysite/"))
-         (defconst my:f:capture-blog-file (expand-file-name "all-posts.org" my:d:blog))
+    (defconst my:d:cloud "~/Documents/")
+    (defconst my:d:blog (concat my:d:cloud "devel/repos/mysite/"))
+    (defconst my:f:capture-blog-file (expand-file-name "all-posts.org" my:d:blog))
 
-         (defvar my:excluded-directories '("/Users/ac1965/Library/Accounts"))
+    (defvar my:excluded-directories '("/Users/ac1965/Library/Accounts"))
 
-         (mapc #'my:ensure-directory-exists (list my:d:cloud my:d:blog))
+    (mapc #'my:ensure-directory-exists (list my:d:cloud my:d:blog))
 
-         (setq load-path
-               (seq-remove (lambda (dir) (member dir my:excluded-directories))
-  			 load-path)))
+    (setq load-path
+          (seq-remove (lambda (dir) (member dir my:excluded-directories))
+                      load-path)))
 
   ;; Smart Input Source (auto switch input source, e.g. English <-> Japanese)
   ;; macOS requirement: `brew tap laishulu/homebre && brew install macism`
-  (setup sis
-         :elpaca t
-         :config
-         ;; First run:
-         ;;   Run M-x sis-get with each input source active
-         ;;   Copy the corresponding IDs here
-         (sis-ism-lazyman-config
-  	"com.apple.keylayout.ABC" ;; English layout
-  	"com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese" ;; Japanese IME
-  	'macism)
+  (leaf sis
+    :ensure t
+    :config
+    ;; First run:
+    ;;   Run M-x sis-get with each input source active
+    ;;   Copy the corresponding IDs here
+    (sis-ism-lazyman-config
+     "com.apple.keylayout.ABC" ;; English layout
+     "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese" ;; Japanese IME
+     'macism)
 
-         ;; set cursor color explicitly
-         (setq sis-english-cursor-color "blue"
-  	     sis-other-cursor-color "lime")
+    ;; set cursor color explicitly
+    (setq sis-english-cursor-color "blue"
+          sis-other-cursor-color "lime")
 
-         ;; Enable global modes
-         (sis-global-respect-mode t)       ;; auto switch based on context
-         (sis-global-cursor-color-mode t)  ;; change cursor color by input source
-         (sis-global-inline-mode t))       ;; inline switch inside comments/strings
+    ;; Enable global modes
+    (sis-global-respect-mode t)       ;; auto switch based on context
+    (sis-global-cursor-color-mode t)  ;; change cursor color by input source
+    (sis-global-inline-mode t))       ;; inline switch inside comments/strings
 
   (add-hook 'after-load-theme-hook
             (lambda ()
               (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
 
   ;; Logitech MX Ergo S Configuration
-  (setup *device/MX_ErgoS
-         :config
-         (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
-               mouse-wheel-progressive-speed nil
-               scroll-conservatively 10000
-               scroll-margin 2
-               scroll-preserve-screen-position t
-               mac-mouse-wheel-smooth-scroll t
-               mouse-wheel-tilt-scroll t
-               mouse-wheel-flip-direction nil)
+  (leaf *device/MX_ErgoS
+    :config
+    (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
+          mouse-wheel-progressive-speed nil
+          scroll-conservatively 10000
+          scroll-margin 2
+          scroll-preserve-screen-position t
+          mac-mouse-wheel-smooth-scroll t
+          mouse-wheel-tilt-scroll t
+          mouse-wheel-flip-direction nil)
 
-         (global-set-key [mouse-2] 'yank)
-         (global-set-key [mouse-4] 'previous-buffer)
-         (global-set-key [mouse-5] 'next-buffer))
+    (global-set-key [mouse-2] 'yank)
+    (global-set-key [mouse-4] 'previous-buffer)
+    (global-set-key [mouse-5] 'next-buffer))
 
   ;; Apple Music Controller (macOS only)
   (when (eq system-type 'darwin)
-    (setup apple-music
-  	 :doc "Apple Music control via AppleScript"
-  	 :config
-  	 ;; Core functions for AppleScript execution
-  	 (defun apple-music-osascript-async (script &optional callback)
-  	   "Run AppleScript SCRIPT asynchronously."
-  	   (let* ((proc-name "apple-music-async")
-  		  (buffer-name "*Apple Music Async*")
-  		  (osascript-cmd (list "osascript" "-e" script))
-  		  (proc (apply 'start-process proc-name buffer-name osascript-cmd)))
-  	     (when callback
-                 (set-process-sentinel
-  		proc
-  		(lambda (process event)
-  		  (when (string= event "finished\n")
-  		    (with-current-buffer (process-buffer process)
-                        (let ((output (string-trim (buffer-string))))
-  			(funcall callback output)))
-  		    (kill-buffer (process-buffer process))))))))
+    (leaf apple-music
+      :doc "Apple Music control via AppleScript"
+      :config
+      ;; Core functions for AppleScript execution
+      (defun apple-music-osascript-async (script &optional callback)
+        "Run AppleScript SCRIPT asynchronously."
+        (let* ((proc-name "apple-music-async")
+               (buffer-name "*Apple Music Async*")
+               (osascript-cmd (list "osascript" "-e" script))
+               (proc (apply 'start-process proc-name buffer-name osascript-cmd)))
+          (when callback
+            (set-process-sentinel
+             proc
+             (lambda (process event)
+               (when (string= event "finished\n")
+                 (with-current-buffer (process-buffer process)
+                   (let ((output (string-trim (buffer-string))))
+                     (funcall callback output)))
+                 (kill-buffer (process-buffer process))))))))
 
-  	 (defun apple-music-osascript-sync (script)
-  	   "Run AppleScript SCRIPT synchronously."
-  	   (string-trim
-  	    (shell-command-to-string
-  	     (format "osascript -e '%s'" script))))
+      (defun apple-music-osascript-sync (script)
+        "Run AppleScript SCRIPT synchronously."
+        (string-trim
+         (shell-command-to-string
+          (format "osascript -e '%s'" script))))
 
-  	 ;; Player controls
-  	 (defun apple-music-play-pause ()
-  	   "Toggle play/pause."
-  	   (interactive)
-  	   (apple-music-osascript-async "tell application \"Music\" to playpause"))
+      ;; Player controls
+      (defun apple-music-play-pause ()
+        "Toggle play/pause."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to playpause"))
 
-  	 (defun apple-music-next-track ()
-  	   "Skip to next track."
-  	   (interactive)
-  	   (apple-music-osascript-async "tell application \"Music\" to next track"))
+      (defun apple-music-next-track ()
+        "Skip to next track."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to next track"))
 
-  	 (defun apple-music-previous-track ()
-  	   "Go to previous track."
-  	   (interactive)
-  	   (apple-music-osascript-async "tell application \"Music\" to previous track"))
+      (defun apple-music-previous-track ()
+        "Go to previous track."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to previous track"))
 
-  	 ;; Apple Music playlist support
-  	 (defun apple-music-get-playlists ()
-  	   "Return a list of playlist names from Apple Music."
-  	   (split-string
-  	    (apple-music-osascript-sync
-  	     "tell application \"Music\" to get name of playlists")
-  	    ", "))
+      ;; Apple Music playlist support
+      (defun apple-music-get-playlists ()
+        "Return a list of playlist names from Apple Music."
+        (split-string
+         (apple-music-osascript-sync
+  	"tell application \"Music\" to get name of playlists")
+         ", "))
 
-  	 (defun apple-music-play-playlist (playlist)
-  	   "Play the Apple Music playlist named PLAYLIST."
-  	   (interactive
-  	    (list (completing-read "Playlist: " (apple-music-get-playlists))))
-  	   (apple-music-osascript-async
-  	    (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
+      (defun apple-music-play-playlist (playlist)
+        "Play the Apple Music playlist named PLAYLIST."
+        (interactive
+         (list (completing-read "Playlist: " (apple-music-get-playlists))))
+        (apple-music-osascript-async
+         (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
 
-  	 ;; Hydra interface
-  	 (defhydra hydra-apple-music (:hint nil)
-  	   "
+      ;; Hydra interface
+      (defhydra hydra-apple-music (:hint nil)
+        "
   Apple Music:
   _p_: Play/Pause  _n_: Next  _b_: Back  _l_: Playlist  _q_: Quit
   "
-  	   ("p" apple-music-play-pause)
-  	   ("n" apple-music-next-track)
-  	   ("b" apple-music-previous-track)
-  	   ("l" apple-music-play-playlist)
-  	   ("q" nil "quit"))
+        ("p" apple-music-play-pause)
+        ("n" apple-music-next-track)
+        ("b" apple-music-previous-track)
+        ("l" apple-music-play-playlist)
+        ("q" nil "quit"))
 
-  	 (global-set-key (kbd "C-c m") 'hydra-apple-music/body)))
+      (global-set-key (kbd "C-c m") 'hydra-apple-music/body)))
 
   (provide 'user)
   ;;; user.el ends here
 #+end_src
 
-** TODO Main Configuration
+** Main Configuration
 :PROPERTIES:
    :CUSTOM_ID: core
    :END:
@@ -709,7 +683,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/15 09:37:19 $
+  ;; $Lastupdate: 2025/09/15 14:20:24 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
