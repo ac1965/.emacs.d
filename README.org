@@ -527,7 +527,7 @@ Personal and device-specific settings.
 
   ;; Personal Settings
   (leaf *personals
-    :config
+    :init
     (setq user-full-name "YAMASHITA, Takao"
           user-mail-address "tjy1965@gmail.com"
           my:font-default "JetBrains Mono NL"
@@ -553,23 +553,22 @@ Personal and device-specific settings.
   ;; macOS requirement: `brew tap laishulu/homebre && brew install macism`
   (leaf sis
     :ensure t
-    :config
-    ;; First run:
-    ;;   Run M-x sis-get with each input source active
-    ;;   Copy the corresponding IDs here
-    (sis-ism-lazyman-config
-     "com.apple.keylayout.ABC" ;; English layout
-     "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese" ;; Japanese IME
-     'macism)
-
-    ;; set cursor color explicitly
-    (setq sis-english-cursor-color "blue"
-          sis-other-cursor-color "lime")
-
-    ;; Enable global modes
-    (sis-global-respect-mode t)       ;; auto switch based on context
-    (sis-global-cursor-color-mode t)  ;; change cursor color by input source
-    (sis-global-inline-mode t))       ;; inline switch inside comments/strings
+    :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
+  				    sis-global-respect-mode sis-global-inline-mode)
+    :hook (emacs-startup-hook .
+  			    (lambda ()
+  			      ;; Defer IME wiring until after startup; avoid blocking init.
+  			      (when (fboundp 'sis-ism-lazyman-config)
+  				(sis-ism-lazyman-config
+  				 "com.apple.keylayout.ABC"
+  				 "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+  				 'macism))
+  			      (when (fboundp 'sis-global-cursor-color-mode)
+  				(sis-global-cursor-color-mode t))
+  			      (when (fboundp 'sis-global-respect-mode)
+  				(sis-global-respect-mode t))
+  			      (when (fboundp 'sis-global-inline-mode)
+  				(sis-global-inline-mode t)))))
 
   (add-hook 'after-load-theme-hook
             (lambda ()
@@ -577,7 +576,7 @@ Personal and device-specific settings.
 
   ;; Logitech MX Ergo S Configuration
   (leaf *device/MX_ErgoS
-    :config
+    :init
     (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
           mouse-wheel-progressive-speed nil
           scroll-conservatively 10000
@@ -595,7 +594,7 @@ Personal and device-specific settings.
   (when (eq system-type 'darwin)
     (leaf apple-music
       :doc "Apple Music control via AppleScript"
-      :config
+      :init
       ;; Core functions for AppleScript execution
       (defun apple-music-osascript-async (script &optional callback)
         "Run AppleScript SCRIPT asynchronously."
@@ -683,7 +682,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/15 14:20:24 $
+  ;; $Lastupdate: 2025/09/15 17:38:41 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -1271,8 +1270,8 @@ Core Emacs configuration with modular design.
   ;;; Winner Mode
   ;; Allows undo/redo of window configurations.
   (leaf winner
-    :config
-    (winner-mode 1)) ;; enable mode early; keys are centralized below
+    :commands (winner-mode)
+    :hook (emacs-startup-hook . (lambda () (winner-mode 1))))
 
   ;; ---------------------------------------------------------------------------
   ;;; Custom Window Layout Utilities
@@ -1680,7 +1679,9 @@ and relative line numbers.
     ;;; Editing Tools
   ;; Region expansion, aggressive indentation, and selection overwrite.
 
-  (leaf expand-region :ensure t)
+  (leaf expand-region
+    :ensure t
+    :after treesit)
   (leaf aggressive-indent
     :ensure t
     :global-minor-mode global-aggressive-indent-mode)
@@ -1775,7 +1776,7 @@ and relative line numbers.
   ;; - Configures a modern completion stack: Vertico, Corfu, Orderless, etc.
 
   (leaf completion-settings
-    :config
+    :init
     ;; Prescient: persistent sorting & filtering
     (leaf prescient
       :ensure t
@@ -1820,19 +1821,21 @@ and relative line numbers.
       :custom
       ((prefix-help-command . #'embark-prefix-help-command)
        (embark-collect-live-update . t))
-      :config
-      ;; Enable live updates in Embark collect buffers.
-      (add-hook 'embark-collect-mode-hook #'embark-collect-live-mode)
-      (when (require 'all-the-icons nil t)
+      :hook (embark-collect-mode . embark-collect-live-mode)
+      :init
+      ;; Enable icons if available
+      (with-eval-after-load 'all-the-icons
         (setq embark-indicators
               '(embark-minimal-indicator
                 embark-highlight-indicator
-                embark-isearch-highlight-indicator)))
-      (leaf embark-consult
-        :ensure t
-        :after (embark consult)
-        :hook (embark-collect-mode . consult-preview-at-point-mode)
-        :custom (consult-preview-key . "M-.")))
+                embark-isearch-highlight-indicator))))
+
+    ;; Integration: Embark + Consult
+    (leaf embark-consult
+      :ensure t
+      :after (embark consult)
+      :hook (embark-collect-mode . consult-preview-at-point-mode)
+      :custom (consult-preview-key . "M-."))
 
     ;; Embark keybindings inside Vertico
     (defun my:setup-embark-vertico-directory ()
@@ -2099,16 +2102,14 @@ and relative line numbers.
            ("C-c d n" . docker-networks))
     :custom ((docker-container-shell-file-name . "/bin/sh")))
 
-  (leaf docker-tramp :ensure t
-    :doc "TRAMP method docker: to edit files inside running containers."
+  ;; Container-based TRAMP support (builtin since Emacs 29)
+  (leaf tramp-container
+    ;; Do NOT use :ensure t because it's not an external package in most archives
+    :commands (tramp-container-tramp-file-p)
+    :after tramp
     :init
-    ;; Usage example: C-x C-f /docker:root@container:/path
-    (with-eval-after-load 'tramp
-      (add-to-list 'tramp-methods
-                   '("docker" (tramp-login-program "docker")
-                     (tramp-login-args (("exec" "-it") ("%h") ("/bin/sh")))
-                     (tramp-remote-shell "/bin/sh")
-                     (tramp-remote-shell-args ("-i" "-c"))))))
+    ;; Set which container engine to use, e.g. "docker" or "podman"
+    (setq tramp-container-method "docker"))
 
   ;; Optional: quick insertion helpers for common Dockerfile snippets.
   (leaf tempel :ensure t
@@ -2143,7 +2144,7 @@ and relative line numbers.
   ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
 
   (leaf org
-    :ensure nil
+    :ensure t
     :leaf-defer t
     :preface
     ;; Org directory setup
@@ -2234,27 +2235,28 @@ and relative line numbers.
   ;; Improves Org visual style with cleaner headings, ellipsis, and agenda tweaks.
 
   (leaf org-modern
-    :config
-    (setopt
-     org-startup-indented t
-     org-hide-leading-stars t
-     org-auto-align-tags nil
-     org-tags-column 0
-     org-catch-invisible-edits 'show-and-error
-     org-special-ctrl-a/e t
-     org-insert-heading-respect-content t
-     org-hide-emphasis-markers t
-     org-pretty-entities t
-     org-agenda-tags-column 0
-     org-agenda-block-separator ?─
-     org-agenda-time-grid
-     '((daily today require-timed)
-       (800 1000 1200 1400 1600 1800 2000)
-       " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
-     org-agenda-current-time-string
-     "◀── now ─────────────────────────────────────────────────")
-    (setopt org-ellipsis " ▾")
-    (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil))
+    :ensure t
+    :commands (org-modern-mode)
+    :hook (org-mode . org-modern-mode)
+    :custom
+    ;; Org appearance tweaks
+    (org-startup-indented . t)
+    (org-hide-leading-stars . t)
+    (org-auto-align-tags . nil)
+    (org-tags-column . 0)
+    (org-catch-invisible-edits . 'show-and-error)
+    (org-special-ctrl-a/e . t)
+    (org-insert-heading-respect-content . t)
+    (org-hide-emphasis-markers . t)
+    (org-pretty-entities . t)
+    (org-agenda-tags-column . 0)
+    (org-agenda-block-separator . ?─)
+    (org-agenda-time-grid .
+  			'((daily today require-timed)
+  			  (800 1000 1200 1400 1600 1800 2000)
+  			  " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
+    (org-agenda-current-time-string
+     . "⭠ now ─────────────────────────────────────────────────"))
 
   ;; -----------------------------------------------------------------------------
   ;;; Org Superstar (Pretty Headings)
@@ -2477,30 +2479,39 @@ and relative line numbers.
 
     ;; GPG & auth-source
     (leaf epa-file
-      :config
-      (epa-file-enable)
+      :commands (epa-file-enable)
+      :init
+      ;; Configure pinentry mode safely before library load
       (setq epa-pinentry-mode
-            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default)))
+            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
+      ;; Enable encrypted file support after startup; avoids init-time I/O
+      (add-hook 'emacs-startup-hook #'epa-file-enable))
 
     (leaf auth-source
-      :config
-      (setq auth-source-gpg-encrypt-to
-            (or (getenv "GPG_KEY_ID")
-                (user-error "GPG_KEY_ID is not set. Authentication will not work."))))
+      :init
+      ;; Don't force load; apply only when the library is actually loaded.
+      (with-eval-after-load 'auth-source
+        (setq auth-source-gpg-encrypt-to
+              (or (getenv "GPG_KEY_ID")
+  		(user-error "GPG_KEY_ID is not set. Authentication will not work.")))))
 
     ;; Password-store and auth-source-pass
     (leaf password-store :ensure t)
     (leaf auth-source-pass
       :ensure t
-      :config
-      (when (executable-find "pass")
-        (auth-source-pass-enable)))
+      :commands (auth-source-pass-enable)
+      :hook (emacs-startup-hook .
+  			      (lambda ()
+  				(when (executable-find "pass")
+  				  (auth-source-pass-enable)))))
 
     ;; Secure plstore
     (leaf plstore
-      :config
-      (setq plstore-secret-keys 'silent
-            plstore-encrypt-to (getenv "GPG_KEY_ID"))))
+      :init
+      ;; Set options only when plstore is loaded; avoids eager require.
+      (with-eval-after-load 'plstore
+        (setq plstore-secret-keys 'silent
+              plstore-encrypt-to (getenv "GPG_KEY_ID")))))
 #+end_src
 
 *** Footer
