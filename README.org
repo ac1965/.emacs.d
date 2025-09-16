@@ -147,28 +147,32 @@ Performance optimizations and environment setup executed before main initializat
     ;; This function is idempotent: calling it multiple times won't duplicate entries.
     (defun my-prepend-env-path (env-var dir)
       "Prepend DIR to ENV-VAR and sync exec-path if ENV-VAR is PATH."
+      ;; Use OS-appropriate separator for portability.
       (when (file-directory-p dir)
-        (let* ((current (split-string (or (getenv env-var) "") ":" t))
-               (new (delete-dups (cons dir current))))
-          (setenv env-var (string-join new ":"))
+        (let* ((sep     (char-to-string path-separator))   ;; safer than hardcoding ":"
+               (current (split-string (or (getenv env-var) "") sep t))
+               (new     (delete-dups (cons dir current))))
+          (setenv env-var (mapconcat #'identity new sep))
           (when (string-equal env-var "PATH")
+            ;; Keep exec-path consistent and idempotent.
             (setq exec-path (delete-dups (cons dir exec-path)))))))
 
-    ;; Configure GCC-related library paths (for libgccjit / native-comp).
-    ;; Only existing directories are added to LIBRARY_PATH.
-    (let* ((gcc-base-paths '("/opt/homebrew/opt/gcc/lib/gcc/current"
-                             "/opt/homebrew/opt/libgccjit/lib/gcc/current"
-                             "/opt/homebrew/opt/gcc/lib/gcc/current/gcc/aarch64-apple-darwin/14"
-                             "/usr/local/opt/gcc/lib/gcc/current"
-                             "/usr/local/opt/libgccjit/lib/gcc/current"
-                             "/usr/local/opt/gcc/lib/gcc/current/gcc/x86_64-apple-darwin/14"))
-  	 (gcc-paths (seq-filter #'file-directory-p gcc-base-paths)))
+    ;; Build a list of plausible GCC/JIT library roots and add only those that exist.
+    (let* ((roots '("/opt/homebrew/opt" "/usr/local/opt"))
+           (cands (apply #'append
+                         (mapcar (lambda (root)
+                                   (list (expand-file-name "gcc/lib/gcc/current" root)
+                                         (expand-file-name "libgccjit/lib/gcc/current" root)
+                                         ;; Avoid hardcoding arch-ver subdirs aggressively; rely on "current".
+                                         ))
+                                 roots)))
+           (gcc-paths (seq-filter #'file-directory-p cands)))
       (dolist (dir gcc-paths)
         (my-prepend-env-path "LIBRARY_PATH" dir)))
 
-    ;; Prepend Homebrew binary paths so `exec-path` and `PATH` are correct early.
-    ;; This ensures commands like `clang` or `g++` are resolved from Homebrew first.
-    (dolist (path '("/opt/homebrew/bin" "/usr/local/bin"))
+    ;; Prefer Homebrew shims early; include sbin if present.
+    (dolist (path '("/opt/homebrew/bin" "/opt/homebrew/sbin"
+                    "/usr/local/bin"   "/usr/local/sbin"))
       (my-prepend-env-path "PATH" path)))
 
   ;; Utility Functions
@@ -242,16 +246,17 @@ Performance optimizations and environment setup executed before main initializat
                (float-time (time-subtract after-init-time before-init-time))
                gcs-done)))
 
-  ;; Avoid duplicate hook entries in case early-init.el is sourced twice.
+  ;; Use a single, well-defined restore point (Emacs 30+).
+  (remove-hook 'after-init-hook #'my--restore-startup-toggles) ;; in case of reloads
   (add-hook 'emacs-startup-hook #'my--restore-startup-toggles)
-
-  (add-hook 'after-init-hook     #'my--restore-startup-toggles) ;; redundancy for safety
 
   ;; Early UI: minimal params only (full UI in init.el)
   (setq frame-inhibit-implied-resize t
         frame-resize-pixelwise t
         inhibit-startup-screen t
         inhibit-startup-message t
+        ;; NOTE: For full effect, this must be set in the user's init with a literal username.
+        ;; Keeping here for early consistency, but see (describe-variable 'inhibit-startup-echo-area-message).
         inhibit-startup-echo-area-message user-login-name)
 
   ;; Idempotent frame params for first & subsequent GUI frames
@@ -376,7 +381,7 @@ Minimal init.el that loads the main configuration from README.org.
   (leaf-keywords-init)
 
   (leaf emacs
-    :ensure nil
+    :straight nil
     :init
     ;; UI toggles are in early-init to avoid flicker.
     (pixel-scroll-precision-mode)
@@ -1897,7 +1902,7 @@ and relative line numbers.
 
 #+begin_src emacs-lisp :tangle lisp/README.el
   (leaf eww
-    :ensure nil
+    :straight nil
     :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
   	   (eww-download-directory . "~/Downloads"))                ;; Download directory
     :config
