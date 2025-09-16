@@ -202,6 +202,16 @@ Performance optimizations and environment setup executed before main initializat
   (mapc #'my:ensure-directory-exists
         (list my:d:cache my:d:etc my:d:var my:d:elpa my:d:eln my:d:treesit my:d:treesit-build))
 
+  ;; Redirect eln-cache before packages load
+  (when (fboundp 'startup-redirect-eln-cache)
+    (startup-redirect-eln-cache my:d:eln))
+
+  ;; Fallback for older comp vars
+  (when (boundp 'native-comp-eln-load-path)
+    (setq native-comp-eln-load-path (list my:d:eln)))
+  (when (boundp 'comp-eln-load-path)
+    (setq comp-eln-load-path (list my:d:eln)))
+
   ;; Startup performance toggles
   (defconst my--gc-cons-threshold-start (* 128 1024 1024) "128MiB during startup.")
   (defconst my--gc-cons-threshold-normal (* 64 1024 1024)  "64MiB after startup.")
@@ -234,23 +244,6 @@ Performance optimizations and environment setup executed before main initializat
 
   ;; Avoid duplicate hook entries in case early-init.el is sourced twice.
   (add-hook 'emacs-startup-hook #'my--restore-startup-toggles)
-
-  ;; Redirect native-compilation cache before packages load.
-  (let ((eln-dir my:d:eln))
-    (condition-case err
-        (when (and (fboundp 'startup-redirect-eln-cache)
-                   (featurep 'native-compile)
-                   (or (boundp 'comp-eln-load-path)
-                       (boundp 'native-comp-eln-load-path)))
-          (startup-redirect-eln-cache eln-dir))
-      (error (message "[early-init] skip startup-redirect-eln-cache: %S" err))))
-
-  (when (file-directory-p my:d:eln)
-    (cond
-     ((boundp 'comp-eln-load-path)
-      (add-to-list 'comp-eln-load-path my:d:eln))
-     ((boundp 'native-comp-eln-load-path)
-      (add-to-list 'native-comp-eln-load-path my:d:eln))))
 
   (add-hook 'after-init-hook     #'my--restore-startup-toggles) ;; redundancy for safety
 
@@ -350,10 +343,9 @@ Minimal init.el that loads the main configuration from README.org.
   (keymap-global-unset "M-m")       ; free a handy prefix
   (keymap-global-unset "M-/")       ; prefer modern completion
 
-  ;; Disable package.el to avoid double initialization (straight.el will manage).
-  ;; (setq package-enable-at-startup nil)
-
   ;; Bootstrap straight.el
+  (setq straight-base-dir  my:d:cache)
+
   (defvar bootstrap-version)
   (let ((bootstrap-file
          (expand-file-name
@@ -692,7 +684,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/15 23:17:35 $
+  ;; $Lastupdate: 2025/09/16 22:51:34 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -2028,7 +2020,7 @@ and relative line numbers.
   ;; Aidermacs configuration
 
   (leaf aidermacs
-    :straight (:host github :repo "MatthewZMD/aidermacs.git")
+    :straight t
     :init
     ;; Prefer OpenRouter when available; fallback to OpenAI.
     (cond
