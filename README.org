@@ -126,55 +126,87 @@ Performance optimizations and environment setup executed before main initializat
 #+begin_src emacs-lisp :tangle early-init.el
   ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
   ;;; Commentary:
-  ;; Early-stage optimizations for Emacs startup performance
-  ;; - GC threshold tuning
-  ;; - File-name-handler optimizations
-  ;; - Native compilation settings
+  ;; Emacs 30+ early-stage optimizations
+  ;; - Startup performance (GC, file-name-handler)
+  ;; - Package.el deferral
+  ;; - Native-comp settings
+  ;; - Environment (PATH/libgccjit on macOS)
+  ;; - Minimal UI setup
   ;;; Code:
 
-  ;; Compatibility Check
-  ;; Guard: Emacs 30+ only (faster than parsing full version string)
+  ;; Guard: require Emacs 30+
   (when (< emacs-major-version 30)
-    (error "This configuration requires Emacs 30+"))
+    (user-error "This configuration requires Emacs 30+"))
 
-  ;; This block ensures Emacs finds Homebrew-installed binaries and GCC libraries
-  ;; from the very beginning of startup. Putting this in early-init.el guarantees
-  ;; that `PATH`, `exec-path`, and `LIBRARY_PATH` are consistent before packages
-  ;; or compilation features (like native-comp) are loaded.
+  ;;;; Package.el
+  ;; Prevent premature initialization; we do it once in init.el.
+  (setopt package-enable-at-startup nil
+          package-quickstart      nil)
 
+  ;;;; Garbage Collection
+  (defvar my--orig-gc-cons-threshold gc-cons-threshold
+    "Backup of `gc-cons-threshold` to restore after startup.")
+  (defvar my--orig-gc-cons-percentage gc-cons-percentage
+    "Backup of `gc-cons-percentage` to restore after startup.")
+
+  (setq gc-cons-threshold most-positive-fixnum
+        gc-cons-percentage 0.6)
+
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (setq gc-cons-threshold (* 64 1024 1024) ; 64 MiB
+                    gc-cons-percentage 0.1)))
+
+  ;; Improve subprocess I/O throughput
+  (setopt read-process-output-max (* 4 1024 1024)) ; 4 MiB
+
+  ;;;; File-name-handlers
+  (defvar my--orig-file-name-handler-alist file-name-handler-alist
+    "Backup of `file-name-handler-alist` to restore after startup.")
+  (setq file-name-handler-alist nil)
+
+  (defun my--restore-file-name-handlers ()
+    "Restore `file-name-handler-alist` safely after startup."
+    (setq file-name-handler-alist
+          (delete-dups (append file-name-handler-alist
+                               my--orig-file-name-handler-alist))))
+  (add-hook 'emacs-startup-hook #'my--restore-file-name-handlers)
+  (add-hook 'after-init-hook     #'my--restore-file-name-handlers)
+
+  ;;;; Native Compilation (Emacs 30+)
+  (when (featurep 'native-compile)
+    (setopt native-comp-async-report-warnings-errors 'silent
+            native-comp-jit-compilation t
+            native-comp-deferred-compilation t)
+
+    ;; Store comp cache in XDG cache dir
+    (let* ((base (or (getenv "XDG_CACHE_HOME")
+                     (expand-file-name "~/.cache/")))
+           (eln  (expand-file-name "emacs/eln-cache/" base)))
+      (setopt native-comp-eln-load-path (list eln))
+      (unless (file-directory-p eln)
+        (make-directory eln t))))
+
+  ;;;; Environment (macOS only)
   (when (eq system-type 'darwin)
-    ;; Utility: prepend directory to ENV-VAR safely and keep exec-path in sync.
-    ;; This function is idempotent: calling it multiple times won't duplicate entries.
-    (defun my-prepend-env-path (env-var dir)
-      "Prepend DIR to ENV-VAR and sync exec-path if ENV-VAR is PATH."
-      ;; Use OS-appropriate separator for portability.
+    (defun my--prepend-path (dir)
+      "Prepend DIR to PATH/exec-path if directory exists."
       (when (file-directory-p dir)
-        (let* ((current (split-string (or (getenv env-var) "") ":" t))
-               (new (delete-dups (cons dir current))))
-          (setenv env-var (string-join new ":"))
-          (when (string-equal env-var "PATH")
-            ;; Keep exec-path consistent and idempotent.
-            (setq exec-path (delete-dups (cons dir exec-path)))))))
+        (setenv "PATH" (concat dir path-separator (getenv "PATH")))
+        (add-to-list 'exec-path dir)))
+    (mapc #'my--prepend-path
+          '("/opt/homebrew/bin" "/usr/local/bin"))
 
-    ;; Build a list of plausible GCC/JIT library roots and add only those that exist.
-    (let* ((roots '("/opt/homebrew/opt" "/usr/local/opt"))
-           (cands (apply #'append
-                         (mapcar (lambda (root)
-                                   (list (expand-file-name "gcc/lib/gcc/current" root)
-                                         (expand-file-name "libgccjit/lib/gcc/current" root)
-                                         ;; Avoid hardcoding arch-ver subdirs aggressively; rely on "current".
-                                         ))
-                                 roots)))
-           (gcc-paths (seq-filter #'file-directory-p cands)))
-      (dolist (dir gcc-paths)
-        (my-prepend-env-path "LIBRARY_PATH" dir)))
+    ;; GCC JIT / libgccjit
+    (let ((libgcc (seq-find #'file-directory-p
+                            '("/opt/homebrew/opt/gcc/lib/gcc/current"
+                              "/opt/homebrew/opt/libgccjit/lib/gcc/current"
+                              "/opt/homebrew/opt/libgccjit/lib"))))
+      (when libgcc
+        (setenv "LIBRARY_PATH"
+                (concat libgcc path-separator (or (getenv "LIBRARY_PATH") ""))))))
 
-    ;; Prefer Homebrew shims early; include sbin if present.
-    (dolist (path '("/opt/homebrew/bin" "/opt/homebrew/sbin"
-                    "/usr/local/bin"   "/usr/local/sbin"))
-      (my-prepend-env-path "PATH" path)))
-
-  ;; Utility Functions
+  ;;;; Directories
   (defun my:ensure-directory-exists (dir)
     "Ensure DIR exists, creating if necessary."
     (unless (file-directory-p dir)
@@ -182,7 +214,6 @@ Performance optimizations and environment setup executed before main initializat
           (make-directory dir t)
         (error (warn "Failed to create directory: %s - %s" dir err)))))
 
-  ;; Directory Structure
   (defvar my:d (or (and load-file-name
                         (file-name-directory (file-chase-links load-file-name)))
                    user-emacs-directory)
@@ -192,81 +223,36 @@ Performance optimizations and environment setup executed before main initializat
   (defvar my:d:etc     (expand-file-name ".etc/"       my:d))
   (defvar my:d:var     (expand-file-name ".var/"       my:d))
   (defvar my:d:treesit (expand-file-name "tree-sitter/" my:d:var)
-    "Directory to store tree-sitter grammars (.so/.dylib/.dll).")
+    "Directory to store tree-sitter grammars.")
   (defvar my:f:custom  (expand-file-name "custom.el"   my:d:etc))
-
-  ;; Dedicated temp/build dir for treesit to avoid polluting default-directory.
   (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache)
-    "Temporary working directory used while building tree-sitter grammars.")
+    "Temporary working directory for tree-sitter builds.")
 
-  ;; Ensure directories exist as early as possible (no-op if present).
-  (mapc #'my:ensure-directory-exists
-        (list my:d:cache my:d:etc my:d:var my:d:treesit my:d:treesit-build))
+  ;; Defer directory creation until after startup
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (mapc #'my:ensure-directory-exists
+                    (list my:d:cache my:d:etc my:d:var my:d:treesit my:d:treesit-build))))
 
-  ;; Startup performance toggles
-  (defconst my--gc-cons-threshold-start (* 128 1024 1024) "128MiB during startup.")
-  (defconst my--gc-cons-threshold-normal (* 64 1024 1024)  "64MiB after startup.")
-  (setq gc-cons-threshold my--gc-cons-threshold-start
-        gc-cons-percentage 0.6)
+  ;;;; UI Tweaks
+  (when (display-graphic-p)
+    (setq-default frame-resize-pixelwise t)
+    (add-hook 'window-setup-hook
+              (lambda () (set-frame-parameter nil 'fullscreen 'maximized))))
 
-  ;; Save & clear to speed up startup, then robustly restore later.
-  (defvar my--saved-file-name-handler-alist file-name-handler-alist)
-  (setq file-name-handler-alist nil)
-
-  ;; Improve subprocess throughput (safe on 30+): 8 MiB
-  (setopt read-process-output-max (* 8 1024 1024))
-
-  ;; Prefer native compilation for installed packages; suppress async warnings.
-  ;; Why: Emacs 30+ builds packages natively, explicit defaults reduce surprises.
-  (setopt package-native-compile t
-          native-comp-async-report-warnings-errors 'silent)
-
-  ;; Guard to make the restore routine idempotent.
-  (defvar my--startup-restored-p nil
-    "Non-nil once startup toggles have been restored exactly once.")
-
-  ;; Restore GC/file-name-handler after init (idempotent).
-  (defun my--restore-startup-toggles ()
-    "Restore GC/file-name-handler after init (idempotent)."
-    (unless my--startup-restored-p
-      (setq gc-cons-threshold my--gc-cons-threshold-normal
-            gc-cons-percentage 0.2)  ;; more conservative post-startup default
-      (setq file-name-handler-alist my--saved-file-name-handler-alist)
-      (setq my--startup-restored-p t)
-      (garbage-collect)))
-
-  ;; Use a single, well-defined restore point (Emacs 30+).
-  (remove-hook 'after-init-hook #'my--restore-startup-toggles) ;; in case of reloads
-  (add-hook 'emacs-startup-hook #'my--restore-startup-toggles)
-
-  ;; Early UI: minimal params only (full UI in init.el)
-  (setq frame-inhibit-implied-resize t
-        frame-resize-pixelwise t
-        inhibit-startup-screen t
-        inhibit-startup-message t
-        ;; NOTE: For full effect, this must be set in the user's init with a literal username.
-        ;; Keeping here for early consistency, but see (describe-variable 'inhibit-startup-echo-area-message).
-        inhibit-startup-echo-area-message user-login-name)
-
-  ;; Idempotent frame params for first & subsequent GUI frames
-  (dolist (kv '((menu-bar-lines . 0)
-                (tool-bar-lines . 0)
-                (vertical-scroll-bars . nil)
-                (fullscreen . maximized)))
-    (setf (alist-get (car kv) default-frame-alist) (cdr kv))
-    (setf (alist-get (car kv) initial-frame-alist) (cdr kv)))
-
-  ;; Daemon: ensure GUI client frames are maximized too
   (when (daemonp)
     (add-hook 'after-make-frame-functions
               (lambda (f)
                 (when (display-graphic-p f)
-                  (set-frame-parameter f 'fullscreen 'maximized)))))
+                  (with-selected-frame f
+                    (setq frame-resize-pixelwise t)
+                    (set-frame-parameter f 'fullscreen 'maximized))))))
 
-  ;; Package system: disable built-in auto init & quickstart cache.
-  ;; - We initialize package.el only once in init.el.
-  (setopt package-enable-at-startup nil
-          package-quickstart      nil)
+  (when (display-graphic-p)
+    ;; Disable heavy chrome before first paint
+    (menu-bar-mode -1)
+    (tool-bar-mode -1)
+    (scroll-bar-mode -1))
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -375,19 +361,18 @@ Minimal init.el that loads the main configuration from README.org.
           no-littering-var-directory my:d:var))
 
   ;;;; macOS integration
+  ;; Environment Variables
+  (defvar my:shell-env-vars
+    '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
+
   ;; 1) Import shell environment for GUI Emacs
   (leaf exec-path-from-shell
-    :when (and (memq system-type '(gnu/linux darwin))
-               (display-graphic-p)
-               (not noninteractive))
     :straight t
-    :custom
-    (exec-path-from-shell-arguments '("-l" "-i")) ; login+interactive for PATH
-    (exec-path-from-shell-variables
-     '("PATH" "MANPATH" "LANG" "LC_ALL"
-       "PASSWORD_STORE_DIR" "GPG_KEY_ID"
-       "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
-    :hook (after-init . exec-path-from-shell-initialize))
+    :config
+    (setq exec-path-from-shell-check-startup-files nil
+          exec-path-from-shell-arguments '("-l" "-i")
+          exec-path-from-shell-variables my:shell-env-vars)
+    (exec-path-from-shell-initialize))
 
   ;; 2) Fallback PATH for CLI/edge cases (was in early-init; moved here)
   (when (eq system-type 'darwin)
@@ -639,7 +624,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/19 11:51:58 $
+  ;; $Lastupdate: 2025/09/20 06:21:29 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
