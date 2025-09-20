@@ -628,14 +628,16 @@ Core Emacs configuration with modular design.
 *** Header
 
 #+begin_src emacs-lisp :tangle lisp/README.el
-  ;;; --- Emacs Configuration -*- mode: emacs-lisp; lexical-binding:t; -*-
+  ;;; README.el --- Unified Emacs configuration entry -*- lexical-binding: t; -*-
 
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/20 14:44:34 $
+  ;; $Lastupdate: 2025/09/20 17:22:06 $
 
   ;;; Commentary:
+  ;; This file loads tangled configuration from `README.org`.
+  ;; It covers package management, modular design, and user-specific overrides.
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
@@ -668,6 +670,16 @@ Core Emacs configuration with modular design.
 #+begin_src emacs-lisp :tangle lisp/README.el
   ;;; ---------------------------------------------------------------------------
   ;;; Utility Functions
+
+  ;; Insert timestamp on save
+  (defun my:save-buffer-wrapper ()
+    "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
+    (interactive)
+    (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
+          (replace-match timestamp t nil)))))
 
   (defun my:auto-tangle-updated-src-blocks ()
     "Automatically tangle updated Org source blocks when saving `README.org`."
@@ -917,9 +929,10 @@ Core Emacs configuration with modular design.
                         nil 'make-it-local)))
   (add-hook 'emacs-startup-hook #'my:delete-old-backups)
   (add-hook 'find-file-hook #'my:auto-insert-lexical-binding)
-  (add-hook 'before-save-hook 'delete-trailing-whitespace)
   (add-hook 'prog-mode-hook 'goto-address-prog-mode)
   (add-hook 'text-mode-hook 'goto-address-mode)
+  (add-hook 'before-save-hook 'delete-trailing-whitespace)
+  (add-hook 'before-save-hook #'my:save-buffer-wrapper)
 #+end_src
 
 *** Fonts/UI/Keybind
@@ -1409,77 +1422,107 @@ Core Emacs configuration with modular design.
 *** Essential Configuration
 **** Minimum setting
 
-This section contains basic enhancements such as automatic timestamps, electric pairs,
-and relative line numbers.
-
-- Insert Timestamp on Save
-  The following function updates a `$Lastupdate` timestamp at the top of the buffer
-  whenever a file is saved.
-- Electric Pair Mode
-  Automatically insert matching parentheses, quotes, or brackets.
-- Relative Line Numbers
-  Enable relative line numbers in programming and text modes for easier navigation.
+This block configures basic editor behavior (electric pairs, relative line numbers),
+file management with TRAMP and backup handling, and secure authentication
+using GPG, auth-source, and password-store.
 
   #+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Basic Editor Configuration
+    ;; -----------------------------------------------------------------------------
+    ;;; Basic Editor Configuration
 
-  ;; Insert timestamp on save
-  (defun my:save-buffer-wrapper ()
-    "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
-    (interactive)
-    (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
-      (save-excursion
-        (goto-char (point-min))
-        (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
-          (replace-match timestamp t nil)))))
+    before-save-hook;; Electric pair mode - automatically insert matching brackets/quotes
+    (leaf electric-pair
+      :doc "Auto insert matching parentheses"
+      :init (electric-pair-mode 1))
 
-  (add-hook 'before-save-hook #'my:save-buffer-wrapper)
+    ;; Display relative line numbers in programming and text modes
+    (leaf display-line-numbers
+      :hook ((prog-mode text-mode) . display-line-numbers-mode)
+      :init (setq display-line-numbers-type 'relative))
 
-  ;; Electric pair mode - automatically insert matching brackets/quotes
-  (leaf electric-pair
-    :doc "Auto insert matching parentheses"
-    :init (electric-pair-mode 1))
+    ;; -----------------------------------------------------------------------------
+    ;;; File Management Configuration
 
-  ;; Display relative line numbers in programming and text modes
-  (leaf display-line-numbers
-    :hook ((prog-mode text-mode) . display-line-numbers-mode)
-    :init (setq display-line-numbers-type 'relative))
+    ;; TRAMP setup for remote file editing
+    (leaf tramp
+      :pre-setq
+      `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+        (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
+      :custom
+      `((tramp-default-method . "scp")
+        (tramp-verbose . 10)))
 
-  ;; -----------------------------------------------------------------------------
-  ;;; File Management Configuration
+    ;; Auto-save and backup configuration
+    (leaf files
+      :custom
+      `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+        (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
+        (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
+        (delete-old-versions . t)
+        (auto-save-visited-interval . 2))
+      :global-minor-mode auto-save-visited-mode)
 
-  ;; TRAMP setup for remote file editing
-  (leaf tramp
-    :pre-setq
-    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-    :custom
-    `((tramp-default-method . "scp")
-      (tramp-verbose . 10)))
+    ;; -----------------------------------------------------------------------------
+    ;;; Authentication Management
+    ;; Secure credential management using `auth-source`, `pass`, and GPG.
 
-  ;; Auto-save and backup configuration
-  (leaf files
-    :custom
-    `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
-      (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
-      (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
-      (delete-old-versions . t)
-      (auto-save-visited-interval . 2))
-    :global-minor-mode auto-save-visited-mode)
+    (leaf *authentication
+      :init
+      (defvar my:d:password-store
+        (or (getenv "PASSWORD_STORE_DIR")
+            (concat no-littering-var-directory "password-store/"))
+        "Path to the password store.")
+
+      ;; Validate environment variables
+      (unless (getenv "GPG_KEY_ID")
+        (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
+      (unless (file-directory-p my:d:password-store)
+        (warn "Password store directory does not exist: %s" my:d:password-store))
+
+      ;; GPG & auth-source
+      (leaf epa-file
+        :commands (epa-file-enable)
+        :init
+        ;; Configure pinentry mode safely before library load
+        (setq epa-pinentry-mode
+              (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
+        ;; Enable encrypted file support after startup; avoids init-time I/O
+        (add-hook 'emacs-startup-hook #'epa-file-enable))
+
+      (leaf auth-source
+        :init
+        ;; Don't force load; apply only when the library is actually loaded.
+        (with-eval-after-load 'auth-source
+          (setq auth-source-gpg-encrypt-to
+                (or (getenv "GPG_KEY_ID")
+    		(user-error "GPG_KEY_ID is not set. Authentication will not work.")))))
+
+      ;; Password-store and auth-source-pass
+      (leaf password-store :straight t)
+      (leaf auth-source-pass
+        :straight t
+        :commands (auth-source-pass-enable)
+        :hook (emacs-startup-hook .
+    			      (lambda ()
+    				(when (executable-find "pass")
+    				  (auth-source-pass-enable)))))
+
+      ;; Secure plstore
+      (leaf plstore
+        :init
+        ;; Set options only when plstore is loaded; avoids eager require.
+        (with-eval-after-load 'plstore
+          (setq plstore-secret-keys 'silent
+                plstore-encrypt-to (getenv "GPG_KEY_ID")))))
 #+end_src
 
 **** Editing Enhancements
 
-- Session Persistence
-  This section ensures that Emacs remembers various session details such as
-  cursor positions, recently opened files, and minibuffer history.
-- Parentheses and Pair Management
-  Provides structured editing and visual cues for parentheses.
-- Tree-Sitter Configuration
-  Enables modern syntax highlighting and parsing.
-- Editing Tools and Navigation
-  Includes tools for undo/redo, window switching, multiple cursors, Git, and search.
+This block sets up core editing features including cursor position restore,
+paren management, Tree-Sitter syntax, file auto-revert, keybinding hints,
+undo/redo, window navigation, macOS integration, dired extensions,
+search/navigation tools, Git support, syntax/spell checking, project management,
+and snippet handling.
 
 #+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
@@ -1717,9 +1760,10 @@ and relative line numbers.
 
 **** Completion Framework
 
-- Completion Framework
-  This section configures a *modern completion stack* built around =Vertico=, =Corfu=, and =Orderless=.
-  It also integrates *Prescient* for persistent sorting, *Consult* for navigation, and *Embark* for context-aware actions.
+This block sets up a comprehensive completion stack combining Vertico (UI),
+Corfu (popup completions), Orderless (fuzzy matching), Prescient (sorting),
+Marginalia (annotations), Consult (navigation), Embark (actions), Cape (sources),
+and Nerd Icons integration for a modern, context-aware completion experience.
 
 #+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
@@ -1842,56 +1886,156 @@ and relative line numbers.
       (nerd-icons-completion-mode)))
 #+end_src
 
-**** EWW configuration
+**** Org Mode Workflow and Styling
+
+This block configures a complete Org Mode setup with GTD-style task
+management, agenda and capture templates, refiling, PDF export, and
+visual enhancements via org-modern and org-superstar for a clean,
+productive workflow.
 
 #+begin_src emacs-lisp :tangle lisp/README.el
-  (leaf eww
-    :straight nil
-    :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
-  	   (eww-download-directory . "~/Downloads"))                ;; Download directory
+  ;; -----------------------------------------------------------------------------
+  ;;; Org Mode Configuration
+  ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
+
+  (leaf org
+    :straight t
+    :leaf-defer t
+    :preface
+    ;; Org directory setup
+    (defvar warning-suppress-types nil)
+    (unless (boundp 'my:d:cloud)
+      (setq my:d:cloud (concat no-littering-var-directory "./")))
+
+    ;; Utility: List all open Org files
+    (defun org-buffer-files ()
+      "Return a list of currently open Org files."
+      (delq nil
+            (mapcar #'buffer-file-name (org-buffer-list 'files))))
+
+    ;; Utility: Show a specific Org file in current buffer
+    (defun show-org-buffer (file)
+      "Display an Org FILE from `org-directory`."
+      (interactive (list (read-file-name "Org file: " org-directory nil t)))
+      (let ((filepath (expand-file-name file org-directory)))
+        (if (get-file-buffer filepath)
+            (switch-to-buffer (get-file-buffer filepath))
+          (find-file filepath))))
+
+    :custom ((org-support-shift-select . t))
+    :init
+    ;; Org directory
+    (setq org-directory (expand-file-name "org/" my:d:cloud))
+    (my:ensure-directory-exists org-directory)
+
+    ;; Link & cache settings
+    (setq org-return-follows-link t
+          org-mouse-1-follows-link t
+          warning-suppress-types (append warning-suppress-types '((org-element-cache)))
+          org-element-use-cache nil)
+
+    ;; PDF export (LaTeX)
+    (setq org-latex-pdf-process
+          '("pdflatex -interaction nonstopmode -output-directory %o %f"
+            "pdflatex -interaction nonstopmode -output-directory %o %f"))
+
+    ;; Key bindings for quick access to major Org files
+    :bind
+    (("C-M--" . (lambda () (interactive) (show-org-buffer "gtd.org")))
+     ("C-M-^" . (lambda () (interactive) (show-org-buffer "notes.org")))
+     ("C-M-~" . (lambda () (interactive) (show-org-buffer "kb.org"))))
+
     :config
-    ;; Save history and bookmarks
-    (setq eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:var))
-    (setq eww-history-limit 200)
+    ;; General Org settings
+    (setq org-agenda-files (list org-directory)
+          org-cycle-emulate-tab 'white-space
+          org-default-notes-file "notes.org"
+          org-enforce-todo-dependencies t
+          org-idle-time 0.3
+          org-log-done 'time
+          org-startup-folded 'content
+          org-startup-truncated nil
+          org-use-speed-commands t
+          org-link-frame-setup '((file . find-file)))
 
-    ;; Variable to store search term
-    (defvar eww-hl-search-word nil
-      "Word to highlight and search with isearch after EWW loads.")
+    ;; Agenda files (exclude archives)
+    (setq org-agenda-files
+          (seq-filter (lambda (file)
+                        (not (string-match-p "archives" file)))
+                      (directory-files-recursively org-directory "\\.org$")))
 
-    ;; Custom search command
-    (defun eww-search (term)
-      "Search TERM with `eww' and start `isearch' with TERM."
-      (interactive "sSearch terms: ")
-      (setq eww-hl-search-word term)
-      (eww-browse-url (concat eww-search-prefix term)))
+    ;; TODO keywords
+    (setq org-todo-keywords
+          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
 
-    ;; After rendering, automatically start isearch with the search term
-    (add-hook 'eww-after-render-hook
-              (lambda ()
-                (when eww-hl-search-word
-                  (isearch-mode t)
-                  (isearch-yank-string eww-hl-search-word)
-                  (setq eww-hl-search-word nil))))
+    ;; Refile targets
+    (setq org-refile-targets
+          '((nil :maxlevel . 3)
+            (org-buffer-files :maxlevel . 1)
+            (org-agenda-files :maxlevel . 3)))
 
-    ;; Toggle images on/off
-    (defun my:eww-toggle-images ()
-      "Toggle whether images are loaded in EWW."
-      (interactive)
-      (setq shr-inhibit-images (not shr-inhibit-images))
-      (eww-reload)))
+    ;; Capture templates
+    (setq org-capture-templates
+          `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
+             "* TODO %?\n %i\n %a")
+            ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
+             "* %?\nEntered on %U\n %i\n %a")
+            ("j" "Journal" entry (function org-journal-find-location)
+             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+            ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
+             "* MEETING with %? :meeting:\n  %U\n  %a"))))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Org Modern Styling
+  ;; Improves Org visual style with cleaner headings, ellipsis, and agenda tweaks.
+
+  (leaf org-modern
+    :straight t
+    :commands (org-modern-mode)
+    :hook (org-mode . org-modern-mode)
+    :custom
+    ;; Org appearance tweaks
+    (org-startup-indented . t)
+    (org-hide-leading-stars . t)
+    (org-auto-align-tags . nil)
+    (org-tags-column . 0)
+    (org-catch-invisible-edits . 'show-and-error)
+    (org-special-ctrl-a/e . t)
+    (org-insert-heading-respect-content . t)
+    (org-hide-emphasis-markers . t)
+    (org-pretty-entities . t)
+    (org-agenda-tags-column . 0)
+    (org-agenda-block-separator . ?─)
+    (org-agenda-time-grid .
+  			'((daily today require-timed)
+  			  (800 1000 1200 1400 1600 1800 2000)
+  			  " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
+    (org-agenda-current-time-string
+     . "⭠ now ─────────────────────────────────────────────────"))
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Org Superstar (Pretty Headings)
+  ;; Enhances the visual appearance of Org headlines by replacing the default
+  ;; asterisks with a set of Unicode symbols.
+
+  (leaf org-superstar
+    :after org
+    :custom
+    ;; Custom bullet symbols for different heading levels
+    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
+    ;; Keep leading stars (set to `t` to remove them completely)
+    (org-superstar-remove-leading-stars . nil)
+    :hook
+    ;; Enable `org-superstar-mode` automatically for Org buffers
+    (org-mode . org-superstar-mode))
 #+end_src
 
-**** Programming Utilities
+**** Development Environment
 
-- LSP Configuration
-  This configuration provides *Language Server Protocol (LSP)* support via two possible backends:
-  The variable `my:use-lsp` determines which backend is active.
-  - *Eglot* (default, lightweight).
-  - *LSP-Mode* (feature-rich, with UI enhancements).
-- Aidermacs (AI Integration)
-  Aidermacs integrates AI-assisted development using OpenRouter or OpenAI APIs.
-- Vterm
-  Enables a fast, full-featured terminal emulator inside Emacs.
+This block configures the programming environment with LSP support
+(Eglot or LSP-Mode), AI assistance via Aidermacs, integrated terminal (vterm),
+improved Makefile and compilation workflow, and Docker tooling
+including Dockerfile editing, container management, and TRAMP support.
 
 #+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
@@ -2078,173 +2222,13 @@ and relative line numbers.
       (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
 #+end_src
 
-*** Org-mode
-**** Org-mode Core Setup
+*** Utilities Package
+**** Org Extensions for Knowledge and Publishing
 
-- Org Mode Configuration
-  This section configures *Org mode* for a GTD-style workflow with tasks, notes, agendas, and capture templates.
-- Org Modern Styling
-  Improves Org mode visuals with cleaner headings, ellipsis, and agenda tweaks.
-- Org Superstar (Pretty Headings)
-  Enhances Org headlines by replacing the default asterisks with a set of Unicode symbols.
-
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
-  ;;; Org Mode Configuration
-  ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
-
-  (leaf org
-    :straight t
-    :leaf-defer t
-    :preface
-    ;; Org directory setup
-    (defvar warning-suppress-types nil)
-    (unless (boundp 'my:d:cloud)
-      (setq my:d:cloud (concat no-littering-var-directory "./")))
-
-    ;; Utility: List all open Org files
-    (defun org-buffer-files ()
-      "Return a list of currently open Org files."
-      (delq nil
-            (mapcar #'buffer-file-name (org-buffer-list 'files))))
-
-    ;; Utility: Show a specific Org file in current buffer
-    (defun show-org-buffer (file)
-      "Display an Org FILE from `org-directory`."
-      (interactive (list (read-file-name "Org file: " org-directory nil t)))
-      (let ((filepath (expand-file-name file org-directory)))
-        (if (get-file-buffer filepath)
-            (switch-to-buffer (get-file-buffer filepath))
-          (find-file filepath))))
-
-    :custom ((org-support-shift-select . t))
-    :init
-    ;; Org directory
-    (setq org-directory (expand-file-name "org/" my:d:cloud))
-    (my:ensure-directory-exists org-directory)
-
-    ;; Link & cache settings
-    (setq org-return-follows-link t
-          org-mouse-1-follows-link t
-          warning-suppress-types (append warning-suppress-types '((org-element-cache)))
-          org-element-use-cache nil)
-
-    ;; PDF export (LaTeX)
-    (setq org-latex-pdf-process
-          '("pdflatex -interaction nonstopmode -output-directory %o %f"
-            "pdflatex -interaction nonstopmode -output-directory %o %f"))
-
-    ;; Key bindings for quick access to major Org files
-    :bind
-    (("C-M--" . (lambda () (interactive) (show-org-buffer "gtd.org")))
-     ("C-M-^" . (lambda () (interactive) (show-org-buffer "notes.org")))
-     ("C-M-~" . (lambda () (interactive) (show-org-buffer "kb.org"))))
-
-    :config
-    ;; General Org settings
-    (setq org-agenda-files (list org-directory)
-          org-cycle-emulate-tab 'white-space
-          org-default-notes-file "notes.org"
-          org-enforce-todo-dependencies t
-          org-idle-time 0.3
-          org-log-done 'time
-          org-startup-folded 'content
-          org-startup-truncated nil
-          org-use-speed-commands t
-          org-link-frame-setup '((file . find-file)))
-
-    ;; Agenda files (exclude archives)
-    (setq org-agenda-files
-          (seq-filter (lambda (file)
-                        (not (string-match-p "archives" file)))
-                      (directory-files-recursively org-directory "\\.org$")))
-
-    ;; TODO keywords
-    (setq org-todo-keywords
-          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
-
-    ;; Refile targets
-    (setq org-refile-targets
-          '((nil :maxlevel . 3)
-            (org-buffer-files :maxlevel . 1)
-            (org-agenda-files :maxlevel . 3)))
-
-    ;; Capture templates
-    (setq org-capture-templates
-          `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
-             "* TODO %?\n %i\n %a")
-            ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
-             "* %?\nEntered on %U\n %i\n %a")
-            ("j" "Journal" entry (function org-journal-find-location)
-             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-            ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
-             "* MEETING with %? :meeting:\n  %U\n  %a"))))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Org Modern Styling
-  ;; Improves Org visual style with cleaner headings, ellipsis, and agenda tweaks.
-
-  (leaf org-modern
-    :straight t
-    :commands (org-modern-mode)
-    :hook (org-mode . org-modern-mode)
-    :custom
-    ;; Org appearance tweaks
-    (org-startup-indented . t)
-    (org-hide-leading-stars . t)
-    (org-auto-align-tags . nil)
-    (org-tags-column . 0)
-    (org-catch-invisible-edits . 'show-and-error)
-    (org-special-ctrl-a/e . t)
-    (org-insert-heading-respect-content . t)
-    (org-hide-emphasis-markers . t)
-    (org-pretty-entities . t)
-    (org-agenda-tags-column . 0)
-    (org-agenda-block-separator . ?─)
-    (org-agenda-time-grid .
-  			'((daily today require-timed)
-  			  (800 1000 1200 1400 1600 1800 2000)
-  			  " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
-    (org-agenda-current-time-string
-     . "⭠ now ─────────────────────────────────────────────────"))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Org Superstar (Pretty Headings)
-  ;; Enhances the visual appearance of Org headlines by replacing the default
-  ;; asterisks with a set of Unicode symbols.
-
-  (leaf org-superstar
-    :after org
-    :custom
-    ;; Custom bullet symbols for different heading levels
-    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
-    ;; Keep leading stars (set to `t` to remove them completely)
-    (org-superstar-remove-leading-stars . nil)
-    :hook
-    ;; Enable `org-superstar-mode` automatically for Org buffers
-    (org-mode . org-superstar-mode))
-#+end_src
-
-**** Additional Org-related packages
-
-- Org Babel (Code Execution in Org)
-  Enables execution of code blocks in multiple languages, including Emacs Lisp, shell, Python, R, Ditaa, and PlantUML.
-- Org Journal
-  Daily journaling with seamless integration into the agenda.
-- Org Roam (Networked Note-Taking)
-  Org Roam provides a personal knowledge base with backlinks and graph-based navigation.
-- Org Download (Image Management)
-  Enables drag-and-drop and clipboard-based image insertion into Org files. Images are stored in a =pictures= subdirectory.
-- TOC-Org (Table of Contents)
-  Automatically generates and updates tables of contents for Org and Markdown files.
-- Org Cliplink (Insert Clickable Links)
-  Fetches webpage titles and inserts properly formatted Org links.
-- Org LaTeX Export Configuration
-  Defines common LaTeX packages and sets up a multi-pass =pdflatex= pipeline with BibTeX support.
-- Org Export to Hugo
-  Supports exporting Org content to Hugo-compatible Markdown.
-- Markdown Mode
-  Enables =markdown-mode= for editing =.md= files.
+This block extends Org Mode with Babel for code execution, journaling,
+networked notes via Org-roam, image management, automatic TOC, web
+link insertion, advanced LaTeX/PDF export, Hugo blog publishing, and
+Markdown editing support, creating a complete writing and publishing workflow.
 
 #+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
@@ -2378,15 +2362,54 @@ and relative line numbers.
     :mode ("\\.md\\'" . markdown-mode))
 #+end_src
 
-*** Utilities Package
-**** Extra Utilities
+**** EWW Web Browser Enhancements
 
-- AUCTeX (LaTeX Editing)
-  This section configures *AUCTeX* for advanced LaTeX editing with PDF workflows.
-  It uses =latexmk= for automated compilation and integrates with =synctex= for forward/inverse search.
-- Authentication Management
-  This section handles secure authentication and credential management using =auth-source=, =pass=, and GPG.
-  It validates environment variables, integrates with =auth-source-pass=, and configures GPG encryption.
+This block customizes Emacs' built-in web browser (EWW) with DuckDuckGo
+search, history and bookmark management, automatic search highlighting,
+and a toggle for loading images.
+
+#+begin_src emacs-lisp :tangle lisp/README.el
+  (leaf eww
+    :straight nil
+    :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
+  	   (eww-download-directory . "~/Downloads"))                ;; Download directory
+    :config
+    ;; Save history and bookmarks
+    (setq eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:var))
+    (setq eww-history-limit 200)
+
+    ;; Variable to store search term
+    (defvar eww-hl-search-word nil
+      "Word to highlight and search with isearch after EWW loads.")
+
+    ;; Custom search command
+    (defun eww-search (term)
+      "Search TERM with `eww' and start `isearch' with TERM."
+      (interactive "sSearch terms: ")
+      (setq eww-hl-search-word term)
+      (eww-browse-url (concat eww-search-prefix term)))
+
+    ;; After rendering, automatically start isearch with the search term
+    (add-hook 'eww-after-render-hook
+              (lambda ()
+                (when eww-hl-search-word
+                  (isearch-mode t)
+                  (isearch-yank-string eww-hl-search-word)
+                  (setq eww-hl-search-word nil))))
+
+    ;; Toggle images on/off
+    (defun my:eww-toggle-images ()
+      "Toggle whether images are loaded in EWW."
+      (interactive)
+      (setq shr-inhibit-images (not shr-inhibit-images))
+      (eww-reload)))
+#+end_src
+
+**** LaTeX Editing with AUCTeX
+
+This block configures AUCTeX for efficient LaTeX editing, enabling
+automatic parsing, PDF workflows, and integration with `latexmk`
+for continuous and automated document compilation.
 
 #+begin_src emacs-lisp :tangle lisp/README.el
   ;; -----------------------------------------------------------------------------
@@ -2409,59 +2432,6 @@ and relative line numbers.
                  '("LatexMk" "latexmk -pdf -interaction=nonstopmode -synctex=1 %s"
                    TeX-run-TeX nil t :help "Run latexmk for automated PDF generation")
                  TeX-command-list))))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; Authentication Management
-  ;; Secure credential management using `auth-source`, `pass`, and GPG.
-
-  (leaf *authentication
-    :init
-    (defvar my:d:password-store
-      (or (getenv "PASSWORD_STORE_DIR")
-          (concat no-littering-var-directory "password-store/"))
-      "Path to the password store.")
-
-    ;; Validate environment variables
-    (unless (getenv "GPG_KEY_ID")
-      (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
-    (unless (file-directory-p my:d:password-store)
-      (warn "Password store directory does not exist: %s" my:d:password-store))
-
-    ;; GPG & auth-source
-    (leaf epa-file
-      :commands (epa-file-enable)
-      :init
-      ;; Configure pinentry mode safely before library load
-      (setq epa-pinentry-mode
-            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
-      ;; Enable encrypted file support after startup; avoids init-time I/O
-      (add-hook 'emacs-startup-hook #'epa-file-enable))
-
-    (leaf auth-source
-      :init
-      ;; Don't force load; apply only when the library is actually loaded.
-      (with-eval-after-load 'auth-source
-        (setq auth-source-gpg-encrypt-to
-              (or (getenv "GPG_KEY_ID")
-  		(user-error "GPG_KEY_ID is not set. Authentication will not work.")))))
-
-    ;; Password-store and auth-source-pass
-    (leaf password-store :straight t)
-    (leaf auth-source-pass
-      :straight t
-      :commands (auth-source-pass-enable)
-      :hook (emacs-startup-hook .
-  			      (lambda ()
-  				(when (executable-find "pass")
-  				  (auth-source-pass-enable)))))
-
-    ;; Secure plstore
-    (leaf plstore
-      :init
-      ;; Set options only when plstore is loaded; avoids eager require.
-      (with-eval-after-load 'plstore
-        (setq plstore-secret-keys 'silent
-              plstore-encrypt-to (getenv "GPG_KEY_ID")))))
 #+end_src
 
 *** Footer
