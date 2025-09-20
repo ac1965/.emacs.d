@@ -166,26 +166,32 @@ Performance optimizations and environment setup executed before main initializat
   (setq file-name-handler-alist nil)
 
   (defun my--restore-file-name-handlers ()
-    "Restore `file-name-handler-alist` safely after startup."
+    "Restore `file-name-handler-alist` exactly once after startup."
     (setq file-name-handler-alist
           (delete-dups (append file-name-handler-alist
-                               my--orig-file-name-handler-alist))))
+                               my--orig-file-name-handler-alist)))
+    ;; Remove self to avoid duplicate runs when loading init fragments.
+    (remove-hook 'emacs-startup-hook #'my--restore-file-name-handlers))
+
   (add-hook 'emacs-startup-hook #'my--restore-file-name-handlers)
-  (add-hook 'after-init-hook     #'my--restore-file-name-handlers)
 
   ;;;; Native Compilation (Emacs 30+)
   (when (featurep 'native-compile)
+    ;; Keep logs quiet and prefer JIT on demand.
     (setopt native-comp-async-report-warnings-errors 'silent
-            native-comp-jit-compilation t
-            native-comp-deferred-compilation t)
+            native-comp-jit-compilation t)
+    ;; Be forward/backward compatible: only touch deprecated var if it exists.
+    (when (boundp 'native-comp-deferred-compilation)
+      (setopt native-comp-deferred-compilation t))
 
-    ;; Store comp cache in XDG cache dir
+    ;; Prefer adding XDG ELN path rather than replacing defaults.
     (let* ((base (or (getenv "XDG_CACHE_HOME")
                      (expand-file-name "~/.cache/")))
            (eln  (expand-file-name "emacs/eln-cache/" base)))
-      (setopt native-comp-eln-load-path (list eln))
       (unless (file-directory-p eln)
-        (make-directory eln t))))
+        (make-directory eln t))
+      ;; Append if absent; keep default search paths intact.
+      (add-to-list 'native-comp-eln-load-path eln t)))
 
   ;;;; Environment (macOS only)
   (when (eq system-type 'darwin)
@@ -617,7 +623,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/20 12:00:20 $
+  ;; $Lastupdate: 2025/09/20 12:38:22 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
