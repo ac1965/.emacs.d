@@ -6,8 +6,8 @@
 #+LANGUAGE: en
 #+OPTIONS: toc:3 num:t
 #+STARTUP: overview
-#+PROPERTY: header-args :results silent :exports code :mkdirp yes
-#+PROPERTY: header-args:emacs-lisp :lexical t :comments link
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no
+#+PROPERTY: header-args:emacs-lisp :lexical t
 #+PROPERTY: header-args:emacs-lisp+ :noweb no-export
 
 # Tangling policy (documentation only; does not force all blocks):
@@ -152,10 +152,11 @@ Performance optimizations and environment setup executed before main initializat
   (setq gc-cons-threshold most-positive-fixnum
         gc-cons-percentage 0.6)
 
+  ;; Restore GC thresholds exactly as they were before startup tuning.
   (add-hook 'emacs-startup-hook
             (lambda ()
-              (setq gc-cons-threshold (* 64 1024 1024) ; 64 MiB
-                    gc-cons-percentage 0.1)))
+              (setq gc-cons-threshold my--orig-gc-cons-threshold
+                    gc-cons-percentage my--orig-gc-cons-percentage)))
 
   ;; Improve subprocess I/O throughput
   (setopt read-process-output-max (* 4 1024 1024)) ; 4 MiB
@@ -246,11 +247,19 @@ Performance optimizations and environment setup executed before main initializat
                     (setq frame-resize-pixelwise t)
                     (set-frame-parameter f 'fullscreen 'maximized))))))
 
+  ;; Prefer frame parameters to avoid flicker on first paint.
+  (setq default-frame-alist
+        (append '((menu-bar-lines . 0)
+                  (tool-bar-lines . 0)
+                  (vertical-scroll-bars))
+                default-frame-alist))
+
+  ;; Fallback for already-created frames (TTY/daemon cases).
   (when (display-graphic-p)
-    ;; Disable heavy chrome before first paint
     (menu-bar-mode -1)
     (tool-bar-mode -1)
     (scroll-bar-mode -1))
+
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -280,6 +289,8 @@ Minimal init.el that loads the main configuration from README.org.
 
   ;; Bootstrap straight.el
   (setq straight-base-dir  my:d:cache)
+  ;; Make straight the default for packages declared via use-package/leaf.
+  (setq straight-use-package-by-default t)
 
   (defvar bootstrap-version)
   (let* ((bootstrap-file
@@ -329,9 +340,8 @@ Minimal init.el that loads the main configuration from README.org.
             delete-old-versions     t
             version-control         t)
 
-    ;; Replace audible beep with visible bell (flash)
-    (setq ring-bell-function #'ignore
-          visible-bell t)
+    ;; Fully silence the bell; keep behavior consistent across UIs.
+    (setq ring-bell-function #'ignore)
 
     ;; Performance (fix: `idle-time` -> `idle-update-delay`)
     ;; Smaller value updates redisplay during idle more frequently.
@@ -495,21 +505,22 @@ Personal and device-specific settings.
   (leaf sis
     :straight t
     :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
-  				    sis-global-respect-mode sis-global-inline-mode)
-    :hook (emacs-startup-hook .
-  			    (lambda ()
-  			      ;; Defer IME wiring until after startup; avoid blocking init.
-  			      (when (fboundp 'sis-ism-lazyman-config)
-  				(sis-ism-lazyman-config
-  				 "com.apple.keylayout.ABC"
-  				 "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
-  				 'macism))
-  			      (when (fboundp 'sis-global-cursor-color-mode)
-  				(sis-global-cursor-color-mode t))
-  			      (when (fboundp 'sis-global-respect-mode)
-  				(sis-global-respect-mode t))
-  			      (when (fboundp 'sis-global-inline-mode)
-  				(sis-global-inline-mode t)))))
+                                      sis-global-respect-mode sis-global-inline-mode)
+    ;; Use `emacs-startup` (not `emacs-startup-hook`) in leaf's :hook syntax.
+    :hook (emacs-startup .
+  		       (lambda ()
+  			 ;; Defer IME wiring until after startup; avoid blocking init.
+  			 (when (fboundp 'sis-ism-lazyman-config)
+  			   (sis-ism-lazyman-config
+  			    "com.apple.keylayout.ABC"
+  			    "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+  			    'macism))
+  			 (when (fboundp 'sis-global-cursor-color-mode)
+  			   (sis-global-cursor-color-mode t))
+  			 (when (fboundp 'sis-global-respect-mode)
+  			   (sis-global-respect-mode t))
+  			 (when (fboundp 'sis-global-inline-mode)
+  			   (sis-global-inline-mode t)))))
 
   (add-hook 'after-load-theme-hook
             (lambda ()
@@ -623,7 +634,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/20 13:49:14 $
+  ;; $Lastupdate: 2025/09/20 14:29:56 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
