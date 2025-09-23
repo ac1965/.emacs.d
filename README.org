@@ -10,11 +10,17 @@
 #+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export
 
 # Tangling policy (for documentation only; block-level :tangle always takes precedence)
-# - early-init.el : Startup performance & low-level toggles (GC, file-name-handler, native-comp)
-# - init.el       : Package bootstrap + leaf configuration entry
-# - user.el       : Personal, machine-specific overrides (optional)
-# - lisp/README.el: Unified tangled config for test/byte-compile
-# - Makefile      : Reproducible tangle/clean/compile pipeline
+# - early-init.el  : Startup performance & low-level toggles (GC, file-name-handler, native-comp)
+# - init.el        : Package bootstrap + leaf configuration entry
+# - lisp/
+# ├─ ui.el         : Appearance and theme-related configuration
+# ├─ completion.el : Completion and minibuffer (vertico, orderless, marginalia, etc.)
+# ├─ org.el        : Org mode (org, org-roam, org-agenda)
+# ├─ lsp.el        : LSP / programming support (eglot, lsp-mode, treesit, flycheck, etc.)
+# ├─ tools.el      : Utility tools (vterm, magit, git-gutter, etc.)
+# └─ etc.el        : Miscellaneous (uncategorized or general settings)
+# - user.el        : Personal, machine-specific overrides (optional)
+# - Makefile       : Reproducible tangle/clean/compile pipeline
 
 * Introduction
 :PROPERTIES:
@@ -143,6 +149,11 @@ build-emacs.sh --native-compilation
    :CUSTOM_ID: structure
    :END:
 
+This configuration is a **modular full-stack setup for Emacs 30+**, structured with:
+- `early-init.el` and `init.el` for core bootstrapping,
+- modular configs under `lisp/`,
+- user-specific configs under `personal/`.
+
 ** Core
 
 *** Early Initialization
@@ -151,6 +162,17 @@ build-emacs.sh --native-compilation
    :END:
 
 Performance optimizations and environment setup executed before main initialization.
+- Purpose: Startup performance optimization and minimal environment setup.
+- Features:
+  - Enforces Emacs 30+.
+  - Disables `package.el` (using `straight.el` instead).
+  - GC and `file-name-handler` temporarily relaxed and restored after startup.
+  - Enlarges `read-process-output-max` for faster subprocess I/O.
+  - Native compilation settings with XDG ELN cache support.
+  - macOS-specific libgccjit environment fixes.
+  - Prepares config directories (`my:d:cache`, `my:d:etc`, `my:d:var`, etc.).
+  - UI tweaks (fullscreen, no menu/tool/scroll bars).
+  - Bootstraps `straight.el` with profile lockfiles.
 
 #+begin_src emacs-lisp :tangle early-init.el
   ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
@@ -330,6 +352,18 @@ Performance optimizations and environment setup executed before main initializat
    :END:
 
 Minimal init.el that loads the main configuration from README.org.
+- Purpose: Main configuration loader and base setup.
+- Features:
+  - Unbinds disruptive defaults; integrates CAPE completion.
+  - Loads `leaf.el` with `straight.el`.
+  - Configures basic behaviors (scrolling, auto-save, relative line numbers, etc.).
+  - Uses `no-littering` for clean paths.
+  - macOS integration: shell env sync (`exec-path-from-shell`) and PATH fallback.
+  - Dired enhancements (GNU ls).
+  - GC optimization via `gcmh`.
+  - Enables `hydra`.
+  - Loads `custom.el` and `personal/` user-specific configs.
+  - Loads modular configs from `lisp/`.
 
 #+begin_src emacs-lisp :tangle init.el
   ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
@@ -453,7 +487,7 @@ Minimal init.el that loads the main configuration from README.org.
     (add-to-list 'load-path lisp-dir)
 
     ;; Load modularized files instead of monolithic README.el
-    (dolist (file '("ui" "completion" "org" "lsp" "tools" "etc"))
+    (dolist (file '("etc" "ui" "completion" "org" "lsp" "tools"))
       (let ((path (expand-file-name (format "%s.el" file) lisp-dir)))
         (when (file-exists-p path)
           (load path nil 'nomessage)))))
@@ -462,195 +496,59 @@ Minimal init.el that loads the main configuration from README.org.
   ;;; init.el ends here
 #+end_src
 
-** User Configuration
-
-:PROPERTIES:
-   :CUSTOM_ID: user-defined
-   :END:
-
-Personal and device-specific settings.
-
-#+begin_src emacs-lisp :tangle personal/user.el
-  ;;; Personal Configuration -*- lexical-binding: t; -*-
-  ;;; Commentary:
-  ;; Personal settings and device-specific configurations
-  ;;; Code:
-
-  ;; Personal Settings
-  (leaf *personals
-    :init
-    (setq user-full-name "YAMASHITA, Takao"
-  	user-mail-address "tjy1965@gmail.com"
-  	inhibit-compacting-font-caches t
-  	plstore-cache-passphrase-for-symmetric-encryption t)
-
-    ;; Font overrides (optional; only apply if available)
-    (setq my:font-default "JetBrains Mono NL"
-  	my:font-alt "Noto Sans JP"
-  	my:emoji-font "Apple Color Emoji"
-  	my:font-size 16)
-
-    (defvar my:d:cloud
-      (expand-file-name "Documents/" (getenv "HOME"))
-      "Cloud storage base directory.")
-    (defvar my:d:blog
-      (concat my:d:cloud "devel/repos/mysite/")
-      "Blog directory.")
-    (defvar my:f:capture-blog-file
-      (expand-file-name "all-posts.org" my:d:blog))
-    (defvar my:d:excluded-directories
-      (list (expand-file-name "Library/Accounts" (getenv "HOME")))
-      "Exclude directory.")
-
-    (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:blog))
-
-    ;; Clean up load-path (exclude unwanted directories)
-    (setq load-path (seq-remove (lambda (dir)
-                                  (member dir my:d:excluded-directories))
-                                load-path)))
-
-  ;; Smart Input Source (auto switch input source, e.g. English <-> Japanese)
-  ;; macOS requirement: `brew tap laishulu/homebrew && brew install macism`
-  (leaf sis
-    :straight t
-    :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
-                                      sis-global-respect-mode sis-global-inline-mode)
-    ;; Use `emacs-startup` (not `emacs-startup-hook`) in leaf's :hook syntax.
-    :hook (emacs-startup .
-  		       (lambda ()
-  			 ;; Defer IME wiring until after startup; avoid blocking init.
-  			 (when (fboundp 'sis-ism-lazyman-config)
-  			   (sis-ism-lazyman-config
-  			    "com.apple.keylayout.ABC"
-  			    "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
-  			    'macism))
-  			 (when (fboundp 'sis-global-cursor-color-mode)
-  			   (sis-global-cursor-color-mode t))
-  			 (when (fboundp 'sis-global-respect-mode)
-  			   (sis-global-respect-mode t))
-  			 (when (fboundp 'sis-global-inline-mode)
-  			   (sis-global-inline-mode t)))))
-
-  (add-hook 'after-load-theme-hook
-            (lambda ()
-              (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
-
-  ;; Logitech MX Ergo S Configuration
-  (leaf *device/MX_ErgoS
-    :init
-    (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
-          mouse-wheel-progressive-speed nil
-          scroll-conservatively 10000
-          scroll-margin 2
-          scroll-preserve-screen-position t
-          mac-mouse-wheel-smooth-scroll t
-          mouse-wheel-tilt-scroll t
-          mouse-wheel-flip-direction nil)
-
-    (global-set-key [mouse-2] 'yank)
-    (global-set-key [mouse-4] 'previous-buffer)
-    (global-set-key [mouse-5] 'next-buffer))
-
-  ;; Apple Music Controller (macOS only)
-  (when (eq system-type 'darwin)
-    (leaf apple-music
-      :doc "Apple Music control via AppleScript"
-      :init
-      ;; Core functions for AppleScript execution
-      (defun apple-music-osascript-async (script &optional callback)
-        "Run AppleScript SCRIPT asynchronously."
-        (let* ((proc-name "apple-music-async")
-               (buffer-name "*Apple Music Async*")
-               (osascript-cmd (list "osascript" "-e" script))
-               (proc (apply 'start-process proc-name buffer-name osascript-cmd)))
-          (when callback
-            (set-process-sentinel
-             proc
-             (lambda (process event)
-               (when (string= event "finished\n")
-                 (with-current-buffer (process-buffer process)
-                   (let ((output (string-trim (buffer-string))))
-                     (funcall callback output)))
-                 (kill-buffer (process-buffer process))))))))
-
-      (defun apple-music-osascript-sync (script)
-        "Run AppleScript SCRIPT synchronously."
-        (string-trim
-         (shell-command-to-string
-          (format "osascript -e '%s'" script))))
-
-      ;; Player controls
-      (defun apple-music-play-pause ()
-        "Toggle play/pause."
-        (interactive)
-        (apple-music-osascript-async "tell application \"Music\" to playpause"))
-
-      (defun apple-music-next-track ()
-        "Skip to next track."
-        (interactive)
-        (apple-music-osascript-async "tell application \"Music\" to next track"))
-
-      (defun apple-music-previous-track ()
-        "Go to previous track."
-        (interactive)
-        (apple-music-osascript-async "tell application \"Music\" to previous track"))
-
-      ;; Apple Music playlist support
-      (defun apple-music-get-playlists ()
-        "Return a list of playlist names from Apple Music."
-        (split-string
-         (apple-music-osascript-sync
-  	"tell application \"Music\" to get name of playlists")
-         ", "))
-
-      (defun apple-music-play-playlist (playlist)
-        "Play the Apple Music playlist named PLAYLIST."
-        (interactive
-         (list (completing-read "Playlist: " (apple-music-get-playlists))))
-        (apple-music-osascript-async
-         (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
-
-      ;; Hydra interface
-      (defhydra hydra-apple-music (:hint nil)
-        "
-  Apple Music:
-  _p_: Play/Pause  _n_: Next  _b_: Back  _l_: Playlist  _q_: Quit
-  "
-        ("p" apple-music-play-pause)
-        ("n" apple-music-next-track)
-        ("b" apple-music-previous-track)
-        ("l" apple-music-play-playlist)
-        ("q" nil "quit"))
-
-      (global-set-key (kbd "C-c m") 'hydra-apple-music/body)))
-
-  (provide 'user)
-  ;;; user.el ends here
-#+end_src
-
 ** Configuration
 :PROPERTIES:
    :CUSTOM_ID: core
    :END:
 
 Core Emacs configuration with modular design.
+- `etc.el`: Hydra (text scaling), global keybindings, TRAMP, backups, authentication.
+- `completion.el`: Modern completion stack (Vertico, Corfu, Orderless, Prescient, Consult, Embark, Cape, Nerd Icons).
+- `lsp.el`: Development environment (Eglot/LSP-Mode, Aidermacs AI, vterm, Makefile helpers, Docker, TRAMP container).
+- `org.el`: Org GTD workflow (agenda, capture, refile, journal, Roam, Hugo, export styling).
+- `tools.el`: Utilities (scratch buffer, lexical-binding auto-insert, async helpers, backups cleanup, editing tools, EWW, LaTeX with AUCTeX).
+- `ui.el`: Fonts, Nerd Icons, ligatures, ef-themes, doom-modeline, padding, tabs, Treemacs, session saving, window layout helpers.
 
 *** Header
-
 #+begin_src emacs-lisp :tangle lisp/etc.el
-  ;;; README.el --- Unified Emacs configuration entry -*- lexical-binding: t; -*-
+  ;;; Etc Setup -*- lexical-binding: t; -*-
+  ;;; Hydra for Text Scaling
+  ;; Provides quick keybindings to increase, decrease, or reset text size.
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
-  ;; Licensed under the GNU General Public License version 3 or later.
+#+end_src
 
-  ;; $Lastupdate: 2025/09/23 17:26:36 $
+#+begin_src emacs-lisp :tangle lisp/completion.el
+  ;;; Completion Setup -*- lexical-binding: t; -*-
+  ;;; Completion Frameworks
+  ;; - Configures a modern completion stack: Vertico, Corfu, Orderless, etc.
 
-  ;;; Commentary:
-  ;; This file loads tangled configuration from `README.org`.
-  ;; It covers package management, modular design, and user-specific overrides.
-  ;; It includes package management, user-specific settings, and modular design.
+#+end_src
 
-  ;;; Code:
+#+begin_src emacs-lisp :tangle lisp/lsp.el
+  ;;; --- -*- lexical-binding: t; -*-
+  ;;; LSP Configuration (Eglot or LSP-Mode)
+  ;; Provides Language Server Protocol (LSP) support for intelligent code features.
+  ;; `my:use-lsp` determines which backend to use:
+  ;; - `eglot` (default, lightweight)
+  ;; - `lsp`   (LSP-Mode, feature-rich)
+
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/org.el
+  ;;; Org Setup -*- lexical-binding: t; -*-a
+  ;;; Org Mode Configuration
+  ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
+
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/tools.el
+  ;;; Tools Setup -*- lexical-binding: t; -*-
+
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/ui.el
+  ;;; UI,Font Setup -*- lexical-binding: t; -*-
+
 #+end_src
 
 *** Miscellaneous Helper Functions
@@ -678,10 +576,6 @@ Core Emacs configuration with modular design.
   Various hooks for startup, file opening, saving, and mode-specific behaviors.
 
 #+begin_src emacs-lisp :tangle lisp/tools.el
-  ;;; tools -*- lexical-binding: t; -*-
-  ;;; Commentary:
-  ;;; Code:
-
   ;;; ---------------------------------------------------------------------------
   ;;; Utility Functions
 
@@ -731,7 +625,7 @@ Core Emacs configuration with modular design.
   (add-hook 'kill-buffer-hook #'my:create-scratch-buffer)
 
   ;; Simple no-prompt revert for the current buffer.
-  (defun my:revert-buffer-quick ()
+  (defun my/revert-buffer-quick ()
     "Revert current buffer without confirmation."
     (interactive)
     (revert-buffer :ignore-auto :noconfirm))
@@ -926,9 +820,9 @@ Core Emacs configuration with modular design.
   ;;; Org Mode Folding Shortcuts
   (with-eval-after-load 'org
     (require 'org-fold)
-    (defun my-org-fold-subtree ()   (interactive) (org-fold-subtree t))
-    (defun my-org-unfold-subtree () (interactive) (org-show-subtree))
-    (defun my-org-toggle-fold ()
+    (defun my/org-fold-subtree ()   (interactive) (org-fold-subtree t))
+    (defun my/org-unfold-subtree () (interactive) (org-show-subtree))
+    (defun my/org-toggle-fold ()
       "Toggle fold for current Org subtree."
       (interactive)
       (save-excursion
@@ -936,9 +830,9 @@ Core Emacs configuration with modular design.
         (if (org-fold-folded-p (point))
             (org-show-subtree)
           (org-fold-subtree t))))
-    (define-key org-mode-map (kbd "C-c C-f") #'my-org-fold-subtree)
-    (define-key org-mode-map (kbd "C-c C-e") #'my-org-unfold-subtree)
-    (define-key org-mode-map (kbd "C-c C-t") #'my-org-toggle-fold))
+    (define-key org-mode-map (kbd "C-c C-f") #'my/org-fold-subtree)
+    (define-key org-mode-map (kbd "C-c C-e") #'my/org-unfold-subtree)
+    (define-key org-mode-map (kbd "C-c C-t") #'my/org-toggle-fold))
 
   ;; -----------------------------------------------------------------------------
   ;;; Hooks
@@ -969,8 +863,6 @@ Core Emacs configuration with modular design.
   Configures programming ligatures (e.g., `->`, `=>`, `===`) using the `ligature` package.
 
 #+begin_src emacs-lisp :tangle lisp/ui.el
-  ;;; Font Setup -*- lexical-binding: t; -*-
-
   ;; -----------------------------------------------------------------------------
   ;; Default font configuration
 
@@ -1036,7 +928,7 @@ Core Emacs configuration with modular design.
   ;; Adjust font-lock faces after loading a theme
   (add-hook 'after-load-theme-hook
             (lambda ()
-              (when (font-exists-p my:font-alt)
+              (when (my/font-exists-p my:font-alt)
                 (custom-theme-set-faces
                  'user
                  `(font-lock-comment-face ((t (:family ,my:font-alt :slant italic))))
@@ -1281,10 +1173,6 @@ Core Emacs configuration with modular design.
   - *Miscellaneous* (restart, execute commands)
 
 #+begin_src emacs-lisp :tangle lisp/etc.el
-  ;;; Etc Setup -*- lexical-binding: t; -*-
-  ;;; Hydra for Text Scaling
-  ;; Provides quick keybindings to increase, decrease, or reset text size.
-
   (defhydra hydra-text-scale (:hint nil :color red)
     "
   ^Text Scaling^
@@ -1328,7 +1216,7 @@ Core Emacs configuration with modular design.
     (leaf-keys
      ;; Function keys and help
      (("<f1>"    . help)
-      ("<f5>"    . revert-buffer-quick)
+      ("<f5>"    . my/revert-buffer-quick)
       ("<f8>"    . treemacs)
       ("C-h"     . backward-delete-char)
 
@@ -1772,10 +1660,6 @@ Marginalia (annotations), Consult (navigation), Embark (actions), Cape (sources)
 and Nerd Icons integration for a modern, context-aware completion experience.
 
 #+begin_src emacs-lisp :tangle lisp/completion.el
-  ;;; Completion Setup -*- lexical-binding: t; -*-
-  ;;; Completion Frameworks
-  ;; - Configures a modern completion stack: Vertico, Corfu, Orderless, etc.
-
   (leaf completion-settings
     :init
     ;; Prescient: persistent sorting & filtering
@@ -1840,13 +1724,13 @@ and Nerd Icons integration for a modern, context-aware completion experience.
       :custom (consult-preview-key . "M-."))
 
     ;; Embark keybindings inside Vertico
-    (defun my:setup-embark-vertico-directory ()
+    (defun my/setup-embark-vertico-directory ()
       "Integrate embark commands inside Vertico minibuffer."
       (when (and (boundp 'vertico-map) (require 'embark nil t))
         (define-key vertico-map (kbd "C-.") #'embark-act)
         (define-key vertico-map (kbd "C-;") #'embark-dwim)))
 
-    (add-hook 'vertico-mode-hook #'my:setup-embark-vertico-directory)
+    (add-hook 'vertico-mode-hook #'my/setup-embark-vertico-directory)
 
     ;; Corfu: popup completions
     (leaf corfu
@@ -1901,10 +1785,6 @@ visual enhancements via org-modern and org-superstar for a clean,
 productive workflow.
 
 #+begin_src emacs-lisp :tangle lisp/org.el
-  ;;; Org Setup -*- lexical-binding: t; -*-a
-  ;;; Org Mode Configuration
-  ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
-
   (leaf org
     :straight t
     :leaf-defer t
@@ -1915,13 +1795,13 @@ productive workflow.
       (setq my:d:cloud (concat no-littering-var-directory "./")))
 
     ;; Utility: List all open Org files
-    (defun org-buffer-files ()
+    (defun my/org-buffer-files ()
       "Return a list of currently open Org files."
       (delq nil
             (mapcar #'buffer-file-name (org-buffer-list 'files))))
 
     ;; Utility: Show a specific Org file in current buffer
-    (defun show-org-buffer (file)
+    (defun my/show-org-buffer (file)
       "Display an Org FILE from `org-directory`."
       (interactive (list (read-file-name "Org file: " org-directory nil t)))
       (let ((filepath (expand-file-name file org-directory)))
@@ -1942,9 +1822,9 @@ productive workflow.
 
     ;; Key bindings for quick access to major Org files
     :bind
-    (("C-M--" . (lambda () (interactive) (show-org-buffer "gtd.org")))
-     ("C-M-^" . (lambda () (interactive) (show-org-buffer "notes.org")))
-     ("C-M-~" . (lambda () (interactive) (show-org-buffer "kb.org"))))
+    (("C-M--" . (lambda () (interactive) (my/show-org-buffer "gtd.org")))
+     ("C-M-^" . (lambda () (interactive) (my/show-org-buffer "notes.org")))
+     ("C-M-~" . (lambda () (interactive) (my/show-org-buffer "kb.org"))))
 
     :config
     ;; General Org settings
@@ -1972,7 +1852,7 @@ productive workflow.
     ;; Refile targets
     (setq org-refile-targets
           '((nil :maxlevel . 3)
-            (org-buffer-files :maxlevel . 1)
+            (my/org-buffer-files :maxlevel . 1)
             (org-agenda-files :maxlevel . 3)))
 
     ;; Capture templates
@@ -1981,7 +1861,7 @@ productive workflow.
              "* TODO %?\n %i\n %a")
             ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
              "* %?\nEntered on %U\n %i\n %a")
-            ("j" "Journal" entry (function org-journal-find-location)
+            ("j" "Journal" entry (function my/org-journal-find-location)
              "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
              "* MEETING with %? :meeting:\n  %U\n  %a"))))
@@ -2039,13 +1919,6 @@ improved Makefile and compilation workflow, and Docker tooling
 including Dockerfile editing, container management, and TRAMP support.
 
 #+begin_src emacs-lisp :tangle lisp/lsp.el
-  ;;; --- -*- lexical-binding: t; -*-
-  ;;; LSP Configuration (Eglot or LSP-Mode)
-  ;; Provides Language Server Protocol (LSP) support for intelligent code features.
-  ;; `my:use-lsp` determines which backend to use:
-  ;; - `eglot` (default, lightweight)
-  ;; - `lsp`   (LSP-Mode, feature-rich)
-
   (defcustom my:use-lsp 'eglot
     "LSP backend selection.
   Valid values are:
@@ -2169,13 +2042,13 @@ including Dockerfile editing, container management, and TRAMP support.
        (compilation-skip-threshold . 2))
       :init
       ;; Prefer `make -k` when a Makefile is present; do not clobber globally.
-      (defun my:set-make-compile-command ()
+      (defun my/set-make-compile-command ()
         "Use `make -k` by default when in a Makefile/project."
         (when (or (derived-mode-p 'makefile-mode)
                   (locate-dominating-file default-directory "Makefile")
                   (locate-dominating-file default-directory "GNUmakefile"))
           (setq-local compile-command "make -k")))
-      (add-hook 'after-change-major-mode-hook #'my:set-make-compile-command))
+      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
     ;; Colorize ANSI escapes in *Compilation* buffer.
     (leaf ansi-color
       :hook (compilation-filter . (lambda ()
@@ -2261,7 +2134,7 @@ Markdown editing support, creating a complete writing and publishing workflow.
     :config
     (setq org-journal-dir (concat org-directory "/journal")
           org-journal-enable-agenda-integration t)
-    (defun org-journal-find-location ()
+    (defun my/org-journal-find-location ()
       "Open today's journal entry."
       (org-journal-new-entry t)))
 
@@ -2347,14 +2220,14 @@ Markdown editing support, creating a complete writing and publishing workflow.
     :require org-capture
     :defvar (org-capture-templates)
     :config
-    (defun generate-safe-filename ()
+    (defun my/generate-safe-filename ()
       "Generate a unique, safe filename for Hugo export."
       (format "%s-%s" (format-time-string "%Y")
               (string-trim (shell-command-to-string "uuidgen | cut -c1-8"))))
     (add-to-list 'org-capture-templates
                  '("b" "Create new blog post" entry
                    (file+headline my:f:capture-blog-file "blog")
-                   "** TODO %?\n  :PROPERTIES:\n  :EXPORT_FILE_NAME: %(generate-safe-filename)\n  :EXPORT_DATE:\n  :EXPORT_HUGO_TAGS:\n  :EXPORT_HUGO_CATEGORIES:\n  :EXPORT_HUGO_LASTMOD:\n  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false\n  :END:\n\n")))
+                   "** TODO %?\n  :PROPERTIES:\n  :EXPORT_FILE_NAME: %(my/generate-safe-filename)\n  :EXPORT_DATE:\n  :EXPORT_HUGO_TAGS:\n  :EXPORT_HUGO_CATEGORIES:\n  :EXPORT_HUGO_LASTMOD:\n  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false\n  :END:\n\n")))
 
   ;; -----------------------------------------------------------------------------
   ;;; Markdown Mode
@@ -2445,6 +2318,220 @@ for continuous and automated document compilation.
 
 *** Footer
 #+begin_src emacs-lisp :tangle lisp/etc.el
-  (provide 'README)
-  ;;; README.el ends here
+
+  (provide 'etc)
+  ;;; etc.el ends here
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/completion.el
+
+  (provide 'completion)
+  ;;; completion.el ends here
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/lsp.el
+
+  (provide 'lsp)
+  ;;; lsp.el ends here
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/org.el
+
+  (provide 'org)
+  ;;; org.el ends here
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/tools.el
+
+  (provide 'tools)
+  ;;; tools.el ends here
+#+end_src
+
+#+begin_src emacs-lisp :tangle lisp/ui.el
+
+  (provide 'ui)
+  ;;; ui.el ends here
+#+end_src
+** User Configuration
+
+:PROPERTIES:
+   :CUSTOM_ID: user-defined
+   :END:
+
+Personal and device-specific settings.
+- Personal information (name, email).
+- Font settings (monospace, alt, emoji).
+- Directory definitions (cloud, blog).
+- Input method integration with `sis` (English ↔ Japanese).
+- Logitech MX Ergo S device tuning.
+- Apple Music control via AppleScript and Hydra.
+
+#+begin_src emacs-lisp :tangle personal/user.el
+  ;;; Personal Configuration -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Personal settings and device-specific configurations
+  ;;; Code:
+
+  ;; Personal Settings
+  (leaf *personals
+    :init
+    (setq user-full-name "YAMASHITA, Takao"
+  	user-mail-address "tjy1965@gmail.com"
+  	inhibit-compacting-font-caches t
+  	plstore-cache-passphrase-for-symmetric-encryption t)
+
+    ;; Font overrides (optional; only apply if available)
+    (setq my:font-default "JetBrains Mono NL"
+  	my:font-alt "Noto Sans JP"
+  	my:emoji-font "Apple Color Emoji"
+  	my:font-size 16)
+
+    (defvar my:d:cloud
+      (expand-file-name "Documents/" (getenv "HOME"))
+      "Cloud storage base directory.")
+    (defvar my:d:blog
+      (concat my:d:cloud "devel/repos/mysite/")
+      "Blog directory.")
+    (defvar my:f:capture-blog-file
+      (expand-file-name "all-posts.org" my:d:blog))
+    (defvar my:d:excluded-directories
+      (list (expand-file-name "Library/Accounts" (getenv "HOME")))
+      "Exclude directory.")
+
+    (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:blog))
+
+    ;; Clean up load-path (exclude unwanted directories)
+    (setq load-path (seq-remove (lambda (dir)
+                                  (member dir my:d:excluded-directories))
+                                load-path)))
+
+  ;; Smart Input Source (auto switch input source, e.g. English <-> Japanese)
+  ;; macOS requirement: `brew tap laishulu/homebrew && brew install macism`
+  (leaf sis
+    :straight t
+    :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
+                                      sis-global-respect-mode sis-global-inline-mode)
+    ;; Use `emacs-startup` (not `emacs-startup-hook`) in leaf's :hook syntax.
+    :hook (emacs-startup .
+  		       (lambda ()
+  			 ;; Defer IME wiring until after startup; avoid blocking init.
+  			 (when (fboundp 'sis-ism-lazyman-config)
+  			   (sis-ism-lazyman-config
+  			    "com.apple.keylayout.ABC"
+  			    "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+  			    'macism))
+  			 (when (fboundp 'sis-global-cursor-color-mode)
+  			   (sis-global-cursor-color-mode t))
+  			 (when (fboundp 'sis-global-respect-mode)
+  			   (sis-global-respect-mode t))
+  			 (when (fboundp 'sis-global-inline-mode)
+  			   (sis-global-inline-mode t)))))
+
+  (add-hook 'after-load-theme-hook
+            (lambda ()
+              (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
+
+  ;; Logitech MX Ergo S Configuration
+  (leaf *device/MX_ErgoS
+    :init
+    (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
+          mouse-wheel-progressive-speed nil
+          scroll-conservatively 10000
+          scroll-margin 2
+          scroll-preserve-screen-position t
+          mac-mouse-wheel-smooth-scroll t
+          mouse-wheel-tilt-scroll t
+          mouse-wheel-flip-direction nil)
+
+    (global-set-key [mouse-2] 'yank)
+    (global-set-key [mouse-4] 'previous-buffer)
+    (global-set-key [mouse-5] 'next-buffer))
+
+  ;; Apple Music Controller (macOS only)
+  (when (eq system-type 'darwin)
+    (leaf apple-music
+      :doc "Apple Music control via AppleScript"
+      :after hydra
+      :bind (("C-c m" . hydra-apple-music/body))
+      :config
+      ;; Core functions for AppleScript execution
+      (defun my/apple-music-osascript-async (script &optional callback)
+        "Run AppleScript SCRIPT asynchronously, calling CALLBACK with output."
+        (let* ((proc-name "apple-music-async")
+               (buffer-name "*Apple Music Async*")
+               (osascript-cmd (list "osascript" "-e" script))
+               (proc (apply #'start-process proc-name buffer-name osascript-cmd)))
+          (when callback
+            (set-process-sentinel
+             proc
+             (lambda (process event)
+               (when (string= event "finished\n")
+                 (with-current-buffer (process-buffer process)
+                   (let ((output (string-trim (buffer-string))))
+                     (funcall callback output)))
+                 (kill-buffer (process-buffer process))))))))
+
+      (defun my/apple-music-osascript-sync (script)
+        "Run AppleScript SCRIPT synchronously and return trimmed output."
+        (string-trim
+         (shell-command-to-string
+          (format "osascript -e '%s'" script))))
+
+      ;; Player controls
+      (defun my/apple-music-play-pause ()
+        "Toggle play/pause."
+        (interactive)
+        (my/apple-music-osascript-async "tell application \"Music\" to playpause"))
+
+      (defun my/apple-music-next-track ()
+        "Skip to next track."
+        (interactive)
+        (my/apple-music-osascript-async "tell application \"Music\" to next track"))
+
+      (defun my/apple-music-previous-track ()
+        "Go to previous track."
+        (interactive)
+        (my/apple-music-osascript-async "tell application \"Music\" to previous track"))
+
+      ;; Track info
+      (defun my/apple-music-current-track-info ()
+        "Return current track info: Title — Artist [Album]."
+        (interactive)
+        (let ((info (my/apple-music-osascript-sync
+                     "tell application \"Music\" \
+  to (get name of current track) & \" — \" & (get artist of current track) & \" [\" & (get album of current track) & \"]\"")))
+          (if (called-interactively-p 'any)
+              (message "%s" info)
+            info)))
+
+      ;; Apple Music playlist support
+      (defun my/apple-music-get-playlists ()
+        "Return a list of playlist names from Apple Music."
+        (split-string
+         (my/apple-music-osascript-sync
+          "tell application \"Music\" to get name of playlists")
+         ", "))
+
+      (defun my/apple-music-play-playlist (playlist)
+        "Play the Apple Music playlist named PLAYLIST."
+        (interactive
+         (list (completing-read "Playlist: " (my/apple-music-get-playlists))))
+        (my/apple-music-osascript-async
+         (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
+
+      ;; Hydra interface
+      (defhydra hydra-apple-music (:hint nil)
+        "
+  Apple Music:
+  _p_: Play/Pause  _n_: Next  _b_: Back  _l_: Playlist  _i_: Info  _q_: Quit
+  "
+        ("p" my/apple-music-play-pause)
+        ("n" my/apple-music-next-track)
+        ("b" my/apple-music-previous-track)
+        ("l" my/apple-music-play-playlist)
+        ("i" my/apple-music-current-track-info)
+        ("q" nil "quit"))))
+
+  (provide 'user)
+  ;;; user.el ends here
 #+end_src
