@@ -158,14 +158,15 @@ Performance optimizations and environment setup executed before main initializat
   (setq gc-cons-threshold most-positive-fixnum
         gc-cons-percentage 0.6)
 
-  ;; Restore GC thresholds exactly as they were before startup tuning.
-  (defun my--restore-gc-settings ()
-    "Restore GC thresholds once after startup."
-    (setq gc-cons-threshold my--orig-gc-cons-threshold
-          gc-cons-percentage my--orig-gc-cons-percentage)
-    (remove-hook 'emacs-startup-hook #'my--restore-gc-settings))
-
-  (add-hook 'emacs-startup-hook #'my--restore-gc-settings)
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              "Restore GC thresholds once after startup."
+  	    (setq gc-cons-threshold my--orig-gc-cons-threshold
+  		  gc-cons-percentage my--orig-gc-cons-percentage)
+  	    ;; Print how long Emacs took to start and how many GCs happened
+              (message "Emacs loaded in %.2f seconds with %d garbage collections."
+                       (float-time (time-subtract after-init-time before-init-time))
+                       gcs-done)))
 
   ;; Improve subprocess I/O throughput
   (setopt read-process-output-max (* 4 1024 1024)) ; 4 MiB
@@ -314,21 +315,15 @@ Minimal init.el that loads the main configuration from README.org.
   ;; Delegates configuration to README.org via Org Babel
   ;;; Code:
 
-  ;; Unbind disruptive or unused default keys (clearer API)
-  (keymap-global-unset "C-z")       ; suspend-frame
-  (keymap-global-unset "C-x C-z")   ; suspend-frame alias
-  (keymap-global-unset "M-z")       ; zap-to-char (destructive)
-  (keymap-global-unset "M-m")       ; free a handy prefix
-  (keymap-global-unset "M-/")       ;; clear destructive default
+  ;;;; Disable disruptive default key bindings."
+  (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
+      (keymap-global-unset k))
   (when (fboundp 'cape-dabbrev)
-    (keymap-global-set "M-/" #'cape-dabbrev))  ;; keep muscle memory with completion-friendly dabbrev
+    (keymap-global-set "M-/" #'cape-dabbrev))
 
-  ;; Integrate straight.el with leaf
-  (straight-use-package 'leaf)
-  (straight-use-package 'leaf-keywords)
-  (straight-use-package 'leaf-convert)
-  (straight-use-package 'blackout)
-  (straight-use-package 'org)
+  ;;;; Integrate straight.el with leaf
+  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout org))
+    (straight-use-package pkg))
   (require 'org)
 
   (eval-when-compile
@@ -336,6 +331,7 @@ Minimal init.el that loads the main configuration from README.org.
     (require 'leaf-keywords))
   (leaf-keywords-init)
 
+  ;;;; Base settings
   (leaf emacs
     :straight nil
     :init
@@ -349,28 +345,17 @@ Minimal init.el that loads the main configuration from README.org.
             create-lockfiles        nil
             make-backup-files       t
             delete-old-versions     t
-            version-control         t)
-
-    ;; Fully silence the bell; keep behavior consistent across UIs.
-    (setq ring-bell-function #'ignore)
-
-    ;; Performance (fix: `idle-time` -> `idle-update-delay`)
-    ;; Smaller value updates redisplay during idle more frequently.
-    (setq idle-update-delay 0.2)
-
-    ;; Electric pairs
+            version-control         t
+            idle-update-delay       0.2
+            ring-bell-function      #'ignore
+            display-line-numbers-type 'relative
+            auto-save-default       t
+            auto-save-visited-interval 2)
     (electric-pair-mode 1)
-
-    ;; Line numbers
-    (setq display-line-numbers-type 'relative)
     (add-hook 'prog-mode-hook #'display-line-numbers-mode)
-
-    ;; Auto-save
-    (setq auto-save-default t
-          auto-save-visited-interval 2)
     (auto-save-visited-mode 1))
 
-  ;; No-Littering
+  ;;;; No-Littering
   (leaf no-littering
     :straight t
     :require t
@@ -384,10 +369,11 @@ Minimal init.el that loads the main configuration from README.org.
   ;; 1) Import shell environment for GUI Emacs
   (leaf exec-path-from-shell
     :straight t
-    :if (memq window-system '(mac ns))           ;; Only on macOS GUI/NS
+    :if (memq window-system '(mac ns))
     :init
     (defvar my:shell-env-vars
-      '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
+      '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
+        "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
     :config
     (setq exec-path-from-shell-check-startup-files nil
           exec-path-from-shell-arguments '("-l" "-i")
@@ -410,16 +396,17 @@ Minimal init.el that loads the main configuration from README.org.
       (setq insert-directory-program "gls"
             dired-use-ls-dired t)))
 
-  ;; Garbage Collection Magic Hack
+  ;;;; Garbage Collection Magic Hack
   (leaf gcmh
     :straight t
     :hook (emacs-startup . gcmh-mode))
 
+  ;;;; Hydra
   (leaf hydra
     :straight t
     :commands (defhydra))
 
-  ;; Load custom-file if it exists (safe fallback, no errors)
+  ;;;; custom.el
   (setq custom-file my:f:custom)
   (when (file-exists-p custom-file)
     (load custom-file nil 'nomessage))
@@ -485,7 +472,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/23 11:26:18 $
+  ;; $Lastupdate: 2025/09/23 13:43:22 $
 
   ;;; Commentary:
   ;; This file loads tangled configuration from `README.org`.
