@@ -487,7 +487,7 @@ Personal and device-specific settings.
     ;; Font overrides (optional; only apply if available)
     (setq my:font-default "JetBrains Mono NL"
   	my:font-alt "Noto Sans JP"
-  	my:emoji-font "MesloLGS NF"
+  	my:emoji-font "Apple Color Emoji"
   	my:font-size 16)
 
     (defvar my:d:cloud
@@ -643,7 +643,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/23 15:49:02 $
+  ;; $Lastupdate: 2025/09/23 17:26:36 $
 
   ;;; Commentary:
   ;; This file loads tangled configuration from `README.org`.
@@ -973,91 +973,64 @@ Core Emacs configuration with modular design.
 
   ;; -----------------------------------------------------------------------------
   ;; Default font configuration
-  (defvar my:font-default
-    (or (getenv "EMACS_FONT_FAMILY")
-        (cond
-         ((eq system-type 'windows-nt) "Consolas")
-         ((eq system-type 'darwin) "SF Mono")
-         (t "Monospace")))
-    "Primary default font for Emacs.")
 
-  (defvar my:font-alt
-    (or (getenv "EMACS_FONT_ALT")
-        (cond
-         ((eq system-type 'windows-nt) "Consolas")
-         ((eq system-type 'darwin) "SF Mono")
-         (t "Monospace")))
-    "Alternate font, e.g., for comments or variable-pitch text.")
+  (defun my/system-default-font ()
+    "Return a default monospace font family depending on the OS."
+    (cond
+     ((eq system-type 'darwin)   "Menlo")     ;; macOS
+     ((eq system-type 'gnu/linux) "Monospace") ;; Linux generic
+     ((eq system-type 'windows-nt) "Consolas") ;; Windows
+     (t "Monospace"))) ;; fallback
 
-  (defvar my:font-size
-    (let ((env (getenv "EMACS_FONT_SIZE")))
-      (if env
-          (string-to-number env)
-        (if (and (display-graphic-p)
-                 (display-pixel-width)
-                 (> (display-pixel-width) 1920))
-            24
-          20)))
-    "Default font size (in pt).")
-
-  (defvar my:emoji-font "Noto Color Emoji"
-    "Default font for displaying emoji.")
+  (defun my/system-emoji-font ()
+    "Return a default emoji font family depending on the OS."
+    (cond
+     ((eq system-type 'darwin)    "Apple Color Emoji")  ;; macOS
+     ((eq system-type 'gnu/linux) "Noto Color Emoji")   ;; Linux
+     ((eq system-type 'windows-nt) "Segoe UI Emoji")    ;; Windows
+     (t "Noto Color Emoji"))) ;; fallback
 
   ;; -----------------------------------------------------------------------------
   ;; Utility function to check if a font is available on the system.
 
-  (defun font-exists-p (font-name)
+  (defun my/font-exists-p (font-name)
     "Return t if FONT-NAME is available on the system."
     (when (find-font (font-spec :family font-name))
       t))
 
-  (defun font-setup (&optional frame)
-    "Apply font settings to FRAME or the current frame."
-    (with-selected-frame (or frame (selected-frame))
-      (when (display-graphic-p)
-        ;; --- Default font setup
-        (when (and (font-exists-p my:font-default)
-                   (numberp my:font-size))
-          (set-face-attribute 'default nil
-                              :family my:font-default
-                              :height (* my:font-size 10))
-          (message "✅ Default font: %s (%dpt)"
-                   my:font-default my:font-size))
+  (defun my/font-setup ()
+    "Apply font settings using user overrides if available, and log to *Messages*."
+    (when (display-graphic-p)
+      ;; Default font
+      (set-face-attribute 'default nil
+                          :family (or my:font-default (my/system-default-font))
+                          :height (* 10 (or my:font-size 16)))
+      (message "[Font] ✔ Default: %s (%dpt)"
+               (or my:font-default (my/system-default-font))
+               (or my:font-size 16))
 
-        ;; --- Variable-pitch font setup
-        (when (font-exists-p my:font-alt)
-          (set-face-attribute 'variable-pitch nil
-                              :family my:font-alt)
-          (set-fontset-font t 'japanese-jisx0208
-                            (font-spec :family my:font-alt))
-          (message "✅ Variable-pitch font (JP): %s"
-                   my:font-alt))
+      ;; Variable-pitch font
+      (set-face-attribute 'variable-pitch nil
+                          :family (or my:font-alt (my/system-default-font)))
+      (message "[Font] ✔ Variable-pitch: %s"
+               (or my:font-alt (my/system-default-font)))
 
-        ;; --- Emoji font setup
-        (when (font-exists-p my:emoji-font)
-          (set-fontset-font t 'emoji
-                            (font-spec :family my:emoji-font)
-                            nil 'prepend)
-          (message "✅ Emoji font: %s" my:emoji-font)))))
+      ;; Emoji font
+      (set-fontset-font t 'emoji
+                        (font-spec :family (or my:emoji-font (my/system-emoji-font))))
+      (message "[Font] ✔ Emoji: %s"
+               (or my:emoji-font (my/system-emoji-font)))))
 
-
-  ;; Unified hook for both GUI and daemon sessions
-  (add-hook 'after-make-frame-functions #'font-setup)
-
-  ;; Apply fonts immediately when running in GUI mode
-  (when (display-graphic-p)
-    (font-setup))
-
-  (defun my:font-setup-on-frame (frame)
-    "Apply `font-setup` to newly created FRAME in daemon sessions."
+  (defun my/font-setup-on-frame (frame)
+    "Apply `my/font-setup` to newly created FRAME in daemon sessions."
     (when (display-graphic-p frame)
       (with-selected-frame frame
-        (font-setup))))
+        (my/font-setup))))
 
+  ;; Ensure font setup runs once, respecting daemon vs GUI
   (if (daemonp)
-      (add-hook 'after-make-frame-functions #'my:font-setup-on-frame)
-    (when (display-graphic-p)
-      (font-setup)))
+      (add-hook 'after-make-frame-functions #'my/font-setup-on-frame)
+    (add-hook 'after-init-hook #'my/font-setup))
 
   ;; -----------------------------------------------------------------------------
   ;; Adjust font-lock faces after loading a theme
@@ -1097,8 +1070,8 @@ Core Emacs configuration with modular design.
   (leaf ligature
     :straight t
     :config
-    (when (and (font-exists-p my:font-default)
-               (font-exists-p my:ligature-font))
+    (when (and (my/font-exists-p my:font-default)
+               (my/font-exists-p my:ligature-font))
       (ligature-set-ligatures 'prog-mode
                               '("->" "=>" "::" "===" "!=" "&&" "||"
                                 ":::" "!!" "??" "-->" "<--" "->>" "<<-"))
