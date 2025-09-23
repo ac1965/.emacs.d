@@ -159,10 +159,13 @@ Performance optimizations and environment setup executed before main initializat
         gc-cons-percentage 0.6)
 
   ;; Restore GC thresholds exactly as they were before startup tuning.
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (setq gc-cons-threshold my--orig-gc-cons-threshold
-                    gc-cons-percentage my--orig-gc-cons-percentage)))
+  (defun my--restore-gc-settings ()
+    "Restore GC thresholds once after startup."
+    (setq gc-cons-threshold my--orig-gc-cons-threshold
+          gc-cons-percentage my--orig-gc-cons-percentage)
+    (remove-hook 'emacs-startup-hook #'my--restore-gc-settings))
+
+  (add-hook 'emacs-startup-hook #'my--restore-gc-settings)
 
   ;; Improve subprocess I/O throughput
   (setopt read-process-output-max (* 4 1024 1024)) ; 4 MiB
@@ -253,11 +256,11 @@ Performance optimizations and environment setup executed before main initializat
                     (setq frame-resize-pixelwise t)
                     (set-frame-parameter f 'fullscreen 'maximized))))))
 
-  ;; Prefer frame parameters to avoid flicker on first paint.
+  ;; Avoid accidental truthy value; ensure scroll bars are disabled on first paint.
   (setq default-frame-alist
         (append '((menu-bar-lines . 0)
                   (tool-bar-lines . 0)
-                  (vertical-scroll-bars))
+                  (vertical-scroll-bars . nil))
                 default-frame-alist))
 
   ;; Fallback for already-created frames (TTY/daemon cases).
@@ -381,7 +384,7 @@ Minimal init.el that loads the main configuration from README.org.
   ;; 1) Import shell environment for GUI Emacs
   (leaf exec-path-from-shell
     :straight t
-    ;; Environment Variables
+    :if (memq window-system '(mac ns))           ;; Only on macOS GUI/NS
     :init
     (defvar my:shell-env-vars
       '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID" "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
@@ -482,7 +485,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/23 10:07:26 $
+  ;; $Lastupdate: 2025/09/23 11:26:18 $
 
   ;;; Commentary:
   ;; This file loads tangled configuration from `README.org`.
@@ -564,6 +567,12 @@ Core Emacs configuration with modular design.
     (run-at-time 0.1 nil #'my:create-scratch-buffer))
 
   (add-hook 'kill-buffer-hook #'my:create-scratch-buffer)
+
+  ;; Simple no-prompt revert for the current buffer.
+  (defun my:revert-buffer-quick ()
+    "Revert current buffer without confirmation."
+    (interactive)
+    (revert-buffer :ignore-auto :noconfirm))
 
   ;; -----------------------------------------------------------------------------
   ;;; Automatic Lexical Binding
@@ -841,36 +850,41 @@ Core Emacs configuration with modular design.
       t))
 
   (defun font-setup (&optional frame)
-    "Apply font settings to FRAME or current frame."
-    (let ((target-frame (or frame (selected-frame))))
-      (when (display-graphic-p target-frame)
-        ;; --- Default font
+    "Apply font settings to FRAME or the current frame."
+    (with-selected-frame (or frame (selected-frame))
+      (when (display-graphic-p)
+        ;; --- Default font setup
         (when (and (font-exists-p my:font-default)
                    (numberp my:font-size))
-          (set-face-attribute 'default target-frame
+          (set-face-attribute 'default nil
                               :family my:font-default
                               :height (* my:font-size 10))
           (message "✅ Default font: %s (%dpt)"
                    my:font-default my:font-size))
 
-        ;; --- Variable-pitch font
+        ;; --- Variable-pitch font setup
         (when (font-exists-p my:font-alt)
-          (set-face-attribute 'variable-pitch target-frame
+          (set-face-attribute 'variable-pitch nil
                               :family my:font-alt)
           (set-fontset-font t 'japanese-jisx0208
                             (font-spec :family my:font-alt))
           (message "✅ Variable-pitch font (JP): %s"
                    my:font-alt))
 
-        ;; --- Emoji font
+        ;; --- Emoji font setup
         (when (font-exists-p my:emoji-font)
           (set-fontset-font t 'emoji
                             (font-spec :family my:emoji-font)
                             nil 'prepend)
           (message "✅ Emoji font: %s" my:emoji-font)))))
 
-  (add-hook 'window-setup-hook #'font-setup)
+
+  ;; Unified hook for both GUI and daemon sessions
   (add-hook 'after-make-frame-functions #'font-setup)
+
+  ;; Apply fonts immediately when running in GUI mode
+  (when (display-graphic-p)
+    (font-setup))
 
   (defun my:font-setup-on-frame (frame)
     "Apply `font-setup` to newly created FRAME in daemon sessions."
@@ -888,10 +902,10 @@ Core Emacs configuration with modular design.
   (add-hook 'after-load-theme-hook
             (lambda ()
               (when (font-exists-p my:font-alt)
-                (set-face-attribute 'font-lock-comment-face nil
-                                    :family my:font-alt :slant 'italic)
-                (set-face-attribute 'font-lock-doc-face nil
-                                    :family my:font-alt :slant 'italic)
+                (custom-theme-set-faces
+                 'user
+                 `(font-lock-comment-face ((t (:family ,my:font-alt :slant italic))))
+                 `(font-lock-doc-face     ((t (:family ,my:font-alt :slant italic)))))
                 (message "Comment/doc font set to: %s" my:font-alt))))
 
   ;; -----------------------------------------------------------------------------
@@ -1034,8 +1048,9 @@ Core Emacs configuration with modular design.
           ;; Use default battery format; doom-modeline reads display-battery-mode.
           )
     :config
-    (display-time-mode 1)     ;; enable time in mode-line
-    (display-battery-mode 1)) ;; enable battery in mode-line
+    (display-time-mode 1)
+    (when (fboundp 'display-battery-mode)
+      (display-battery-mode 1)))
 
   ;; ---------------------------------------------------------------------------
   ;;; Tab Bar & Tab Line
@@ -1279,11 +1294,6 @@ using GPG, auth-source, and password-store.
     ;; -----------------------------------------------------------------------------
     ;;; Basic Editor Configuration
 
-    ;; Electric pair mode - automatically insert matching brackets/quotes
-    (leaf electric-pair
-      :doc "Auto insert matching parentheses"
-      :init (electric-pair-mode 1))
-
     ;; Display relative line numbers in programming and text modes
     (leaf display-line-numbers
       :hook ((prog-mode text-mode) . display-line-numbers-mode)
@@ -1307,9 +1317,7 @@ using GPG, auth-source, and password-store.
       `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
         (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
         (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
-        (delete-old-versions . t)
-        (auto-save-visited-interval . 2))
-      :global-minor-mode auto-save-visited-mode)
+        (delete-old-versions . t)))
 
     ;; -----------------------------------------------------------------------------
     ;;; Authentication Management
@@ -1342,9 +1350,11 @@ using GPG, auth-source, and password-store.
         :init
         ;; Don't force load; apply only when the library is actually loaded.
         (with-eval-after-load 'auth-source
-          (setq auth-source-gpg-encrypt-to
-                (or (getenv "GPG_KEY_ID")
-    		(user-error "GPG_KEY_ID is not set. Authentication will not work.")))))
+          (let ((key (getenv "GPG_KEY_ID")))
+    	(if key
+                (setq auth-source-gpg-encrypt-to key)
+    	  (display-warning 'auth-source
+    			   "GPG_KEY_ID is not set. Authentication backends may be limited.")))))
 
       ;; Password-store and auth-source-pass
       (leaf password-store :straight t)
@@ -1404,7 +1414,9 @@ and snippet handling.
   ;; Structured editing for Emacs Lisp
   (leaf paredit
     :straight t
-    :hook (emacs-lisp-mode . enable-paredit-mode))
+    :hook (emacs-lisp-mode . (lambda ()
+                               (enable-paredit-mode)
+                               (electric-pair-local-mode -1))))  ;; prevent double pairing
 
   ;; Highlight matching parentheses
   (leaf paren
@@ -1537,7 +1549,7 @@ and snippet handling.
     :after treesit)
   (leaf aggressive-indent
     :straight t
-    :global-minor-mode global-aggressive-indent-mode)
+    :hook (prog-mode . aggressive-indent-mode))
   (leaf delsel
     :global-minor-mode delete-selection-mode)
 
@@ -1638,6 +1650,7 @@ and Nerd Icons integration for a modern, context-aware completion experience.
       :global-minor-mode prescient-persist-mode)
 
     ;; Vertico: vertical completion UI
+    (leaf posframe :straight t)  ;; Ensure dependency is installed
     (leaf vertico
       :straight t
       :global-minor-mode vertico-mode
@@ -1790,13 +1803,7 @@ productive workflow.
     ;; Link & cache settings
     (setq org-return-follows-link t
           org-mouse-1-follows-link t
-          warning-suppress-types (append warning-suppress-types '((org-element-cache)))
-          org-element-use-cache nil)
-
-    ;; PDF export (LaTeX)
-    (setq org-latex-pdf-process
-          '("pdflatex -interaction nonstopmode -output-directory %o %f"
-            "pdflatex -interaction nonstopmode -output-directory %o %f"))
+          warning-suppress-types (append warning-suppress-types '((org-element-cache))))
 
     ;; Key bindings for quick access to major Org files
     :bind
@@ -1904,8 +1911,14 @@ including Dockerfile editing, container management, and TRAMP support.
   ;; - `eglot` (default, lightweight)
   ;; - `lsp`   (LSP-Mode, feature-rich)
 
-  (defvar my:use-lsp 'eglot
-    "LSP backend selection. Use `eglot` (default) or `lsp`.")
+  (defcustom my:use-lsp 'eglot
+    "LSP backend selection.
+  Valid values are:
+  - `eglot` (default, lightweight)
+  - `lsp`   (full-featured LSP-Mode)."
+    :type '(choice (const :tag "Eglot" eglot)
+                   (const :tag "LSP-Mode" lsp))
+    :group 'my)
 
   ;; -----------------------------------------------------------------------------
   ;;; Eglot (Lightweight LSP Client)
@@ -2244,8 +2257,8 @@ and a toggle for loading images.
       "Word to highlight and search with isearch after EWW loads.")
 
     ;; Custom search command
-    (defun eww-search (term)
-      "Search TERM with `eww' and start `isearch' with TERM."
+    (defun my:eww-search (term)
+      "Search TERM with `eww' and start `isearch`."
       (interactive "sSearch terms: ")
       (setq eww-hl-search-word term)
       (eww-browse-url (concat eww-search-prefix term)))
@@ -2328,21 +2341,27 @@ Personal and device-specific settings.
   	my:emoji-font "MesloLGS NF"
   	my:font-size 16)
 
-    (defconst my:d:cloud "~/Documents/")
-    (defconst my:d:blog (concat my:d:cloud "devel/repos/mysite/"))
-    (defconst my:f:capture-blog-file (expand-file-name "all-posts.org" my:d:blog))
-
-    (defvar my:excluded-directories '("/Users/ac1965/Library/Accounts"))
+    (defvar my:d:cloud
+      (expand-file-name "Documents/" (getenv "HOME"))
+      "Cloud storage base directory.")
+    (defvar my:d:blog
+      (concat my:d:cloud "devel/repos/mysite/")
+      "Blog directory.")
+    (defvar my:f:capture-blog-file
+      (expand-file-name "all-posts.org" my:d:blog))
+    (defvar my:d:excluded-directories
+      (list (expand-file-name "Library/Accounts" (getenv "HOME")))
+      "Exclude directory.")
 
     (mapc #'my:ensure-directory-exists (list my:d:cloud my:d:blog))
 
     ;; Clean up load-path (exclude unwanted directories)
     (setq load-path (seq-remove (lambda (dir)
-                                  (member dir my:excluded-directories))
+                                  (member dir my:d:excluded-directories))
                                 load-path)))
 
   ;; Smart Input Source (auto switch input source, e.g. English <-> Japanese)
-  ;; macOS requirement: `brew tap laishulu/homebre && brew install macism`
+  ;; macOS requirement: `brew tap laishulu/homebrew && brew install macism`
   (leaf sis
     :straight t
     :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
