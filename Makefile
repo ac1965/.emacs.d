@@ -11,7 +11,7 @@ ELFILES     = $(wildcard $(LISPDIR)/*.el) $(wildcard $(PERSONALDIR)/*.el)
 ELCFILES    = $(ELFILES:.el=.elc)
 
 # Default target
-all: compile
+all: tangle
 
 # Tangle all .el files from README.org
 tangle: $(ORG)
