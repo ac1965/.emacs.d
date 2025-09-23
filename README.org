@@ -123,7 +123,9 @@ build-emacs.sh --native-compilation
    :CUSTOM_ID: structure
    :END:
 
-** Early Initialization
+** Core
+
+*** Early Initialization
 :PROPERTIES:
    :CUSTOM_ID: performance
    :END:
@@ -302,7 +304,7 @@ Performance optimizations and environment setup executed before main initializat
   ;;; early-init.el ends here
 #+end_src
 
-** Initialization
+*** Initialization
 :PROPERTIES:
    :CUSTOM_ID: initial
    :END:
@@ -312,12 +314,12 @@ Minimal init.el that loads the main configuration from README.org.
 #+begin_src emacs-lisp :tangle init.el
   ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
   ;;; Commentary:
-  ;; Delegates configuration to README.org via Org Babel
+  ;; Modularized configuration (tangled from README.org into lisp/*.el)
   ;;; Code:
 
-  ;;;; Disable disruptive default key bindings."
+  ;;;; Disable disruptive default key bindings
   (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
-      (keymap-global-unset k))
+    (keymap-global-unset k))
   (when (fboundp 'cape-dabbrev)
     (keymap-global-set "M-/" #'cape-dabbrev))
 
@@ -380,7 +382,7 @@ Minimal init.el that loads the main configuration from README.org.
           exec-path-from-shell-variables my:shell-env-vars)
     (exec-path-from-shell-initialize))
 
-  ;; 2) Fallback PATH for CLI/edge cases (was in early-init; moved here)
+  ;; 2) Fallback PATH for CLI/edge cases
   (when (eq system-type 'darwin)
     (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
       (when (and (file-directory-p p)
@@ -388,7 +390,7 @@ Minimal init.el that loads the main configuration from README.org.
         (add-to-list 'exec-path p)
         (setenv "PATH" (concat p ":" (getenv "PATH"))))))
 
-  ;; 3) Dired + GNU ls (gls) integration (was in early-init; moved here)
+  ;; 3) Dired + GNU ls (gls) integration
   (leaf dired
     :custom ((dired-listing-switches . "-aBhl --group-directories-first"))
     :config
@@ -411,50 +413,199 @@ Minimal init.el that loads the main configuration from README.org.
   (when (file-exists-p custom-file)
     (load custom-file nil 'nomessage))
 
-  ;; Load User-Specific Configurations
-  ;; - Dynamically loads an additional configuration file specific to the current
-  ;;   user (e.g., "username.el") if it exists.
+  ;;;; User-specific config
   (setq user-specific-config (concat my:d user-login-name ".el"))
   (if (file-exists-p user-specific-config) (load user-specific-config))
 
-  ;; Respect each block's :tangle; never override TARGET-FILE from code.
+  ;;;; Modularized config loading
   (let* ((root (cond
                 ((and (boundp 'my:d) (stringp my:d) (file-directory-p my:d))
                  (file-name-as-directory my:d))
                 (t (file-name-as-directory user-emacs-directory))))
-         (lisp-dir (expand-file-name "lisp" root))
-         (org-file (expand-file-name "README.org" root))
-         (el-file  (expand-file-name "README.el"  lisp-dir)))
-    (when (file-exists-p org-file)
-      ;; Ensure dedicated load path (avoid adding root itself).
-      (unless (file-directory-p lisp-dir)
-        (make-directory lisp-dir t))
-      (dolist (p (list (file-name-as-directory user-emacs-directory)
-                       (directory-file-name user-emacs-directory)))
-        (setq load-path (delete p load-path)))
-      (add-to-list 'load-path lisp-dir)
+         (lisp-dir (expand-file-name "lisp" root)))
+    (unless (file-directory-p lisp-dir)
+      (make-directory lisp-dir t))
 
-      ;; Tangle only when needed, honoring per-block :tangle destinations.
-      (defvar org-confirm-babel-evaluate)
-      (require 'org)
-      (require 'ob-tangle)
-      (let* ((org-confirm-babel-evaluate nil)
-             (case-fold-search t)
-             (lang-re "\\`\\(?:emacs-lisp\\|elisp\\)\\'"))
-        (when (or (not (file-exists-p el-file))
-                  (file-newer-than-file-p org-file el-file))
-          ;; ✅ Do not pass TARGET-FILE -> respect each block's :tangle.
-          (org-babel-tangle-file org-file nil lang-re)))
+    ;; Add lisp directory to load-path, but not root
+    (dolist (p (list (file-name-as-directory user-emacs-directory)
+                     (directory-file-name user-emacs-directory)))
+      (setq load-path (delete p load-path)))
+    (add-to-list 'load-path lisp-dir)
 
-      ;; Load README feature idempotently.
-      (unless (featurep 'README)
-        (let ((generated el-file))
-  	(when (file-exists-p generated)
-  	  (load generated nil 'nomessage))))))
-
+    ;; Load modularized files instead of monolithic README.el
+    (dolist (file '("ui" "completion" "org" "lsp" "tools" "etc"))
+      (let ((path (expand-file-name (format "%s.el" file) lisp-dir)))
+        (when (file-exists-p path)
+          (load path nil 'nomessage)))))
 
   (provide 'init)
   ;;; init.el ends here
+#+end_src
+
+** User Configuration
+
+:PROPERTIES:
+   :CUSTOM_ID: user-defined
+   :END:
+
+Personal and device-specific settings.
+
+#+begin_src emacs-lisp :tangle user.el
+  ;;; user.el --- Personal Configuration -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Personal settings and device-specific configurations
+  ;;; Code:
+
+  ;; Personal Settings
+  (leaf *personals
+    :init
+    (setq user-full-name "YAMASHITA, Takao"
+  	user-mail-address "tjy1965@gmail.com"
+  	inhibit-compacting-font-caches t
+  	plstore-cache-passphrase-for-symmetric-encryption t)
+
+    ;; Font overrides (optional; only apply if available)
+    (setq my:font-default "JetBrains Mono NL"
+  	my:font-alt "Noto Sans JP"
+  	my:emoji-font "MesloLGS NF"
+  	my:font-size 16)
+
+    (defvar my:d:cloud
+      (expand-file-name "Documents/" (getenv "HOME"))
+      "Cloud storage base directory.")
+    (defvar my:d:blog
+      (concat my:d:cloud "devel/repos/mysite/")
+      "Blog directory.")
+    (defvar my:f:capture-blog-file
+      (expand-file-name "all-posts.org" my:d:blog))
+    (defvar my:d:excluded-directories
+      (list (expand-file-name "Library/Accounts" (getenv "HOME")))
+      "Exclude directory.")
+
+    (mapc #'my:ensure-directory-exists (list my:d:cloud my:d:blog))
+
+    ;; Clean up load-path (exclude unwanted directories)
+    (setq load-path (seq-remove (lambda (dir)
+                                  (member dir my:d:excluded-directories))
+                                load-path)))
+
+  ;; Smart Input Source (auto switch input source, e.g. English <-> Japanese)
+  ;; macOS requirement: `brew tap laishulu/homebrew && brew install macism`
+  (leaf sis
+    :straight t
+    :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
+                                      sis-global-respect-mode sis-global-inline-mode)
+    ;; Use `emacs-startup` (not `emacs-startup-hook`) in leaf's :hook syntax.
+    :hook (emacs-startup .
+  		       (lambda ()
+  			 ;; Defer IME wiring until after startup; avoid blocking init.
+  			 (when (fboundp 'sis-ism-lazyman-config)
+  			   (sis-ism-lazyman-config
+  			    "com.apple.keylayout.ABC"
+  			    "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+  			    'macism))
+  			 (when (fboundp 'sis-global-cursor-color-mode)
+  			   (sis-global-cursor-color-mode t))
+  			 (when (fboundp 'sis-global-respect-mode)
+  			   (sis-global-respect-mode t))
+  			 (when (fboundp 'sis-global-inline-mode)
+  			   (sis-global-inline-mode t)))))
+
+  (add-hook 'after-load-theme-hook
+            (lambda ()
+              (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
+
+  ;; Logitech MX Ergo S Configuration
+  (leaf *device/MX_ErgoS
+    :init
+    (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
+          mouse-wheel-progressive-speed nil
+          scroll-conservatively 10000
+          scroll-margin 2
+          scroll-preserve-screen-position t
+          mac-mouse-wheel-smooth-scroll t
+          mouse-wheel-tilt-scroll t
+          mouse-wheel-flip-direction nil)
+
+    (global-set-key [mouse-2] 'yank)
+    (global-set-key [mouse-4] 'previous-buffer)
+    (global-set-key [mouse-5] 'next-buffer))
+
+  ;; Apple Music Controller (macOS only)
+  (when (eq system-type 'darwin)
+    (leaf apple-music
+      :doc "Apple Music control via AppleScript"
+      :init
+      ;; Core functions for AppleScript execution
+      (defun apple-music-osascript-async (script &optional callback)
+        "Run AppleScript SCRIPT asynchronously."
+        (let* ((proc-name "apple-music-async")
+               (buffer-name "*Apple Music Async*")
+               (osascript-cmd (list "osascript" "-e" script))
+               (proc (apply 'start-process proc-name buffer-name osascript-cmd)))
+          (when callback
+            (set-process-sentinel
+             proc
+             (lambda (process event)
+               (when (string= event "finished\n")
+                 (with-current-buffer (process-buffer process)
+                   (let ((output (string-trim (buffer-string))))
+                     (funcall callback output)))
+                 (kill-buffer (process-buffer process))))))))
+
+      (defun apple-music-osascript-sync (script)
+        "Run AppleScript SCRIPT synchronously."
+        (string-trim
+         (shell-command-to-string
+          (format "osascript -e '%s'" script))))
+
+      ;; Player controls
+      (defun apple-music-play-pause ()
+        "Toggle play/pause."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to playpause"))
+
+      (defun apple-music-next-track ()
+        "Skip to next track."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to next track"))
+
+      (defun apple-music-previous-track ()
+        "Go to previous track."
+        (interactive)
+        (apple-music-osascript-async "tell application \"Music\" to previous track"))
+
+      ;; Apple Music playlist support
+      (defun apple-music-get-playlists ()
+        "Return a list of playlist names from Apple Music."
+        (split-string
+         (apple-music-osascript-sync
+  	"tell application \"Music\" to get name of playlists")
+         ", "))
+
+      (defun apple-music-play-playlist (playlist)
+        "Play the Apple Music playlist named PLAYLIST."
+        (interactive
+         (list (completing-read "Playlist: " (apple-music-get-playlists))))
+        (apple-music-osascript-async
+         (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
+
+      ;; Hydra interface
+      (defhydra hydra-apple-music (:hint nil)
+        "
+  Apple Music:
+  _p_: Play/Pause  _n_: Next  _b_: Back  _l_: Playlist  _q_: Quit
+  "
+        ("p" apple-music-play-pause)
+        ("n" apple-music-next-track)
+        ("b" apple-music-previous-track)
+        ("l" apple-music-play-playlist)
+        ("q" nil "quit"))
+
+      (global-set-key (kbd "C-c m") 'hydra-apple-music/body)))
+
+  (provide 'user)
+  ;;; user.el ends here
 #+end_src
 
 ** Configuration
@@ -466,13 +617,13 @@ Core Emacs configuration with modular design.
 
 *** Header
 
-#+begin_src emacs-lisp :tangle lisp/README.el
+#+begin_src emacs-lisp :tangle lisp/etc.el
   ;;; README.el --- Unified Emacs configuration entry -*- lexical-binding: t; -*-
 
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/23 13:43:22 $
+  ;; $Lastupdate: 2025/09/23 15:09:46 $
 
   ;;; Commentary:
   ;; This file loads tangled configuration from `README.org`.
@@ -506,7 +657,11 @@ Core Emacs configuration with modular design.
 - Hooks
   Various hooks for startup, file opening, saving, and mode-specific behaviors.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
+#+begin_src emacs-lisp :tangle lisp/tools.el
+  ;;; tools -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;;; Code:
+
   ;;; ---------------------------------------------------------------------------
   ;;; Utility Functions
 
@@ -793,8 +948,8 @@ Core Emacs configuration with modular design.
 - Ligature Setup
   Configures programming ligatures (e.g., `->`, `=>`, `===`) using the `ligature` package.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;;; Font Setup ---------------------------------------------------------------
+#+begin_src emacs-lisp :tangle lisp/ui.el
+  ;;; Font Setup -*- lexical-binding: t; -*-
 
   ;; -----------------------------------------------------------------------------
   ;; Default font configuration
@@ -957,7 +1112,7 @@ Core Emacs configuration with modular design.
 - Custom Window Layout Utilities
   Adds functions for saving/restoring layouts and toggling window dedication.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
+#+begin_src emacs-lisp :tangle lisp/ui.el
   ;; ---------------------------------------------------------------------------
   ;;; Fullscreen Mode Configuration
   ;; Ensures Emacs starts in fullscreen mode.
@@ -1132,8 +1287,8 @@ Core Emacs configuration with modular design.
   - *Git* (magit)
   - *Miscellaneous* (restart, execute commands)
 
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
+#+begin_src emacs-lisp :tangle lisp/etc.el
+  ;;; Etc Setup -*- lexical-binding: t; -*-
   ;;; Hydra for Text Scaling
   ;; Provides quick keybindings to increase, decrease, or reset text size.
 
@@ -1277,7 +1432,7 @@ This block configures basic editor behavior (electric pairs, relative line numbe
 file management with TRAMP and backup handling, and secure authentication
 using GPG, auth-source, and password-store.
 
-  #+begin_src emacs-lisp :tangle lisp/README.el
+  #+begin_src emacs-lisp :tangle lisp/etc.el
     ;; -----------------------------------------------------------------------------
     ;;; Basic Editor Configuration
 
@@ -1370,8 +1525,8 @@ undo/redo, window navigation, macOS integration, dired extensions,
 search/navigation tools, Git support, syntax/spell checking, project management,
 and snippet handling.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
+#+begin_src emacs-lisp :tangle lisp/tools.el
+  ;;; Tools -*- lexical-binding: t; -*-
     ;;; Saveplace (Remember Cursor Positions)
   ;; Restores the last cursor position when reopening files.
 
@@ -1623,8 +1778,8 @@ Corfu (popup completions), Orderless (fuzzy matching), Prescient (sorting),
 Marginalia (annotations), Consult (navigation), Embark (actions), Cape (sources),
 and Nerd Icons integration for a modern, context-aware completion experience.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
+#+begin_src emacs-lisp :tangle lisp/completion.el
+  ;;; Completion Setup -*- lexical-binding: t; -*-
   ;;; Completion Frameworks
   ;; - Configures a modern completion stack: Vertico, Corfu, Orderless, etc.
 
@@ -1752,8 +1907,8 @@ management, agenda and capture templates, refiling, PDF export, and
 visual enhancements via org-modern and org-superstar for a clean,
 productive workflow.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
+#+begin_src emacs-lisp :tangle lisp/org.el
+  ;;; Org Setup -*- lexical-binding: t; -*-a
   ;;; Org Mode Configuration
   ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
 
@@ -1890,8 +2045,8 @@ This block configures the programming environment with LSP support
 improved Makefile and compilation workflow, and Docker tooling
 including Dockerfile editing, container management, and TRAMP support.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
-  ;; -----------------------------------------------------------------------------
+#+begin_src emacs-lisp :tangle lisp/lsp.el
+  ;;; --- -*- lexical-binding: t; -*-
   ;;; LSP Configuration (Eglot or LSP-Mode)
   ;; Provides Language Server Protocol (LSP) support for intelligent code features.
   ;; `my:use-lsp` determines which backend to use:
@@ -2089,7 +2244,7 @@ networked notes via Org-roam, image management, automatic TOC, web
 link insertion, advanced LaTeX/PDF export, Hugo blog publishing, and
 Markdown editing support, creating a complete writing and publishing workflow.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
+#+begin_src emacs-lisp :tangle lisp/org.el
   ;; -----------------------------------------------------------------------------
   ;;; Org Babel (Code Execution in Org)
   ;; Enables execution of code blocks in multiple languages.
@@ -2229,7 +2384,7 @@ This block customizes Emacs' built-in web browser (EWW) with DuckDuckGo
 search, history and bookmark management, automatic search highlighting,
 and a toggle for loading images.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
+#+begin_src emacs-lisp :tangle lisp/tools.el
   (leaf eww
     :straight nil
     :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
@@ -2272,7 +2427,7 @@ This block configures AUCTeX for efficient LaTeX editing, enabling
 automatic parsing, PDF workflows, and integration with `latexmk`
 for continuous and automated document compilation.
 
-#+begin_src emacs-lisp :tangle lisp/README.el
+#+begin_src emacs-lisp :tangle lisp/tools.el
   ;; -----------------------------------------------------------------------------
   ;;; AUCTeX (LaTeX Editing)
   ;; Configures AUCTeX for PDF-based workflows with `latexmk`.
@@ -2296,172 +2451,7 @@ for continuous and automated document compilation.
 #+end_src
 
 *** Footer
-#+begin_src emacs-lisp :tangle lisp/README.el
+#+begin_src emacs-lisp :tangle lisp/etc.el
   (provide 'README)
   ;;; README.el ends here
-#+end_src
-** User Configuration
-
-:PROPERTIES:
-   :CUSTOM_ID: user-defined
-   :END:
-
-Personal and device-specific settings.
-
-#+begin_src emacs-lisp :tangle user.el
-  ;;; user.el --- Personal Configuration -*- lexical-binding: t; -*-
-  ;;; Commentary:
-  ;; Personal settings and device-specific configurations
-  ;;; Code:
-
-  ;; Personal Settings
-  (leaf *personals
-    :init
-    (setq user-full-name "YAMASHITA, Takao"
-  	user-mail-address "tjy1965@gmail.com"
-  	inhibit-compacting-font-caches t
-  	plstore-cache-passphrase-for-symmetric-encryption t)
-
-    ;; Font overrides (optional; only apply if available)
-    (setq my:font-default "JetBrains Mono NL"
-  	my:font-alt "Noto Sans JP"
-  	my:emoji-font "MesloLGS NF"
-  	my:font-size 16)
-
-    (defvar my:d:cloud
-      (expand-file-name "Documents/" (getenv "HOME"))
-      "Cloud storage base directory.")
-    (defvar my:d:blog
-      (concat my:d:cloud "devel/repos/mysite/")
-      "Blog directory.")
-    (defvar my:f:capture-blog-file
-      (expand-file-name "all-posts.org" my:d:blog))
-    (defvar my:d:excluded-directories
-      (list (expand-file-name "Library/Accounts" (getenv "HOME")))
-      "Exclude directory.")
-
-    (mapc #'my:ensure-directory-exists (list my:d:cloud my:d:blog))
-
-    ;; Clean up load-path (exclude unwanted directories)
-    (setq load-path (seq-remove (lambda (dir)
-                                  (member dir my:d:excluded-directories))
-                                load-path)))
-
-  ;; Smart Input Source (auto switch input source, e.g. English <-> Japanese)
-  ;; macOS requirement: `brew tap laishulu/homebrew && brew install macism`
-  (leaf sis
-    :straight t
-    :commands (sis-ism-lazyman-config sis-global-cursor-color-mode
-                                      sis-global-respect-mode sis-global-inline-mode)
-    ;; Use `emacs-startup` (not `emacs-startup-hook`) in leaf's :hook syntax.
-    :hook (emacs-startup .
-  		       (lambda ()
-  			 ;; Defer IME wiring until after startup; avoid blocking init.
-  			 (when (fboundp 'sis-ism-lazyman-config)
-  			   (sis-ism-lazyman-config
-  			    "com.apple.keylayout.ABC"
-  			    "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
-  			    'macism))
-  			 (when (fboundp 'sis-global-cursor-color-mode)
-  			   (sis-global-cursor-color-mode t))
-  			 (when (fboundp 'sis-global-respect-mode)
-  			   (sis-global-respect-mode t))
-  			 (when (fboundp 'sis-global-inline-mode)
-  			   (sis-global-inline-mode t)))))
-
-  (add-hook 'after-load-theme-hook
-            (lambda ()
-              (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
-
-  ;; Logitech MX Ergo S Configuration
-  (leaf *device/MX_ErgoS
-    :init
-    (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
-          mouse-wheel-progressive-speed nil
-          scroll-conservatively 10000
-          scroll-margin 2
-          scroll-preserve-screen-position t
-          mac-mouse-wheel-smooth-scroll t
-          mouse-wheel-tilt-scroll t
-          mouse-wheel-flip-direction nil)
-
-    (global-set-key [mouse-2] 'yank)
-    (global-set-key [mouse-4] 'previous-buffer)
-    (global-set-key [mouse-5] 'next-buffer))
-
-  ;; Apple Music Controller (macOS only)
-  (when (eq system-type 'darwin)
-    (leaf apple-music
-      :doc "Apple Music control via AppleScript"
-      :init
-      ;; Core functions for AppleScript execution
-      (defun apple-music-osascript-async (script &optional callback)
-        "Run AppleScript SCRIPT asynchronously."
-        (let* ((proc-name "apple-music-async")
-               (buffer-name "*Apple Music Async*")
-               (osascript-cmd (list "osascript" "-e" script))
-               (proc (apply 'start-process proc-name buffer-name osascript-cmd)))
-          (when callback
-            (set-process-sentinel
-             proc
-             (lambda (process event)
-               (when (string= event "finished\n")
-                 (with-current-buffer (process-buffer process)
-                   (let ((output (string-trim (buffer-string))))
-                     (funcall callback output)))
-                 (kill-buffer (process-buffer process))))))))
-
-      (defun apple-music-osascript-sync (script)
-        "Run AppleScript SCRIPT synchronously."
-        (string-trim
-         (shell-command-to-string
-          (format "osascript -e '%s'" script))))
-
-      ;; Player controls
-      (defun apple-music-play-pause ()
-        "Toggle play/pause."
-        (interactive)
-        (apple-music-osascript-async "tell application \"Music\" to playpause"))
-
-      (defun apple-music-next-track ()
-        "Skip to next track."
-        (interactive)
-        (apple-music-osascript-async "tell application \"Music\" to next track"))
-
-      (defun apple-music-previous-track ()
-        "Go to previous track."
-        (interactive)
-        (apple-music-osascript-async "tell application \"Music\" to previous track"))
-
-      ;; Apple Music playlist support
-      (defun apple-music-get-playlists ()
-        "Return a list of playlist names from Apple Music."
-        (split-string
-         (apple-music-osascript-sync
-  	"tell application \"Music\" to get name of playlists")
-         ", "))
-
-      (defun apple-music-play-playlist (playlist)
-        "Play the Apple Music playlist named PLAYLIST."
-        (interactive
-         (list (completing-read "Playlist: " (apple-music-get-playlists))))
-        (apple-music-osascript-async
-         (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
-
-      ;; Hydra interface
-      (defhydra hydra-apple-music (:hint nil)
-        "
-  Apple Music:
-  _p_: Play/Pause  _n_: Next  _b_: Back  _l_: Playlist  _q_: Quit
-  "
-        ("p" apple-music-play-pause)
-        ("n" apple-music-next-track)
-        ("b" apple-music-previous-track)
-        ("l" apple-music-play-playlist)
-        ("q" nil "quit"))
-
-      (global-set-key (kbd "C-c m") 'hydra-apple-music/body)))
-
-  (provide 'user)
-  ;;; user.el ends here
 #+end_src
