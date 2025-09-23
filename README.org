@@ -49,23 +49,43 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 *** Makefile
 
 #+begin_src text :tangle Makefile :comments no
-  EMACS     ?= emacs
-  ORG       ?= README.org
-  LISP_DIR  ?= lisp
+  # Makefile for Emacs config build
+  # Emacs 30+, Org Babel (tangle), byte-compilation
+  # Safe, minimal, maintainable
 
-  .PHONY: all tangle clean
+  # Variables
+  EMACS       ?= emacs
+  ORG         ?= README.org
+  LISPDIR     ?= lisp
+  PERSONALDIR ?= personal
+  ELFILES     = $(wildcard $(LISPDIR)/*.el) $(wildcard $(PERSONALDIR)/*.el)
+  ELCFILES    = $(ELFILES:.el=.elc)
 
-  all: tangle
+  # Default target
+  all: compile
 
-  tangle:
-  	@mkdir -p $(LISP_DIR)
+  # Tangle all .el files from README.org
+  tangle: $(ORG)
   	$(EMACS) --batch -Q \
-  	  --eval "(require 'org)" \
-  	  --eval "(setq org-confirm-babel-evaluate nil)" \
-  	  --eval "(org-babel-tangle-file \"$(ORG)\")"
+  		--eval "(require 'org)" \
+  		--eval "(org-babel-tangle-file \"$(ORG)\")"
 
+  # Byte-compile all tangled .el files
+  compile: tangle $(ELCFILES)
+
+  $(LISPDIR)/%.elc: $(LISPDIR)/%.el
+  	$(EMACS) --batch -Q \
+  		--eval "(byte-compile-file \"$<\")"
+
+  $(PERSONALDIR)/%.elc: $(PERSONALDIR)/%.el
+  	$(EMACS) --batch -Q \
+  		--eval "(byte-compile-file \"$<\")"
+
+  # Remove compilation artifacts
   clean:
-	rm -f *.el $(LISP_DIR)/*.el
+  	rm -f $(LISPDIR)/*.elc $(PERSONALDIR)/*.elc
+
+  .PHONY: all tangle compile clean
 #+end_src
 
 *** Quick Start
@@ -218,7 +238,7 @@ Performance optimizations and environment setup executed before main initializat
                 (concat libgcc path-separator (or (getenv "LIBRARY_PATH") ""))))))
 
   ;;;; Directories
-  (defun my:ensure-directory-exists (dir)
+  (defun my/ensure-directory-exists (dir)
     "Ensure DIR exists, creating if necessary."
     (unless (file-directory-p dir)
       (condition-case err
@@ -242,7 +262,7 @@ Performance optimizations and environment setup executed before main initializat
   ;; Defer directory creation until after startup
   (add-hook 'emacs-startup-hook
             (lambda ()
-              (mapc #'my:ensure-directory-exists
+              (mapc #'my/ensure-directory-exists
                     (list my:d:cache my:d:etc my:d:var my:d:treesit my:d:treesit-build))))
 
   ;;;; UI Tweaks
@@ -414,7 +434,7 @@ Minimal init.el that loads the main configuration from README.org.
     (load custom-file nil 'nomessage))
 
   ;;;; User-specific config
-  (setq user-specific-config (concat my:d user-login-name ".el"))
+  (setq user-specific-config (concat my:d "personal/" user-login-name ".el"))
   (if (file-exists-p user-specific-config) (load user-specific-config))
 
   ;;;; Modularized config loading
@@ -450,8 +470,8 @@ Minimal init.el that loads the main configuration from README.org.
 
 Personal and device-specific settings.
 
-#+begin_src emacs-lisp :tangle user.el
-  ;;; user.el --- Personal Configuration -*- lexical-binding: t; -*-
+#+begin_src emacs-lisp :tangle personal/user.el
+  ;;; Personal Configuration -*- lexical-binding: t; -*-
   ;;; Commentary:
   ;; Personal settings and device-specific configurations
   ;;; Code:
@@ -482,7 +502,7 @@ Personal and device-specific settings.
       (list (expand-file-name "Library/Accounts" (getenv "HOME")))
       "Exclude directory.")
 
-    (mapc #'my:ensure-directory-exists (list my:d:cloud my:d:blog))
+    (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:blog))
 
     ;; Clean up load-path (exclude unwanted directories)
     (setq load-path (seq-remove (lambda (dir)
@@ -623,7 +643,7 @@ Core Emacs configuration with modular design.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/23 15:09:46 $
+  ;; $Lastupdate: 2025/09/23 15:49:02 $
 
   ;;; Commentary:
   ;; This file loads tangled configuration from `README.org`.
@@ -856,7 +876,7 @@ Core Emacs configuration with modular design.
            (args* (append args (make-list (max 0 (- 7 len)) nil)))
            (out-dir (or (nth 6 args*) my:d:treesit)))
       (setf (nth 6 args*) out-dir)
-      (my:ensure-directory-exists out-dir)
+      (my/ensure-directory-exists out-dir)
       (let ((default-directory my:d:treesit-build))
         (apply orig-fn args*))))
 
@@ -1940,7 +1960,7 @@ productive workflow.
     :init
     ;; Org directory
     (setq org-directory (expand-file-name "org/" my:d:cloud))
-    (my:ensure-directory-exists org-directory)
+    (my/ensure-directory-exists org-directory)
 
     ;; Link & cache settings
     (setq org-return-follows-link t
