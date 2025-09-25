@@ -375,7 +375,7 @@ Minimal init.el that loads the main configuration from README.org.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/25 07:04:00 $
+  ;; $Lastupdate: 2025/09/25 10:41:21 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -420,7 +420,26 @@ Minimal init.el that loads the main configuration from README.org.
             auto-save-visited-interval 2)
     (electric-pair-mode 1)
     (add-hook 'prog-mode-hook #'display-line-numbers-mode)
-    (auto-save-visited-mode 1))
+    (auto-save-visited-mode 1)
+
+    (leaf my:modifier
+      :config
+      (cond
+       ;; macOS
+       ((eq system-type 'darwin)
+        (setq mac-option-modifier 'meta   ;; Option → Meta
+  	    mac-command-modifier 'super     ;; Command → Super
+  	    mac-control-modifier 'control   ;; Control → Control
+  	    mac-function-modifier 'hyper))  ;; Fn → Hyper
+       ;; Windows
+       ((eq system-type 'windows-nt)
+        (setq w32-lwindow-modifier 'super ;; Left Win → Super
+  	    w32-rwindow-modifier 'super     ;; Right Win → Super
+  	    w32-apps-modifier   'hyper))    ;; Apps/Menu → Hyper
+       ;; Linux
+       ((eq system-type 'gnu/linux)
+        ;; Linux: handled at XKB/DE level
+        (setq my:os "linux")))))
 
   ;;;; No-Littering
   (leaf no-littering
@@ -613,7 +632,7 @@ Core Emacs configuration with modular design.
   ;;; Utility Functions
 
   ;; Insert timestamp on save
-  (defun my:save-buffer-wrapper ()
+  (defun my/save-buffer-wrapper ()
     "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
     (interactive)
     (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
@@ -622,7 +641,7 @@ Core Emacs configuration with modular design.
         (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
           (replace-match timestamp t nil)))))
 
-  (defun my:auto-tangle-updated-src-blocks ()
+  (defun my/auto-tangle-updated-src-blocks ()
     "Automatically tangle updated Org source blocks when saving `README.org`."
     (when (and buffer-file-name
                (string= (file-name-nondirectory buffer-file-name) "README.org"))
@@ -633,7 +652,7 @@ Core Emacs configuration with modular design.
   ;;; Scratch Buffer Management
   ;; Ensures that the `*scratch*` buffer always exists, and allows recreation.
 
-  (defun my:create-scratch-buffer ()
+  (defun my/create-scratch-buffer ()
     "Ensure that a `*scratch*` buffer exists."
     (unless (get-buffer "*scratch*")
       (with-current-buffer (get-buffer-create "*scratch*")
@@ -643,19 +662,19 @@ Core Emacs configuration with modular design.
           (insert initial-scratch-message))
         (current-buffer))))
 
-  (defun my:recreate-scratch-buffer ()
+  (defun my/recreate-scratch-buffer ()
     "Kill and recreate the `*scratch*` buffer."
     (interactive)
     (when (get-buffer "*scratch*")
       (kill-buffer "*scratch*"))
-    (my:create-scratch-buffer)
+    (my/create-scratch-buffer)
     (switch-to-buffer "*scratch*"))
 
-  (defun my:after-kill-buffer-advice (&rest _)
+  (defun my/after-kill-buffer-advice (&rest _)
     "Ensure `*scratch*` buffer exists after any buffer is killed."
-    (run-at-time 0.1 nil #'my:create-scratch-buffer))
+    (run-at-time 0.1 nil #'my/create-scratch-buffer))
 
-  (add-hook 'kill-buffer-hook #'my:create-scratch-buffer)
+  (add-hook 'kill-buffer-hook #'my/create-scratch-buffer)
 
   ;; Simple no-prompt revert for the current buffer.
   (defun my/revert-buffer-quick ()
@@ -667,7 +686,7 @@ Core Emacs configuration with modular design.
   ;;; Automatic Lexical Binding
   ;; Inserts a `lexical-binding: t` header into `.el` files in `no-littering-var-directory`.
 
-  (defun my:auto-insert-lexical-binding ()
+  (defun my/auto-insert-lexical-binding ()
     "Automatically insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
     (when (and (stringp buffer-file-name)
                (boundp 'no-littering-var-directory)
@@ -684,7 +703,7 @@ Core Emacs configuration with modular design.
   ;; -----------------------------------------------------------------------------
   ;;; Asynchronous Task Execution Helper
 
-  (defun my:safe-run-async (task)
+  (defun my/safe-run-async (task)
     "Run TASK asynchronously, catching and reporting any errors."
     (run-at-time 0 nil
                  (lambda ()
@@ -696,10 +715,10 @@ Core Emacs configuration with modular design.
   ;;; Backup File Cleanup
   ;; Deletes old backup files (older than 7 days) asynchronously.
 
-  (defun my:delete-old-backups ()
+  (defun my/delete-old-backups ()
     "Delete backup files older than 7 days."
     (interactive)
-    (my:safe-run-async
+    (my/safe-run-async
      (lambda ()
        (let ((backup-dir (concat no-littering-var-directory "backup/"))
              (threshold (- (float-time (current-time)) (* 7 24 60 60))))
@@ -715,22 +734,22 @@ Core Emacs configuration with modular design.
   ;;; Read-Only Buffer Handling
   ;; Automatically enables `view-mode` for read-only buffers.
 
-  (defun my:enable-view-mode-on-read-only ()
+  (defun my/enable-view-mode-on-read-only ()
     "Enable `view-mode` when buffer is read-only."
     (if buffer-read-only
         (view-mode 1)
       (view-mode -1)))
-  (add-hook 'read-only-mode-hook #'my:enable-view-mode-on-read-only)
+  (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
 
   ;; -----------------------------------------------------------------------------
   ;;; UI & Navigation Helpers
 
-  (defun my:toggle-linum-lines ()
+  (defun my/toggle-linum-lines ()
     "Toggle line numbers using `display-line-numbers-mode`."
     (interactive)
     (display-line-numbers-mode 'toggle))
 
-  (defun my:toggle-window-split ()
+  (defun my/toggle-window-split ()
     "Toggle between horizontal and vertical split for two windows."
     (interactive)
     (when (= (count-windows) 2)
@@ -748,7 +767,7 @@ Core Emacs configuration with modular design.
         (set-window-buffer (next-window) next-buf)
         (select-window (selected-window)))))
 
-  (defun my:find-keybinding-conflicts ()
+  (defun my/find-keybinding-conflicts ()
     "Find and display conflicting keybindings across active keymaps."
     (interactive)
     (let ((conflicts (make-hash-table :test 'equal))
@@ -779,7 +798,7 @@ Core Emacs configuration with modular design.
   ;; -----------------------------------------------------------------------------
   ;;; Dired Helper
 
-  (defun my:dired-view-file-other-window ()
+  (defun my/dired-view-file-other-window ()
     "Open selected Dired file or directory in another window."
     (interactive)
     (let ((file (dired-get-file-for-visit)))
@@ -792,7 +811,7 @@ Core Emacs configuration with modular design.
   ;; -----------------------------------------------------------------------------
   ;;; External Integration
 
-  (defun my:treesit--call-with-outdir (orig-fn &rest args)
+  (defun my/treesit--call-with-outdir (orig-fn &rest args)
     "Advice ORIG-FN to force OUT-DIR to `my:d:treesit` when omitted.
   Also run the build in `my:d:treesit-build` to avoid polluting `default-directory`."
     ;; treesit-install-language-grammar signature (Emacs 29/30):
@@ -807,7 +826,7 @@ Core Emacs configuration with modular design.
       (let ((default-directory my:d:treesit-build))
         (apply orig-fn args*))))
 
-  (defun my:open-by-vscode ()
+  (defun my/open-by-vscode ()
     "Open current file in Visual Studio Code at line/column."
     (interactive)
     (when (buffer-file-name)
@@ -817,13 +836,13 @@ Core Emacs configuration with modular design.
                (line-number-at-pos)
                (current-column)))))
 
-  (defun my:show-env-variable (var)
+  (defun my/show-env-variable (var)
     "Display the value of environment variable VAR."
     (interactive "sEnvironment variable: ")
     (let ((val (getenv var)))
       (message "%s = %s" var (or val "Not set"))))
 
-  (defun my:print-build-info ()
+  (defun my/print-build-info ()
     "Display Emacs build details (commit, branch, system, features, options)."
     (interactive)
     (let ((buf (get-buffer-create "*Build Info*")))
@@ -872,14 +891,14 @@ Core Emacs configuration with modular design.
 
   (add-hook 'org-mode-hook
             (lambda ()
-              (add-hook 'after-save-hook #'my:auto-tangle-updated-src-blocks
+              (add-hook 'after-save-hook #'my/auto-tangle-updated-src-blocks
                         nil 'make-it-local)))
-  (add-hook 'emacs-startup-hook #'my:delete-old-backups)
-  (add-hook 'find-file-hook #'my:auto-insert-lexical-binding)
+  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
+  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
   (add-hook 'prog-mode-hook 'goto-address-prog-mode)
   (add-hook 'text-mode-hook 'goto-address-mode)
   (add-hook 'before-save-hook 'delete-trailing-whitespace)
-  (add-hook 'before-save-hook #'my:save-buffer-wrapper)
+  (add-hook 'before-save-hook #'my/save-buffer-wrapper)
 #+end_src
 
 *** Fonts/UI/Keybind
@@ -1166,13 +1185,13 @@ Core Emacs configuration with modular design.
   (defvar my:saved-window-config nil
     "Stores the current window configuration for later restoration.")
 
-  (defun my:save-window-layout ()
+  (defun my/save-window-layout ()
     "Save the current window configuration persistently."
     (interactive)
     (setq my:saved-window-config (window-state-get nil t))
     (message "Window configuration saved."))
 
-  (defun my:restore-window-layout ()
+  (defun my/restore-window-layout ()
     "Restore the previously saved window configuration."
     (interactive)
     (if my:saved-window-config
@@ -1181,7 +1200,7 @@ Core Emacs configuration with modular design.
           (message "Window configuration restored."))
       (message "No saved window configuration found.")))
 
-  (defun my:toggle-window-dedication ()
+  (defun my/toggle-window-dedication ()
     "Toggle the dedicated status of the currently selected window."
     (interactive)
     (let ((window (selected-window)))
@@ -1274,7 +1293,7 @@ Core Emacs configuration with modular design.
 
       ;; Window management
       ("C-."     . other-window)
-      ("C-c 2"   . my:toggle-window-split)
+      ("C-c 2"   . my/toggle-window-split)
       ("s-."     . ace-window)
       ("s-w"     . ace-swap-window)
       ("s-d"     . delete-frame)
@@ -1318,7 +1337,7 @@ Core Emacs configuration with modular design.
       ("C-c w r" . eww-readable)       ;; Readable mode
       ("C-c w u" . eww-back-url)       ;; Back
       ("C-c w f" . eww-forward-url)    ;; Forward
-      ("C-c w I" . my:eww-toggle-images) ;; Toggle Image
+      ("C-c w I" . my/eww-toggle-images) ;; Toggle Image
 
       ;; Misc
       ("C-x g"   . magit-status)
@@ -1335,7 +1354,7 @@ Core Emacs configuration with modular design.
     (add-hook 'dired-mode-hook
               (lambda ()
                 (define-key dired-mode-map "z"
-  			  'my:dired-view-file-other-window)))
+  			  'my/dired-view-file-other-window)))
     )
 #+end_src
 
@@ -1497,9 +1516,9 @@ and snippet handling.
     ;;    Keeping our grammars in my:d:var keeps ~/.emacs.d tidy and portable.
     (with-eval-after-load 'treesit
       (add-to-list 'treesit-extra-load-path my:d:treesit)
-      (advice-add 'treesit-install-language-grammar :around #'my:treesit--call-with-outdir))
+      (advice-add 'treesit-install-language-grammar :around #'my/treesit--call-with-outdir))
 
-    (defun my:treesit-install (lang)
+    (defun my/treesit-install (lang)
       (interactive
        (list (intern (completing-read "Language: "
                                       (mapcar #'car treesit-language-source-alist)))))
@@ -2298,7 +2317,7 @@ and a toggle for loading images.
       "Word to highlight and search with isearch after EWW loads.")
 
     ;; Custom search command
-    (defun my:eww-search (term)
+    (defun my/eww-search (term)
       "Search TERM with `eww' and start `isearch`."
       (interactive "sSearch terms: ")
       (setq eww-hl-search-word term)
@@ -2313,7 +2332,7 @@ and a toggle for loading images.
                   (setq eww-hl-search-word nil))))
 
     ;; Toggle images on/off
-    (defun my:eww-toggle-images ()
+    (defun my/eww-toggle-images ()
       "Toggle whether images are loaded in EWW."
       (interactive)
       (setq shr-inhibit-images (not shr-inhibit-images))
