@@ -156,114 +156,51 @@ This configuration is a **modular full-stack setup for Emacs 30+**, structured w
 
 ** Core
 
-*** Early Initialization
-:PROPERTIES:
-   :CUSTOM_ID: performance
-   :END:
+*** early-init.el
+Early initialization for Emacs 30+.
+Goals: faster startup, clean directory layout, native-comp tuning, and minimal UI.
 
-Performance optimizations and environment setup executed before main initialization.
-- Purpose: Startup performance optimization and minimal environment setup.
-- Features:
-  - Enforces Emacs 30+.
-  - Disables `package.el` (using `straight.el` instead).
-  - GC and `file-name-handler` temporarily relaxed and restored after startup.
-  - Enlarges `read-process-output-max` for faster subprocess I/O.
-  - Native compilation settings with XDG ELN cache support.
-  - macOS-specific libgccjit environment fixes.
-  - Prepares config directories (`my:d:cache`, `my:d:etc`, `my:d:var`, etc.).
-  - UI tweaks (fullscreen, no menu/tool/scroll bars).
-  - Bootstraps `straight.el` with profile lockfiles.
+- Disable `package.el` → use `straight.el` exclusively
+- Raise GC thresholds during startup → restore afterwards
+- Temporarily disable file-name handlers → restore afterwards
+- Create standard directories: `.cache/`, `.etc/`, `.var/`, `lisp/`, `eln-cache/`, `tree-sitter/`
+- Configure Native Compilation (silent async, cache under `.cache/eln-cache/`)
+- On macOS, automatically set Homebrew `libgccjit` path
+- Minimal UI (disable menu/tool/scroll bars after startup to avoid flicker)
+- Initialize straight.el in `.cache/` with defaults
+- Provide `early-init` feature for external `require`
 
 #+begin_src emacs-lisp :tangle early-init.el
   ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
-  ;; Licensed under the GNU General Public License version 3 or later.
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
+  ;; Licensed under the GNU GPL v3 or later.
 
   ;;; Commentary:
-  ;; Emacs 30+ early-stage optimizations
-  ;; - Startup performance (GC, file-name-handler)
-  ;; - Package.el deferral
-  ;; - Native-comp settings
-  ;; - Environment (PATH/libgccjit on macOS)
-  ;; - Minimal UI setup
+  ;; Minimal early startup optimizations and directory setup
+  ;; for Emacs 30+ with straight.el + leaf.el
+
   ;;; Code:
+  (setopt package-enable-at-startup nil)
+  (defvar my:orig:gc-cons-threshold gc-cons-threshold)
+  (defvar my:orig:gc-cons-percentage gc-cons-percentage)
 
-  ;; Guard: require Emacs 30+
-  (when (< emacs-major-version 30)
-    (user-error "This configuration requires Emacs 30+"))
-
-  ;; Package.el (disabled; straight.el handles packages)
-  (setopt package-enable-at-startup nil
-          package-quickstart nil)
-
-  ;; Garbage Collection
-  (defvar my--orig-gc-cons-threshold gc-cons-threshold
-    "Backup of `gc-cons-threshold` to restore after startup.")
-  (defvar my--orig-gc-cons-percentage gc-cons-percentage
-    "Backup of `gc-cons-percentage` to restore after startup.")
-
-  (setq gc-cons-threshold most-positive-fixnum
-        gc-cons-percentage 0.6)
+  (setopt gc-cons-threshold  most-positive-fixnum
+          gc-cons-percentage 0.6)
 
   (add-hook 'emacs-startup-hook
             (lambda ()
-              "Restore GC thresholds once after startup."
-  	    (setq gc-cons-threshold my--orig-gc-cons-threshold
-  		  gc-cons-percentage my--orig-gc-cons-percentage)
-  	    ;; Print how long Emacs took to start and how many GCs happened
-              (message "Emacs loaded in %.2f seconds with %d garbage collections."
-                       (float-time (time-subtract after-init-time before-init-time))
-                       gcs-done)))
+              (setopt gc-cons-threshold  my:orig:gc-cons-threshold
+                      gc-cons-percentage my:orig:gc-cons-percentage)))
+  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
 
-  ;; Improve subprocess I/O throughput
-  (setopt read-process-output-max (* 4 1024 1024)) ; 4 MiB
-
-  ;;;; File-name-handlers
-  (defvar my--orig-file-name-handler-alist file-name-handler-alist
-    "Backup of `file-name-handler-alist` to restore after startup.")
   (setq file-name-handler-alist nil)
 
-  (defun my--restore-file-name-handlers ()
-    "Restore `file-name-handler-alist` exactly once after startup."
-    (setq file-name-handler-alist
-          (delete-dups (append file-name-handler-alist
-                               my--orig-file-name-handler-alist)))
-    ;; Remove self to avoid duplicate runs when loading init fragments.
-    (remove-hook 'emacs-startup-hook #'my--restore-file-name-handlers))
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (setq file-name-handler-alist my:orig:file-name-handler-alist)))
 
-  (add-hook 'emacs-startup-hook #'my--restore-file-name-handlers)
-
-  ;;;; Native Compilation (Emacs 30+)
-  (when (featurep 'native-compile)
-    ;; Keep logs quiet and prefer JIT on demand.
-    (setopt native-comp-async-report-warnings-errors 'silent
-            native-comp-jit-compilation t)
-    ;; Be forward/backward compatible: only touch deprecated var if it exists.
-    (when (boundp 'native-comp-deferred-compilation)
-      (setopt native-comp-deferred-compilation t))
-
-    ;; Prefer adding XDG ELN path rather than replacing defaults.
-    (let* ((base (or (getenv "XDG_CACHE_HOME")
-                     (expand-file-name "~/.cache/")))
-           (eln  (expand-file-name "emacs/eln-cache/" base)))
-      (unless (file-directory-p eln)
-        (make-directory eln t))
-      ;; Append if absent; keep default search paths intact.
-      (add-to-list 'native-comp-eln-load-path eln t)))
-
-  ;;;; Environment (macOS only)
-  (when (eq system-type 'darwin)
-    ;; GCC JIT / libgccjit
-    (let ((libgcc (seq-find #'file-directory-p
-                            '("/opt/homebrew/opt/gcc/lib/gcc/current"
-                              "/opt/homebrew/opt/libgccjit/lib/gcc/current"
-                              "/opt/homebrew/opt/libgccjit/lib"))))
-      (when libgcc
-        (setenv "LIBRARY_PATH"
-                (concat libgcc path-separator (or (getenv "LIBRARY_PATH") ""))))))
-
-  ;;;; Directories
+  ;; Utility Functions
   (defun my/ensure-directory-exists (dir)
     "Ensure DIR exists, creating if necessary."
     (unless (file-directory-p dir)
@@ -273,77 +210,45 @@ Performance optimizations and environment setup executed before main initializat
 
   (defvar my:d (or (and load-file-name
                         (file-name-directory (file-chase-links load-file-name)))
-                   user-emacs-directory)
-    "Base configuration directory.")
+                   user-emacs-directory))
 
-  (defvar my:d:cache   (expand-file-name ".cache/"     my:d))
-  (defvar my:d:etc     (expand-file-name ".etc/"       my:d))
-  (defvar my:d:var     (expand-file-name ".var/"       my:d))
-  (defvar my:d:treesit (expand-file-name "tree-sitter/" my:d:var)
-    "Directory to store tree-sitter grammars.")
-  (defvar my:f:custom  (expand-file-name "custom.el"   my:d:etc))
-  (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache)
-    "Temporary working directory for tree-sitter builds.")
+  (defvar my:d:cache   (expand-file-name ".cache/"       my:d))
+  (defvar my:d:etc     (expand-file-name ".etc/"         my:d))
+  (defvar my:d:var     (expand-file-name ".var/"         my:d))
+  (defvar my:d:lisp    (expand-file-name "lisp/"         my:d))
+  (defvar my:d:eln     (expand-file-name "eln-cache/"    my:d:cache))
+  (defvar my:d:treesit (expand-file-name "tree-sitter/"  my:d:var))
+  (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache))
+  (defvar my:f:custom  (expand-file-name "custom.el"     my:d:etc))
 
-  ;; Defer directory creation until after startup
+  (dolist (dir (list my:d:cache my:d:etc my:d:var my:d:lisp
+                     my:d:eln my:d:treesit my:d:treesit-build))
+    (my/ensure-directory-exists dir))
+
+  (add-to-list 'load-path my:d:lisp)
+
+  (when (featurep 'native-compile)
+    (setopt native-comp-async-report-warnings-errors 'silent)
+    (add-to-list 'native-comp-eln-load-path my:d:eln)
+    (when (eq system-type 'darwin)
+      (let ((brew-libgccjit
+             (expand-file-name "lib/gcc/current"
+                               (string-trim (shell-command-to-string "brew --prefix")))))
+        (when (file-directory-p brew-libgccjit)
+          (setenv "LIBRARY_PATH"
+                  (concat brew-libgccjit
+                          (when-let* ((orig (getenv "LIBRARY_PATH")))
+                            (concat ":" orig))))))))
+
   (add-hook 'emacs-startup-hook
             (lambda ()
-              (mapc #'my/ensure-directory-exists
-                    (list my:d:cache my:d:etc my:d:var my:d:treesit my:d:treesit-build))))
+              (dolist (mode '(menu-bar-mode tool-bar-mode scroll-bar-mode))
+                (when (fboundp mode)
+                  (funcall mode -1)))))
 
-  ;;;; UI Tweaks
-  (when (display-graphic-p)
-    (setq-default frame-resize-pixelwise t)
-    (add-hook 'window-setup-hook
-              (lambda () (set-frame-parameter nil 'fullscreen 'maximized))))
-
-  (when (daemonp)
-    (add-hook 'after-make-frame-functions
-              (lambda (f)
-                (when (display-graphic-p f)
-                  (with-selected-frame f
-                    (setq frame-resize-pixelwise t)
-                    (set-frame-parameter f 'fullscreen 'maximized))))))
-
-  ;; Avoid accidental truthy value; ensure scroll bars are disabled on first paint.
-  (setq default-frame-alist
-        (append '((menu-bar-lines . 0)
-                  (tool-bar-lines . 0)
-                  (vertical-scroll-bars . nil))
-                default-frame-alist))
-
-  ;; Fallback for already-created frames (TTY/daemon cases).
-  (when (display-graphic-p)
-    (menu-bar-mode -1)
-    (tool-bar-mode -1)
-    (scroll-bar-mode -1))
-
-    ;;;; Package Management (straight.el)
-  ;; Base directory inside `my:d:cache` for reproducibility.
-  (setq straight-base-dir my:d:cache
-        straight-use-package-by-default t)
-
-  ;; Use profile lockfiles for reproducibility
-  (setq straight-profiles '((nil . "default.el")))
-
-  (defvar bootstrap-version)
-  (let* ((bootstrap-file
-          (expand-file-name "straight/repos/straight.el/bootstrap.el"
-                            straight-base-dir))
-         (bootstrap-version 7))
-    (unless (file-exists-p bootstrap-file)
-      (let ((url-request-timeout 15))
-        (condition-case err
-            (with-current-buffer
-                (url-retrieve-synchronously
-                 "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-                 'silent 'inhibit-cookies)
-              (goto-char (point-max))
-              (eval-print-last-sexp))
-          (error
-           (warn "[straight] bootstrap failed: %s"
-                 (error-message-string err))))))
-    (load bootstrap-file nil 'nomessage))
+  (setopt straight-base-dir my:d:cache
+          straight-use-package-by-default t
+          straight-profiles '((nil . "default.el")))
 
 
   (provide 'early-init)
@@ -355,19 +260,31 @@ Performance optimizations and environment setup executed before main initializat
    :CUSTOM_ID: initial
    :END:
 
-Minimal init.el that loads the main configuration from README.org.
-- Purpose: Main configuration loader and base setup.
-- Features:
-  - Unbinds disruptive defaults; integrates CAPE completion.
-  - Loads `leaf.el` with `straight.el`.
-  - Configures basic behaviors (scrolling, auto-save, relative line numbers, etc.).
-  - Uses `no-littering` for clean paths.
-  - macOS integration: shell env sync (`exec-path-from-shell`) and PATH fallback.
-  - Dired enhancements (GNU ls).
-  - GC optimization via `gcmh`.
-  - Enables `hydra`.
-  - Loads `custom.el` and `personal/` user-specific configs.
-  - Loads modular configs from `lisp/`.
+Main initialization file for Emacs.
+This loads the actual configuration split into modular files under `lisp/`.
+
+Features:
+- Bootstraps `straight.el`
+- Installs and integrates `leaf.el` (`leaf-keywords`, `blackout`, `org`)
+- Base settings:
+  - Unbind disruptive defaults (`C-z`, `M-m`, etc.)
+  - Bind `M-/` to `cape-dabbrev` if available
+  - Enable smooth scrolling (`pixel-scroll-precision-mode`)
+  - Configure general behaviors (relative line numbers, auto-save, backups, short answers, etc.)
+  - OS-specific modifier keys (macOS, Windows, Linux)
+- Use `no-littering` for clean paths (`.etc/`, `.var/`)
+- macOS integration:
+  1. Import environment variables via `exec-path-from-shell`
+  2. Add fallback `PATH` entries for CLI/edge cases
+  3. Enable GNU ls (`gls`) integration for Dired if available
+- Enable GC optimization with `gcmh`
+- Enable `hydra` (lazy load)
+- Load `custom.el` from `.etc/custom.el`
+- Load user-specific config from `personal/USERNAME.el` if present
+- Modularized loading:
+  - Load `etc.el`, `ui.el`, `completion.el`, `org.el`, `lsp.el`, `tools.el` from `lisp/`
+  - Avoids monolithic `README.el`
+- Provide `init` feature for external `require`
 
 #+begin_src emacs-lisp :tangle init.el
   ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
@@ -375,18 +292,28 @@ Minimal init.el that loads the main configuration from README.org.
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/25 10:41:21 $
+  ;; $Lastupdate: 2025/09/26 14:16:38 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
 
-  ;;;; Disable disruptive default key bindings
-  (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
-    (keymap-global-unset k))
-  (when (fboundp 'cape-dabbrev)
-    (keymap-global-set "M-/" #'cape-dabbrev))
+  (defvar bootstrap-version)
+  (let ((bootstrap-file
+         (expand-file-name
+          "straight/repos/straight.el/bootstrap.el"
+          (or (bound-and-true-p straight-base-dir)
+              user-emacs-directory)))
+        (bootstrap-version 7))
+    (unless (file-exists-p bootstrap-file)
+      (with-current-buffer
+          (url-retrieve-synchronously
+           "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+           'silent 'inhibit-cookies)
+        (goto-char (point-max))
+        (eval-print-last-sexp)))
+    (load bootstrap-file nil 'nomessage))
 
   ;;;; Integrate straight.el with leaf
   (dolist (pkg '(leaf leaf-keywords leaf-convert blackout org))
@@ -402,6 +329,12 @@ Minimal init.el that loads the main configuration from README.org.
   (leaf emacs
     :straight nil
     :init
+    ;; Disable disruptive default key bindings
+    (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
+      (keymap-global-unset k))
+    (when (fboundp 'cape-dabbrev)
+      (keymap-global-set "M-/" #'cape-dabbrev))
+
     ;; UI toggles are in early-init to avoid flicker.
     (pixel-scroll-precision-mode)
 
@@ -525,6 +458,7 @@ Minimal init.el that loads the main configuration from README.org.
   (provide 'init)
   ;;; init.el ends here
 #+end_src
+
 
 ** Core Emacs configuration
 :PROPERTIES:
