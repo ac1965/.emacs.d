@@ -154,21 +154,41 @@ This configuration is a **modular full-stack setup for Emacs 30+**, structured w
 - modular configs under `lisp/`,
 - user-specific configs under `personal/`.
 
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+This configuration targets *Emacs 30+* with the following goals:
+
+- Fast startup (optimized GC and file handling)
+- Clean directory layout (~.cache/~, ~.etc/~, ~.var/~, etc.)
+- Modern package management with =straight.el= + =leaf.el=
+- Modular and maintainable structure (all config split under ~lisp/~)
+- Cross-platform support (macOS, Linux, Windows)
+
 ** Core
+:PROPERTIES:
+:CUSTOM_ID: core
+:END:
 
 *** early-init.el
-Early initialization for Emacs 30+.
-Goals: faster startup, clean directory layout, native-comp tuning, and minimal UI.
+:PROPERTIES:
+:CUSTOM_ID: early-init
+:END:
+Early initialization runs *before* =init.el= and sets up the environment for
+fast startup and clean separation of directories.
 
-- Disable `package.el` → use `straight.el` exclusively
-- Raise GC thresholds during startup → restore afterwards
-- Temporarily disable file-name handlers → restore afterwards
-- Create standard directories: `.cache/`, `.etc/`, `.var/`, `lisp/`, `eln-cache/`, `tree-sitter/`
-- Configure Native Compilation (silent async, cache under `.cache/eln-cache/`)
-- On macOS, automatically set Homebrew `libgccjit` path
-- Minimal UI (disable menu/tool/scroll bars after startup to avoid flicker)
-- Initialize straight.el in `.cache/` with defaults
-- Provide `early-init` feature for external `require`
+- Disable =package.el= (use =straight.el= exclusively)
+- Relax GC and file handlers during startup, then restore them afterwards
+- Create standard directories:
+  - ~.cache/~, ~.etc/~, ~.var/~, ~lisp/~, ~eln-cache/~, ~tree-sitter/~
+- Configure native compilation:
+  - Silent async compilation
+  - Cache under ~.cache/eln-cache/~
+  - On macOS, auto-detect =libgccjit= via Homebrew
+- Minimal UI (menu/tool/scroll bars disabled after startup to avoid flicker)
+- Initialize =straight.el= under ~.cache/~
+- Provide feature =early-init= for external =require=
 
 #+begin_src emacs-lisp :tangle early-init.el
   ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
@@ -182,18 +202,25 @@ Goals: faster startup, clean directory layout, native-comp tuning, and minimal U
 
   ;;; Code:
   (setopt package-enable-at-startup nil)
+
+  ;; Temporarily relax GC during startup; restore on first frame
   (defvar my:orig:gc-cons-threshold gc-cons-threshold)
   (defvar my:orig:gc-cons-percentage gc-cons-percentage)
-
-  (setopt gc-cons-threshold  most-positive-fixnum
-          gc-cons-percentage 0.6)
-
+  (setopt gc-cons-threshold most-positive-fixnum
+  	gc-cons-percentage 0.6) ; aggressive only at startup
   (add-hook 'emacs-startup-hook
-            (lambda ()
-              (setopt gc-cons-threshold  my:orig:gc-cons-threshold
-                      gc-cons-percentage my:orig:gc-cons-percentage)))
-  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
+  	  (lambda ()
+  	    (setopt gc-cons-threshold my:orig:gc-cons-threshold
+  		    gc-cons-percentage my:orig:gc-cons-percentage)))
 
+  ;; Disable costly file handlers during load; restore after init
+  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
+  (setq file-name-handler-alist nil)
+  (add-hook 'emacs-startup-hook
+  	  (lambda ()
+  	    (setq file-name-handler-alist my:orig:file-name-handler-alist)))
+
+  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
   (setq file-name-handler-alist nil)
 
   (add-hook 'emacs-startup-hook
@@ -229,17 +256,19 @@ Goals: faster startup, clean directory layout, native-comp tuning, and minimal U
 
   (when (featurep 'native-compile)
     (setopt native-comp-async-report-warnings-errors 'silent)
-    (add-to-list 'native-comp-eln-load-path my:d:eln)
-    (when (eq system-type 'darwin)
-      (let ((brew-libgccjit
-             (expand-file-name "lib/gcc/current"
-                               (string-trim (shell-command-to-string "brew --prefix")))))
-        (when (file-directory-p brew-libgccjit)
-          (setenv "LIBRARY_PATH"
-                  (concat brew-libgccjit
-                          (when-let* ((orig (getenv "LIBRARY_PATH")))
-                            (concat ":" orig))))))))
+    (add-to-list 'native-comp-eln-load-path my:d:eln))
 
+  (when (eq system-type 'darwin)
+    (let ((brew-libgccjit
+           (expand-file-name "lib/gcc/current"
+                             (string-trim (shell-command-to-string "brew --prefix")))))
+      (when (file-directory-p brew-libgccjit)
+        (setenv "LIBRARY_PATH"
+                (concat brew-libgccjit
+                        (when-let* ((orig (getenv "LIBRARY_PATH")))
+                          (concat ":" orig)))))))
+
+  ;; Disable heavyweight UI toggles *after* startup to avoid flicker
   (add-hook 'emacs-startup-hook
             (lambda ()
               (dolist (mode '(menu-bar-mode tool-bar-mode scroll-bar-mode))
@@ -292,13 +321,14 @@ Features:
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/26 14:16:38 $
+  ;; $Lastupdate: 2025/09/27 07:44:53 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
 
   ;;; Code:
 
+  ;; straight.el bootstrap (package.el is disabled in early-init.el)
   (defvar bootstrap-version)
   (let ((bootstrap-file
          (expand-file-name
@@ -324,6 +354,18 @@ Features:
     (require 'leaf)
     (require 'leaf-keywords))
   (leaf-keywords-init)
+
+  ;; Larger pipe buffer for LSP/rg/git; restore after startup.
+  ;; Note: This belongs in init.el (not early-init.el), since
+  ;; external processes (LSP, rg, git) are launched *after* init.
+  (defvar my:orig:read-process-output-max (and (boundp 'read-process-output-max)
+  					     read-process-output-max))
+  (when (boundp 'read-process-output-max)
+    (setq read-process-output-max (* 4 1024 1024))) ; 4 MiB during init
+  (add-hook 'emacs-startup-hook
+  	  (lambda ()
+  	    (when (boundp 'read-process-output-max)
+  	      (setq read-process-output-max my:orig:read-process-output-max))))
 
   ;;;; Base settings
   (leaf emacs
@@ -400,10 +442,10 @@ Features:
     (exec-path-from-shell-initialize))
 
   ;; 2) Fallback PATH for CLI/edge cases
+  ;; Append typical Homebrew bins on macOS if missing
   (when (eq system-type 'darwin)
     (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
-      (when (and (file-directory-p p)
-                 (not (member p exec-path)))
+      (when (and (file-directory-p p) (not (member p exec-path)))
         (add-to-list 'exec-path p)
         (setenv "PATH" (concat p ":" (getenv "PATH"))))))
 
@@ -418,16 +460,20 @@ Features:
   ;;;; Garbage Collection Magic Hack
   (leaf gcmh
     :straight t
-    :hook (emacs-startup . gcmh-mode))
+    :hook (emacs-startup . gcmh-mode)
+    :init
+    ;; Safe defaults: gentle collection
+    (setq gcmh-idle-delay 2
+          gcmh-high-cons-threshold (* 64 1024 1024)))
 
   ;;;; Hydra
   (leaf hydra
     :straight t
     :commands (defhydra))
 
-  ;;;; custom.el
+  ;; Load user customizations from cache/etc; keep init clean
   (setq custom-file my:f:custom)
-  (when (file-exists-p custom-file)
+  (when (file-readable-p custom-file)
     (load custom-file nil 'nomessage))
 
   ;;;; User-specific config
@@ -455,10 +501,21 @@ Features:
         (when (file-exists-p path)
           (load path nil 'nomessage)))))
 
+  ;; Report startup time and GC count after init (after epa-file etc.)
+  (add-hook 'after-init-hook
+            (lambda ()
+              (run-with-idle-timer
+               0 nil
+               (lambda ()
+                 (let ((elapsed (float-time (time-subtract after-init-time before-init-time)))
+                       (gc-count gcs-done))
+                   (message "Emacs ready in %.2f seconds with %d GCs." elapsed gc-count))))))
+
+
+
   (provide 'init)
   ;;; init.el ends here
 #+end_src
-
 
 ** Core Emacs configuration
 :PROPERTIES:
@@ -1905,75 +1962,48 @@ improved Makefile and compilation workflow, and Docker tooling
 including Dockerfile editing, container management, and TRAMP support.
 
 #+begin_src emacs-lisp :tangle lisp/lsp.el
+  ;; -----------------------------------------------------------------------------
   (defcustom my:use-lsp 'eglot
-    "LSP backend selection.
-  Valid values are:
-  - `eglot` (default, lightweight)
-  - `lsp`   (full-featured LSP-Mode)."
+    "Select which LSP client to use. Valid values: 'eglot or 'lsp."
     :type '(choice (const :tag "Eglot" eglot)
-                   (const :tag "LSP-Mode" lsp))
+                   (const :tag "lsp-mode" lsp))
     :group 'my)
 
-  ;; -----------------------------------------------------------------------------
-  ;;; Eglot (Lightweight LSP Client)
-  ;; - Starts language servers automatically in `prog-mode`.
-  ;; - Provides essential LSP features (rename, code actions, diagnostics).
-  ;; - Uses Flymake for on-the-fly diagnostics.
+  ;; Eglot: lightweight LSP client, enabled only if `my:use-lsp' is 'eglot
+  (leaf eglot
+    :when (eq my:use-lsp 'eglot)
+    :commands (eglot eglot-ensure) ; autoload only these entry points
+    :hook ((prog-mode . (lambda ()
+                          ;; Enable only when server contact can be guessed
+                          ;; -> prevents useless eglot startup in unsupported modes
+                          (when (eglot--guess-contact) (eglot-ensure)))))
+    :custom
+    ((eglot-autoreconnect . t))) ; reconnect if server dies
 
-  (when (eq my:use-lsp 'eglot)
-    (leaf eglot
-      :hook (prog-mode . eglot-ensure)
-      :custom
-      `((eglot-autoshutdown . t)      ;; Stop servers when not in use
-        (eglot-sync-connect . nil)    ;; Connect asynchronously
-        (eglot-events-buffer-size . 200))
-      :bind (:eglot-mode-map
-             ("C-c h" . eglot-help-at-point)
-             ("C-c r" . eglot-rename)
-             ("C-c a" . eglot-code-actions)
-             ("C-c d" . flymake-show-buffer-diagnostics))))
+  ;; lsp-mode: heavier alternative, loaded only if `my:use-lsp' is 'lsp
+  (leaf lsp-mode
+    :when (eq my:use-lsp 'lsp)
+    :commands (lsp lsp-deferred) ; autoload entry points
+    :custom
+    ((lsp-keymap-prefix . "C-c l"))) ; consistent keybinding prefix
 
-  ;; -----------------------------------------------------------------------------
-  ;;; LSP-Mode (Full-Featured LSP Client)
-  ;; - Activated when `my:use-lsp` is set to `lsp`.
-  ;; - Includes advanced features such as:
-  ;;   - Breadcrumb navigation
-  ;;   - Extensive diagnostics
-  ;;   - Enhanced completion
-
-  (when (eq my:use-lsp 'lsp)
-    (leaf lsp-mode
-      :straight t
-      :hook ((python-mode      . lsp)
-             (rust-mode        . lsp)
-             (go-mode          . lsp)
-             (js-mode          . lsp)
-             (typescript-mode  . lsp)
-             (c-mode           . lsp)
-             (c++-mode         . lsp))
-      :custom
-      `((lsp-enable-snippet . t)            ;; Enable snippet completion
-        (lsp-idle-delay . 0.5)              ;; Delay before LSP actions
-        (lsp-headerline-breadcrumb-enable . t)
-        (lsp-prefer-flymake . nil))         ;; Use Flycheck instead of Flymake
-      :config
-      (setq lsp-completion-provider :capf)))
-
-  ;; -----------------------------------------------------------------------------
-  ;;; LSP UI Enhancements
-  ;; - Adds inline documentation, diagnostics, and code action hints.
-  ;; - Works only when using LSP-Mode.
-
-  (when (eq my:use-lsp 'lsp)
-    (leaf lsp-ui
-      :straight t
-      :after lsp-mode
-      :custom
-      `((lsp-ui-doc-enable . t)
-        (lsp-ui-sideline-enable . t)
-        (lsp-ui-sideline-show-hover . t)
-        (lsp-ui-sideline-show-code-actions . t)
-        (lsp-ui-sideline-show-diagnostics . t))))
+  ;; Utility: temporarily enlarge `read-process-output-max`
+  ;; Useful for bandwidth-heavy subprocesses like LSP servers or ripgrep.
+  ;; Example:
+  ;;   (my/with-larger-rpom (* 8 1024 1024)
+  ;;     (lambda () (eglot-ensure)))
+  ;;
+  (defun my/with-larger-rpom (size-bytes fn)
+    "Call FN with `read-process-output-max' temporarily set to SIZE-BYTES.
+  Restores the original value afterwards, even if FN signals an error."
+    (let* ((sym 'read-process-output-max)
+           (orig (and (boundp sym) (symbol-value sym))))
+      ;; Set temporary value only if the variable exists
+      (when (boundp sym) (set sym size-bytes))
+      (unwind-protect
+          (funcall fn)
+        ;; Always restore original value
+        (when (boundp sym) (set sym orig)))))
 
   ;; -----------------------------------------------------------------------------
   ;; Aidermacs configuration
