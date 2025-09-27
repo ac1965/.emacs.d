@@ -314,7 +314,7 @@ Features:
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/27 17:06:44 $
+  ;; $Lastupdate: 2025/09/27 17:45:45 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -2363,12 +2363,14 @@ Personal and device-specific settings.
 #+begin_src emacs-lisp :tangle personal/user.el
   ;;; Personal Configuration -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
   ;; Licensed under the GNU General Public License version 3 or later.
 
   ;;; Commentary:
   ;; Personal settings and device-specific configurations
   ;;; Code:
+
+  (eval-when-compile (require 'leaf))
 
   ;; Personal Settings
   (leaf *personals
@@ -2447,77 +2449,67 @@ Personal and device-specific settings.
 
   ;; Apple Music Controller (macOS only)
   (when (eq system-type 'darwin)
-    (leaf apple-music
-      :doc "Apple Music control via AppleScript"
-      :after hydra
-      :bind (("C-c m" . hydra-apple-music/body))
-      :config
-      ;; Core functions for AppleScript execution
-      (defun my/apple-music-osascript-async (script &optional callback)
-        "Run AppleScript SCRIPT asynchronously, calling CALLBACK with output."
-        (let* ((proc-name "apple-music-async")
-               (buffer-name "*Apple Music Async*")
-               (osascript-cmd (list "osascript" "-e" script))
-               (proc (apply #'start-process proc-name buffer-name osascript-cmd)))
-          (when callback
-            (set-process-sentinel
-             proc
-             (lambda (process event)
-               (when (string= event "finished\n")
-                 (with-current-buffer (process-buffer process)
-                   (let ((output (string-trim (buffer-string))))
-                     (funcall callback output)))
-                 (kill-buffer (process-buffer process))))))))
+    ;; Core functions for AppleScript execution
+    (defun my/apple-music-osascript-async (script &optional callback)
+      "Run AppleScript SCRIPT asynchronously, calling CALLBACK with output."
+      (let* ((proc-name "apple-music-async")
+             (buffer-name "*Apple Music Async*")
+             (osascript-cmd (list "osascript" "-e" script))
+             (proc (apply #'start-process proc-name buffer-name osascript-cmd)))
+        (when callback
+          (set-process-sentinel
+           proc
+           (lambda (process event)
+             (when (string= event "finished\n")
+               (with-current-buffer (process-buffer process)
+                 (let ((output (string-trim (buffer-string))))
+                   (funcall callback output)))
+               (kill-buffer (process-buffer process))))))))
 
-      (defun my/apple-music-osascript-sync (script)
-        "Run AppleScript SCRIPT synchronously and return trimmed output."
-        (string-trim
-         (shell-command-to-string
-          (format "osascript -e '%s'" script))))
+    (defun my/apple-music-osascript-sync (script)
+      "Run AppleScript SCRIPT synchronously and return trimmed output."
+      (string-trim
+       (shell-command-to-string
+        (format "osascript -e '%s'" script))))
 
-      ;; Player controls
-      (defun my/apple-music-play-pause ()
-        "Toggle play/pause."
-        (interactive)
-        (my/apple-music-osascript-async "tell application \"Music\" to playpause"))
+    ;; Player controls
+    (defun my/apple-music-play-pause () (interactive)
+      (my/apple-music-osascript-async "tell application \"Music\" to playpause"))
 
-      (defun my/apple-music-next-track ()
-        "Skip to next track."
-        (interactive)
-        (my/apple-music-osascript-async "tell application \"Music\" to next track"))
+    (defun my/apple-music-next-track () (interactive)
+      (my/apple-music-osascript-async "tell application \"Music\" to next track"))
 
-      (defun my/apple-music-previous-track ()
-        "Go to previous track."
-        (interactive)
-        (my/apple-music-osascript-async "tell application \"Music\" to previous track"))
+    (defun my/apple-music-previous-track () (interactive)
+      (my/apple-music-osascript-async "tell application \"Music\" to previous track"))
 
-      ;; Track info
-      (defun my/apple-music-current-track-info ()
-        "Return current track info: Title — Artist [Album]."
-        (interactive)
-        (let ((info (my/apple-music-osascript-sync
-                     "tell application \"Music\" \
+    ;; Track info
+    (defun my/apple-music-current-track-info ()
+      "Return current track info: Title — Artist [Album]."
+      (interactive)
+      (let ((info (my/apple-music-osascript-sync
+                   "tell application \"Music\" \
   to (get name of current track) & \" — \" & (get artist of current track) & \" [\" & (get album of current track) & \"]\"")))
-          (if (called-interactively-p 'any)
-              (message "%s" info)
-            info)))
+        (if (called-interactively-p 'any)
+            (message "%s" info)
+          info)))
 
-      ;; Apple Music playlist support
-      (defun my/apple-music-get-playlists ()
-        "Return a list of playlist names from Apple Music."
-        (split-string
-         (my/apple-music-osascript-sync
-          "tell application \"Music\" to get name of playlists")
-         ", "))
+    ;; Playlist support
+    (defun my/apple-music-get-playlists ()
+      "Return a list of playlist names from Apple Music."
+      (split-string
+       (my/apple-music-osascript-sync
+        "tell application \"Music\" to get name of playlists")
+       ", "))
 
-      (defun my/apple-music-play-playlist (playlist)
-        "Play the Apple Music playlist named PLAYLIST."
-        (interactive
-         (list (completing-read "Playlist: " (my/apple-music-get-playlists))))
-        (my/apple-music-osascript-async
-         (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
+    (defun my/apple-music-play-playlist (playlist)
+      "Play the Apple Music playlist named PLAYLIST."
+      (interactive
+       (list (completing-read "Playlist: " (my/apple-music-get-playlists))))
+      (my/apple-music-osascript-async
+       (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
 
-      ;; Hydra interface
+    ;; Hydra interface
+    (with-eval-after-load 'hydra
       (defhydra hydra-apple-music (:hint nil)
         "
   Apple Music:
@@ -2528,7 +2520,9 @@ Personal and device-specific settings.
         ("b" my/apple-music-previous-track)
         ("l" my/apple-music-play-playlist)
         ("i" my/apple-music-current-track-info)
-        ("q" nil "quit"))))
+        ("q" nil "quit"))
+
+      (global-set-key (kbd "C-c m") #'hydra-apple-music/body)))
 
   (provide 'user)
   ;;; user.el ends here
