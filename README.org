@@ -220,13 +220,6 @@ fast startup and clean separation of directories.
   	  (lambda ()
   	    (setq file-name-handler-alist my:orig:file-name-handler-alist)))
 
-  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
-  (setq file-name-handler-alist nil)
-
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (setq file-name-handler-alist my:orig:file-name-handler-alist)))
-
   ;; Utility Functions
   (defun my/ensure-directory-exists (dir)
     "Ensure DIR exists, creating if necessary."
@@ -321,7 +314,7 @@ Features:
   ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
   ;; Licensed under the GNU General Public License version 3 or later.
 
-  ;; $Lastupdate: 2025/09/27 07:44:53 $
+  ;; $Lastupdate: 2025/09/27 17:06:44 $
 
   ;;; Commentary:
   ;; It includes package management, user-specific settings, and modular design.
@@ -354,6 +347,24 @@ Features:
     (require 'leaf)
     (require 'leaf-keywords))
   (leaf-keywords-init)
+
+  ;;; Define a customization group for all personal settings
+  ;;; All `defcustom` variables belonging to this group can be
+  ;;; managed together via: M-x customize-group RET my RET
+  (defgroup my nil
+    "User customizations."
+    :group 'convenience)
+
+  ;;; Choose which LSP client Emacs should use
+  ;;; - Default: `eglot` (lightweight, built into Emacs 29+)
+  ;;; - Alternative: `lsp` (lsp-mode, feature-rich but heavier)
+  ;;; This variable is used in init.el / lsp.el with :when
+  ;;; conditions to load the appropriate client.
+  (defcustom my:use-lsp 'eglot
+    "Select which LSP client to use. Valid values: 'eglot or 'lsp."
+    :type '(choice (const :tag "Eglot" eglot)
+                   (const :tag "lsp-mode" lsp))
+    :group 'my)
 
   ;; Larger pipe buffer for LSP/rg/git; restore after startup.
   ;; Note: This belongs in init.el (not early-init.el), since
@@ -534,29 +545,33 @@ Core Emacs configuration with modular design.
 #+begin_src emacs-lisp :tangle lisp/etc.el
   ;;; Etc Setup -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
   ;; Licensed under the GNU General Public License version 3 or later.
 
   ;;; Hydra for Text Scaling
   ;; Provides quick keybindings to increase, decrease, or reset text size.
+
+  (eval-when-compile (require 'leaf))
 
 #+end_src
 
 #+begin_src emacs-lisp :tangle lisp/completion.el
   ;;; Completion Setup -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
   ;; Licensed under the GNU General Public License version 3 or later.
 
   ;;; Completion Frameworks
   ;; - Configures a modern completion stack: Vertico, Corfu, Orderless, etc.
+
+  (eval-when-compile (require 'leaf))
 
 #+end_src
 
 #+begin_src emacs-lisp :tangle lisp/lsp.el
   ;;; --- -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
   ;; Licensed under the GNU General Public License version 3 or later.
 
   ;;; LSP Configuration (Eglot or LSP-Mode)
@@ -565,32 +580,40 @@ Core Emacs configuration with modular design.
   ;; - `eglot` (default, lightweight)
   ;; - `lsp`   (LSP-Mode, feature-rich)
 
+  (eval-when-compile (require 'leaf))
+
 #+end_src
 
 #+begin_src emacs-lisp :tangle lisp/org.el
-  ;;; Org Setup -*- lexical-binding: t; -*-a
+  ;;; Org Setup -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
   ;; Licensed under the GNU General Public License version 3 or later.
 
   ;;; Org Mode Configuration
   ;; Provides a GTD-style workflow with notes, tasks, agendas, and capture templates.
+
+  (eval-when-compile (require 'leaf))
 
 #+end_src
 
 #+begin_src emacs-lisp :tangle lisp/tools.el
   ;;; Tools Setup -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
   ;; Licensed under the GNU General Public License version 3 or later.
+
+  (eval-when-compile (require 'leaf))
 
 #+end_src
 
 #+begin_src emacs-lisp :tangle lisp/ui.el
   ;;; UI,Font Setup -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
   ;; Licensed under the GNU General Public License version 3 or later.
+
+  (eval-when-compile (require 'leaf))
 
 #+end_src
 
@@ -759,20 +782,20 @@ Core Emacs configuration with modular design.
         (select-window (selected-window)))))
 
   (defun my/find-keybinding-conflicts ()
-    "Find and display conflicting keybindings across active keymaps."
+    "Find and display conflicting keybindings in active keymaps."
     (interactive)
     (let ((conflicts (make-hash-table :test 'equal))
+          (maps (current-active-maps t))
           (buffer-name "*Keybinding Conflicts*"))
-      (mapatoms (lambda (sym)
-                  (when (and (boundp sym) (keymapp (symbol-value sym)))
-                    (map-keymap
-                     (lambda (key cmd)
-                       (when (commandp cmd)
-                         (let ((desc (key-description (vector key)))
-                               (existing (gethash desc conflicts)))
-                           (puthash desc (delete-dups (cons cmd existing))
-                                    conflicts))))
-                     (symbol-value sym)))))
+      (dolist (map maps)
+        (map-keymap
+         (lambda (key cmd)
+           (when (commandp cmd)
+             (let ((desc (key-description (vector key)))
+                   (existing (gethash desc conflicts)))
+               (puthash desc (delete-dups (cons cmd existing))
+                        conflicts))))
+         map))
       (with-current-buffer (get-buffer-create buffer-name)
         (read-only-mode -1)
         (erase-buffer)
@@ -784,7 +807,7 @@ Core Emacs configuration with modular design.
                                      (mapconcat #'symbol-name cmds ", ")))))
                  conflicts)
         (read-only-mode 1))
-      (switch-to-buffer buffer-name)))
+      (pop-to-buffer buffer-name)))
 
   ;; -----------------------------------------------------------------------------
   ;;; Dired Helper
@@ -986,7 +1009,7 @@ Core Emacs configuration with modular design.
   (leaf nerd-icons
     :straight t
     :if (display-graphic-p)
-    :custom ((nerd-icons-color-icons . (font-exists-p my:nerd-icons-font))))
+    :custom ((nerd-icons-color-icons . (my/font-exists-p my:nerd-icons-font))))
 
   ;; Show icons in Dired using nerd-icons.
   (leaf nerd-icons-dired
@@ -1035,27 +1058,25 @@ Core Emacs configuration with modular design.
   Adds a sidebar file explorer with live file watching and follow-mode.
 - Desktop Session Management
   Saves and restores window layouts and open files between sessions.
-- Winner Mode
-  Enables undo/redo for window layouts with =M-[= and =M-]=.
-- Custom Window Layout Utilities
+  - Custom Window Layout Utilities
   Adds functions for saving/restoring layouts and toggling window dedication.
 
 #+begin_src emacs-lisp :tangle lisp/ui.el
   ;; ---------------------------------------------------------------------------
   ;;; Fullscreen Mode Configuration
   ;; Ensures Emacs starts in fullscreen mode.
+  (defun my/set-frame-fullscreen (&optional frame)
+    "Always set FRAME (or current frame if nil) to fullscreen."
+    (when (display-graphic-p frame)
+      (set-frame-parameter (or frame (selected-frame)) 'fullscreen 'fullboth)))
+
   (leaf fullscreen
-    ;; Use startup hook so the first frame surely exists (non-daemon).
     :init
     (if (daemonp)
-        (add-hook 'after-make-frame-functions
-                  (lambda (frame)
-                    (when (display-graphic-p frame)
-                      (set-frame-parameter frame 'fullscreen 'fullboth))))
-      (add-hook 'emacs-startup-hook
-                (lambda ()
-                  (when (display-graphic-p)
-                    (set-frame-parameter nil 'fullscreen 'fullboth))))))
+        ;; Daemon: apply to each new frame
+        (add-hook 'after-make-frame-functions #'my/set-frame-fullscreen)
+      ;; Normal GUI startup: apply once
+      (add-hook 'emacs-startup-hook #'my/set-frame-fullscreen)))
 
   ;; ---------------------------------------------------------------------------
   ;;; Dynamic Window Resizing (Zoom)
@@ -1080,7 +1101,8 @@ Core Emacs configuration with modular design.
     :straight t
     :custom ((ef-themes-to-toggle . '(ef-frost ef-spring)))
     :config
-    (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t))
+    (unless custom-enabled-themes
+    (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t)))
 
   ;; ---------------------------------------------------------------------------
   ;;; Spacious Padding
@@ -1159,17 +1181,10 @@ Core Emacs configuration with modular design.
               (desktop-restore-eager . 10))
     :hook ((kill-emacs-hook . desktop-save-in-desktop-dir)
            (after-init-hook . (lambda ()
-                                (make-directory (concat no-littering-var-directory "desktop") t)
+                                (make-directory desktop-dirname t)
                                 (desktop-read))))
     :config
     (desktop-save-mode 1))
-
-  ;; ---------------------------------------------------------------------------
-  ;;; Winner Mode
-  ;; Allows undo/redo of window configurations.
-  (leaf winner
-    :commands (winner-mode)
-    :hook (emacs-startup-hook . (lambda () (winner-mode 1))))
 
   ;; ---------------------------------------------------------------------------
   ;;; Custom Window Layout Utilities
@@ -1216,16 +1231,20 @@ Core Emacs configuration with modular design.
   - *Miscellaneous* (restart, execute commands)
 
 #+begin_src emacs-lisp :tangle lisp/etc.el
-  (defhydra hydra-text-scale (:hint nil :color red)
-    "
+  ;; -----------------------------------------------------------------------------
+  ;; Hydra for Text Scaling
+  (leaf hydra
+    :straight t
+    :config
+    (defhydra hydra-text-scale (:hint nil :color red)
+      "
   ^Text Scaling^
-  ----------------------------
-  [_+_] Increase   [_-_] Decrease   [_0_] Reset
+  [_+_] Increase   [_-_] Decrease   [_0_] Reset   [_q_] Quit
   "
-    ("+" text-scale-increase)
-    ("-" text-scale-decrease)
-    ("0" (text-scale-set 0) :color blue)
-    ("q" nil "quit" :color blue))
+      ("+" text-scale-increase)
+      ("-" text-scale-decrease)
+      ("0" (text-scale-set 0) :color blue)
+      ("q" nil "quit" :color blue)))
 
   ;; -----------------------------------------------------------------------------
   ;;; Common Key Bindings
@@ -1234,119 +1253,101 @@ Core Emacs configuration with modular design.
   (leaf my:keys
     :doc "Centralized keybindings via `leaf-keys`, ordered by map lifetime."
     :emacs>= 30.0
+    :bind
+    (;; Global key bindings
+     ("<f1>"    . help)
+     ("<f5>"    . my/revert-buffer-quick)
+     ("<f8>"    . treemacs)
+     ("C-h"     . backward-delete-char)
+
+     ;; Undo/redo
+     ("C-/"     . undo-fu-only-undo)
+     ("C-?"     . undo-fu-only-redo)
+
+     ;; Text scaling
+     ("C-c z"   . hydra-text-scale/body)
+
+     ;; Buffer navigation
+     ("C-c b"   . consult-buffer)
+     ("M-n"     . forward-paragraph)
+     ("M-p"     . backward-paragraph)
+     ("s-<down>". end-of-buffer)
+     ("s-<up>"  . beginning-of-buffer)
+     ("s-<right>" . next-buffer)
+     ("s-<left>"  . previous-buffer)
+
+     ;; Window management
+     ("C-."     . other-window)
+     ("C-c 2"   . my/toggle-window-split)
+     ("s-."     . ace-window)
+     ("s-w"     . ace-swap-window)
+     ("s-d"     . delete-frame)
+     ("s-m"     . (lambda () (interactive)
+                    (let ((frame (make-frame)))
+                      (with-selected-frame frame
+                        (switch-to-buffer (generate-new-buffer "untitled"))))))
+
+     ;; File operations
+     ("s-j"     . find-file-other-window)
+     ("s-o"     . find-file-other-frame)
+     ("C-c o"   . find-file)
+     ("C-c v"   . find-file-read-only)
+     ("C-c V"   . view-file-other-window)
+     ("C-c k"   . kill-buffer-and-window)
+
+     ;; Search
+     ("C-s"     . consult-line)
+     ("C-c r"   . consult-ripgrep)
+
+     ;; Text manipulation
+     ("C-="     . er/expand-region)
+     ("C-c M-a" . align-regexp)
+     ("C-c ;"   . comment-or-uncomment-region)
+     ("C-c l"   . display-line-numbers-mode)
+
+     ;; Org mode & Roam
+     ("C-c d a" . org-agenda)
+     ("C-c d c" . org-capture)
+     ("C-c d i" . org-roam-node-insert)
+     ("C-c d f" . org-roam-node-find)
+
+     ;; Aider
+     ("C-c a a" . aidermacs-transient-menu)
+
+     ;; EWW (global bindings for browsing)
+     ("C-c w w" . eww)                ;; Open EWW (prompt URL/search)
+     ("C-c w s" . eww-search)         ;; Search + start isearch
+     ("C-c w o" . eww-open-file)      ;; Open local HTML
+     ("C-c w b" . eww-list-bookmarks) ;; Bookmarks
+     ("C-c w r" . eww-readable)       ;; Readable mode
+     ("C-c w u" . eww-back-url)       ;; Back
+     ("C-c w f" . eww-forward-url)    ;; Forward
+     ("C-c w I" . my/eww-toggle-images) ;; Toggle Image
+
+     ;; Misc
+     ("C-x g"   . magit-status)
+     ("s-r"     . restart-emacs)
+     ("M-x"     . execute-extended-command))
+
     :init
-    ;; Global keys that depend on packages: bind after the package is ready
-    (with-eval-after-load 'winner
-      (leaf-keys
-       (global-map
-        ("M-[" . winner-undo)
-        ("M-]" . winner-redo))))
-
-    ;; Mode-local keys: bind after the mode package loads
-    (with-eval-after-load 'treemacs
-      (leaf-keys
-       (treemacs-mode-map
-        ([mouse-1] . treemacs-single-click-expand-action))))
-
-    ;; Dired and its extensions
-    (with-eval-after-load 'dired
-      (leaf-keys
-       (dired-mode-map
-        ("i"   . dired-subtree-insert)
-        ("TAB" . dired-subtree-toggle))))
-
-    ;; Global key bindings
-    (leaf-keys
-     ;; Function keys and help
-     (("<f1>"    . help)
-      ("<f5>"    . my/revert-buffer-quick)
-      ("<f8>"    . treemacs)
-      ("C-h"     . backward-delete-char)
-
-      ;; Undo/redo
-      ("C-/"     . undo-fu-only-undo)
-      ("C-?"     . undo-fu-only-redo)
-
-      ;; Text scaling
-      ("C-+"     . text-scale-increase)
-      ("C--"     . text-scale-decrease)
-      ("C-0"     . (lambda () (interactive) (text-scale-set 0)))
-      ("C-c z"   . hydra-text-scale/body)
-
-      ;; Buffer navigation
-      ("C-c b"   . consult-buffer)
-      ("M-n"     . forward-paragraph)
-      ("M-p"     . backward-paragraph)
-      ("s-<down>". end-of-buffer)
-      ("s-<up>"  . beginning-of-buffer)
-      ("s-<right>" . next-buffer)
-      ("s-<left>"  . previous-buffer)
-
-      ;; Window management
-      ("C-."     . other-window)
-      ("C-c 2"   . my/toggle-window-split)
-      ("s-."     . ace-window)
-      ("s-w"     . ace-swap-window)
-      ("s-d"     . delete-frame)
-      ("s-m"     . (lambda () (interactive)
-                     (let ((frame (make-frame)))
-                       (with-selected-frame frame
-                         (switch-to-buffer (generate-new-buffer "untitled"))))))
-
-      ;; File operations
-      ("s-j"     . find-file-other-window)
-      ("s-o"     . find-file-other-frame)
-      ("C-c o"   . find-file)
-      ("C-c v"   . find-file-read-only)
-      ("C-c V"   . view-file-other-window)
-      ("C-c k"   . kill-buffer-and-window)
-
-      ;; Search
-      ("C-s"     . consult-line)
-      ("C-c r"   . consult-ripgrep)
-
-      ;; Text manipulation
-      ("C-="     . er/expand-region)
-      ("C-c M-a" . align-regexp)
-      ("C-c ;"   . comment-or-uncomment-region)
-      ("C-c l"   . display-line-numbers-mode)
-
-      ;; Org mode & Roam
-      ("C-c d a" . org-agenda)
-      ("C-c d c" . org-capture)
-      ("C-c d i" . org-roam-node-insert)
-      ("C-c d f" . org-roam-node-find)
-
-      ;; Aider
-      ("C-c a a" . aidermacs-transient-menu)
-
-      ;; EWW (global bindings for browsing)
-      ("C-c w w" . eww)                ;; Open EWW (prompt URL/search)
-      ("C-c w s" . eww-search)         ;; Search + start isearch
-      ("C-c w o" . eww-open-file)      ;; Open local HTML
-      ("C-c w b" . eww-list-bookmarks) ;; Bookmarks
-      ("C-c w r" . eww-readable)       ;; Readable mode
-      ("C-c w u" . eww-back-url)       ;; Back
-      ("C-c w f" . eww-forward-url)    ;; Forward
-      ("C-c w I" . my/eww-toggle-images) ;; Toggle Image
-
-      ;; Misc
-      ("C-x g"   . magit-status)
-      ("s-r"     . restart-emacs)
-      ("M-x"     . execute-extended-command)))
-
     ;; Enable directional window navigation with Shift + arrow keys.
-    (windmove-default-keybindings)
+    (windmove-default-keybindings))
 
-    ;; -----------------------------------------------------------------------------
-    ;; Dired Enhancements
-    ;; Adds a custom `z` key in Dired to open files in another window.
+  ;; -----------------------------------------------------------------------------
+  ;; Dired enhancements
+  (leaf dired
+    :bind (:dired-mode-map
+           ("i"   . dired-subtree-insert)
+           ("TAB" . dired-subtree-toggle)
+           ("z"   . my/dired-view-file-other-window)))
 
-    (add-hook 'dired-mode-hook
-              (lambda ()
-                (define-key dired-mode-map "z"
-  			  'my/dired-view-file-other-window)))
-    )
+  ;; -----------------------------------------------------------------------------
+  ;; Winner mode
+  (leaf winner
+    :straight t
+    :global-minor-mode t
+    :bind (("M-[" . winner-undo)
+           ("M-]" . winner-redo)))
 #+end_src
 
 *** Essential Configuration
@@ -1356,89 +1357,94 @@ This block configures basic editor behavior (electric pairs, relative line numbe
 file management with TRAMP and backup handling, and secure authentication
 using GPG, auth-source, and password-store.
 
-  #+begin_src emacs-lisp :tangle lisp/etc.el
-    ;; -----------------------------------------------------------------------------
+#+begin_src emacs-lisp :tangle lisp/etc.el
+  ;; -----------------------------------------------------------------------------
     ;;; Basic Editor Configuration
 
-    ;; Display relative line numbers in programming and text modes
-    (leaf display-line-numbers
-      :hook ((prog-mode text-mode) . display-line-numbers-mode)
-      :init (setq display-line-numbers-type 'relative))
+  ;; Display relative line numbers in programming and text modes
+  (leaf display-line-numbers
+    :hook ((prog-mode text-mode) . display-line-numbers-mode)
+    :init (setq display-line-numbers-type 'relative))
 
-    ;; -----------------------------------------------------------------------------
+  ;; -----------------------------------------------------------------------------
     ;;; File Management Configuration
 
-    ;; TRAMP setup for remote file editing
-    (leaf tramp
-      :pre-setq
-      `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-        (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
-      :custom
-      `((tramp-default-method . "scp")
-        (tramp-verbose . 10)))
+  ;; TRAMP setup for remote file editing
+  (leaf tramp
+    :pre-setq
+    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
+    :custom
+    `((tramp-default-method . "scp")
+      (tramp-verbose . 3)))
 
-    ;; Auto-save and backup configuration
-    (leaf files
-      :custom
-      `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
-        (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
-        (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
-        (delete-old-versions . t)))
+  ;; Auto-save and backup configuration
+  (leaf files
+    :custom
+    `((auto-save-file-name-transforms . '((".*" ,(concat no-littering-var-directory "backup") t)))
+      (auto-save-list-file-prefix . ,(concat no-littering-var-directory "backup/.saves-"))
+      (backup-directory-alist . '(("." . ,(concat no-littering-var-directory "backup"))))
+      (delete-old-versions . t)))
 
-    ;; -----------------------------------------------------------------------------
+  ;; -----------------------------------------------------------------------------
     ;;; Authentication Management
-    ;; Secure credential management using `auth-source`, `pass`, and GPG.
+  ;; Secure credential management using `auth-source`, `pass`, and GPG.
 
-    (leaf *authentication
+  (defvar my:d:password-store
+    (or (getenv "PASSWORD_STORE_DIR")
+        (concat no-littering-var-directory "password-store/"))
+    "Path to the password store.")
+
+  (defun my/auth-check-env ()
+    "Validate authentication environment and warn if misconfigured."
+    (unless (getenv "GPG_KEY_ID")
+      (display-warning 'auth "GPG_KEY_ID is not set." :level 'debug))
+    (unless (file-directory-p my:d:password-store)
+      (display-warning 'auth
+                       (format "Password store directory does not exist: %s"
+                               my:d:password-store)
+                       :level 'warning)))
+
+  (leaf *authentication
+    :init
+    (my/auth-check-env)
+
+    ;; GPG & auth-source
+    (leaf epa-file
+      :commands (epa-file-enable)
       :init
-      (defvar my:d:password-store
-        (or (getenv "PASSWORD_STORE_DIR")
-            (concat no-littering-var-directory "password-store/"))
-        "Path to the password store.")
+      ;; Configure pinentry mode safely before library load
+      (setq epa-pinentry-mode
+            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
+      ;; Enable encrypted file support after startup; avoids init-time I/O
+      (add-hook 'emacs-startup-hook #'epa-file-enable))
 
-      ;; Validate environment variables
-      (unless (getenv "GPG_KEY_ID")
-        (warn "GPG_KEY_ID is not set. Authentication features may not work properly."))
-      (unless (file-directory-p my:d:password-store)
-        (warn "Password store directory does not exist: %s" my:d:password-store))
-
-      ;; GPG & auth-source
-      (leaf epa-file
-        :commands (epa-file-enable)
-        :init
-        ;; Configure pinentry mode safely before library load
-        (setq epa-pinentry-mode
-              (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
-        ;; Enable encrypted file support after startup; avoids init-time I/O
-        (add-hook 'emacs-startup-hook #'epa-file-enable))
-
-      (leaf auth-source
-        :init
-        ;; Don't force load; apply only when the library is actually loaded.
-        (with-eval-after-load 'auth-source
-          (let ((key (getenv "GPG_KEY_ID")))
+    (leaf auth-source
+      :init
+      ;; Don't force load; apply only when the library is actually loaded.
+      (with-eval-after-load 'auth-source
+        (let ((key (getenv "GPG_KEY_ID")))
     	(if key
-                (setq auth-source-gpg-encrypt-to key)
+              (setq auth-source-gpg-encrypt-to key)
     	  (display-warning 'auth-source
     			   "GPG_KEY_ID is not set. Authentication backends may be limited.")))))
 
-      ;; Password-store and auth-source-pass
-      (leaf password-store :straight t)
-      (leaf auth-source-pass
-        :straight t
-        :commands (auth-source-pass-enable)
-        :hook (emacs-startup-hook .
-    			      (lambda ()
-    				(when (executable-find "pass")
-    				  (auth-source-pass-enable)))))
+    ;; Password-store and auth-source-pass
+    (leaf password-store :straight t)
+    (leaf auth-source-pass
+      :straight t
+      :commands (auth-source-pass-enable)
+      :hook (emacs-startup-hook . (lambda ()
+    				  (when (executable-find "pass")
+    				    (auth-source-pass-enable)))))
 
-      ;; Secure plstore
-      (leaf plstore
-        :init
-        ;; Set options only when plstore is loaded; avoids eager require.
-        (with-eval-after-load 'plstore
-          (setq plstore-secret-keys 'silent
-                plstore-encrypt-to (getenv "GPG_KEY_ID")))))
+    ;; Secure plstore
+    (leaf plstore
+      :init
+      ;; Set options only when plstore is loaded; avoids eager require.
+      (with-eval-after-load 'plstore
+        (setq plstore-secret-keys 'silent
+              plstore-encrypt-to (getenv "GPG_KEY_ID")))))
 #+end_src
 
 **** Editing Enhancements
@@ -1806,8 +1812,13 @@ and Nerd Icons integration for a modern, context-aware completion experience.
     (leaf orderless
       :straight t
       :custom
-      ((completion-styles . '(orderless basic))
-       (completion-category-overrides . '((file (styles . (partial-completion)))))))
+      ((completion-styles . '(orderless basic flex))
+       (completion-category-defaults . nil)
+       (completion-category-overrides .
+  				    '((file    (styles . (partial-completion)))
+  				      (symbol  (styles . (flex)))
+  				      (project (styles . (basic)))
+  				      (command (styles . (orderless)))))))
 
     ;; nerd-icons-{ibuffer,completion}
     (leaf nerd-icons-ibuffer
@@ -1828,20 +1839,34 @@ visual enhancements via org-modern and org-superstar for a clean,
 productive workflow.
 
 #+begin_src emacs-lisp :tangle lisp/org.el
+  ;; -----------------------------------------------------------------------------
+  ;; Path variables for Org ecosystem
+  (defvar my:d:org (expand-file-name "org/" my:d:cloud)
+    "Main Org directory.")
+  (defvar my:d:org-journal (expand-file-name "journal" my:d:org)
+    "Org journal directory.")
+  (defvar my:d:org-roam (expand-file-name "org-roam" my:d:org)
+    "Org Roam directory.")
+  (defvar my:d:org-pictures (expand-file-name "pictures" my:d:org)
+    "Org pictures directory.")
+  (defvar my:f:capture-blog-file (expand-file-name "blog.org" my:d:org)
+    "Default Org file for Hugo blog captures.")
+
+  (my/ensure-directory-exists my:d:org)
+  (my/ensure-directory-exists my:d:org-journal)
+  (my/ensure-directory-exists my:d:org-roam)
+  (my/ensure-directory-exists my:d:org-pictures)
+
+  ;; -----------------------------------------------------------------------------
+  ;;; Org Mode
   (leaf org
     :straight t
     :leaf-defer t
     :preface
-    ;; Org directory setup
-    (defvar warning-suppress-types nil)
-    (unless (boundp 'my:d:cloud)
-      (setq my:d:cloud (concat no-littering-var-directory "./")))
-
     ;; Utility: List all open Org files
     (defun my/org-buffer-files ()
       "Return a list of currently open Org files."
-      (delq nil
-            (mapcar #'buffer-file-name (org-buffer-list 'files))))
+      (delq nil (mapcar #'buffer-file-name (org-buffer-list 'files))))
 
     ;; Utility: Show a specific Org file in current buffer
     (defun my/show-org-buffer (file)
@@ -1852,52 +1877,42 @@ productive workflow.
             (switch-to-buffer (get-file-buffer filepath))
           (find-file filepath))))
 
-    :custom ((org-support-shift-select . t))
+    :custom
+    ((org-support-shift-select . t)
+     (org-directory . my:d:org)
+     (org-return-follows-link . t)
+     (org-mouse-1-follows-link . t)
+     (org-cycle-emulate-tab . 'white-space)
+     (org-default-notes-file . "notes.org")
+     (org-enforce-todo-dependencies . t)
+     (org-idle-time . 0.3)
+     (org-log-done . 'time)
+     (org-startup-folded . 'content)
+     (org-startup-truncated . nil)
+     (org-use-speed-commands . t)
+     (org-link-frame-setup . '((file . find-file))))
     :init
-    ;; Org directory
-    (setq org-directory (expand-file-name "org/" my:d:cloud))
-    (my/ensure-directory-exists org-directory)
-
-    ;; Link & cache settings
-    (setq org-return-follows-link t
-          org-mouse-1-follows-link t
-          warning-suppress-types (append warning-suppress-types '((org-element-cache))))
-
-    ;; Key bindings for quick access to major Org files
+    ;; Suppress noisy cache warnings
+    (setq warning-suppress-types
+          (append warning-suppress-types '((org-element-cache))))
     :bind
     (("C-M--" . (lambda () (interactive) (my/show-org-buffer "gtd.org")))
      ("C-M-^" . (lambda () (interactive) (my/show-org-buffer "notes.org")))
      ("C-M-~" . (lambda () (interactive) (my/show-org-buffer "kb.org"))))
-
     :config
-    ;; General Org settings
-    (setq org-agenda-files (list org-directory)
-          org-cycle-emulate-tab 'white-space
-          org-default-notes-file "notes.org"
-          org-enforce-todo-dependencies t
-          org-idle-time 0.3
-          org-log-done 'time
-          org-startup-folded 'content
-          org-startup-truncated nil
-          org-use-speed-commands t
-          org-link-frame-setup '((file . find-file)))
-
     ;; Agenda files (exclude archives)
     (setq org-agenda-files
           (seq-filter (lambda (file)
                         (not (string-match-p "archives" file)))
                       (directory-files-recursively org-directory "\\.org$")))
-
     ;; TODO keywords
     (setq org-todo-keywords
           '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
-
     ;; Refile targets
     (setq org-refile-targets
           '((nil :maxlevel . 3)
             (my/org-buffer-files :maxlevel . 1)
             (org-agenda-files :maxlevel . 3)))
-
     ;; Capture templates
     (setq org-capture-templates
           `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
@@ -1910,48 +1925,37 @@ productive workflow.
              "* MEETING with %? :meeting:\n  %U\n  %a"))))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Org Modern Styling
-  ;; Improves Org visual style with cleaner headings, ellipsis, and agenda tweaks.
-
+  ;;; Org Modern (visual tweaks)
   (leaf org-modern
     :straight t
-    :commands (org-modern-mode)
     :hook (org-mode . org-modern-mode)
     :custom
-    ;; Org appearance tweaks
-    (org-startup-indented . t)
-    (org-hide-leading-stars . t)
-    (org-auto-align-tags . nil)
-    (org-tags-column . 0)
-    (org-catch-invisible-edits . 'show-and-error)
-    (org-special-ctrl-a/e . t)
-    (org-insert-heading-respect-content . t)
-    (org-hide-emphasis-markers . t)
-    (org-pretty-entities . t)
-    (org-agenda-tags-column . 0)
-    (org-agenda-block-separator . ?─)
-    (org-agenda-time-grid .
-  			'((daily today require-timed)
-  			  (800 1000 1200 1400 1600 1800 2000)
-  			  " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
-    (org-agenda-current-time-string
-     . "⭠ now ─────────────────────────────────────────────────"))
+    ((org-startup-indented . t)
+     (org-hide-leading-stars . t)
+     (org-auto-align-tags . nil)
+     (org-tags-column . 0)
+     (org-catch-invisible-edits . 'show-and-error)
+     (org-special-ctrl-a/e . t)
+     (org-insert-heading-respect-content . t)
+     (org-hide-emphasis-markers . t)
+     (org-pretty-entities . t)
+     (org-agenda-tags-column . 0)
+     (org-agenda-block-separator . ?─)
+     (org-agenda-time-grid .
+                           '((daily today require-timed)
+                             (800 1000 1200 1400 1600 1800 2000)
+                             " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
+     (org-agenda-current-time-string
+      . "⭠ now ─────────────────────────────────────────────────")))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Org Superstar (Pretty Headings)
-  ;; Enhances the visual appearance of Org headlines by replacing the default
-  ;; asterisks with a set of Unicode symbols.
-
+  ;;; Org Superstar (optional pretty bullets)
   (leaf org-superstar
     :after org
+    :hook (org-mode . org-superstar-mode)
     :custom
-    ;; Custom bullet symbols for different heading levels
-    (org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
-    ;; Keep leading stars (set to `t` to remove them completely)
-    (org-superstar-remove-leading-stars . nil)
-    :hook
-    ;; Enable `org-superstar-mode` automatically for Org buffers
-    (org-mode . org-superstar-mode))
+    ((org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
+     (org-superstar-remove-leading-stars . nil)))
 #+end_src
 
 **** Development Environment
@@ -1963,29 +1967,34 @@ including Dockerfile editing, container management, and TRAMP support.
 
 #+begin_src emacs-lisp :tangle lisp/lsp.el
   ;; -----------------------------------------------------------------------------
-  (defcustom my:use-lsp 'eglot
-    "Select which LSP client to use. Valid values: 'eglot or 'lsp."
-    :type '(choice (const :tag "Eglot" eglot)
-                   (const :tag "lsp-mode" lsp))
-    :group 'my)
-
   ;; Eglot: lightweight LSP client, enabled only if `my:use-lsp' is 'eglot
   (leaf eglot
     :when (eq my:use-lsp 'eglot)
-    :commands (eglot eglot-ensure) ; autoload only these entry points
+    :commands (eglot eglot-ensure) ; autoload only these
     :hook ((prog-mode . (lambda ()
-                          ;; Enable only when server contact can be guessed
-                          ;; -> prevents useless eglot startup in unsupported modes
+                          ;; Enable only when a server contact is known
                           (when (eglot--guess-contact) (eglot-ensure)))))
     :custom
-    ((eglot-autoreconnect . t))) ; reconnect if server dies
+    ((eglot-autoreconnect . t))
+    :config
+    ;; Per-language hooks
+    (add-hook 'python-mode-hook #'eglot-ensure)     ; Python
+    (add-hook 'rust-mode-hook   #'eglot-ensure)     ; Rust
+    (add-hook 'go-mode-hook     #'eglot-ensure)     ; Go
+    (add-hook 'js-mode-hook     #'eglot-ensure)     ; JavaScript
+    (add-hook 'typescript-mode-hook #'eglot-ensure)) ; TypeScript
 
   ;; lsp-mode: heavier alternative, loaded only if `my:use-lsp' is 'lsp
   (leaf lsp-mode
     :when (eq my:use-lsp 'lsp)
     :commands (lsp lsp-deferred) ; autoload entry points
     :custom
-    ((lsp-keymap-prefix . "C-c l"))) ; consistent keybinding prefix
+    ((lsp-keymap-prefix . "C-c l")) ; unified prefix
+    :hook ((python-mode-hook . lsp-deferred)     ; Python
+           (rust-mode-hook   . lsp-deferred)     ; Rust
+           (go-mode-hook     . lsp-deferred)     ; Go
+           (js-mode-hook     . lsp-deferred)     ; JavaScript
+           (typescript-mode-hook . lsp-deferred))) ; TypeScript
 
   ;; Utility: temporarily enlarge `read-process-output-max`
   ;; Useful for bandwidth-heavy subprocesses like LSP servers or ripgrep.
@@ -2128,12 +2137,9 @@ Markdown editing support, creating a complete writing and publishing workflow.
 
 #+begin_src emacs-lisp :tangle lisp/org.el
   ;; -----------------------------------------------------------------------------
-  ;;; Org Babel (Code Execution in Org)
-  ;; Enables execution of code blocks in multiple languages.
-
+  ;;; Org Babel (code execution)
   (leaf ob
     :after org
-    :defun org-babel-do-load-languages
     :config
     (org-babel-do-load-languages
      'org-babel-load-languages
@@ -2142,113 +2148,84 @@ Markdown editing support, creating a complete writing and publishing workflow.
 
   ;; -----------------------------------------------------------------------------
   ;;; Org Journal
-  ;; Daily journaling with agenda integration.
-
   (leaf org-journal
     :straight t
     :after org
+    :custom
+    ((org-journal-dir . my:d:org-journal)
+     (org-journal-enable-agenda-integration . t))
     :config
-    (setq org-journal-dir (concat org-directory "/journal")
-          org-journal-enable-agenda-integration t)
     (defun my/org-journal-find-location ()
       "Open today's journal entry."
       (org-journal-new-entry t)))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Org Roam (Networked Note-Taking)
-  ;; A personal knowledge base with backlinks and a graph-based view.
-
+  ;;; Org Roam
   (leaf org-roam
     :straight t
     :after org
+    :custom ((org-roam-directory . my:d:org-roam))
     :config
-    (setq org-roam-directory (concat org-directory "/org-roam"))
-    (unless (file-directory-p org-roam-directory)
-      (make-directory org-roam-directory t))
     (org-roam-db-autosync-mode))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Org Download (Image Management)
-  ;; Enables drag-and-drop or clipboard-based image insertion into Org files.
-  ;; Images are stored in an "pictures" directory under `org-directory`.
-
+  ;;; Org Download
   (leaf org-download
     :straight t
     :after org
-    :config
-    (setq org-download-image-dir (expand-file-name "pictures" org-directory))
-    (unless (file-directory-p org-download-image-dir)
-      (make-directory org-download-image-dir t)))
+    :custom ((org-download-image-dir . my:d:org-pictures)))
 
   ;; -----------------------------------------------------------------------------
-  ;;; TOC-Org (Table of Contents)
-  ;; Automatically generates and updates tables of contents for Org and Markdown.
-
+  ;;; TOC-Org
   (leaf toc-org
     :straight t
-    :after org markdown-mode
-    :config
-    (add-hook 'org-mode-hook 'toc-org-enable)
-    (add-hook 'markdown-mode-hook 'toc-org-mode))
+    :after (org markdown-mode)
+    :hook ((org-mode . toc-org-enable)
+           (markdown-mode . toc-org-mode)))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Org Cliplink (Insert Clickable Links)
-  ;; Fetches the title of a webpage and inserts a properly formatted Org link.
-
+  ;;; Org Cliplink
   (leaf org-cliplink
     :straight t
     :after org
     :bind ("C-x p i" . org-cliplink))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Org LaTeX Export Configuration
-  ;; Adds common LaTeX packages and defines a multi-pass `pdflatex` build pipeline
-  ;; with BibTeX integration for high-quality PDF exports.
-
+  ;;; Org LaTeX Export
   (leaf org-latex
     :after org
     :custom
-    (org-latex-packages-alist
-     '(("" "graphicx" t)
-       ("" "longtable" nil)
-       ("" "wrapfig" nil)))
-    (setq org-latex-pdf-process
-          '("pdflatex -interaction nonstopmode -output-directory %o %f"
-            "bibtex %b"
-            "pdflatex -interaction nonstopmode -output-directory %o %f"
-            "pdflatex -interaction nonstopmode -output-directory %o %f")))
+    ((org-latex-packages-alist
+      '(("" "graphicx" t)
+        ("" "longtable" nil)
+        ("" "wrapfig" nil)))
+     (org-latex-pdf-process
+      '("pdflatex -interaction nonstopmode -output-directory %o %f"
+        "bibtex %b"
+        "pdflatex -interaction nonstopmode -output-directory %o %f"
+        "pdflatex -interaction nonstopmode -output-directory %o %f"))))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Org Export to Hugo (Static Site Generation)
-  ;; Exports Org content to the Hugo static site generator format.
-
+  ;;; Hugo Export
   (leaf ox-hugo
     :straight t
-    :require t
     :after ox
     :custom ((org-hugo-front-matter-format . "toml")))
 
-  ;; -----------------------------------------------------------------------------
-  ;;; Hugo Blog Capture Template
-  ;; Adds an Org-Capture template for quickly creating new Hugo blog posts.
-
   (leaf *ox-hugo--capture
-    :require org-capture
-    :defvar (org-capture-templates)
+    :after org-capture
     :config
     (defun my/generate-safe-filename ()
       "Generate a unique, safe filename for Hugo export."
       (format "%s-%s" (format-time-string "%Y")
               (string-trim (shell-command-to-string "uuidgen | cut -c1-8"))))
     (add-to-list 'org-capture-templates
-                 '("b" "Create new blog post" entry
-                   (file+headline my:f:capture-blog-file "blog")
+                 `("b" "Create new blog post" entry
+                   (file+headline ,my:f:capture-blog-file "blog")
                    "** TODO %?\n  :PROPERTIES:\n  :EXPORT_FILE_NAME: %(my/generate-safe-filename)\n  :EXPORT_DATE:\n  :EXPORT_HUGO_TAGS:\n  :EXPORT_HUGO_CATEGORIES:\n  :EXPORT_HUGO_LASTMOD:\n  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false\n  :END:\n\n")))
 
   ;; -----------------------------------------------------------------------------
-  ;;; Markdown Mode
-  ;; Enables `markdown-mode` for `.md` files.
-
+  ;;; Markdown
   (leaf markdown-mode
     :straight t
     :mode ("\\.md\\'" . markdown-mode))
@@ -2256,8 +2233,9 @@ Markdown editing support, creating a complete writing and publishing workflow.
   (leaf markdown-preview-mode
     :straight t
     :after markdown-mode
-    :config
-    (setq markdown-preview-stylesheets (list "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/4.0.0/github-markdown.min.css")))
+    :custom
+    ((markdown-preview-stylesheets
+      . '("https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/4.0.0/github-markdown.min.css"))))
 #+end_src
 
 **** EWW Web Browser Enhancements
