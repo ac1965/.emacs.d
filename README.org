@@ -161,313 +161,348 @@ This Emacs configuration is modular and organized for **Emacs 30+**.
 :END:
 
 *** early-init.el
+:PROPERTIES:
+:CUSTOM_ID: early-init
+:END:
+
+*Purpose*
+Provide early, minimal startup optimizations and directory scaffolding for a modular setup using `straight.el` + `leaf.el`.
+
+*What it does*
+- Disables `package.el` auto-activation.
+- Temporarily widens GC and disables file-name handlers; restores later.
+- Creates cache/var/etc/eln/treesit directories defensively.
+- Configures native-comp warnings and eln path.
+- On macOS, adjusts `LIBRARY_PATH` if Homebrew `libgccjit` exists.
+- Disables heavy UI toggles after first frame.
+- Points `straight` base dir to `.cache/`.
+
+*Notes*
+- All originals are restored.
+- Brew detection is guarded and safe.
+- Directory creation is tolerant of errors.
+
 #+begin_src emacs-lisp :tangle early-init.el
-  ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
+;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao
-  ;; Licensed under the GNU GPL v3 or later.
+;; Copyright (c) 2021-2025
+;; Author: YAMASHITA, Takao
+;; License: GNU GPL v3 or later
 
-  ;;; Commentary:
-  ;; Minimal early startup optimizations and directory setup
-  ;; for Emacs 30+ with straight.el + leaf.el
+;;; Commentary:
+;; Early startup optimizations and directory setup for Emacs 30+.
+;; Safe, reversible, and compatible with straight.el + leaf.el.
 
-  ;;; Code:
+;;; Code:
 
-  (setopt package-enable-at-startup nil)
+(setopt package-enable-at-startup nil)
 
-  ;; Temporarily relax GC during startup; restore on first frame
-  (defvar my:orig:gc-cons-threshold gc-cons-threshold)
-  (defvar my:orig:gc-cons-percentage gc-cons-percentage)
-  (setopt gc-cons-threshold most-positive-fixnum
-  	gc-cons-percentage 0.6) ; aggressive only at startup
-  (add-hook 'emacs-startup-hook
-  	  (lambda ()
-  	    (setopt gc-cons-threshold my:orig:gc-cons-threshold
-  		    gc-cons-percentage my:orig:gc-cons-percentage)))
+;; Save & widen GC limits during startup, restore later
+(defvar my:orig:gc-cons-threshold gc-cons-threshold)
+(defvar my:orig:gc-cons-percentage gc-cons-percentage)
+(setopt gc-cons-threshold most-positive-fixnum
+        gc-cons-percentage 0.6)
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setopt gc-cons-threshold my:orig:gc-cons-threshold
+                    gc-cons-percentage my:orig:gc-cons-percentage)))
 
-  ;; Disable costly file handlers during load; restore after init
-  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
-  (setq file-name-handler-alist nil)
-  (add-hook 'emacs-startup-hook
-  	  (lambda ()
-  	    (setq file-name-handler-alist my:orig:file-name-handler-alist)))
+;; Suppress file-name-handler overhead during init
+(defvar my:orig:file-name-handler-alist file-name-handler-alist)
+(setq file-name-handler-alist nil)
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setq file-name-handler-alist my:orig:file-name-handler-alist)))
 
-  ;; Utility Functions
-  (defun my/ensure-directory-exists (dir)
-    "Ensure DIR exists, creating if necessary."
-    (unless (file-directory-p dir)
-      (condition-case err
-          (make-directory dir t)
-        (error (warn "Failed to create directory: %s - %s" dir err)))))
+(defun my/ensure-directory-exists (dir)
+  "Ensure DIR exists; create if necessary."
+  (unless (file-directory-p dir)
+    (condition-case err
+        (make-directory dir t)
+      (error (warn "Failed to create directory: %s (%s)" dir (error-message-string err))))))
 
-  (defvar my:d (or (and load-file-name
-                        (file-name-directory (file-chase-links load-file-name)))
-                   user-emacs-directory))
+;; Define directory layout
+(defvar my:d (or (and load-file-name
+                      (file-name-directory (file-chase-links load-file-name)))
+                 user-emacs-directory))
 
-  (defvar my:d:cache   (expand-file-name ".cache/"       my:d))
-  (defvar my:d:etc     (expand-file-name ".etc/"         my:d))
-  (defvar my:d:var     (expand-file-name ".var/"         my:d))
-  (defvar my:d:lisp    (expand-file-name "lisp/"         my:d))
-  (defvar my:d:eln     (expand-file-name "eln-cache/"    my:d:cache))
-  (defvar my:d:treesit (expand-file-name "tree-sitter/"  my:d:var))
-  (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache))
-  (defvar my:f:custom  (expand-file-name "custom.el"     my:d:etc))
+(defvar my:d:cache   (expand-file-name ".cache/"       my:d))
+(defvar my:d:etc     (expand-file-name ".etc/"         my:d))
+(defvar my:d:var     (expand-file-name ".var/"         my:d))
+(defvar my:d:lisp    (expand-file-name "lisp/"         my:d))
+(defvar my:d:eln     (expand-file-name "eln-cache/"    my:d:cache))
+(defvar my:d:treesit (expand-file-name "tree-sitter/"  my:d:var))
+(defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache))
+(defvar my:f:custom  (expand-file-name "custom.el"     my:d:etc))
 
-  (dolist (dir (list my:d:cache my:d:etc my:d:var my:d:lisp
-                     my:d:eln my:d:treesit my:d:treesit-build))
-    (my/ensure-directory-exists dir))
+(dolist (dir (list my:d:cache my:d:etc my:d:var my:d:lisp
+                   my:d:eln my:d:treesit my:d:treesit-build))
+  (my/ensure-directory-exists dir))
 
-  (add-to-list 'load-path my:d:lisp)
+(add-to-list 'load-path my:d:lisp)
 
-  (when (featurep 'native-compile)
-    (setopt native-comp-async-report-warnings-errors 'silent)
-    (add-to-list 'native-comp-eln-load-path my:d:eln))
+;; Native compilation setup
+(when (featurep 'native-compile)
+  (setopt native-comp-async-report-warnings-errors 'silent)
+  (add-to-list 'native-comp-eln-load-path my:d:eln))
 
-  (when (eq system-type 'darwin)
-    (let ((brew-libgccjit
-           (expand-file-name "lib/gcc/current"
-                             (string-trim (shell-command-to-string "brew --prefix")))))
-      (when (file-directory-p brew-libgccjit)
-        (setenv "LIBRARY_PATH"
-                (concat brew-libgccjit
-                        (when-let* ((orig (getenv "LIBRARY_PATH")))
-                          (concat ":" orig)))))))
+;; macOS + Homebrew libgccjit support
+(when (and (eq system-type 'darwin) (executable-find "brew"))
+  (condition-case err
+      (let* ((prefix (string-trim (shell-command-to-string "brew --prefix")))
+             (brew-libgccjit (expand-file-name "lib/gcc/current" prefix)))
+        (when (file-directory-p brew-libgccjit)
+          (setenv "LIBRARY_PATH"
+                  (concat brew-libgccjit
+                          (when-let ((orig (getenv "LIBRARY_PATH")))
+                            (concat ":" orig))))))
+    (error (message "[early-init] brew probe failed: %s" (error-message-string err)))))
 
-  ;; Disable heavyweight UI toggles *after* startup to avoid flicker
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (dolist (mode '(menu-bar-mode tool-bar-mode scroll-bar-mode))
-                (when (fboundp mode)
-                  (funcall mode -1)))))
+;; Disable heavy UI after first frame
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (dolist (mode '(menu-bar-mode tool-bar-mode scroll-bar-mode))
+              (when (fboundp mode) (funcall mode -1)))))
 
-  (setopt straight-base-dir my:d:cache
-          straight-use-package-by-default t
-          straight-profiles '((nil . "default.el")))
+;; straight.el defaults
+(setopt straight-base-dir my:d:cache
+        straight-use-package-by-default t
+        straight-profiles '((nil . "default.el")))
 
-
-  (provide 'early-init)
-  ;;; early-init.el ends here
+(provide 'early-init)
+;;; early-init.el ends here
 #+end_src
 
 *** init.el
+:PROPERTIES:
+:CUSTOM_ID: init
+:END:
+
+*Purpose*
+Bootstrap packages, configure base behavior, and load modular files.
+
+*What it does*
+- Bootstraps `straight.el` (guarded, timeout).
+- Installs and initializes `leaf`.
+- Defines user customization group (`my`) and LSP selector.
+- Temporarily enlarges process I/O buffer; restores later.
+- Configures sensible defaults (UI, editing, scrolling).
+- Uses `no-littering` to centralize paths.
+- On macOS: imports shell env safely; extends PATH; configures `dired`.
+- Loads personal and modular configs fault-tolerantly.
+- Reports startup time & GC count asynchronously.
+
+*Notes*
+- Safe wrappers prevent single-file errors from breaking init.
+- `custom.el` is isolated in `.etc`.
+- Load-path sanitized (no root dir).
+
 #+begin_src emacs-lisp :tangle init.el
-  ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
+;;; init.el --- Main initialization -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025 YAMASHITA, Takao <tjy1965@gmail.com>
-  ;; Licensed under the GNU General Public License version 3 or later.
+;; Copyright (c) 2021-2025
+;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+;; License: GNU GPL v3 or later
 
-  ;; $Lastupdate: 2025/09/28 15:28:35 $
+;;; Commentary:
+;; Main initialization file for Emacs 30+.
+;; Provides package management (straight.el + leaf),
+;; user customization groups, base UI/behavior,
+;; and modular loading of configuration from lisp/.
 
-  ;;; Commentary:
-  ;; It includes package management, user-specific settings, and modular design.
+;;; Code:
 
-  ;;; Code:
+;; Bootstrap straight.el
+(defvar bootstrap-version 7)
+(let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
+       (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
+  (unless (file-exists-p bootstrap-file)
+    (condition-case err
+        (let ((url-queue-timeout 30))
+          (with-current-buffer
+              (url-retrieve-synchronously
+               "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+               'silent 'inhibit-cookies)
+            (goto-char (point-max))
+            (eval-print-last-sexp)))
+      (error
+       (user-error "[straight] bootstrap failed: %s" (error-message-string err)))))
+  (load bootstrap-file nil 'nomessage))
 
-  ;; straight.el bootstrap (package.el is disabled in early-init.el)
-  (defvar bootstrap-version)
-  (let ((bootstrap-file
-         (expand-file-name
-          "straight/repos/straight.el/bootstrap.el"
-          (or (bound-and-true-p straight-base-dir)
-              user-emacs-directory)))
-        (bootstrap-version 7))
-    (unless (file-exists-p bootstrap-file)
-      (with-current-buffer
-          (url-retrieve-synchronously
-           "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-           'silent 'inhibit-cookies)
-        (goto-char (point-max))
-        (eval-print-last-sexp)))
-    (load bootstrap-file nil 'nomessage))
+;; Ensure core packages
+(dolist (pkg '(leaf leaf-keywords leaf-convert blackout org))
+  (straight-use-package pkg))
+(require 'org)
 
-  ;;;; Integrate straight.el with leaf
-  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout org))
-    (straight-use-package pkg))
-  (require 'org)
+;; Initialize leaf
+(eval-when-compile
+  (require 'leaf)
+  (require 'leaf-keywords))
+(leaf-keywords-init)
 
-  (eval-when-compile
-    (require 'leaf)
-    (require 'leaf-keywords))
-  (leaf-keywords-init)
+;; Customization group
+(defgroup my nil
+  "User customizations."
+  :group 'convenience)
 
-  ;;; Define a customization group for all personal settings
-  ;;; All `defcustom` variables belonging to this group can be
-  ;;; managed together via: M-x customize-group RET my RET
-  (defgroup my nil
-    "User customizations."
-    :group 'convenience)
+(defcustom my:use-lsp 'eglot
+  "Select which LSP client to use. Valid values: 'eglot or 'lsp."
+  :type '(choice (const :tag "Eglot" eglot)
+                 (const :tag "lsp-mode" lsp))
+  :group 'my)
 
-  ;;; Choose which LSP client Emacs should use
-  ;;; - Default: `eglot` (lightweight, built into Emacs 29+)
-  ;;; - Alternative: `lsp` (lsp-mode, feature-rich but heavier)
-  ;;; This variable is used in init.el / lsp.el with :when
-  ;;; conditions to load the appropriate client.
-  (defcustom my:use-lsp 'eglot
-    "Select which LSP client to use. Valid values: 'eglot or 'lsp."
-    :type '(choice (const :tag "Eglot" eglot)
-                   (const :tag "lsp-mode" lsp))
-    :group 'my)
+;; Increase process buffer size temporarily
+(defvar my:orig:read-process-output-max
+  (and (boundp 'read-process-output-max) read-process-output-max))
+(when (boundp 'read-process-output-max)
+  (setq read-process-output-max (* 4 1024 1024)))
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (when (boundp 'read-process-output-max)
+              (setq read-process-output-max my:orig:read-process-output-max))))
 
-  ;; Larger pipe buffer for LSP/rg/git; restore after startup.
-  ;; Note: This belongs in init.el (not early-init.el), since
-  ;; external processes (LSP, rg, git) are launched *after* init.
-  (defvar my:orig:read-process-output-max (and (boundp 'read-process-output-max)
-  					     read-process-output-max))
-  (when (boundp 'read-process-output-max)
-    (setq read-process-output-max (* 4 1024 1024))) ; 4 MiB during init
-  (add-hook 'emacs-startup-hook
-  	  (lambda ()
-  	    (when (boundp 'read-process-output-max)
-  	      (setq read-process-output-max my:orig:read-process-output-max))))
-
-  ;;;; Base settings
-  (leaf emacs
-    :straight nil
-    :init
-    ;; Disable disruptive default key bindings
-    (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
-      (keymap-global-unset k))
-    (when (fboundp 'cape-dabbrev)
-      (keymap-global-set "M-/" #'cape-dabbrev))
-
-    ;; UI toggles are in early-init to avoid flicker.
-    (pixel-scroll-precision-mode)
-
-    ;; Basic behavior
-    (setopt inhibit-startup-screen  t
-            initial-scratch-message nil
-            use-short-answers       t
-            create-lockfiles        nil
-            make-backup-files       t
-            delete-old-versions     t
-            version-control         t
-            idle-update-delay       0.2
-            ring-bell-function      #'ignore
-            display-line-numbers-type 'relative
-            auto-save-default       t
-            auto-save-visited-interval 2)
-    (electric-pair-mode 1)
-    (add-hook 'prog-mode-hook #'display-line-numbers-mode)
-    (auto-save-visited-mode 1)
-
-    (leaf my:modifier
-      :config
-      (cond
-       ;; macOS
-       ((eq system-type 'darwin)
-        (setq mac-option-modifier 'meta   ;; Option → Meta
-  	    mac-command-modifier 'super     ;; Command → Super
-  	    mac-control-modifier 'control   ;; Control → Control
-  	    mac-function-modifier 'hyper))  ;; Fn → Hyper
-       ;; Windows
-       ((eq system-type 'windows-nt)
-        (setq w32-lwindow-modifier 'super ;; Left Win → Super
-  	    w32-rwindow-modifier 'super     ;; Right Win → Super
-  	    w32-apps-modifier   'hyper))    ;; Apps/Menu → Hyper
-       ;; Linux
-       ((eq system-type 'gnu/linux)
-        ;; Linux: handled at XKB/DE level
-        (setq my:os "linux")))))
-
-  ;;;; No-Littering
-  (leaf no-littering
-    :straight t
-    :require t
-    :init
-    ;; Set directories before package loads things that compute paths.
-    (setq no-littering-etc-directory my:d:etc
-          no-littering-var-directory my:d:var))
-
-  ;;;; macOS integration
-
-  ;; 1) Import shell environment for GUI Emacs
-  (leaf exec-path-from-shell
-    :straight t
-    :if (memq window-system '(mac ns))
-    :init
-    (defvar my:shell-env-vars
-      '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
-        "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
+;; Basic UI and editing defaults
+(leaf emacs
+  :straight nil
+  :init
+  (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
+    (keymap-global-unset k))
+  (when (fboundp 'cape-dabbrev)
+    (keymap-global-set "M-/" #'cape-dabbrev))
+  (when (fboundp 'pixel-scroll-precision-mode)
+    (pixel-scroll-precision-mode 1))
+  (setopt inhibit-startup-screen  t
+          initial-scratch-message nil
+          use-short-answers       t
+          create-lockfiles        nil
+          make-backup-files       t
+          delete-old-versions     t
+          version-control         t
+          idle-update-delay       0.2
+          ring-bell-function      #'ignore
+          display-line-numbers-type 'relative
+          auto-save-default       t
+          auto-save-visited-interval 2)
+  (electric-pair-mode 1)
+  (add-hook 'prog-mode-hook #'display-line-numbers-mode)
+  (auto-save-visited-mode 1)
+  (leaf my:modifier
     :config
-    (setq exec-path-from-shell-check-startup-files nil
-          exec-path-from-shell-arguments '("-l" "-i")
-          exec-path-from-shell-variables my:shell-env-vars)
-    (exec-path-from-shell-initialize))
+    (cond
+     ((eq system-type 'darwin)
+      (setq mac-option-modifier 'meta
+            mac-command-modifier 'super
+            mac-control-modifier 'control
+            mac-function-modifier 'hyper))
+     ((eq system-type 'windows-nt)
+      (setq w32-lwindow-modifier 'super
+            w32-rwindow-modifier 'super
+            w32-apps-modifier   'hyper))
+     ((eq system-type 'gnu/linux)
+      (setq my:os "linux")))))
 
-  ;; 2) Fallback PATH for CLI/edge cases
-  ;; Append typical Homebrew bins on macOS if missing
-  (when (eq system-type 'darwin)
-    (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
-      (when (and (file-directory-p p) (not (member p exec-path)))
-        (add-to-list 'exec-path p)
-        (setenv "PATH" (concat p ":" (getenv "PATH"))))))
+;; Centralize files
+(leaf no-littering
+  :straight t
+  :require t
+  :init
+  (setq no-littering-etc-directory my:d:etc
+        no-littering-var-directory my:d:var))
 
-  ;; 3) Dired + GNU ls (gls) integration
-  (leaf dired
-    :custom ((dired-listing-switches . "-aBhl --group-directories-first"))
-    :config
-    (when (and (eq system-type 'darwin) (executable-find "gls"))
-      (setq insert-directory-program "gls"
-            dired-use-ls-dired t)))
+;; macOS environment import
+(leaf exec-path-from-shell
+  :straight t
+  :if (memq window-system '(mac ns))
+  :init
+  (defvar my:shell-env-vars
+    '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
+      "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
+  :config
+  (setq exec-path-from-shell-check-startup-files nil
+        exec-path-from-shell-arguments '("-l" "-i")
+        exec-path-from-shell-variables my:shell-env-vars)
+  (condition-case err
+      (exec-path-from-shell-initialize)
+    (error (message "[exec-path-from-shell] skipped: %s" (error-message-string err)))))
 
-  ;;;; Garbage Collection Magic Hack
-  (leaf gcmh
-    :straight t
-    :hook (emacs-startup . gcmh-mode)
-    :init
-    ;; Safe defaults: gentle collection
-    (setq gcmh-idle-delay 2
-          gcmh-high-cons-threshold (* 64 1024 1024)))
+(when (eq system-type 'darwin)
+  (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
+    (when (and (file-directory-p p) (not (member p exec-path)))
+      (add-to-list 'exec-path p)
+      (setenv "PATH" (concat p ":" (getenv "PATH"))))))
 
-  ;;;; Hydra
-  (leaf hydra
-    :straight t
-    :commands (defhydra))
+;; Dired defaults
+(leaf dired
+  :custom ((dired-listing-switches . "-aBhl --group-directories-first"))
+  :config
+  (when (and (eq system-type 'darwin) (executable-find "gls"))
+    (setq insert-directory-program "gls"
+          dired-use-ls-dired t)))
 
-  ;; Load user customizations from cache/etc; keep init clean
-  (setq custom-file my:f:custom)
-  (when (file-readable-p custom-file)
-    (load custom-file nil 'nomessage))
+;; Garbage collector tweaks
+(leaf gcmh
+  :straight t
+  :hook (emacs-startup . gcmh-mode)
+  :init
+  (setq gcmh-idle-delay 2
+        gcmh-high-cons-threshold (* 64 1024 1024)))
 
-  ;;;; User-specific config
-  (setq user-specific-config (concat my:d "personal/" user-login-name ".el"))
-  (if (file-exists-p user-specific-config) (load user-specific-config))
+;; Hydra support
+(leaf hydra
+  :straight t
+  :commands (defhydra))
 
-  ;;;; Modularized config loading
-  (let* ((root (cond
-                ((and (boundp 'my:d) (stringp my:d) (file-directory-p my:d))
-                 (file-name-as-directory my:d))
-                (t (file-name-as-directory user-emacs-directory))))
-         (lisp-dir (expand-file-name "lisp" root)))
-    (unless (file-directory-p lisp-dir)
-      (make-directory lisp-dir t))
+;; custom.el isolation
+(setq custom-file my:f:custom)
+(when (file-readable-p custom-file)
+  (condition-case err
+      (load custom-file nil 'nomessage)
+    (error (message "[custom-file] failed: %s" (error-message-string err)))))
 
-    ;; Add lisp directory to load-path, but not root
-    (dolist (p (list (file-name-as-directory user-emacs-directory)
-                     (directory-file-name user-emacs-directory)))
-      (setq load-path (delete p load-path)))
-    (add-to-list 'load-path lisp-dir)
+;; Safe file loader
+(defun my/safe-load-file (file &optional noerror)
+  "Load FILE safely. If NOERROR is non-nil, log error instead of raising."
+  (when (and file (file-exists-p file))
+    (condition-case err
+        (load file nil 'nomessage)
+      (error
+       (funcall (if noerror #'message #'user-error)
+                "[personal] failed to load %s: %s"
+                file (error-message-string err))))))
 
-    ;; Load modularized files instead of monolithic README.el
-    (dolist (file '("general" "ui" "completion" "org" "lsp" "tools"))
-      (let ((path (expand-file-name (format "%s.el" file) lisp-dir)))
-        (when (file-exists-p path)
-          (load path nil 'nomessage)))))
+;; User-specific config
+(let ((user-specific-config (concat my:d "personal/" user-login-name ".el")))
+  (my/safe-load-file user-specific-config t))
 
-  ;; Report startup time and GC count after init (after epa-file etc.)
-  (add-hook 'after-init-hook
-            (lambda ()
-              (run-with-idle-timer
-               0 nil
-               (lambda ()
-                 (let ((elapsed (float-time (time-subtract after-init-time before-init-time)))
-                       (gc-count gcs-done))
-                   (message "Emacs ready in %.2f seconds with %d GCs." elapsed gc-count))))))
+;; Modular config loading
+(let* ((root (if (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d))
+                 (file-name-as-directory my:d)
+               (file-name-as-directory user-emacs-directory)))
+       (lisp-dir (expand-file-name "lisp" root)))
+  (unless (file-directory-p lisp-dir)
+    (make-directory lisp-dir t))
+  ;; Avoid load-path pollution with user-emacs-directory
+  (dolist (p (list (file-name-as-directory user-emacs-directory)
+                   (directory-file-name user-emacs-directory)))
+    (setq load-path (delete p load-path)))
+  (add-to-list 'load-path lisp-dir)
+  (dolist (file '("general" "ui" "completion" "org" "lsp" "tools"))
+    (let ((path (expand-file-name (format "%s.el" file) lisp-dir)))
+      (when (file-exists-p path)
+        (my/safe-load-file path t)))))
 
+;; Report startup time
+(add-hook 'after-init-hook
+          (lambda ()
+            (run-with-idle-timer
+             0 nil
+             (lambda ()
+               (let ((elapsed (float-time (time-subtract after-init-time before-init-time)))
+                     (gc-count gcs-done))
+                 (message "Emacs ready in %.2f seconds with %d GCs." elapsed gc-count))))))
 
-
-  (provide 'init)
-  ;;; init.el ends here
+(provide 'init)
+;;; init.el ends here
 #+end_src
 
 ** Modular Configuration
