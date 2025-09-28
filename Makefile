@@ -32,6 +32,6 @@ $(PERSONALDIR)/%.elc: $(PERSONALDIR)/%.el
 
 # Remove compilation artifacts
 clean:
-	rm -f $(LISPDIR)/*.elc $(PERSONALDIR)/*.elc
+	rm -fr $(LISPDIR) $(PERSONALDIR)
 
 .PHONY: all tangle compile clean
