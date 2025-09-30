@@ -576,7 +576,7 @@ Bootstrap packages, configure base behavior, and load modular files.
   ;;  - ui/:    Fonts, theme, modeline, window, treemacs, clipboard (mac)
   ;;  - completion/: Vertico, Corfu, Consult, Embark, etc.
   ;;  - org/:   Org ecosystem
-  ;;  - dev/:   Development tools (LSP, AI, term, build, docker, LaTeX)
+  ;;  - dev/:   Development tools (generic + web stack, SQL, REST, infra)
   ;;  - vcs/:   Version control
   ;;  - utils/: General-purpose helpers (scratch, backup, async, search)
 
@@ -614,13 +614,21 @@ Bootstrap packages, configure base behavior, and load modular files.
       org/org-extensions
       org/org-export
 
-      ;; Development
+      ;; Development (generic)
       dev/dev-lsp
       dev/dev-ai
       dev/dev-term
       dev/dev-build
       dev/dev-docker
       ;; dev/dev-latex
+
+      ;; Development (web stack & infra)
+      dev/web-core
+      dev/lsp-web
+      dev/format
+      dev/infra-modes
+      dev/sql
+      dev/rest
 
       ;; Version Control
       vcs/vcs-magit
@@ -790,7 +798,7 @@ Built-ins use `:straight nil`. Requires `core/utils`, `core/eww`.
           desktop-base-lock-name "lock"
           desktop-restore-eager 10
           desktop-save t
-          desktop-load-locked-desktop t
+          desktop-load-locked-desktop nil
           desktop-auto-save-timeout 300)
 
     (my/ensure-directory-exists desktop-dirname)
@@ -1282,50 +1290,70 @@ Applies fonts and enables `ligature` in `prog-mode`.
 Works for GUI frames/daemon.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-font.el
-;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
+  ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(defun my/system-default-font ()
-  "Return a default monospace font family depending on OS."
-  (cond ((eq system-type 'darwin) "Menlo")
-        ((eq system-type 'gnu/linux) "Monospace")
-        ((eq system-type 'windows-nt) "Consolas")
-        (t "Monospace")))
+  (defun my/system-default-font ()
+    "Return a default monospace font family depending on OS."
+    (cond ((eq system-type 'darwin) "Menlo")
+          ((eq system-type 'gnu/linux) "Monospace")
+          ((eq system-type 'windows-nt) "Consolas")
+          (t "Monospace")))
 
-(defun my/system-emoji-font ()
-  "Return a default emoji font family depending on OS."
-  (cond ((eq system-type 'darwin) "Apple Color Emoji")
-        ((eq system-type 'gnu/linux) "Noto Color Emoji")
-        ((eq system-type 'windows-nt) "Segoe UI Emoji")
-        (t "Noto Color Emoji")))
+  (defun my/system-emoji-font ()
+    "Return a default emoji font family depending on OS."
+    (cond ((eq system-type 'darwin) "Apple Color Emoji")
+          ((eq system-type 'gnu/linux) "Noto Color Emoji")
+          ((eq system-type 'windows-nt) "Segoe UI Emoji")
+          (t "Noto Color Emoji")))
 
-(defun my/font-setup ()
-  "Apply font settings, respecting overrides."
-  (when (display-graphic-p)
-    (set-face-attribute 'default nil
-                        :family (or my:font-default (my/system-default-font))
-                        :height (* 10 (or my:font-size 16)))
-    (set-face-attribute 'variable-pitch nil
-                        :family (or my:font-alt (my/system-default-font)))
-    (set-fontset-font t 'emoji
-                      (font-spec :family (or my:emoji-font (my/system-emoji-font))))))
+  (defun my/font-setup ()
+    "Apply font settings, respecting overrides, and report applied fonts."
+    (when (display-graphic-p)
+      ;; Default (monospace) font
+      (set-face-attribute 'default nil
+                          :family (or my:font-default (my/system-default-font))
+                          :height (* 10 (or my:font-size 16)))
+      (message "[font] default: %s, %.1f pt"
+               (face-attribute 'default :family)
+               (/ (float (face-attribute 'default :height)) 10))
 
-(if (daemonp)
-    (add-hook 'after-make-frame-functions
-              (lambda (frame) (with-selected-frame frame (my/font-setup))))
-  (add-hook 'after-init-hook #'my/font-setup))
+      ;; Variable-pitch font
+      (set-face-attribute 'variable-pitch nil
+                          :family (or my:font-alt (my/system-default-font)))
+      (message "[font] variable-pitch: %s"
+               (face-attribute 'variable-pitch :family))
 
-(leaf ligature :straight t
-  :config
-  (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
-  (global-ligature-mode 1))
+      ;; Emoji font
+      (set-fontset-font t 'emoji
+                        (font-spec :family (or my:emoji-font (my/system-emoji-font))))
+      (message "[font] emoji: %s"
+  	     (or my:emoji-font (my/system-emoji-font)))))
 
-(provide 'ui/ui-font)
-;;; ui/ui-font.el ends here
+  (defun my/show-current-font ()
+    "Echo the current default font family and point size."
+    (interactive)
+    (let* ((family (face-attribute 'default :family))
+           (height (face-attribute 'default :height))
+           (pt (/ height 10.0)))
+      (message "Current font: %s, %.1f pt" family pt)))
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions
+                (lambda (frame) (with-selected-frame frame (my/font-setup))))
+    (add-hook 'after-init-hook #'my/font-setup))
+
+  (leaf ligature :straight t
+    :config
+    (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
+    (global-ligature-mode 1))
+
+  (provide 'ui/ui-font)
+  ;;; ui/ui-font.el ends here
 #+end_src
 
 *** ui/ui-theme.el
@@ -2244,6 +2272,263 @@ None.
 ;;; dev/dev-docker.el ends here
 #+end_src
 
+*** dev/web-core.el
+:PROPERTIES:
+:CUSTOM_ID: dev-web-core
+:END:
+
+*Purpose*: Provide modern syntax highlighting and project management.
+*What it does*: Configures built-in `project`, `files`, `treesit`, and associates file extensions with Tree-sitter modes. Also enables EditorConfig.
+*Notes*: Tree-sitter is native in Emacs 30+. Ensure grammar installation via `M-x treesit-install-language-grammar`.
+
+#+begin_src emacs-lisp :tangle lisp/dev/web-core.el
+  ;;; web-core.el --- Treesit & project core -*- lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+
+  ;;; Commentary:
+  ;; Core configuration for project management and modern syntax highlighting.
+  ;; Includes EditorConfig support and Tree-sitter remapping.
+
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  ;; Built-ins
+  (leaf project :straight nil)
+  (leaf files   :straight nil
+    :custom ((require-final-newline . t)
+             (delete-trailing-lines . t))
+    :hook ((before-save-hook . delete-trailing-whitespace)))
+
+  ;; EditorConfig
+  (leaf editorconfig
+    :straight t
+    :global-minor-mode t)
+
+  ;; Tree-sitter preferences (Emacs 30+)
+  (leaf treesit
+    :straight nil
+    :custom ((major-mode-remap-alist
+              . '((typescript-mode . typescript-ts-mode)
+                  (js-mode         . js-ts-mode)
+                  (json-mode       . json-ts-mode)
+                  (css-mode        . css-ts-mode)
+                  (yaml-mode       . yaml-ts-mode)
+                  (sh-mode         . bash-ts-mode)))))
+
+  ;; File associations
+  (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))
+  (add-to-list 'auto-mode-alist '("\\.ts\\'"  . typescript-ts-mode))
+  (add-to-list 'auto-mode-alist '("\\.json\\'" . json-ts-mode))
+  (add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode))
+  (add-to-list 'auto-mode-alist '("Dockerfile\\'" . dockerfile-ts-mode))
+
+  (provide 'dev/web-core)
+  ;;; web-core.el ends here
+#+end_src
+
+*** dev/lsp-web.el
+:PROPERTIES:
+:CUSTOM_ID: dev-lsp-web
+:END:
+
+*Purpose*: Enable LSP support for TypeScript, JSON, CSS, HTML, YAML, Docker, and Prisma.
+*What it does*: Uses `lsp-mode` with deferred loading, plus `lsp-ui` enhancements. Prefers local TypeScript server binaries.
+*Notes*: Completion backend (`lsp-completion-provider`) is disabled in favor of Corfu.
+
+#+begin_src emacs-lisp :tangle lisp/dev/lsp-web.el
+  ;;; lsp-web.el --- LSP for web stack -*- lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+
+  ;;; Commentary:
+  ;; Provides LSP support for the modern web stack including TS/JS, JSON, CSS,
+  ;; HTML, YAML, Docker, and Prisma.
+
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf lsp-mode
+    :straight t
+    :commands (lsp lsp-deferred)
+    :hook ((typescript-ts-mode . lsp-deferred)
+           (tsx-ts-mode        . lsp-deferred)
+           (json-ts-mode       . lsp-deferred)
+           (css-ts-mode        . lsp-deferred)
+           (html-mode          . lsp-deferred)
+           (yaml-ts-mode       . lsp-deferred)
+           (dockerfile-ts-mode . lsp-deferred)
+           (prisma-mode        . lsp-deferred))
+    :custom ((lsp-enable-file-watchers . t)
+             (lsp-file-watch-threshold . 5000)
+             (lsp-response-timeout . 5)
+             (lsp-diagnostics-provider . :auto)
+             (lsp-completion-provider . :none))  ;; use corfu etc.
+    :config
+    ;; Prefer TS/JS LSP from project-local node_modules first
+    (setq lsp-clients-typescript-server-args '("--stdio"))
+    (setq lsp-clients-typescript-server "typescript-language-server"))
+
+  (leaf lsp-ui
+    :straight t
+    :after lsp-mode
+    :custom ((lsp-ui-doc-enable . t)
+             (lsp-ui-doc-delay . 0.2)
+             (lsp-ui-sideline-enable . t)))
+
+  ;; Prisma
+  (leaf prisma-mode :straight nil :mode ("\\.prisma\\'" . prisma-mode))
+
+  ;; Docker
+  (leaf dockerfile-ts-mode :straight nil)
+
+  ;; YAML
+  (leaf yaml-ts-mode :straight nil)
+
+  ;; HTML
+  (leaf sgml-mode :straight nil)
+
+  (provide 'dev/lsp-web)
+  ;;; lsp-web.el ends here
+#+end_src
+
+*** dev/format.el
+:PROPERTIES:
+:CUSTOM_ID: dev-format
+:END:
+
+*Purpose*: Provide auto-formatting for TypeScript/JavaScript/JSON/CSS/Markdown.
+*What it does*: Configures Apheleia with `prettierd`/`prettier` formatters and enables global mode.
+*Notes*: `prettierd` is preferred for performance; falls back to `npx prettier`.
+
+#+begin_src emacs-lisp :tangle lisp/dev/format.el
+  ;;; format.el --- Prettier/ESLint via Apheleia -*- lexical-binding: t; -*-
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf apheleia
+    :straight t
+    :require t
+    :config
+    (setf (alist-get 'prettierd apheleia-formatters)
+          '("prettierd" filepath))
+    (setf (alist-get 'prettier apheleia-formatters)
+          '("npx" "prettier" "--stdin-filepath" filepath))
+    (dolist (pair '((typescript-ts-mode . prettierd)
+                    (tsx-ts-mode        . prettierd)
+                    (json-ts-mode       . prettierd)
+                    (css-ts-mode        . prettierd)
+                    (markdown-mode      . prettierd)))
+      (add-to-list 'apheleia-mode-alist pair))
+    (apheleia-global-mode +1))
+
+  (provide 'dev/format)
+  ;;; format.el ends here
+#+end_src
+
+*** dev/infra-modes.el
+:PROPERTIES:
+:CUSTOM_ID: dev-infra-modes
+:END:
+
+*Purpose*: Enable syntax modes for infrastructure files (`.env`, Compose, TOML, Makefiles).
+*What it does*: Configures `docker-compose-mode`, `dotenv-mode`, `toml-mode`, and builtin `make-mode`.
+*Notes*: Built-in `make-mode` remaps `Makefile` to GNU Make variant.
+
+#+begin_src emacs-lisp :tangle lisp/dev/infra-modes.el
+  ;;; infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+
+  ;;; Commentary:
+  ;; Syntax support for infra files such as Docker Compose, .env, TOML, and Makefiles.
+
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf docker-compose-mode :straight t :mode ("docker-compose\\.*ya?ml\\'"))
+  (leaf dotenv-mode :straight t
+    :mode (("\\.env\\..*\\'" . dotenv-mode)
+           ("\\.env\\'"     . dotenv-mode)))
+  (leaf toml-mode :straight t :mode ("\\.toml\\'" . toml-mode))
+
+  ;; Makefile tweaks (builtin)
+  (leaf make-mode :straight nil
+    :mode (("Makefile\\'" . makefile-gmake-mode)))
+
+  (provide 'dev/infra-modes)
+  ;;; infra-modes.el ends here
+#+end_src
+
+*** dev/sql.el
+:PROPERTIES:
+:CUSTOM_ID: dev-sql
+:END:
+
+*Purpose*: Provide SQL/PostgreSQL development helpers and formatting.
+*What it does*: Configures built-in `sql` with indentation mode, and uses `sqlformat` for auto-formatting with `pgformatter`.
+*Notes*: Ensure `pgformatter` is installed in your system PATH.
+
+#+begin_src emacs-lisp :tangle lisp/dev/sql.el
+  ;;; sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf sql :straight nil
+    :hook (sql-mode . sqlind-minor-mode)
+    :custom ((sql-product . 'postgres)))
+
+  (leaf sqlformat
+    :straight t
+    :custom ((sqlformat-command . 'pgformatter)
+             (sqlformat-args . '("--nostyle"))) ;; 必ず quote する
+    :hook (sql-mode . sqlformat-on-save-mode)
+    :hook (sql-ts-mode . sqlformat-on-save-mode))
+
+  (provide 'dev/sql)
+  ;;; sql.el ends here
+#+end_src
+
+*** dev/rest.el
+:PROPERTIES:
+:CUSTOM_ID: dev-rest
+:END:
+
+*Purpose*: Provide HTTP request testing inside Emacs.
+*What it does*: Installs `restclient` and `restclient-jq` for `.http` files with JSON parsing.
+*Notes*: Useful for API testing in Next.js, Ollama, Qdrant workflows.
+
+#+begin_src emacs-lisp :tangle lisp/dev/rest.el
+  ;;; rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+
+  ;;; Commentary:
+  ;; REST client integration for testing HTTP requests inside Emacs.
+  ;; Supports JSON parsing with jq.
+
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
+  (leaf restclient-jq :straight t :after restclient)
+
+  (provide 'dev/rest)
+  ;;; rest.el ends here
+#+end_src
+
 *** vcs/vcs-magit.el
 :PROPERTIES:
 :CUSTOM_ID: vcs-magit
@@ -2798,284 +3083,4 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
 
   (provide 'user)
   ;;; user.el ends here
-#+end_src
-
-
-*** dev/web-core.el
-:PROPERTIES:
-:CUSTOM_ID: dev-web-core
-:END:
-
-*Purpose*: Provide modern syntax highlighting and project management.
-*What it does*: Configures built-in `project`, `files`, `treesit`, and associates file extensions with Tree-sitter modes. Also enables EditorConfig.
-*Notes*: Tree-sitter is native in Emacs 30+. Ensure grammar installation via `M-x treesit-install-language-grammar`.
-
-#+begin_src emacs-lisp :tangle lisp/dev/web-core.el
-;;; web-core.el --- Treesit & project core -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-
-;;; Commentary:
-;; Core configuration for project management and modern syntax highlighting.
-;; Includes EditorConfig support and Tree-sitter remapping.
-
-;;; Code:
-
-(eval-when-compile (require 'leaf))
-
-;; Built-ins
-(leaf project :straight nil)
-(leaf files   :straight nil
-  :custom ((require-final-newline . t)
-           (delete-trailing-lines . t))
-  :hook ((before-save-hook . delete-trailing-whitespace)))
-
-;; EditorConfig
-(leaf editorconfig
-  :straight t
-  :global-minor-mode t)
-
-;; Tree-sitter preferences (Emacs 30+)
-(leaf treesit
-  :straight nil
-  :custom ((major-mode-remap-alist
-            . '((typescript-mode . typescript-ts-mode)
-                (js-mode         . js-ts-mode)
-                (json-mode       . json-ts-mode)
-                (css-mode        . css-ts-mode)
-                (yaml-mode       . yaml-ts-mode)
-                (sh-mode         . bash-ts-mode)))))
-
-;; File associations
-(add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))
-(add-to-list 'auto-mode-alist '("\\.ts\\'"  . typescript-ts-mode))
-(add-to-list 'auto-mode-alist '("\\.json\\'" . json-ts-mode))
-(add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode))
-(add-to-list 'auto-mode-alist '("Dockerfile\\'" . dockerfile-ts-mode))
-
-(provide 'web-core)
-;;; web-core.el ends here
-#+end_src
-
-
-*** dev/lsp-web.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-web
-:END:
-
-*Purpose*: Enable LSP support for TypeScript, JSON, CSS, HTML, YAML, Docker, and Prisma.
-*What it does*: Uses `lsp-mode` with deferred loading, plus `lsp-ui` enhancements. Prefers local TypeScript server binaries.
-*Notes*: Completion backend (`lsp-completion-provider`) is disabled in favor of Corfu.
-
-#+begin_src emacs-lisp :tangle lisp/dev/lsp-web.el
-;;; lsp-web.el --- LSP for web stack -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-
-;;; Commentary:
-;; Provides LSP support for the modern web stack including TS/JS, JSON, CSS,
-;; HTML, YAML, Docker, and Prisma.
-
-;;; Code:
-
-(eval-when-compile (require 'leaf))
-
-(leaf lsp-mode
-  :straight t
-  :commands (lsp lsp-deferred)
-  :hook ((typescript-ts-mode . lsp-deferred)
-         (tsx-ts-mode        . lsp-deferred)
-         (json-ts-mode       . lsp-deferred)
-         (css-ts-mode        . lsp-deferred)
-         (html-mode          . lsp-deferred)
-         (yaml-ts-mode       . lsp-deferred)
-         (dockerfile-ts-mode . lsp-deferred)
-         (prisma-mode        . lsp-deferred))
-  :custom ((lsp-enable-file-watchers . t)
-           (lsp-file-watch-threshold . 5000)
-           (lsp-response-timeout . 5)
-           (lsp-diagnostics-provider . :auto)
-           (lsp-completion-provider . :none))  ;; use corfu etc.
-  :config
-  ;; Prefer TS/JS LSP from project-local node_modules first
-  (setq lsp-clients-typescript-server-args '("--stdio"))
-  (setq lsp-clients-typescript-server "typescript-language-server"))
-
-(leaf lsp-ui
-  :straight t
-  :after lsp-mode
-  :custom ((lsp-ui-doc-enable . t)
-           (lsp-ui-doc-delay . 0.2)
-           (lsp-ui-sideline-enable . t)))
-
-;; Prisma
-(leaf prisma-mode :straight nil :mode ("\\.prisma\\'" . prisma-mode))
-
-;; Docker
-(leaf dockerfile-ts-mode :straight nil)
-
-;; YAML
-(leaf yaml-ts-mode :straight nil)
-
-;; HTML
-(leaf sgml-mode :straight nil)
-
-(provide 'lsp-web)
-;;; lsp-web.el ends here
-#+end_src
-
-
-*** dev/format.el
-:PROPERTIES:
-:CUSTOM_ID: dev-format
-:END:
-
-*Purpose*: Provide auto-formatting for TypeScript/JavaScript/JSON/CSS/Markdown.
-*What it does*: Configures Apheleia with `prettierd`/`prettier` formatters and enables global mode.
-*Notes*: `prettierd` is preferred for performance; falls back to `npx prettier`.
-
-#+begin_src emacs-lisp :tangle lisp/dev/format.el
-;;; format.el --- Prettier/ESLint via Apheleia -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-
-;;; Commentary:
-;; Integration of Prettier and ESLint via Apheleia. Uses prettierd if available.
-
-;;; Code:
-
-(eval-when-compile (require 'leaf))
-
-(leaf apheleia
-  :straight nil
-  :config
-  (setf (alist-get 'prettierd apheleia-formatters)
-        '("prettierd" filepath))
-  (setf (alist-get 'prettier apheleia-formatters)
-        '("npx" "prettier" "--stdin-filepath" filepath))
-  (dolist (pair '((typescript-ts-mode . prettierd)
-                  (tsx-ts-mode        . prettierd)
-                  (json-ts-mode       . prettierd)
-                  (css-ts-mode        . prettierd)
-                  (markdown-mode      . prettierd)))
-    (add-to-list 'apheleia-mode-alist pair))
-  (apheleia-global-mode +1))
-
-(provide 'format)
-;;; format.el ends here
-#+end_src
-
-
-*** dev/infra-modes.el
-:PROPERTIES:
-:CUSTOM_ID: dev-infra-modes
-:END:
-
-*Purpose*: Enable syntax modes for infrastructure files (`.env`, Compose, TOML, Makefiles).
-*What it does*: Configures `docker-compose-mode`, `dotenv-mode`, `toml-mode`, and builtin `make-mode`.
-*Notes*: Built-in `make-mode` remaps `Makefile` to GNU Make variant.
-
-#+begin_src emacs-lisp :tangle lisp/dev/infra-modes.el
-;;; infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-
-;;; Commentary:
-;; Syntax support for infra files such as Docker Compose, .env, TOML, and Makefiles.
-
-;;; Code:
-
-(eval-when-compile (require 'leaf))
-
-(leaf docker-compose-mode :straight t :mode ("docker-compose\\.*ya?ml\\'"))
-(leaf dotenv-mode :straight t
-  :mode (("\\.env\\..*\\'" . dotenv-mode)
-         ("\\.env\\'"     . dotenv-mode)))
-(leaf toml-mode :straight t :mode ("\\.toml\\'" . toml-mode))
-
-;; Makefile tweaks (builtin)
-(leaf make-mode :straight nil
-  :mode (("Makefile\\'" . makefile-gmake-mode)))
-
-(provide 'infra-modes)
-;;; infra-modes.el ends here
-#+end_src
-
-
-*** dev/sql.el
-:PROPERTIES:
-:CUSTOM_ID: dev-sql
-:END:
-
-*Purpose*: Provide SQL/PostgreSQL development helpers and formatting.
-*What it does*: Configures built-in `sql` with indentation mode, and uses `sqlformat` for auto-formatting with `pgformatter`.
-*Notes*: Ensure `pgformatter` is installed in your system PATH.
-
-#+begin_src emacs-lisp :tangle lisp/dev/sql.el
-;;; sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-
-;;; Commentary:
-;; SQL development with PostgreSQL defaults and pgformatter integration.
-
-;;; Code:
-
-(eval-when-compile (require 'leaf))
-
-(leaf sql :straight nil
-  :hook ((sql-mode . sqlind-minor-mode))
-  :custom ((sql-product . 'postgres)))
-
-(leaf sqlformat
-  :straight t
-  :custom ((sqlformat-command . 'pgformatter)
-           (sqlformat-args . ("--nostyle")))
-  :hook ((sql-mode . sqlformat-on-save-mode)
-         (sql-ts-mode . sqlformat-on-save-mode)))
-
-(provide 'sql)
-;;; sql.el ends here
-#+end_src
-
-
-*** dev/rest.el
-:PROPERTIES:
-:CUSTOM_ID: dev-rest
-:END:
-
-*Purpose*: Provide HTTP request testing inside Emacs.
-*What it does*: Installs `restclient` and `restclient-jq` for `.http` files with JSON parsing.
-*Notes*: Useful for API testing in Next.js, Ollama, Qdrant workflows.
-
-#+begin_src emacs-lisp :tangle lisp/dev/rest.el
-;;; rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-
-;;; Commentary:
-;; REST client integration for testing HTTP requests inside Emacs.
-;; Supports JSON parsing with jq.
-
-;;; Code:
-
-(eval-when-compile (require 'leaf))
-
-(leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
-(leaf restclient-jq :straight t :after restclient)
-
-(provide 'rest)
-;;; rest.el ends here
 #+end_src
