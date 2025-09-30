@@ -39,37 +39,47 @@ _For documentation only; block-level :tangle always takes precedence._
 |---------------+-----------------------+-------------------------------------------------------------|
 | (top-level)   | early-init.el         | Startup performance & low-level toggles (GC, handlers, etc) |
 | (top-level)   | init.el               | Package bootstrap + leaf.el init; loads =modules.el=        |
+| (top-level)   | modules.el            | Centralized loader (requires everything below in order)     |
 | core/         | general.el            | General settings, hydra, keybindings, Dired, TRAMP, auth    |
 | core/         | tools.el              | Navigation helpers, Dired helper, Tree-sitter, ext tools    |
 | core/         | utils.el              | Auto-tangle, scratch, revert, lexical-binding helpers       |
+| core/         | history.el            | Savehist, recentf, autorevert, transient                    |
+| core/         | editing.el            | Paredit, puni, undo, which-key, ace-window, dired UI        |
+| core/         | eww.el                | EWW helpers (search, toggle images)                         |
 | ui/           | ui-font.el            | Font setup, ligatures                                       |
 | ui/           | ui-theme.el           | Theme mgmt (ef-themes, spacious-padding)                    |
 | ui/           | ui-modeline.el        | Doom-modeline, minions, time, battery                       |
 | ui/           | ui-window.el          | Fullscreen, zoom, tab-bar/line, layouts                     |
 | ui/           | ui-treemacs.el        | Sidebar project/file explorer                               |
-| completion/   | completion-core.el    | prescient, orderless styles                                 |
-| completion/   | completion-vertico.el | vertico, posframe, marginalia                               |
-| completion/   | completion-consult.el | consult, xref integration                                   |
-| completion/   | completion-embark.el  | embark + consult integration                                |
-| completion/   | completion-corfu.el   | corfu, kind-icon, cape                                      |
-| completion/   | completion-icons.el   | nerd-icons integration                                      |
+| ui/           | ui-clipboard.el       | macOS clipboard integration                                 |
+| completion/   | completion-core.el    | Orderless styles (no prescient)                             |
+| completion/   | completion-vertico.el | Vertico, posframe, marginalia                               |
+| completion/   | completion-consult.el | Consult, xref integration                                   |
+| completion/   | completion-embark.el  | Embark + consult integration                                |
+| completion/   | completion-corfu.el   | Corfu, kind-icon, cape                                      |
+| completion/   | completion-icons.el   | Nerd-icons integration                                      |
 | org/          | org-core.el           | GTD workflow, agenda, capture, refiling                     |
-| org/          | org-visual.el         | org-modern, org-superstar, visual tweaks                    |
-| org/          | org-extensions.el     | org-journal, org-roam, org-download, toc-org, cliplink      |
+| org/          | org-visual.el         | Org-modern (no org-superstar)                               |
+| org/          | org-extensions.el     | Org-journal, org-roam, org-download, toc-org, cliplink      |
 | org/          | org-export.el         | LaTeX export, Hugo, Markdown                                |
-| dev/          | dev-lsp.el            | eglot / lsp-mode integration                                |
+| dev/          | dev-lsp.el            | Eglot / lsp-mode integration                                |
+| dev/          | lsp-web.el            | LSP for web stack (only when my:use-lsp = 'lsp)             |
+| dev/          | web-core.el           | Project.el + treesit + editorconfig                         |
 | dev/          | dev-ai.el             | Aidermacs (AI integration)                                  |
 | dev/          | dev-term.el           | vterm integration                                           |
 | dev/          | dev-build.el          | Make, compile, ansi-color                                   |
 | dev/          | dev-docker.el         | Dockerfile, docker.el, tramp-container                      |
+| dev/          | infra-modes.el        | dotenv, toml, docker-compose, makefile tweaks               |
+| dev/          | sql.el                | SQL/Postgres helpers, sqlformat                             |
+| dev/          | rest.el               | REST client helpers (restclient + jq)                       |
 | vcs/          | vcs-magit.el          | Magit                                                       |
-| vcs/          | vcs-gutter.el         | git-gutter, diff-hl                                         |
+| vcs/          | vcs-gutter.el         | diff-hl only (git-gutter removed)                           |
 | vcs/          | vcs-forge.el          | Forge (GitHub/GitLab)                                       |
 | utils/        | utils-functions.el    | Directory creation, safe-load                               |
 | utils/        | utils-scratch.el      | Scratch buffer management                                   |
 | utils/        | utils-backup.el       | Backup/auto-save cleanup                                    |
 | utils/        | utils-async.el        | Async task wrapper                                          |
-| (top-level)   | modules.el            | Centralized loader (requires everything above in order)     |
+| utils/        | search-nav.el         | Dumb-jump fallback, multiple-cursors (projectile removed)   |
 | personal/     | <username>.el         | Optional per-user, per-machine overrides                    |
 | personal/     | user.el               | Personal entry point, loaded last if present                |
 
@@ -1561,66 +1571,26 @@ Conditional on `window-system` being `mac`/`ns`.
 #+end_src
 
 *** completion/completion-core.el
-:PROPERTIES:
-:CUSTOM_ID: completion-core
-:END:
-
-*Purpose*
-Completion styles + Prescient persistence.
-
-*What it does*
-Sets Orderless, Prescient save file & enables persist mode.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/completion/completion-core.el
-;;; completion/completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
+;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
+(eval-when-compile (require 'leaf))
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
-
-;;; Code:
-
-(leaf prescient :straight t
-  :custom ((prescient-aggressive-file-save . t))
-  :config
-  (setq prescient-save-file (expand-file-name "prescient-save.el" my:d:var))
-  (with-eval-after-load 'prescient (prescient-persist-mode 1)))
-
-(leaf orderless :straight t
+(leaf orderless
+  :straight t
   :custom
-  ((completion-styles . '(orderless basic flex))
+  ((completion-styles . '(orderless basic))
    (completion-category-overrides
     . '((file (styles . (partial-completion)))
-        (symbol (styles . (flex)))
+        (symbol (styles . (orderless)))
         (command (styles . (orderless)))))))
 
 (provide 'completion/completion-core)
-;;; completion/completion-core.el ends here
 #+end_src
 
 *** completion/completion-vertico.el
-:PROPERTIES:
-:CUSTOM_ID: completion-vertico
-:END:
-
-*Purpose*
-Vertico minibuffer completion UI with posframe and marginalia.
-
-*What it does*
-Enables `vertico(-posframe)` and `marginalia`.
-
-*Notes*
-GUI guards for posframe.
-
 #+begin_src emacs-lisp :tangle lisp/completion/completion-vertico.el
-;;; completion/completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
-
-;;; Code:
+;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
+(eval-when-compile (require 'leaf))
 
 (leaf vertico :straight t
   :global-minor-mode vertico-mode
@@ -1636,30 +1606,12 @@ GUI guards for posframe.
   :global-minor-mode marginalia-mode)
 
 (provide 'completion/completion-vertico)
-;;; completion/completion-vertico.el ends here
 #+end_src
 
 *** completion/completion-consult.el
-:PROPERTIES:
-:CUSTOM_ID: completion-consult
-:END:
-
-*Purpose*
-Consult provides advanced search, navigation, and xref integration.
-
-*What it does*
-Binds xref hooks to `consult-xref`.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/completion/completion-consult.el
-;;; completion/completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
-
-;;; Code:
+;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
+(eval-when-compile (require 'leaf))
 
 (leaf consult :straight t
   :custom
@@ -1667,30 +1619,12 @@ None.
    (xref-show-definitions-function . #'consult-xref)))
 
 (provide 'completion/completion-consult)
-;;; completion/completion-consult.el ends here
 #+end_src
 
 *** completion/completion-embark.el
-:PROPERTIES:
-:CUSTOM_ID: completion-embark
-:END:
-
-*Purpose*
-Embark provides context-sensitive actions, with consult integration.
-
-*What it does*
-Sets prefix help and enables consult preview in collect buffers.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/completion/completion-embark.el
-;;; completion/completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
-
-;;; Code:
+;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
+(eval-when-compile (require 'leaf))
 
 (leaf embark :straight t
   :custom ((prefix-help-command . #'embark-prefix-help-command)))
@@ -1700,30 +1634,12 @@ None.
   :hook (embark-collect-mode . consult-preview-at-point-mode))
 
 (provide 'completion/completion-embark)
-;;; completion/completion-embark.el ends here
 #+end_src
 
 *** completion/completion-corfu.el
-:PROPERTIES:
-:CUSTOM_ID: completion-corfu
-:END:
-
-*Purpose*
-Popup completions with Corfu; icons with kind-icon; extra capf sources with cape.
-
-*What it does*
-Enables `global-corfu-mode`, margin icons, CAPEs.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/completion/completion-corfu.el
-;;; completion/completion-corfu.el --- Corfu popup completion -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
-
-;;; Code:
+;;; completion-corfu.el --- Corfu popup completion -*- lexical-binding: t; -*-
+(eval-when-compile (require 'leaf))
 
 (leaf corfu :straight t
   :init (global-corfu-mode)
@@ -1741,30 +1657,12 @@ None.
         '(cape-file cape-dabbrev cape-keyword)))
 
 (provide 'completion/completion-corfu)
-;;; completion/completion-corfu.el ends here
 #+end_src
 
 *** completion/completion-icons.el
-:PROPERTIES:
-:CUSTOM_ID: completion-icons
-:END:
-
-*Purpose*
-Icons for ibuffer and marginalia completions.
-
-*What it does*
-Enables nerd-icons-* integrations.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/completion/completion-icons.el
-;;; completion/completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
-
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
-
-;;; Code:
+;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
+(eval-when-compile (require 'leaf))
 
 (leaf nerd-icons-ibuffer :straight t
   :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
@@ -1774,7 +1672,6 @@ None.
   :config (nerd-icons-completion-mode))
 
 (provide 'completion/completion-icons)
-;;; completion/completion-icons.el ends here
 #+end_src
 
 *** org/org-core.el
@@ -1853,60 +1750,48 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
 :CUSTOM_ID: org-visual
 :END:
 
-*Purpose*
-Org visual enhancements.
-
-*What it does*
-Enables `org-modern` and `org-superstar`.
-
-*Notes*
-None.
+*Purpose*: Provide modern Org Mode visual enhancements.
+*What it does*: Enables `org-modern` for indentation, pretty entities, and agenda visuals.
+*Notes*: Removed `org-superstar` (redundant & conflicts). Use `org-modern` as default.
 
 #+begin_src emacs-lisp :tangle lisp/org/org-visual.el
-  ;;; org/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
+;;; org/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
+;; Copyright (c) 2021-2025
+;; Author: YAMASHITA, Takao
+;; License: GNU GPL v3 or later
 
-  ;;; Code:
+;;; Commentary:
+;; Use org-modern for visual tweaks. org-superstar removed for clarity.
 
-  (eval-when-compile (require 'leaf))
+;;; Code:
 
-  ;; -----------------------------------------------------------------------------
-  ;;; Org Modern (visual tweaks)
-  (leaf org-modern
-    :straight t
-    :hook (org-mode . org-modern-mode)
-    :custom
-    ((org-startup-indented . t)
-     (org-hide-leading-stars . t)
-     (org-auto-align-tags . nil)
-     (org-tags-column . 0)
-     (org-catch-invisible-edits . 'show-and-error)
-     (org-special-ctrl-a/e . t)
-     (org-insert-heading-respect-content . t)
-     (org-hide-emphasis-markers . t)
-     (org-pretty-entities . t)
-     (org-agenda-tags-column . 0)
-     (org-agenda-block-separator . ?─)
-     (org-agenda-time-grid .
-                           '((daily today require-timed)
-                             (800 1000 1200 1400 1600 1800 2000)
-                             " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
-     (org-agenda-current-time-string
-      . "⭠ now ─────────────────────────────────────────────────")))
+(eval-when-compile (require 'leaf))
 
-  ;; -----------------------------------------------------------------------------
-  ;;; Org Superstar (optional pretty bullets)
-  (leaf org-superstar
-    :after org
-    :hook (org-mode . org-superstar-mode)
-    :custom
-    ((org-superstar-headline-bullets-list . '("◉" "★" "○" "▷"))
-     (org-superstar-remove-leading-stars . nil)))
+(leaf org-modern
+  :straight t
+  :hook (org-mode . org-modern-mode)
+  :custom
+  ((org-startup-indented . t)
+   (org-hide-leading-stars . t)
+   (org-auto-align-tags . nil)
+   (org-tags-column . 0)
+   (org-catch-invisible-edits . 'show-and-error)
+   (org-special-ctrl-a/e . t)
+   (org-insert-heading-respect-content . t)
+   (org-hide-emphasis-markers . t)
+   (org-pretty-entities . t)
+   (org-agenda-tags-column . 0)
+   (org-agenda-block-separator . ?─)
+   (org-agenda-time-grid
+    . '((daily today require-timed)
+        (800 1000 1200 1400 1600 1800 2000)
+        " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
+   (org-agenda-current-time-string
+    . "⭠ now ─────────────────────────────────────────────────")))
 
-  (provide 'org/org-visual)
-  ;;; org/org-visual.el ends here
+(provide 'org/org-visual)
+;;; org-visual.el ends here
 #+end_src
 
 *** org/org-extensions.el
@@ -1961,51 +1846,56 @@ None.
 :CUSTOM_ID: org-export
 :END:
 
-*Purpose*
-Org export setup: LaTeX, Hugo, Markdown, Preview.
-
-*What it does*
-Configures LaTeX process & Hugo exporter etc.
-
-*Notes*
-None.
+*Purpose*: Configure Org export backends (LaTeX, Hugo, Markdown).
+*What it does*:
+- Tweak LaTeX export process
+- Enable Hugo export (`ox-hugo`)
+- Provide Markdown preview/editing helpers
+*Notes*:
+- Use `with-eval-after-load 'ox-latex` instead of `leaf org-latex` (safer)
+- Markdown tools (`markdown-mode`, `edit-indirect`) included here for convenience
 
 #+begin_src emacs-lisp :tangle lisp/org/org-export.el
-  ;;; org/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
+;;; org/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
+;; Copyright (c) 2021-2025
+;; Author: YAMASHITA, Takao
+;; License: GNU GPL v3 or later
 
-  ;;; Code:
+;;; Commentary:
+;; Org export configuration: LaTeX, Hugo, Markdown.
 
-  (eval-when-compile (require 'leaf))
+;;; Code:
 
-  ;; Org LaTeX Export
-  (leaf org-latex :straight nil
-    :after org
-    :custom
-    ((org-latex-packages-alist
-      '(("" "graphicx" t)
-        ("" "longtable" nil)
-        ("" "wrapfig" nil)))
-     (org-latex-pdf-process
-      '("pdflatex -interaction nonstopmode -output-directory %o %f"
-        "bibtex %b"
-        "pdflatex -interaction nonstopmode -output-directory %o %f"
-        "pdflatex -interaction nonstopmode -output-directory %o %f"))))
+(eval-when-compile (require 'leaf))
 
-  ;; Hugo Export
-  (leaf ox-hugo :straight t
-    :after ox
-    :custom ((org-hugo-front-matter-format . "toml")))
+;; ---------------------------------------------------------------------------
+;; Org LaTeX Export tweaks
+(with-eval-after-load 'ox-latex
+  (setq org-latex-packages-alist
+        '(("" "graphicx" t)
+          ("" "longtable" nil)
+          ("" "wrapfig" nil)))
+  (setq org-latex-pdf-process
+        '("pdflatex -interaction nonstopmode -output-directory %o %f"
+          "bibtex %b"
+          "pdflatex -interaction nonstopmode -output-directory %o %f"
+          "pdflatex -interaction nonstopmode -output-directory %o %f")))
 
-  ;; Markdown
-  (leaf markdown-mode :straight t)
-  (leaf markdown-preview-mode :straight t)
-  (leaf edit-indirect :straight t)
+;; ---------------------------------------------------------------------------
+;; Hugo Export
+(leaf ox-hugo :straight t
+  :after ox
+  :custom ((org-hugo-front-matter-format . "toml")))
 
-  (provide 'org/org-export)
-  ;;; org/org-export.el ends here
+;; ---------------------------------------------------------------------------
+;; Markdown Editing/Preview
+(leaf markdown-mode :straight t)
+(leaf markdown-preview-mode :straight t)
+(leaf edit-indirect :straight t)
+
+(provide 'org/org-export)
+;;; org-export.el ends here
 #+end_src
 
 *** dev/dev-lsp.el
@@ -2336,8 +2226,8 @@ None.
 :END:
 
 *Purpose*: Enable LSP support for TypeScript, JSON, CSS, HTML, YAML, Docker, and Prisma.
-*What it does*: Uses `lsp-mode` with deferred loading, plus `lsp-ui` enhancements. Prefers local TypeScript server binaries.
-*Notes*: Completion backend (`lsp-completion-provider`) is disabled in favor of Corfu.
+*What it does*: Loads `lsp-mode` and `lsp-ui` **only when `my:use-lsp` is `'lsp`**.
+*Notes*: Prevents conflicts with `eglot` by wrapping the entire configuration in a conditional.
 
 #+begin_src emacs-lisp :tangle lisp/dev/lsp-web.el
   ;;; lsp-web.el --- LSP for web stack -*- lexical-binding: t; -*-
@@ -2349,50 +2239,55 @@ None.
   ;;; Commentary:
   ;; Provides LSP support for the modern web stack including TS/JS, JSON, CSS,
   ;; HTML, YAML, Docker, and Prisma.
+  ;; Activated only when `my:use-lsp` is set to 'lsp.
 
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf lsp-mode
-    :straight t
-    :commands (lsp lsp-deferred)
-    :hook ((typescript-ts-mode . lsp-deferred)
-           (tsx-ts-mode        . lsp-deferred)
-           (json-ts-mode       . lsp-deferred)
-           (css-ts-mode        . lsp-deferred)
-           (html-mode          . lsp-deferred)
-           (yaml-ts-mode       . lsp-deferred)
-           (dockerfile-ts-mode . lsp-deferred)
-           (prisma-mode        . lsp-deferred))
-    :custom ((lsp-enable-file-watchers . t)
-             (lsp-file-watch-threshold . 5000)
-             (lsp-response-timeout . 5)
-             (lsp-diagnostics-provider . :auto)
-             (lsp-completion-provider . :none))  ;; use corfu etc.
-    :config
-    ;; Prefer TS/JS LSP from project-local node_modules first
-    (setq lsp-clients-typescript-server-args '("--stdio"))
-    (setq lsp-clients-typescript-server "typescript-language-server"))
+  (when (eq my:use-lsp 'lsp)
 
-  (leaf lsp-ui
-    :straight t
-    :after lsp-mode
-    :custom ((lsp-ui-doc-enable . t)
-             (lsp-ui-doc-delay . 0.2)
-             (lsp-ui-sideline-enable . t)))
+    (leaf lsp-mode
+      :straight t
+      :commands (lsp lsp-deferred)
+      :hook ((typescript-ts-mode . lsp-deferred)
+             (tsx-ts-mode        . lsp-deferred)
+             (json-ts-mode       . lsp-deferred)
+             (css-ts-mode        . lsp-deferred)
+             (html-mode          . lsp-deferred)
+             (yaml-ts-mode       . lsp-deferred)
+             (dockerfile-ts-mode . lsp-deferred)
+             (prisma-mode        . lsp-deferred))
+      :custom ((lsp-enable-file-watchers . t)
+               (lsp-file-watch-threshold . 5000)
+               (lsp-response-timeout . 5)
+               (lsp-diagnostics-provider . :auto)
+               (lsp-completion-provider . :none)) ;; corfu handles completion
+      :config
+      ;; Prefer project-local TypeScript LSP first
+      (setq lsp-clients-typescript-server "typescript-language-server")
+      (setq lsp-clients-typescript-server-args '("--stdio")))
 
-  ;; Prisma
-  (leaf prisma-mode :straight nil :mode ("\\.prisma\\'" . prisma-mode))
+    (leaf lsp-ui
+      :straight t
+      :after lsp-mode
+      :custom ((lsp-ui-doc-enable . t)
+               (lsp-ui-doc-delay . 0.2)
+               (lsp-ui-sideline-enable . t)))
 
-  ;; Docker
-  (leaf dockerfile-ts-mode :straight nil)
+    ;; Prisma
+    (leaf prisma-mode
+      :straight nil
+      :mode ("\\.prisma\\'" . prisma-mode))
 
-  ;; YAML
-  (leaf yaml-ts-mode :straight nil)
+    ;; Docker
+    (leaf dockerfile-ts-mode :straight nil)
 
-  ;; HTML
-  (leaf sgml-mode :straight nil)
+    ;; YAML
+    (leaf yaml-ts-mode :straight nil)
+
+    ;; HTML
+    (leaf sgml-mode :straight nil))
 
   (provide 'dev/lsp-web)
   ;;; lsp-web.el ends here
@@ -2560,40 +2455,39 @@ None.
 ;;; vcs/vcs-magit.el ends here
 #+end_src
 
-*** vcs/vcs-gutter.el
+**** vcs/vcs-gutter.el
 :PROPERTIES:
 :CUSTOM_ID: vcs-gutter
 :END:
 
-*Purpose*
-Show Git changes in fringe.
-
-*What it does*
-`git-gutter` and `diff-hl` (both available).
-
-*Notes*
-`diff-hl` integrates with Magit refresh.
+*Purpose*: Show Git changes in the fringe.
+*What it does*: Uses `diff-hl` for inline VC indicators and integrates with Magit refresh.
+*Notes*: Removed `git-gutter` to avoid duplication and possible conflicts.
 
 #+begin_src emacs-lisp :tangle lisp/vcs/vcs-gutter.el
-;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
+  ;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Commentary:
+  ;; Use `diff-hl` as the sole fringe indicator. Integrates with Magit refresh.
 
-(eval-when-compile (require 'leaf))
+  ;;; Code:
 
-(leaf git-gutter :straight t
-  :hook (prog-mode . git-gutter-mode)
-  :custom ((git-gutter:update-interval . 2)))
+  (eval-when-compile (require 'leaf))
 
-(leaf diff-hl :straight t
-  :hook ((prog-mode . diff-hl-mode)
-         (magit-post-refresh . diff-hl-magit-post-refresh)))
+  (leaf diff-hl
+    :straight t
+    :hook ((prog-mode . diff-hl-mode)
+           (text-mode . diff-hl-mode)
+           (dired-mode . diff-hl-dired-mode)
+           (magit-post-refresh . diff-hl-magit-post-refresh))
+    :custom ((diff-hl-draw-borders . nil)))
 
-(provide 'vcs/vcs-gutter)
-;;; vcs/vcs-gutter.el ends here
+  (provide 'vcs/vcs-gutter)
+  ;;; vcs-gutter.el ends here
 #+end_src
 
 *** vcs/vcs-forge.el
@@ -2806,53 +2700,43 @@ None.
 :CUSTOM_ID: utils-search-nav
 :END:
 
-*Purpose*
-Project-level search & navigation tools.
-
-*What it does*
-`rg` (if available), `dumb-jump` (xref backend), `projectile`, `multiple-cursors`.
-
-*Notes*
-`rg` activated only when executable is present.
+*Purpose*: Provide project-level search and navigation tools.
+*What it does*:
+- Use `consult-ripgrep` (from completion-consult) for live grep if `rg` is installed
+- Provide `dumb-jump` as a fallback xref backend (when no LSP available)
+- Optional: `multiple-cursors` for multi-editing
+*Notes*:
+- Removed `leaf rg` (redundant with consult)
+- `projectile` dropped in favor of built-in `project.el` (Emacs 30+)
+- Safer and avoids duplication with `completion-consult.el`
 
 #+begin_src emacs-lisp :tangle lisp/utils/search-nav.el
-  ;;; utils/search-nav.el --- Project search & navigation -*- lexical-binding: t; -*-
+;;; utils/search-nav.el --- Project search & navigation -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
+;; Copyright (c) 2021-2025
+;; Author: YAMASHITA, Takao
+;; License: GNU GPL v3 or later
 
-  ;;; Code:
+;;; Commentary:
+;; Modern search/navigation helpers using ripgrep (via consult) and dumb-jump fallback.
 
-  (when (executable-find "rg")
-    (setopt grep-program "rg")
-    (leaf rg :straight t))
+;;; Code:
 
-  (leaf dumb-jump :straight t
-    :hook (xref-backend-functions . dumb-jump-xref-activate)
-    :custom '((dumb-jump-force-searcher  . 'rg)
-              (dumb-jump-prefer-searcher . 'rg)))
+(eval-when-compile (require 'leaf))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Projectile: project management
-  (leaf projectile
-    :straight t
-    :config
-    ;; Ensure .var/projectile directory exists
-    (my/ensure-directory-exists (expand-file-name "projectile" no-littering-var-directory))
+;; ---------------------------------------------------------------------------
+;; Dumb Jump (fallback xref backend when no LSP available)
+(leaf dumb-jump :straight t
+  :hook (xref-backend-functions . dumb-jump-xref-activate)
+  :custom '((dumb-jump-force-searcher  . 'rg)
+            (dumb-jump-prefer-searcher . 'rg)))
 
-    ;; Store all files under .var/projectile/
-    (setq projectile-cache-file
-          (expand-file-name "projectile/cache.el" no-littering-var-directory)
-          projectile-known-projects-file
-          (expand-file-name "projectile/bookmarks.eld" no-littering-var-directory))
+;; ---------------------------------------------------------------------------
+;; Multiple cursors for multi-editing
+(leaf multiple-cursors :straight t)
 
-    ;; Enable projectile
-    (projectile-mode 1))
-
-  (leaf multiple-cursors :straight t)
-
-  (provide 'utils/search-nav)
-  ;;; utils/search-nav.el ends here
+(provide 'utils/search-nav)
+;;; utils-search-nav.el ends here
 #+end_src
 
 ** Personal Configuration
