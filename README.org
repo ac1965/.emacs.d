@@ -83,6 +83,47 @@ _For documentation only; block-level :tangle always takes precedence._
 | personal/     | <username>.el         | Optional per-user, per-machine overrides                    |
 | personal/     | user.el               | Personal entry point, loaded last if present                |
 
+** Coding Rules
+:PROPERTIES:
+:CUSTOM_ID: conventions
+:END:
+
+*- `lexical-binding: t` is *mandatory*. The provided feature **must match the file name** (e.g., `lisp/core.el` → `(provide 'core)`).
+- Follow *official documentation* only. Do **not** rely on undocumented features or future/unstable behavior.
+- In every *leaf* block, group settings under `:straight`, `:bind`, `:hook`, and `:custom`.
+- For built-in packages, **always** specify `:straight nil`.
+
+*** Header template
+#+begin_src emacs-lisp
+  ;;; module.el --- description -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;;; Commentary:
+  ;; Short explanation about what this module does.
+  ;; If it belongs to a category (core, ui, completion, org, dev, vcs, utils),
+  ;; mention it here as well.
+  ;;
+  ;;; Code:
+
+  ... code ...
+
+  (provide 'module)
+  ;;; module.el ends here
+#+end_src
+
+*** Namespaces and naming
+
+- Module prefixes: `core-...`, `ui-...`, `completion-...`, `orgx-...`, `dev-...`, `vcs-...`, `utils-...`
+- Personal namespace: `my/...`
+- *Internal-only* functions/variables use a **double hyphen** `--` (e.g., `core--restore-startup-state`)
+- *Predicates* end with `-p` (e.g., `core-enabled-p`)
+- *Hook helpers* should make their purpose clear: `PREFIX--on-...` or `PREFIX-...-hook-function`
+- *Keymaps* end with `-map`, and *hook variables* end with `-hook`
+- Add `;;;###autoload` **only** to public commands (never to internal `--` functions).
+
 ** Build pipeline
 - =Makefile= :: Reproducible pipeline (=tangle=, =clean=, =compile=)
 
@@ -1320,12 +1361,29 @@ Works for GUI frames/daemon.
           ((eq system-type 'windows-nt) "Consolas")
           (t "Monospace")))
 
+  ;; (defun my/system-emoji-font ()
+  ;;   "Return a default emoji font family depending on OS."
+  ;;   (cond ((eq system-type 'darwin) "Apple Color Emoji")
+  ;;         ((eq system-type 'gnu/linux) "Noto Color Emoji")
+  ;;         ((eq system-type 'windows-nt) "Segoe UI Emoji")
+  ;;         (t "Noto Color Emoji")))
+
   (defun my/system-emoji-font ()
-    "Return a default emoji font family depending on OS."
-    (cond ((eq system-type 'darwin) "Apple Color Emoji")
-          ((eq system-type 'gnu/linux) "Noto Color Emoji")
-          ((eq system-type 'windows-nt) "Segoe UI Emoji")
-          (t "Noto Color Emoji")))
+    "Set a color emoji font for unicode emoji ranges."
+    (interactive)
+    (let* ((emoji-font
+            (cond
+             ((eq system-type 'darwin) "Apple Color Emoji")
+             ((eq system-type 'gnu/linux)
+              (or (car (seq-filter (lambda (f) (member f (font-family-list)))
+                                   '("Noto Color Emoji" "JoyPixels" "Twitter Color Emoji")))
+                  "Noto Color Emoji"))
+             ((eq system-type 'windows-nt) "Segoe UI Emoji")
+             (t nil))))
+      (when (and emoji-font (member emoji-font (font-family-list)))
+        (set-fontset-font t 'emoji emoji-font nil 'prepend)
+        (set-fontset-font t 'symbol emoji-font nil 'prepend)
+        (set-fontset-font t 'unicode emoji-font nil 'prepend))))
 
   (defun my/font-setup ()
     "Apply font settings, respecting overrides, and report applied fonts."
