@@ -649,7 +649,7 @@ Deterministic, resilient loader for modular config under `lisp/`, updated to loa
   (defconst my:modules
     '(
       ;; --- Core (compat first) --------------------------------------------------
-      core/compat
+      ;; core/compat
       core/general
       core/tools
       core/utils
@@ -789,54 +789,6 @@ Deterministic, resilient loader for modular config under `lisp/`, updated to loa
   ;;; modules.el ends here
 #+end_src
 
-*** core/compat.el
-:PROPERTIES:
-:CUSTOM_ID: core-compat
-:END:
-
-**Purpose**
-Provide **forward-compatible shims** so legacy helpers like `my--nl-var` won’t break byte-compilation or eager macro-expansion. Also supplies a safe fallback for `no-littering-var-directory`.
-
-**What it does**
-- Defines `no-littering-var-directory` fallback (uses `~/.emacs.d/.var/` by default).
-- Defines `(my--nl-var &rest SEGMENTS)` helper that **joins under** `no-littering-var-directory`.
-- Exposes `my:d:var` pointing at `.var/` so other modules can rely on a stable root.
-- Contains **no side effects** beyond definitions; safe to load very early.
-
-**Notes**
-- Put `core/compat` **before** `core/general` in your module order (or add `(require 'core/compat)` at the top of `core/general.el`).
-- This removes the error:
-  `[modules] Failed to load core/general: Eager macro-expansion failure: (void-function my--nl-var)`.
-
-#+begin_src emacs-lisp :tangle lisp/core/compat.el
-;;; compat.el --- Lightweight shims for legacy helpers -*- lexical-binding: t; -*-
-;;; Commentary:
-;; Provide forward-compatible helpers used by older snippets (e.g., my--nl-var).
-;;; Code:
-
-(require 'subr-x)
-
-;; Fallback when no-littering is not present.
-(defvar no-littering-var-directory
-  (expand-file-name ".var/"
-                    (or (and load-file-name
-                             (file-name-directory (file-chase-links load-file-name)))
-                        user-emacs-directory))
-  "Variable data directory. If `no-littering` is installed, it usually sets this.")
-
-(defvar my:d:var no-littering-var-directory
-  "Canonical variable-data root for this config (defaults to `.var/`).")
-
-;; Legacy helper used by some configs/snippets: (my--nl-var \"sub/dir\" \"file\")
-(unless (fboundp 'my--nl-var)
-  (defun my--nl-var (&rest segments)
-    "Join SEGMENTS under `no-littering-var-directory` and return an absolute path."
-    (let ((base (file-name-as-directory no-littering-var-directory)))
-      (expand-file-name (mapconcat #'identity segments "/") base))))
-
-(provide 'core/compat)
-;;; compat.el ends here
-#+end_src
 *** core/general.el
 :PROPERTIES:
 :CUSTOM_ID: core-general
@@ -1545,71 +1497,6 @@ QoL for EWW: search primed for isearch, toggle images, history/bookmarks locatio
   ;;; core/eww.el ends here
 #+end_src
 
-*** ui/ui-faces-sanitize.el
-:PROPERTIES:
-:CUSTOM_ID: ui-faces-sanitize
-:END:
-
-**Purpose**
-Eliminate the warning:
-“setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead”
-without breaking callers of `set-face-attribute`.
-
-**What it does**
-- Removes any global `:filter-args` advice (which can mis-handle call shapes).
-- Adds a **narrow :around advice** that only sanitizes `:foreground nil` when the face is `font-lock-doc-markup-face`, converting it to `'unspecified`.
-- Adds a small **post-theme normalizer** as a safety net.
-
-**Notes**
-- This advice is minimal and only touches the one problematic face/attribute.
-- Load this early (your `modules.el` already lists it before theme/UI blocks).
-
-#+begin_src emacs-lisp :tangle lisp/ui/ui-faces-sanitize.el
-;;; ui-faces-sanitize.el --- Sanitize doc-markup face safely -*- lexical-binding: t; -*-
-;;; Commentary:
-;; Avoid the warning:
-;;   setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’:
-;;   nil value is invalid, use ‘unspecified’ instead.
-;; We do NOT use :filter-args (which caused assertions in some call paths).
-;; Instead, apply a narrow :around advice that only sanitizes the problematic case.
-;;; Code:
-
-(defvar my/ui--faces-sanitize-installed nil
-  "Non-nil when our around-advice for `set-face-attribute` is installed.")
-
-(defun my/ui--sanitize-doc-markup-foreground (orig face frame &rest attrs)
-  "Around advice: sanitize `:foreground nil` when FACE is the doc-markup face."
-  (if (not (eq face 'font-lock-doc-markup-face))
-      (apply orig face frame attrs)
-    (let ((rest attrs) out)
-      (while rest
-        (let ((k (pop rest))
-              (v (pop rest)))
-          (when (and (eq k :foreground) (eq v nil))
-            (setq v 'unspecified))
-          (push v out) (push k out)))
-      (apply orig face frame (nreverse out)))))
-
-(unless my/ui--faces-sanitize-installed
-  (advice-add 'set-face-attribute :around #'my/ui--sanitize-doc-markup-foreground)
-  (setq my/ui--faces-sanitize-installed t))
-
-;; Post-theme normalizer (belt and suspenders).
-(defun my/ui--normalize-doc-markup-face ()
-  "Ensure `font-lock-doc-markup-face` has a non-nil :foreground."
-  (when (eq (face-attribute 'font-lock-doc-markup-face :foreground nil 'default) nil)
-    (set-face-attribute 'font-lock-doc-markup-face nil :foreground 'unspecified)))
-
-(add-hook 'emacs-startup-hook #'my/ui--normalize-doc-markup-face)
-(when (boundp 'enable-theme-functions)
-  (add-hook 'enable-theme-functions (lambda (&rest _) (my/ui--normalize-doc-markup-face))))
-(when (boundp 'after-load-theme-hook)
-  (add-hook 'after-load-theme-hook #'my/ui--normalize-doc-markup-face))
-
-(provide 'ui/ui-faces-sanitize)
-;;; ui-faces-sanitize.el ends here
-#+end_src
-
 *** ui/ui-font.el
 :PROPERTIES:
 :CUSTOM_ID: ui-font
@@ -1672,22 +1559,18 @@ Font setup for default/variable-pitch/emoji and ligatures.
   ;;; ui/ui-font.el ends here
 #+end_src
 
-**** ui/ui-theme.el
+*** ui/ui-theme.el
 :PROPERTIES:
 :CUSTOM_ID: ui-theme
 :END:
 
 **Purpose**
-Theme management with `ef-themes` and `spacious-padding`, plus a **safe face-normalizer** that avoids setting face attributes to `nil` (which causes warnings in Emacs 30+).
+Theme management with `nano-themes`
 
 **What it does**
-- Keeps your original theme setup (incl. `(modus-themes-to-toggle . '(ef-frost ef-spring))`).
-- Adds `ui--normalize-faces-after-theme` to set problematic face attributes to `'unspecified` instead of `nil`.
-- Hooks the normalizer to `after-load-theme-hook` and runs it once at init.
+- none
 
 **Notes**
-If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`, this helper will correct it at runtime to prevent warnings like:
-`Warning: setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead.`
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-theme.el
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
@@ -1704,84 +1587,10 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
   ;;;
   ;;; Code:
 
-  (leaf ef-themes :straight t
-    ;; Keep the user's original toggle pair as requested.
-    :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
+  (leaf nano-theme
+    :straight (nano-theme :type git :host github :repo "rougier/nano-theme")
     :config
-    (unless custom-enabled-themes
-      (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t)))
-
-  (leaf spacious-padding :straight t
-    :if (display-graphic-p)
-    :custom ((spacious-padding-widths . '((left . 15) (right . 15)))
-             (spacious-padding-subtle-mode-line . t))
-    :config (spacious-padding-mode 1))
-
-  ;;;; Face normalization --------------------------------------------------------
-  ;; Emacs 30+: setting a face attribute to NIL is invalid; use 'unspecified.
-
-  (defgroup ui-theme-normalize nil
-    "Normalize face attributes set to nil."
-    :group 'faces)
-
-  (defcustom ui:normalize-face-attrs
-    '((font-lock-doc-markup-face :foreground))
-    "List of (FACE ATTR ...) pairs to ensure are not nil."
-    :type '(repeat (cons symbol (repeat symbol)))
-    :group 'ui-theme-normalize)
-
-  (defun ui--normalize-face-attr (face attr)
-    "If FACE's ATTR is nil, set it to 'unspecified to avoid warnings."
-    (when (facep face)
-      (let ((val (face-attribute face attr nil 'default)))
-        (when (null val)
-          (set-face-attribute face nil attr 'unspecified)))))
-
-  (defun ui--normalize-faces ()
-    "Normalize all faces declared in `ui:normalize-face-attrs`."
-    (dolist (entry ui:normalize-face-attrs)
-      (let ((face (car entry))
-            (attrs (cdr entry)))
-        (dolist (attr attrs)
-          (ui--normalize-face-attr face attr)))))
-
-  ;; Run after any theme is enabled (THEME arg is ignored).
-  (add-hook 'enable-theme-functions
-            (lambda (_theme) (ui--normalize-faces)))
-
-  ;; Also run once at startup (covers custom-file faces before first theme load).
-  (add-hook 'emacs-startup-hook #'ui--normalize-faces)
-
-  ;; Back-compat: if something still calls the old name with args, don't error.
-  (defun ui--normalize-faces-after-theme (&rest _ignore)
-    "Compatibility shim; call `ui--normalize-faces' and ignore extra args."
-    (ui--normalize-faces))
-
-  (defcustom ui:normalize-face-attrs
-    '((font-lock-doc-markup-face :foreground))
-    "List of (FACE ATTR ...) pairs to ensure are not nil."
-    :type '(repeat (cons symbol (repeat symbol)))
-    :group 'ui-theme-normalize)
-
-  (defun ui--normalize-face-attr (face attr)
-    "If FACE's ATTR is nil, set it to 'unspecified to avoid warnings."
-    (when (facep face)
-      (let ((val (face-attribute face attr nil 'default)))
-        (when (null val)
-          (set-face-attribute face nil attr 'unspecified)))))
-
-  (defun ui--normalize-faces ()
-    "Normalize all faces declared in `ui:normalize-face-attrs`."
-    (dolist (entry ui:normalize-face-attrs)
-      (let ((face (car entry))
-            (attrs (cdr entry)))
-        (dolist (attr attrs)
-          (ui--normalize-face-attr face attr)))))
-
-  (add-hook 'enable-theme-functions (lambda (_theme) (ui--normalize-faces)))
-  (add-hook 'emacs-startup-hook #'ui--normalize-faces)
-
-  (defun ui--normalize-faces-after-theme (&rest _) (ui--normalize-faces))
+    (load-theme 'nano-light t)) ;; or 'nano-dark
 
   (provide 'ui/ui-theme)
   ;;; ui/ui-theme.el ends here
@@ -1796,7 +1605,7 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
 Modeline essentials, time, and battery display.
 
 **What it does**
-- Enables `doom-modeline` and `minions`.
+- Enables `nano-modeline` and `minions`.
 - Shows time every 30s; shows battery when available.
 
 **Notes**
@@ -1809,9 +1618,6 @@ Modeline essentials, time, and battery display.
   ;; Modeline widgets and lightweight indicators.
   ;;; Code:
 
-  (leaf doom-modeline :straight t
-    :hook (after-init-hook . doom-modeline-mode))
-
   (leaf minions :straight t
     :custom ((minions-mode-line-lighter . "⚙"))
     :hook (after-init-hook . minions-mode))
@@ -1821,6 +1627,26 @@ Modeline essentials, time, and battery display.
         display-time-24hr-format t)
   (display-time-mode 1)
   (when (fboundp 'display-battery-mode) (display-battery-mode 1))
+
+  (leaf nano-modeline
+    :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
+    :require t
+    :init (setopt nano-modeline-padding '(0.20 . 0.25))
+    :config (nano-modeline-text-mode t))
+
+  (add-hook 'prog-mode-hook            #'nano-modeline-prog-mode)
+  (add-hook 'text-mode-hook            #'nano-modeline-text-mode)
+  (add-hook 'org-mode-hook             #'nano-modeline-org-mode)
+  (add-hook 'pdf-view-mode-hook        #'nano-modeline-pdf-mode)
+  (add-hook 'mu4e-headers-mode-hook    #'nano-modeline-mu4e-headers-mode)
+  (add-hook 'mu4e-view-mode-hook       #'nano-modeline-mu4e-message-mode)
+  (add-hook 'elfeed-show-mode-hook     #'nano-modeline-elfeed-entry-mode)
+  (add-hook 'elfeed-search-mode-hook   #'nano-modeline-elfeed-search-mode)
+  (add-hook 'term-mode-hook            #'nano-modeline-term-mode)
+  (add-hook 'xwidget-webkit-mode-hook  #'nano-modeline-xwidget-mode)
+  (add-hook 'messages-buffer-mode-hook #'nano-modeline-message-mode)
+  (add-hook 'org-capture-mode-hook     #'nano-modeline-org-capture-mode)
+  (add-hook 'org-agenda-mode-hook      #'nano-modeline-org-agenda-mode)
 
   (provide 'ui/ui-modeline)
   ;;; ui/ui-modeline.el ends here
@@ -1864,14 +1690,6 @@ Window management: fullscreen on startup, zoom, tabs, and save/restore layout.
              (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
              (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
 
-  (leaf tab-bar :straight nil
-    :custom ((tab-bar-show . 1)
-             (tab-bar-new-tab-choice . "*scratch*"))
-    :hook (after-init-hook . tab-bar-mode))
-
-  (leaf tab-line :straight nil
-    :hook (after-init-hook . global-tab-line-mode))
-
   (defvar my:saved-window-config nil)
 
   (defun my/save-window-layout ()
@@ -1891,7 +1709,7 @@ Window management: fullscreen on startup, zoom, tabs, and save/restore layout.
   ;;; ui/ui-window.el ends here
 #+end_src
 
-v*** ui/ui-treemacs.el
+*** ui/ui-treemacs.el
 :PROPERTIES:
 :CUSTOM_ID: ui-treemacs
 :END:
