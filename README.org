@@ -263,75 +263,81 @@ This Emacs configuration is modular and organized for **Emacs 30+**.
 :CUSTOM_ID: early-init
 :END:
 
-*Purpose*
-Provide early, minimal startup optimizations and directory scaffolding for a modular setup using `straight.el` + `leaf.el`.
+**Purpose**
+Provide early, minimal startup optimizations and a hidden, tidy directory layout for Emacs 30+ using `straight.el` + `leaf.el`, while preserving macOS-specific Homebrew / `LIBRARY_PATH` handling.
 
-*What it does*
+**What it does**
 - Disables `package.el` auto-activation.
-- Temporarily widens GC and disables file-name handlers; restores later.
-- Creates cache/var/etc/eln/treesit directories defensively.
-- Configures native-comp warnings and eln path.
-- On macOS, adjusts `LIBRARY_PATH` if Homebrew `libgccjit` exists.
-- Disables heavy UI toggles after first frame.
-- Points `straight` base dir to `.cache/`.
+- Temporarily widens GC and disables file-name handlers; **restores them at `emacs-startup`**.
+- Ensures hidden directories: `.cache/`, `.etc/`, `.var/`, plus `eln-cache/` and Tree-sitter paths.
+- Redirects native-comp ELN to `.cache/eln-cache/`; silences async warnings.
+- **macOS**: if Homebrew’s `lib/gcc/current` exists, safely prepends it to `LIBRARY_PATH` (errors are messaged, not swallowed).
+- Turns off menu/tool/scroll bars *after* first frame.
+- Sets `straight-base-dir` under `.cache/` and `custom-file` to `.etc/custom.el` (loaded quietly if present).
 
-*Notes*
-- All originals are restored.
-- Brew detection is guarded and safe.
-- Directory creation is tolerant of errors.
+**Notes**
+- All original variables (GC thresholds, `file-name-handler-alist`) are restored on startup.
+- Directory creation is defensive (fails with warnings, not hard errors).
+- Although tangled to `early-init.el` here, Emacs only reads early init from the **top-level** (e.g., `~/.emacs.d/early-init.el`). Place the tangled file there.
 
 #+begin_src emacs-lisp :tangle early-init.el
   ;;; early-init.el --- Early initialization -*- lexical-binding: t; -*-
-
+  ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-
+  ;;;
   ;;; Commentary:
   ;; Early startup optimizations and directory setup for Emacs 30+.
   ;; Safe, reversible, and compatible with straight.el + leaf.el.
-
+  ;;;
   ;;; Code:
 
+  ;; Keep package.el dormant (straight handles packages)
   (setopt package-enable-at-startup nil)
+
+  ;; We use string-trim / when-let; ensure availability at compile time.
+  (eval-when-compile (require 'subr-x))
 
   ;; Save & widen GC limits during startup, restore later
   (defvar my:orig:gc-cons-threshold gc-cons-threshold)
   (defvar my:orig:gc-cons-percentage gc-cons-percentage)
   (setopt gc-cons-threshold most-positive-fixnum
           gc-cons-percentage 0.6)
+
+  ;; Suppress file-name-handler overhead during init, then restore
+  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
+  (setq file-name-handler-alist nil)
+
   (add-hook 'emacs-startup-hook
             (lambda ()
               (setopt gc-cons-threshold my:orig:gc-cons-threshold
-                      gc-cons-percentage my:orig:gc-cons-percentage)))
-
-  ;; Suppress file-name-handler overhead during init
-  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
-  (setq file-name-handler-alist nil)
-  (add-hook 'emacs-startup-hook
-            (lambda ()
+                      gc-cons-percentage my:orig:gc-cons-percentage)
               (setq file-name-handler-alist my:orig:file-name-handler-alist)))
 
   (defun my/ensure-directory-exists (dir)
-    "Ensure DIR exists; create if necessary."
+    "Ensure DIR exists, creating it if necessary (warn on failure)."
     (unless (file-directory-p dir)
       (condition-case err
           (make-directory dir t)
-        (error (warn "Failed to create directory: %s (%s)" dir (error-message-string err))))))
+        (error (warn "Failed to create directory: %s (%s)"
+                     dir (error-message-string err))))))
 
-  ;; Define directory layout
+  ;; Root dir for this config (prefer the file's directory)
   (defvar my:d (or (and load-file-name
                         (file-name-directory (file-chase-links load-file-name)))
-                   user-emacs-directory))
+                   user-emacs-directory)
+    "Root directory for this Emacs configuration.")
 
-  (defvar my:d:cache   (expand-file-name ".cache/"       my:d))
-  (defvar my:d:etc     (expand-file-name ".etc/"         my:d))
-  (defvar my:d:var     (expand-file-name ".var/"         my:d))
-  (defvar my:d:lisp    (expand-file-name "lisp/"         my:d))
-  (defvar my:d:eln     (expand-file-name "eln-cache/"    my:d:cache))
-  (defvar my:d:treesit (expand-file-name "tree-sitter/"  my:d:var))
+  ;; Hidden layout under my:d
+  (defvar my:d:cache   (expand-file-name ".cache/"             my:d))
+  (defvar my:d:etc     (expand-file-name ".etc/"               my:d))
+  (defvar my:d:var     (expand-file-name ".var/"               my:d))
+  (defvar my:d:lisp    (expand-file-name "lisp/"               my:d))
+  (defvar my:d:eln     (expand-file-name "eln-cache/"          my:d:cache))
+  (defvar my:d:treesit (expand-file-name "tree-sitter/"        my:d:var))
   (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache))
-  (defvar my:f:custom  (expand-file-name "custom.el"     my:d:etc))
+  (defvar my:f:custom  (expand-file-name "custom.el"           my:d:etc))
 
   (dolist (dir (list my:d:cache my:d:etc my:d:var my:d:lisp
                      my:d:eln my:d:treesit my:d:treesit-build))
@@ -339,12 +345,16 @@ Provide early, minimal startup optimizations and directory scaffolding for a mod
 
   (add-to-list 'load-path my:d:lisp)
 
-  ;; Native compilation setup
+  ;; Native compilation (defensive)
   (when (featurep 'native-compile)
     (setopt native-comp-async-report-warnings-errors 'silent
             native-comp-eln-load-path (list my:d:eln)))
 
-  ;; macOS + Homebrew libgccjit support
+  ;; Tree-sitter extra search path
+  (when (boundp 'treesit-extra-load-path)
+    (add-to-list 'treesit-extra-load-path my:d:treesit))
+
+  ;; macOS + Homebrew libgccjit support (prepend safely to LIBRARY_PATH)
   (when (and (eq system-type 'darwin) (executable-find "brew"))
     (condition-case err
         (let* ((prefix (string-trim (shell-command-to-string "brew --prefix")))
@@ -352,20 +362,26 @@ Provide early, minimal startup optimizations and directory scaffolding for a mod
           (when (file-directory-p brew-libgccjit)
             (setenv "LIBRARY_PATH"
                     (concat brew-libgccjit
-                            (when-let* ((orig (getenv "LIBRARY_PATH")))
+                            (when-let ((orig (getenv "LIBRARY_PATH")))
                               (concat ":" orig))))))
-      (error (message "[early-init] brew probe failed: %s" (error-message-string err)))))
+      (error (message "[early-init] brew probe failed: %s"
+                      (error-message-string err)))))
 
-  ;; Disable heavy UI after first frame
+  ;; Disable heavy UI *after* first frame (safe for tty/daemon)
   (add-hook 'emacs-startup-hook
             (lambda ()
               (dolist (mode '(menu-bar-mode tool-bar-mode scroll-bar-mode))
                 (when (fboundp mode) (funcall mode -1)))))
 
-  ;; straight.el defaults
+  ;; straight.el: keep everything inside .cache/
   (setopt straight-base-dir my:d:cache
           straight-use-package-by-default t
           straight-profiles '((nil . "default.el")))
+
+  ;; Custom settings file in .etc/
+  (setopt custom-file my:f:custom)
+  (when (file-exists-p my:f:custom)
+    (load custom-file 'noerror 'nomessage))
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -376,32 +392,34 @@ Provide early, minimal startup optimizations and directory scaffolding for a mod
 :CUSTOM_ID: init
 :END:
 
-*Purpose*
-Bootstrap packages, configure base behavior, and load modular files.
+**Purpose**
+Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies safe defaults, and loads modular configs via `lisp/modules.el`. macOS-specific environment handling (Homebrew paths, shell env import) is preserved.
 
-*What it does*
-- Bootstraps `straight.el` (guarded, timeout).
-- Installs and initializes `leaf`.
-- Defines user customization group (`my`) and LSP selector.
-- Temporarily enlarges process I/O buffer; restores later.
-- Configures sensible defaults (UI, editing, scrolling).
-- Uses `no-littering` to centralize paths.
-- On macOS: imports shell env safely; extends PATH; configures `dired`.
-- Loads personal and modular configs fault-tolerantly.
-- Reports startup time & GC count asynchronously.
+**What it does**
+- Bootstraps `straight.el` and initializes `leaf` / `leaf-keywords`.
+- Defines `my` customization group and `my:use-lsp` selector (`eglot` or `lsp`).
+- Practical performance tweaks (`read-process-output-max`, `gcmh`).
+- Sensible UI/editing defaults; macOS modifier keys.
+- Aligns `no-littering` paths with hidden dirs prepared in *early-init.el* (`my:d:etc`, `my:d:var`).
+- macOS: imports shell env (`exec-path-from-shell`) and prefers Homebrew paths.
+- Dired with GNU `ls` (`gls`) if present.
+- Loads `lisp/modules.el` (central loader) and optional `personal/<user>.el`.
+- Respects `custom-file` at `.etc/custom.el` if present.
 
-*Notes*
-- Safe wrappers prevent single-file errors from breaking init.
-- `custom.el` is isolated in `.etc`.
-- Load-path sanitized (no root dir).
+**Notes**
+- Assumes *early-init.el* has defined `my:d`, `my:d:etc`, `my:d:var`, and created directories.
+- Built-ins explicitly declare `:straight nil` per policy.
+- You can toggle LSP backend by setting `(setq my:use-lsp 'eglot)` or `'lsp`.
 
 #+begin_src emacs-lisp :tangle init.el
   ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
-
+  ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
   ;; License: GNU GPL v3 or later
-
+  ;;
+  ;; $Lastupdate: 2025/10/05 02:55:19 $
+  ;;
   ;;; Commentary:
   ;; Entry point for Emacs 30+ configuration.
   ;; - Bootstraps package management (straight.el + leaf)
@@ -409,12 +427,11 @@ Bootstrap packages, configure base behavior, and load modular files.
   ;; - Configures basic UI and performance
   ;; - Loads modular configuration via lisp/modules.el
   ;; - Optionally loads personal overrides
-
+  ;;;
   ;;; Code:
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Bootstrap straight.el
-  ;; ---------------------------------------------------------------------------
+  ;;;; Bootstrap straight.el -----------------------------------------------------
+  (require 'url) ;; for url-retrieve-synchronously
   (defvar bootstrap-version 7)
   (let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
          (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
@@ -426,38 +443,37 @@ Bootstrap packages, configure base behavior, and load modular files.
                'silent 'inhibit-cookies)
             (goto-char (point-max))
             (eval-print-last-sexp))
-        (error (user-error "[straight] bootstrap failed: %s" (error-message-string err)))))
+        (error (user-error "[straight] bootstrap failed: %s"
+                           (error-message-string err)))))
     (load bootstrap-file nil 'nomessage))
 
-  ;; Ensure essential packages
   (dolist (pkg '(leaf leaf-keywords leaf-convert blackout org))
-    (straight-use-package pkg))
-  (require 'org)
+    (ignore-errors (straight-use-package pkg)))
 
   (eval-when-compile
     (require 'leaf)
     (require 'leaf-keywords))
-  (leaf-keywords-init)
+  (when (fboundp 'leaf-keywords-init)
+    (leaf-keywords-init))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Customization group
-  ;; ---------------------------------------------------------------------------
+  (require 'org) ;; keep org available early
+
+  ;;;; Customization group --------------------------------------------------------
   (defgroup my nil
     "User customizations."
     :group 'convenience)
 
   (defcustom my:use-lsp 'eglot
-    "Select which LSP client to use. Valid values: 'eglot or 'lsp."
+    "Select which LSP client to use. Valid values: `eglot' or `lsp`."
     :type '(choice (const :tag "Eglot" eglot)
                    (const :tag "lsp-mode" lsp))
     :group 'my)
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Performance tweaks
-  ;; ---------------------------------------------------------------------------
+  ;;;; Performance tweaks ---------------------------------------------------------
   (defvar my:orig:read-process-output-max
     (and (boundp 'read-process-output-max) read-process-output-max))
   (when (boundp 'read-process-output-max)
+    ;; 4MB improves LSP and terminals throughput.
     (setq read-process-output-max (* 4 1024 1024)))
   (add-hook 'emacs-startup-hook
             (lambda ()
@@ -466,65 +482,64 @@ Bootstrap packages, configure base behavior, and load modular files.
 
   (leaf gcmh
     :straight t
-    :hook (emacs-startup . gcmh-mode)
-    :init
-    (setq gcmh-idle-delay 2
-          gcmh-high-cons-threshold (* 64 1024 1024)))
+    :custom
+    ((gcmh-idle-delay . 5)
+     (gcmh-high-cons-threshold . 16777216))
+    :config
+    (gcmh-mode 1))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Basic UI and editing defaults
-  ;; ---------------------------------------------------------------------------
+  ;;;; Basic UI and editing defaults ---------------------------------------------
   (leaf emacs
     :straight nil
     :init
     ;; Unset disruptive keys
     (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
-      (keymap-global-unset k))
+      (when (lookup-key (current-global-map) (kbd k))
+        (keymap-global-unset k)))
+    ;; Prefer CAPE dabbrev if present
     (when (fboundp 'cape-dabbrev)
       (keymap-global-set "M-/" #'cape-dabbrev))
+    ;; Smooth scrolling (Emacs 29+)
     (when (fboundp 'pixel-scroll-precision-mode)
       (pixel-scroll-precision-mode 1))
-    (setopt inhibit-startup-screen  t
-            initial-scratch-message nil
-            use-short-answers       t
-            create-lockfiles        nil
-            make-backup-files       t
-            delete-old-versions     t
-            version-control         t
-            idle-update-delay       0.2
-            ring-bell-function      #'ignore
-            display-line-numbers-type 'relative
-            auto-save-default       t
-            auto-save-visited-interval 2)
+    :config
+    (setopt inhibit-startup-screen        t
+            initial-scratch-message       nil
+            use-short-answers             t
+            create-lockfiles              nil
+            make-backup-files             t
+            delete-old-versions           t
+            version-control               t
+            idle-update-delay             0.2
+            ring-bell-function            #'ignore
+  	  display-line-numbers-type     'relative)
     (electric-pair-mode 1)
     (add-hook 'prog-mode-hook #'display-line-numbers-mode)
     (auto-save-visited-mode 1))
 
-  ;; Modifier keys
+  ;; Modifier keys (per-OS)
   (leaf my:modifier
     :straight nil
-    :init
-    (cond
-     ((eq system-type 'darwin)
-      (setq mac-option-modifier 'meta
-            mac-command-modifier 'super
-            mac-control-modifier 'control
-            mac-function-modifier 'hyper))
-     ((eq system-type 'windows-nt)
-      (setq w32-lwindow-modifier 'super
-            w32-rwindow-modifier 'super
-            w32-apps-modifier   'hyper))
-     ((eq system-type 'gnu/linux)
-      (setq my:os "linux"))))
+    :config
+    (pcase system-type
+      ('darwin
+       (setq mac-option-modifier 'meta
+             mac-command-modifier 'super
+             mac-control-modifier 'control
+             mac-function-modifier 'hyper))
+      ('windows-nt
+       (setq w32-lwindow-modifier 'super
+             w32-rwindow-modifier 'super
+             w32-apps-modifier   'hyper))
+      (_ nil)))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Files and environment
-  ;; ---------------------------------------------------------------------------
+  ;;;; Files and environment ------------------------------------------------------
   (leaf no-littering
     :straight t
     :init
-    (setq no-littering-etc-directory my:d:etc
-          no-littering-var-directory my:d:var))
+    ;; Align with early-init hidden dirs
+    (setq no-littering-etc-directory (file-name-as-directory (or (bound-and-true-p my:d:etc) (expand-file-name ".etc/" user-emacs-directory)))
+          no-littering-var-directory (file-name-as-directory (or (bound-and-true-p my:d:var) (expand-file-name ".var/" user-emacs-directory)))))
 
   (leaf exec-path-from-shell
     :straight t
@@ -537,32 +552,34 @@ Bootstrap packages, configure base behavior, and load modular files.
     :config
     (ignore-errors (exec-path-from-shell-initialize)))
 
+  ;; Prefer Homebrew paths on macOS (Apple Silicon/Intel)
   (when (eq system-type 'darwin)
     (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
-      (when (and (file-directory-p p) (not (member p exec-path)))
+      (when (and (file-directory-p p)
+                 (not (member p exec-path)))
         (add-to-list 'exec-path p)
         (setenv "PATH" (concat p ":" (getenv "PATH"))))))
 
-  ;; Dired defaults
+  ;; Dired defaults (GNU ls if available)
   (leaf dired
+    :straight nil
     :custom ((dired-listing-switches . "-aBhl --group-directories-first"))
     :config
     (when (and (eq system-type 'darwin) (executable-find "gls"))
       (setq insert-directory-program "gls"
             dired-use-ls-dired t)))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Misc
-  ;; ---------------------------------------------------------------------------
+  ;;;; Misc helpers ---------------------------------------------------------------
   (leaf hydra :straight t :commands (defhydra))
 
-  (setq custom-file my:f:custom)
-  (when (file-readable-p custom-file)
+  ;; Respect custom-file from early-init and load quietly if present
+  (setq custom-file (or (bound-and-true-p my:f:custom) custom-file))
+  (when (and custom-file (file-readable-p custom-file))
     (ignore-errors (load custom-file nil 'nomessage)))
 
-  ;; Safe file loader
+  ;; Safe file loader (utility)
   (defun my/safe-load-file (file &optional noerror)
-    "Load FILE safely. If NOERROR is non-nil, log error instead of raising."
+    "Load FILE safely. If NOERROR is non-nil, log instead of raising."
     (when (and file (file-exists-p file))
       (condition-case err
           (load file nil 'nomessage)
@@ -571,24 +588,20 @@ Bootstrap packages, configure base behavior, and load modular files.
                   "[load] failed to load %s: %s"
                   file (error-message-string err))))))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; User-specific overrides
-  ;; ---------------------------------------------------------------------------
-  (my/safe-load-file (concat my:d "personal/" user-login-name ".el") t)
+  ;;;; User-specific overrides ----------------------------------------------------
+  (my/safe-load-file (expand-file-name (concat "personal/" user-login-name ".el")
+                                       (or (bound-and-true-p my:d) user-emacs-directory))
+                     t)
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Modular configuration
-  ;; ---------------------------------------------------------------------------
-  (let* ((root (if (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d))
-                   (file-name-as-directory my:d)
-                 (file-name-as-directory user-emacs-directory)))
+  ;;;; Modular configuration loader ----------------------------------------------
+  (let* ((root (or (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d) my:d)
+                   user-emacs-directory))
          (lisp-dir (expand-file-name "lisp" root)))
     (add-to-list 'load-path lisp-dir)
+    ;; lisp/modules.el — central loader that specifies which files to load.
     (require 'modules nil t))
 
-  ;; ---------------------------------------------------------------------------
-  ;;; Startup report
-  ;; ---------------------------------------------------------------------------
+  ;;;; Startup report -------------------------------------------------------------
   (add-hook 'after-init-hook
             (lambda ()
               (run-with-idle-timer
@@ -612,29 +625,56 @@ Bootstrap packages, configure base behavior, and load modular files.
 :CUSTOM_ID: core-modules
 :END:
 
+*Purpose*
+Central loader for modular configuration under `lisp/`. Uses **module namespace `orgx/`** (not `org`), to avoid feature/path collision with the Org package itself.
+
+*What it does*
+- Loads modules in a stable order; optional per-module timing when verbose.
+- Skips features in `my:modules-skip`; appends `my:modules-extra`.
+- Safe `require` per module; failures don’t abort the session.
+
+*Notes*
+- Each module file must `(provide 'path/feature)` matching its path, e.g. `lisp/orgx/org-core.el` → `(provide 'orgx/org-core)`.
+- Built-ins must declare `:straight nil` inside their own files.
+- Tangles to `lisp/modules.el`.
+
 #+begin_src emacs-lisp :tangle lisp/modules.el
   ;;; modules.el --- Modular config loader -*- lexical-binding: t; -*-
-
+  ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-
+  ;;;
   ;;; Commentary:
-  ;; Central entry point to load modular configs.
-  ;; Each module is responsible for a single concern and is loaded here in order.
-  ;;
-  ;; Load order:
-  ;;  - core/:  General settings, tools, utils (Emacs-global helpers)
-  ;;  - ui/:    Fonts, theme, modeline, window, treemacs, clipboard (mac)
-  ;;  - completion/: Vertico, Corfu, Consult, Embark, etc.
-  ;;  - org/:   Org ecosystem
-  ;;  - dev/:   Development tools (generic + web stack, SQL, REST, infra)
-  ;;  - vcs/:   Version control
-  ;;  - utils/: General-purpose helpers (scratch, backup, async, search)
-
+  ;; Central entry point to load modular configs placed under lisp/.
+  ;; Each module should `provide' the same feature as its path, e.g.:
+  ;;   lisp/core/general.el  =>  (provide 'core/general)
+  ;;   lisp/orgx/org-core.el =>  (provide 'orgx/org-core)
+  ;;;
   ;;; Code:
 
-  (defvar my:modules
+  (eval-when-compile (require 'subr-x)) ;; string-join, etc.
+
+  (defgroup my:modules nil
+    "Loader options for modular Emacs configuration."
+    :group 'convenience)
+
+  (defcustom my:modules-verbose t
+    "If non-nil, print per-module load time and a summary."
+    :type 'boolean
+    :group 'my:modules)
+
+  (defcustom my:modules-skip nil
+    "List of module features to skip during loading."
+    :type '(repeat symbol)
+    :group 'my:modules)
+
+  (defcustom my:modules-extra nil
+    "List of extra module features to append after `my:modules'."
+    :type '(repeat symbol)
+    :group 'my:modules)
+
+  (defconst my:modules
     '(
       ;; Core
       core/general
@@ -652,7 +692,7 @@ Bootstrap packages, configure base behavior, and load modular files.
       ui/ui-treemacs
       ui/ui-clipboard
 
-      ;; Completion stack
+      ;; Completion
       completion/completion-core
       completion/completion-vertico
       completion/completion-consult
@@ -660,21 +700,20 @@ Bootstrap packages, configure base behavior, and load modular files.
       completion/completion-corfu
       completion/completion-icons
 
-      ;; Org ecosystem
-      org/org-core
-      org/org-visual
-      org/org-extensions
-      org/org-export
+      ;; Org ecosystem (module namespace = orgx/)
+      orgx/org-core
+      orgx/org-visual
+      orgx/org-extensions
+      orgx/org-export
 
-      ;; Development (generic)
+      ;; Development
       dev/dev-lsp
       dev/dev-ai
       dev/dev-term
       dev/dev-build
       dev/dev-docker
-      ;; dev/dev-latex
 
-      ;; Development (web stack & infra)
+      ;; Web/Infra
       dev/web-core
       dev/lsp-web
       dev/format
@@ -682,26 +721,64 @@ Bootstrap packages, configure base behavior, and load modular files.
       dev/sql
       dev/rest
 
-      ;; Version Control
+      ;; VCS
       vcs/vcs-magit
       vcs/vcs-gutter
       vcs/vcs-forge
 
-      ;; Utils (cross-cutting helpers)
+      ;; Utils
       utils/utils-functions
       utils/utils-scratch
       utils/utils-backup
       utils/utils-async
       utils/search-nav
       )
-    "List of modular configuration files to load sequentially.")
+    "Default set of modules to load in order.")
 
-  (dolist (mod my:modules)
+  (defun my/modules--should-load-p (feature)
+    "Return non-nil if FEATURE should be loaded."
+    (not (memq feature my:modules-skip)))
+
+  (defun my/modules--require-safe (feature)
+    "Require FEATURE with error trapping. Return non-nil on success."
     (condition-case err
-        (require mod)
-      (error
-       (message "[modules] Failed to load %s: %s"
-                mod (error-message-string err)))))
+        (progn (require feature) t)
+      (error (message "[modules] Failed to load %s: %s"
+                      feature (error-message-string err))
+             nil)))
+
+  (defun my/modules--format-seconds (sec)
+    "Format SEC (float seconds) compactly."
+    (cond
+     ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
+     ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
+     (t             (format "%.2fs"   sec))))
+
+  (defun my/modules-load ()
+    "Load all modules defined by `my:modules', respecting options."
+    (let* ((final (seq-remove
+                   (lambda (m) (not (my/modules--should-load-p m)))
+                   (append my:modules my:modules-extra)))
+           (ok 0) (ng 0)
+           (t0 (and my:modules-verbose (current-time))))
+      (dolist (mod final)
+        (let ((m0 (and my:modules-verbose (current-time))))
+          (if (my/modules--require-safe mod) (setq ok (1+ ok)) (setq ng (1+ ng)))
+          (when my:modules-verbose
+            (message "[modules] %-24s %s"
+                     mod (my/modules--format-seconds
+                          (float-time (time-subtract (current-time) m0)))))))
+      (when my:modules-verbose
+        (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
+                 ok
+                 (- (length (append my:modules my:modules-extra))
+                    (length final))
+                 ng
+                 (my/modules--format-seconds
+                  (float-time (time-subtract (current-time) t0)))))))
+
+  ;; Kick it off immediately on require.
+  (my/modules-load)
 
   (provide 'modules)
   ;;; modules.el ends here
@@ -713,190 +790,190 @@ Bootstrap packages, configure base behavior, and load modular files.
 :END:
 
 *Purpose*
-Global policies and keymaps. Fix hydra typo and align EWW keymaps to helper functions.
+Global policies and keymaps for navigation, windows, files, session persistence, TRAMP, and **visited-mode auto-save**. Built-ins explicitly declare `:straight nil` per policy.
 
 *What it does*
-- Defines text-scale hydra and global bindings (Consult, Treemacs, undo-fu, etc.)
-- TRAMP, backups, authentication scaffolding.
-- EWW bindings call `my/eww-search` & `my/eww-toggle-images`.
+- Namespaced **text-scale hydra** (`core-hydra-text-scale`).
+- Centralized **global keybindings** (Consult, Treemacs, Undo-Fu, window ops, EWW helpers, Org/Roam, Magit).
+- Enables **Desktop save**, **Winner**; configures **TRAMP**.
+- Consolidates on **visited-mode auto-save** (real file on idle) and **removes legacy `#…#` auto-save settings**.
+- Keeps backups under hidden dirs (`.var/`) and creates them defensively.
 
 *Notes*
-Built-ins use `:straight nil`. Requires `core/utils`, `core/eww`.
+- Assumes `my/ensure-directory-exists` and `no-littering-var-directory` are defined in *early-init* / *init*.
+- Keep Dired-specific extra keybindings here; configure Dired packages in a separate module.
+- Removed legacy `#…#` auto-save settings (`auto-save-file-name-transforms`, `auto-save-list-file-prefix`, and related timeouts).
 
 #+begin_src emacs-lisp :tangle lisp/core/general.el
   ;;; core/general.el --- General settings & keybindings -*- lexical-binding: t; -*-
-
+  ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-
+  ;;;
   ;;; Commentary:
-  ;; General-purpose utilities and settings.
-
+  ;; - Namespaced text-scale hydra
+  ;; - Centralized global keybindings
+  ;; - Desktop save, Winner mode, TRAMP
+  ;; - Visited-mode auto-save (no #...# artifacts)
+  ;; - Backups into hidden .var/ dirs
+  ;;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x)) ;; when-let, string-join
 
-  ;; ---------------------------------------------------------------------------
-  ;; Hydra for Text Scaling
-
+  ;;;; Text scaling hydra ---------------------------------------------------------
   (leaf hydra
     :straight t
     :config
-    (defhydra hydra-text-scale (:hint nil :color red)
+    (defhydra core-hydra-text-scale (:hint nil :color red)
       "
   ^Text Scaling^
-  [_+_] Increase   [_-_] Decrease   [_0_] Reset   [_q_] Quit
+  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
   "
       ("+" text-scale-increase)
       ("-" text-scale-decrease)
       ("0" (text-scale-set 0) :color blue)
       ("q" nil "quit" :color blue)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Common Key Bindings
-
+  ;;;; Global key bindings --------------------------------------------------------
   (leaf my:key
     :straight nil
-    :doc "Centralized keybindings via `leaf-keys`, ordered by map lifetime."
-    :emacs>= 30.0
     :bind
     (;; Global
-     ("<f1>"    . help-command)
-     ("<f5>"    . my/revert-buffer-quick)
-     ("<f8>"    . treemacs)
-     ("C-h"     . backward-delete-char)
+     ("<f1>"      . help-command)
+     ("<f5>"      . my/revert-buffer-quick)
+     ("<f8>"      . treemacs)
+     ("C-h"       . backward-delete-char)
      ;; Undo/redo
-     ("C-/"     . undo-fu-only-undo)
-     ("C-?"     . undo-fu-only-redo)
+     ("C-/"       . undo-fu-only-undo)
+     ("C-?"       . undo-fu-only-redo)
      ;; Text scaling
-     ("C-c z"   . hydra-text-scale/body)
+     ("C-c z"     . core-hydra-text-scale/body)
      ;; Buffer navigation
-     ("C-c b"   . consult-buffer)
-     ("M-n"     . forward-paragraph)
-     ("M-p"     . backward-paragraph)
-     ("s-<down>". end-of-buffer)
-     ("s-<up>"  . beginning-of-buffer)
+     ("C-c b"     . consult-buffer)
+     ("M-n"       . forward-paragraph)
+     ("M-p"       . backward-paragraph)
+     ("s-<down>"  . end-of-buffer)
+     ("s-<up>"    . beginning-of-buffer)
      ("s-<right>" . next-buffer)
      ("s-<left>"  . previous-buffer)
      ;; Window management
-     ("C-."     . other-window)
-     ("C-c 2"   . my/toggle-window-split)
-     ("s-."     . ace-window)
-     ("s-w"     . ace-swap-window)
-     ("s-d"     . delete-frame)
-     ("s-m"     . (lambda () (interactive)
-                    (let ((frame (make-frame)))
-                      (with-selected-frame frame
-                        (switch-to-buffer (generate-new-buffer "untitled"))))))
+     ("C-."       . other-window)
+     ("C-c 2"     . my/toggle-window-split)
+     ("s-."       . ace-window)
+     ("s-w"       . ace-swap-window)
+     ("s-d"       . delete-frame)
+     ("s-m"       . my/new-frame-with-scratch)
      ;; File ops
-     ("s-j"     . find-file-other-window)
-     ("s-o"     . find-file-other-frame)
-     ("C-c o"   . find-file)
-     ("C-c v"   . find-file-read-only)
-     ("C-c V"   . view-file-other-window)
-     ("C-c k"   . kill-buffer-and-window)
+     ("s-j"       . find-file-other-window)
+     ("s-o"       . find-file-other-frame)
+     ("C-c o"     . find-file)
+     ("C-c v"     . find-file-read-only)
+     ("C-c V"     . view-file-other-window)
+     ("C-c k"     . my/kill-buffer-smart)
      ;; Search
-     ("C-s"     . consult-line)
-     ("C-c r"   . consult-ripgrep)
+     ("C-s"       . consult-line)
+     ("C-c r"     . consult-ripgrep)
      ;; Text manipulation
-     ("C-="     . er/expand-region)
-     ("C-c M-a" . align-regexp)
-     ("C-c ;"   . comment-or-uncomment-region)
-     ("C-c l"   . display-line-numbers-mode)
+     ("C-="       . er/expand-region)
+     ("C-c M-a"   . align-regexp)
+     ("C-c ;"     . comment-or-uncomment-region)
+     ("C-c l"     . display-line-numbers-mode)
      ;; Org/Roam
-     ("C-c d a" . org-agenda)
-     ("C-c d c" . org-capture)
-     ("C-c d i" . org-roam-node-insert)
-     ("C-c d f" . org-roam-node-find)
+     ("C-c d a"   . org-agenda)
+     ("C-c d c"   . org-capture)
+     ("C-c d i"   . org-roam-node-insert)
+     ("C-c d f"   . org-roam-node-find)
      ;; Aider
-     ("C-c a a" . aidermacs-transient-menu)
+     ("C-c a a"   . aidermacs-transient-menu)
      ;; EWW (helpers in core/eww.el)
-     ("C-c w w" . eww)
-     ("C-c w s" . my/eww-search)
-     ("C-c w o" . eww-open-file)
-     ("C-c w b" . eww-list-bookmarks)
-     ("C-c w r" . eww-readable)
-     ("C-c w u" . my/eww-toggle-images)
+     ("C-c w w"   . eww)
+     ("C-c w s"   . my/eww-search)
+     ("C-c w o"   . eww-open-file)
+     ("C-c w b"   . eww-list-bookmarks)
+     ("C-c w r"   . eww-readable)
+     ("C-c w u"   . my/eww-toggle-images)
      ;; Misc
-     ("C-x g"   . magit-status)
-     ("s-r"     . (lambda () (interactive)
-                    (if (fboundp 'restart-emacs)
-                        (restart-emacs)
-                      (save-buffers-kill-emacs))))
-     ("M-x"     . execute-extended-command))
+     ("C-x g"     . magit-status)
+     ("s-r"       . my/restart-or-exit)
+     ("M-x"       . execute-extended-command))
     :init
+    ;; Small helpers to keep lambdas out of keymaps (namespaced)
+    (defun my/new-frame-with-scratch ()
+      "Create a new frame and switch to a fresh buffer."
+      (interactive)
+      (let ((frame (make-frame)))
+        (with-selected-frame frame
+          (switch-to-buffer (generate-new-buffer \"untitled\")))))
+    (defun my/restart-or-exit ()
+      "Restart Emacs if `restart-emacs' exists, otherwise save & exit."
+      (interactive)
+      (if (fboundp 'restart-emacs)
+          (restart-emacs)
+        (save-buffers-kill-emacs)))
     (windmove-default-keybindings))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Dired enhancements (bindings only; packages in core/editing.el)
-
-  (leaf dired :straight nil
+  ;;;; Dired key additions (packages configured elsewhere) -----------------------
+  (leaf dired
+    :straight nil
     :bind (:dired-mode-map
            ("i"   . dired-subtree-insert)
            ("TAB" . dired-subtree-toggle)
            ("z"   . my/dired-view-file-other-window)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Desktop Save Mode
-
-  ;; ---------------------------------------------------------------------------
-  ;; Desktop Save Mode
-
+  ;;;; Desktop Save Mode ---------------------------------------------------------
   (leaf desktop
     :straight nil
     :config
-    ;; Set variables explicitly (not via :custom to avoid list errors)
-    (setq desktop-dirname (concat no-littering-var-directory "desktop/")
-          desktop-path    (list (concat no-littering-var-directory "desktop/"))
-          desktop-base-file-name "desktop"
-          desktop-base-lock-name "lock"
-          desktop-restore-eager 10
-          desktop-save t
-          desktop-load-locked-desktop nil
-          desktop-auto-save-timeout 300)
+    (let* ((dir (concat no-littering-var-directory "desktop/")))
+      (setq desktop-dirname            dir
+            desktop-path               (list dir)
+            desktop-base-file-name     "desktop"
+            desktop-base-lock-name     "lock"
+            desktop-restore-eager      10
+            desktop-save               t
+            desktop-load-locked-desktop nil
+            desktop-auto-save-timeout  300)
+      (my/ensure-directory-exists dir)
+      (desktop-save-mode 1)))
 
-    (my/ensure-directory-exists desktop-dirname)
-    (desktop-save-mode 1))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Winner mode
-
-  (leaf winner :straight nil
+  ;;;; Winner mode (window configuration undo/redo) ------------------------------
+  (leaf winner
+    :straight nil
     :global-minor-mode t
     :bind (("M-[" . winner-undo)
            ("M-]" . winner-redo)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; TRAMP setup
-
-  (leaf tramp :straight nil
+  ;;;; TRAMP setup ---------------------------------------------------------------
+  (leaf tramp
+    :straight nil
     :pre-setq
     `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-      (tramp-auto-save-directory . ,(concat no-littering-var-directory "tramp-autosave")))
+      (tramp-auto-save-directory   . ,(concat no-littering-var-directory "tramp-autosave")))
     :custom
-    `((tramp-default-method . "scp")
-      (tramp-verbose . 3)))
+    '((tramp-default-method . "scp")
+      (tramp-verbose        . 3)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Auto-save and backup configuration
-
-  (leaf files :straight nil
+  ;;;; Auto-save (visited-mode) & backups ----------------------------------------
+  ;; Backups go into hidden .var/; classic #...# auto-save settings are removed.
+  (leaf files
+    :straight nil
     :custom
-    `((auto-save-file-name-transforms
-       . '((".*" ,(concat no-littering-var-directory "backup/") t)))
-      (auto-save-list-file-prefix
-       . ,(concat no-littering-var-directory "auto-save-list/.saves-"))
-      (backup-directory-alist
+    `((backup-directory-alist
        . '(("." . ,(concat no-littering-var-directory "backup/"))))
       (delete-old-versions . t)))
-
   (my/ensure-directory-exists (concat no-littering-var-directory "backup/"))
-  (my/ensure-directory-exists (concat no-littering-var-directory "auto-save-list/"))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Authentication Management
+  ;; Visited-mode saves the *real* file after brief idle.
+  (setopt auto-save-visited-interval 1   ;; seconds of idle before saving
+          auto-save-default        nil)  ;; don't create #...# files
+  (when (fboundp 'auto-save-visited-mode)
+    (auto-save-visited-mode 1))
 
+  ;;;; Authentication management -------------------------------------------------
   (defvar my:d:password-store
     (or (getenv "PASSWORD_STORE_DIR")
         (concat no-littering-var-directory "password-store/"))
@@ -912,18 +989,21 @@ Built-ins use `:straight nil`. Requires `core/utils`, `core/eww`.
                                my:d:password-store)
                        :level 'warning)))
 
-  (leaf *authentication :straight nil
+  (leaf *authentication
+    :straight nil
     :init
     (my/auth-check-env)
 
-    (leaf epa-file :straight nil
+    (leaf epa-file
+      :straight nil
       :commands (epa-file-enable)
       :init
       (setq epa-pinentry-mode
             (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
       (add-hook 'emacs-startup-hook #'epa-file-enable))
 
-    (leaf auth-source :straight nil
+    (leaf auth-source
+      :straight nil
       :init
       (with-eval-after-load 'auth-source
         (let ((key (getenv "GPG_KEY_ID")))
@@ -933,6 +1013,7 @@ Built-ins use `:straight nil`. Requires `core/utils`, `core/eww`.
                              "GPG_KEY_ID is not set. Authentication backends may be limited.")))))
 
     (leaf password-store :straight t)
+
     (leaf auth-source-pass
       :straight t
       :commands (auth-source-pass-enable)
@@ -940,7 +1021,8 @@ Built-ins use `:straight nil`. Requires `core/utils`, `core/eww`.
                                     (when (executable-find "pass")
                                       (auth-source-pass-enable)))))
 
-    (leaf plstore :straight nil
+    (leaf plstore
+      :straight nil
       :init
       (with-eval-after-load 'plstore
         (setq plstore-secret-keys 'silent
@@ -1108,51 +1190,51 @@ Adds hooks for after-save, org-tangle-on-save, find-file, read-only-mode.
 None.
 
 #+begin_src emacs-lisp :tangle lisp/core/utils.el
-;;; core/utils.el --- Core utility helpers -*- lexical-binding: t; -*-
+  ;;; core/utils.el --- Core utility helpers -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(defun my/save-buffer-wrapper ()
-  "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
-  (interactive)
-  (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
-        (replace-match timestamp t nil)))))
+  (defun my/save-buffer-wrapper ()
+    "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
+    (interactive)
+    (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
+          (replace-match timestamp t nil)))))
 
-(add-hook 'after-save-hook #'my/save-buffer-wrapper)
+  (add-hook 'after-save-hook #'my/save-buffer-wrapper)
 
-(defun my/auto-tangle-updated-src-blocks ()
-  "Automatically tangle updated Org source blocks when saving `README.org`."
-  (when (and buffer-file-name (string= (file-name-nondirectory buffer-file-name) "README.org"))
-    (let ((org-confirm-babel-evaluate nil)) (org-babel-tangle))))
+  (defun my/auto-tangle-updated-src-blocks ()
+    "Automatically tangle updated Org source blocks when saving `README.org`."
+    (when (and buffer-file-name (string= (file-name-nondirectory buffer-file-name) "README.org"))
+      (let ((org-confirm-babel-evaluate nil)) (org-babel-tangle))))
 
-(add-hook 'org-mode-hook
-          (lambda () (add-hook 'after-save-hook #'my/auto-tangle-updated-src-blocks nil 'make-it-local)))
+  (add-hook 'org-mode-hook
+            (lambda () (add-hook 'after-save-hook #'my/auto-tangle-updated-src-blocks nil 'make-it-local)))
 
-(defun my/revert-buffer-quick () (interactive) (revert-buffer :ignore-auto :noconfirm))
+  (defun my/revert-buffer-quick () (interactive) (revert-buffer :ignore-auto :noconfirm))
 
-(defun my/auto-insert-lexical-binding ()
-  "Insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
-  (when (and (stringp buffer-file-name)
-             (boundp 'no-littering-var-directory)
-             (string-prefix-p (expand-file-name no-littering-var-directory) (expand-file-name buffer-file-name))
-             (string-match-p "\\.el\\'" buffer-file-name)
-             (not (save-excursion (goto-char (point-min))
-                                  (re-search-forward "lexical-binding" (line-end-position 5) t))))
-    (save-excursion (goto-char (point-min)) (insert ";; -*- lexical-binding: t; -*- \n"))))
-(add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
+  (defun my/auto-insert-lexical-binding ()
+    "Insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
+    (when (and (stringp buffer-file-name)
+               (boundp 'no-littering-var-directory)
+               (string-prefix-p (expand-file-name no-littering-var-directory) (expand-file-name buffer-file-name))
+               (string-match-p "\\.el\\'" buffer-file-name)
+               (not (save-excursion (goto-char (point-min))
+                                    (re-search-forward "lexical-binding" (line-end-position 5) t))))
+      (save-excursion (goto-char (point-min)) (insert ";; -*- lexical-binding: t; -*- \n"))))
+  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
 
-(defun my/enable-view-mode-on-read-only () (if buffer-read-only (view-mode 1) (view-mode -1)))
-(add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
+  (defun my/enable-view-mode-on-read-only () (if buffer-read-only (view-mode 1) (view-mode -1)))
+  (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
 
-(provide 'core/utils)
-;;; core/utils.el ends here
+  (provide 'core/utils)
+  ;;; core/utils.el ends here
 #+end_src
 
 *** core/history.el
@@ -1235,53 +1317,53 @@ Modern structural editing, pairs, which-key, undo helpers, visual line wrap.
 Built-ins use `:straight nil`.
 
 #+begin_src emacs-lisp :tangle lisp/core/editing.el
-;;; core/editing.el --- Editing helpers & UX aids -*- lexical-binding: t; -*-
+  ;;; core/editing.el --- Editing helpers & UX aids -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(leaf paredit :straight t
-  :hook (emacs-lisp-mode . (lambda () (enable-paredit-mode) (electric-pair-local-mode -1))))
+  (leaf paredit :straight t
+    :hook (emacs-lisp-mode . (lambda () (enable-paredit-mode) (electric-pair-local-mode -1))))
 
-(leaf paren :straight nil
-  :custom ((show-paren-delay . 0)
-           (show-paren-style . 'expression)
-           (show-paren-highlight-openparen . t))
-  :global-minor-mode show-paren-mode)
+  (leaf paren :straight nil
+    :custom ((show-paren-delay . 0)
+             (show-paren-style . 'expression)
+             (show-paren-highlight-openparen . t))
+    :global-minor-mode show-paren-mode)
 
-(leaf puni :straight t
-  :global-minor-mode puni-global-mode
-  :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
+  (leaf puni :straight t
+    :global-minor-mode puni-global-mode
+    :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
 
-(leaf which-key :straight t :global-minor-mode t
-  :custom ((which-key-idle-delay . 0.5)))
+  (leaf which-key :straight t :global-minor-mode t
+    :custom ((which-key-idle-delay . 0.5)))
 
-(leaf undo-fu :straight t
-  :custom ((undo-fu-allow-undo-in-region . t)))
+  (leaf undo-fu :straight t
+    :custom ((undo-fu-allow-undo-in-region . t)))
 
-(leaf vundo :straight t
-  :bind (("C-c u" . vundo)))
+  (leaf vundo :straight t
+    :bind (("C-c u" . vundo)))
 
-(leaf ace-window :straight t
-  :custom ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
-           (aw-scope . 'frame)
-           (aw-background . t))
-  :config (ace-window-display-mode 1))
+  (leaf ace-window :straight t
+    :custom ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
+             (aw-scope . 'frame)
+             (aw-background . t))
+    :config (ace-window-display-mode 1))
 
-(leaf visual-line-mode :straight nil
-  :hook (text-mode . visual-line-mode))
+  (leaf visual-line-mode :straight nil
+    :hook (text-mode . visual-line-mode))
 
-(leaf dired-filter :straight t)
-(leaf dired-subtree :straight t :after dired)
+  (leaf dired-filter :straight t)
+  (leaf dired-subtree :straight t :after dired)
 
-(leaf expand-region :straight t :after treesit)
-(leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
-(leaf delsel :straight nil :global-minor-mode delete-selection-mode)
+  (leaf expand-region :straight t :after treesit)
+  (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
+  (leaf delsel :straight nil :global-minor-mode delete-selection-mode)
 
-(provide 'core/editing)
-;;; core/editing.el ends here
+  (provide 'core/editing)
+  ;;; core/editing.el ends here
 #+end_src
 
 *** core/eww.el
@@ -1299,37 +1381,37 @@ Defines `my/eww-search` & `my/eww-toggle-images`; sets paths.
 EWW is built-in (`:straight nil`). Keybindings in `core/general.el`.
 
 #+begin_src emacs-lisp :tangle lisp/core/eww.el
-;;; core/eww.el --- EWW helpers -*- lexical-binding: t; -*-
+  ;;; core/eww.el --- EWW helpers -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(leaf eww :straight nil
-  :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
-           (eww-download-directory . "~/Downloads"))
-  :init
-  (setq eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:var))
-  (setq eww-history-limit 200)
-  (defvar eww-hl-search-word nil "Word to highlight with isearch after EWW loads.")
-  (defun my/eww-search (term)
-    "Search TERM with EWW and start isearch."
-    (interactive "sSearch terms: ")
-    (setq eww-hl-search-word term)
-    (eww-browse-url (concat eww-search-prefix term)))
-  (add-hook 'eww-after-render-hook
-            (lambda ()
-              (when eww-hl-search-word
-                (isearch-mode t)
-                (isearch-yank-string eww-hl-search-word)
-                (setq eww-hl-search-word nil))))
-  (defun my/eww-toggle-images () (interactive)
-    (setq shr-inhibit-images (not shr-inhibit-images))
-    (eww-reload)))
+  (leaf eww :straight nil
+    :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
+             (eww-download-directory . "~/Downloads"))
+    :init
+    (setq eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:var))
+    (setq eww-history-limit 200)
+    (defvar eww-hl-search-word nil "Word to highlight with isearch after EWW loads.")
+    (defun my/eww-search (term)
+      "Search TERM with EWW and start isearch."
+      (interactive "sSearch terms: ")
+      (setq eww-hl-search-word term)
+      (eww-browse-url (concat eww-search-prefix term)))
+    (add-hook 'eww-after-render-hook
+              (lambda ()
+                (when eww-hl-search-word
+                  (isearch-mode t)
+                  (isearch-yank-string eww-hl-search-word)
+                  (setq eww-hl-search-word nil))))
+    (defun my/eww-toggle-images () (interactive)
+      (setq shr-inhibit-images (not shr-inhibit-images))
+      (eww-reload)))
 
-(provide 'core/eww)
-;;; core/eww.el ends here
+  (provide 'core/eww)
+  ;;; core/eww.el ends here
 #+end_src
 
 *** ui/ui-font.el
@@ -1361,29 +1443,12 @@ Works for GUI frames/daemon.
           ((eq system-type 'windows-nt) "Consolas")
           (t "Monospace")))
 
-  ;; (defun my/system-emoji-font ()
-  ;;   "Return a default emoji font family depending on OS."
-  ;;   (cond ((eq system-type 'darwin) "Apple Color Emoji")
-  ;;         ((eq system-type 'gnu/linux) "Noto Color Emoji")
-  ;;         ((eq system-type 'windows-nt) "Segoe UI Emoji")
-  ;;         (t "Noto Color Emoji")))
-
   (defun my/system-emoji-font ()
-    "Set a color emoji font for unicode emoji ranges."
-    (interactive)
-    (let* ((emoji-font
-            (cond
-             ((eq system-type 'darwin) "Apple Color Emoji")
-             ((eq system-type 'gnu/linux)
-              (or (car (seq-filter (lambda (f) (member f (font-family-list)))
-                                   '("Noto Color Emoji" "JoyPixels" "Twitter Color Emoji")))
-                  "Noto Color Emoji"))
-             ((eq system-type 'windows-nt) "Segoe UI Emoji")
-             (t nil))))
-      (when (and emoji-font (member emoji-font (font-family-list)))
-        (set-fontset-font t 'emoji emoji-font nil 'prepend)
-        (set-fontset-font t 'symbol emoji-font nil 'prepend)
-        (set-fontset-font t 'unicode emoji-font nil 'prepend))))
+    "Return a default emoji font family depending on OS."
+    (cond ((eq system-type 'darwin) "Apple Color Emoji")
+          ((eq system-type 'gnu/linux) "Noto Color Emoji")
+          ((eq system-type 'windows-nt) "Segoe UI Emoji")
+          (t "Noto Color Emoji")))
 
   (defun my/font-setup ()
     "Apply font settings, respecting overrides, and report applied fonts."
@@ -1430,29 +1495,40 @@ Works for GUI frames/daemon.
   ;;; ui/ui-font.el ends here
 #+end_src
 
-*** ui/ui-theme.el
+
 :PROPERTIES:
 :CUSTOM_ID: ui-theme
 :END:
 
-*Purpose*
-Theme management using ef-themes and spacious-padding.
+**Purpose**
+Theme management with `ef-themes` and `spacious-padding`, plus a **safe face-normalizer** that avoids setting face attributes to `nil` (which causes warnings in Emacs 30+).
 
-*What it does*
-Loads theme and padding for GUI.
+**What it does**
+- Keeps your original theme setup (incl. `(modus-themes-to-toggle . '(ef-frost ef-spring))`).
+- Adds `ui--normalize-faces-after-theme` to set problematic face attributes to `'unspecified` instead of `nil`.
+- Hooks the normalizer to `after-load-theme-hook` and runs it once at init.
 
-*Notes*
-None.
+**Notes**
+If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`, this helper will correct it at runtime to prevent warnings like:
+`Warning: setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead.`
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-theme.el
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
-
+  ;;
   ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-
+  ;;;
+  ;;; Commentary:
+  ;; Theme management (ef-themes + spacious-padding) and a face normalizer that
+  ;; replaces invalid `nil` attributes with `unspecified` to avoid warnings on
+  ;; Emacs 30+ (e.g., font-lock-doc-markup-face :foreground nil).
+  ;; Category: ui
+  ;;;
   ;;; Code:
 
   (leaf ef-themes :straight t
+    ;; Keep the user's original toggle pair as requested.
     :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
     :config
     (unless custom-enabled-themes
@@ -1464,10 +1540,154 @@ None.
              (spacious-padding-subtle-mode-line . t))
     :config (spacious-padding-mode 1))
 
+  ;; ---------------------------------------------------------------------------
+  ;; Face normalization to avoid `nil` attribute warnings on Emacs 30+
+  ;;
+  ;; Emacs warns if a face attribute is set to NIL explicitly. Use 'unspecified.
+  ;; We fix known offenders conservatively (extend list if needed).
+
+  (defun ui--normalize-face-attr (face &rest plist)
+    "Set FACE attributes from PLIST, rewriting any nil values to 'unspecified."
+    (when (facep face)
+      (let ((fixed '()))
+        (while plist
+          (let* ((attr (pop plist))
+                 (val  (pop plist)))
+            (push (if (null val) 'unspecified val) fixed)
+            (push attr fixed)))
+        (apply #'set-face-attribute face nil (nreverse fixed)))))
+
+  (defun ui--normalize-faces-after-theme ()
+    "Normalize face attributes that may have been set to nil by themes/custom."
+    ;; Your reported warning: font-lock-doc-markup-face :foreground nil
+    (ui--normalize-face-attr 'font-lock-doc-markup-face :foreground (face-attribute 'font-lock-doc-markup-face :foreground))
+    ;; Add other normalizations here if you encounter similar warnings, e.g.:
+    ;; (ui--normalize-face-attr 'font-lock-doc-face :foreground (face-attribute 'font-lock-doc-face :foreground))
+    )
+
+  (add-hook 'after-load-theme-hook #'ui--normalize-faces-after-theme)
+
+  ;; Run once at startup to cover faces set by custom-file before theme changes.
+  (add-hook 'emacs-startup-hook #'ui--normalize-faces-after-theme)
+
   (provide 'ui/ui-theme)
   ;;; ui/ui-theme.el ends here
 #+end_src
 
+*** ui/ui-theme.el
+:PROPERTIES:
+:CUSTOM_ID: ui-theme
+:END:
+
+**Purpose**
+Theme management with `ef-themes` and `spacious-padding`, plus a **safe face-normalizer** that avoids setting face attributes to `nil` (which causes warnings in Emacs 30+).
+
+**What it does**
+- Keeps your original theme setup (incl. `(modus-themes-to-toggle . '(ef-frost ef-spring))`).
+- Adds `ui--normalize-faces-after-theme` to set problematic face attributes to `'unspecified` instead of `nil`.
+- Hooks the normalizer to `after-load-theme-hook` and runs it once at init.
+
+**Notes**
+If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`, this helper will correct it at runtime to prevent warnings like:
+`Warning: setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead.`
+
+#+begin_src emacs-lisp :tangle lisp/ui/ui-theme.el
+  ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Theme management (ef-themes + spacious-padding) and a face normalizer that
+  ;; replaces invalid `nil` attributes with `unspecified` to avoid warnings on
+  ;; Emacs 30+ (e.g., font-lock-doc-markup-face :foreground nil).
+  ;; Category: ui
+  ;;;
+  ;;; Code:
+
+  (leaf ef-themes :straight t
+    ;; Keep the user's original toggle pair as requested.
+    :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
+    :config
+    (unless custom-enabled-themes
+      (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t)))
+
+  (leaf spacious-padding :straight t
+    :if (display-graphic-p)
+    :custom ((spacious-padding-widths . '((left . 15) (right . 15)))
+             (spacious-padding-subtle-mode-line . t))
+    :config (spacious-padding-mode 1))
+
+  ;;;; Face normalization --------------------------------------------------------
+  ;; Emacs 30+: setting a face attribute to NIL is invalid; use 'unspecified.
+
+  (defgroup ui-theme-normalize nil
+    "Normalize face attributes set to nil."
+    :group 'faces)
+
+  (defcustom ui:normalize-face-attrs
+    '((font-lock-doc-markup-face :foreground))
+    "List of (FACE ATTR ...) pairs to ensure are not nil."
+    :type '(repeat (cons symbol (repeat symbol)))
+    :group 'ui-theme-normalize)
+
+  (defun ui--normalize-face-attr (face attr)
+    "If FACE's ATTR is nil, set it to 'unspecified to avoid warnings."
+    (when (facep face)
+      (let ((val (face-attribute face attr nil 'default)))
+        (when (null val)
+          (set-face-attribute face nil attr 'unspecified)))))
+
+  (defun ui--normalize-faces ()
+    "Normalize all faces declared in `ui:normalize-face-attrs`."
+    (dolist (entry ui:normalize-face-attrs)
+      (let ((face (car entry))
+            (attrs (cdr entry)))
+        (dolist (attr attrs)
+          (ui--normalize-face-attr face attr)))))
+
+  ;; Run after any theme is enabled (THEME arg is ignored).
+  (add-hook 'enable-theme-functions
+            (lambda (_theme) (ui--normalize-faces)))
+
+  ;; Also run once at startup (covers custom-file faces before first theme load).
+  (add-hook 'emacs-startup-hook #'ui--normalize-faces)
+
+  ;; Back-compat: if something still calls the old name with args, don't error.
+  (defun ui--normalize-faces-after-theme (&rest _ignore)
+    "Compatibility shim; call `ui--normalize-faces' and ignore extra args."
+    (ui--normalize-faces))
+
+  (defcustom ui:normalize-face-attrs
+    '((font-lock-doc-markup-face :foreground))
+    "List of (FACE ATTR ...) pairs to ensure are not nil."
+    :type '(repeat (cons symbol (repeat symbol)))
+    :group 'ui-theme-normalize)
+
+  (defun ui--normalize-face-attr (face attr)
+    "If FACE's ATTR is nil, set it to 'unspecified to avoid warnings."
+    (when (facep face)
+      (let ((val (face-attribute face attr nil 'default)))
+        (when (null val)
+          (set-face-attribute face nil attr 'unspecified)))))
+
+  (defun ui--normalize-faces ()
+    "Normalize all faces declared in `ui:normalize-face-attrs`."
+    (dolist (entry ui:normalize-face-attrs)
+      (let ((face (car entry))
+            (attrs (cdr entry)))
+        (dolist (attr attrs)
+          (ui--normalize-face-attr face attr)))))
+
+  (add-hook 'enable-theme-functions (lambda (_theme) (ui--normalize-faces)))
+  (add-hook 'emacs-startup-hook #'ui--normalize-faces)
+
+  (defun ui--normalize-faces-after-theme (&rest _) (ui--normalize-faces))
+
+  (provide 'ui/ui-theme)
+  ;;; ui/ui-theme.el ends here
+#+end_src
 *** ui/ui-modeline.el
 :PROPERTIES:
 :CUSTOM_ID: ui-modeline
@@ -1483,28 +1703,28 @@ Enables doom-modeline and minions, shows time/battery.
 None.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-modeline.el
-;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
+  ;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(leaf doom-modeline :straight t
-  :hook (after-init-hook . doom-modeline-mode))
+  (leaf doom-modeline :straight t
+    :hook (after-init-hook . doom-modeline-mode))
 
-(leaf minions :straight t
-  :custom ((minions-mode-line-lighter . "⚙"))
-  :hook (after-init-hook . minions-mode))
+  (leaf minions :straight t
+    :custom ((minions-mode-line-lighter . "⚙"))
+    :hook (after-init-hook . minions-mode))
 
-(setq display-time-interval 30
-      display-time-day-and-date t
-      display-time-24hr-format t)
-(display-time-mode 1)
-(when (fboundp 'display-battery-mode) (display-battery-mode 1))
+  (setq display-time-interval 30
+        display-time-day-and-date t
+        display-time-24hr-format t)
+  (display-time-mode 1)
+  (when (fboundp 'display-battery-mode) (display-battery-mode 1))
 
-(provide 'ui/ui-modeline)
-;;; ui/ui-modeline.el ends here
+  (provide 'ui/ui-modeline)
+  ;;; ui/ui-modeline.el ends here
 #+end_src
 
 *** ui/ui-window.el
@@ -1522,49 +1742,49 @@ For GUI frames set fullscreen; zoom-mode; tab-bar/line; save/restore functions.
 None.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-window.el
-;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
+  ;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(defun my/set-frame-fullscreen (&optional frame)
-  "Always set FRAME (or current) to fullscreen."
-  (when (display-graphic-p frame)
-    (set-frame-parameter (or frame (selected-frame)) 'fullscreen 'fullboth)))
+  (defun my/set-frame-fullscreen (&optional frame)
+    "Always set FRAME (or current) to fullscreen."
+    (when (display-graphic-p frame)
+      (set-frame-parameter (or frame (selected-frame)) 'fullscreen 'fullboth)))
 
-(if (daemonp)
-    (add-hook 'after-make-frame-functions #'my/set-frame-fullscreen)
-  (add-hook 'emacs-startup-hook #'my/set-frame-fullscreen))
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'my/set-frame-fullscreen)
+    (add-hook 'emacs-startup-hook #'my/set-frame-fullscreen))
 
-(leaf zoom :straight t
-  :hook (after-init-hook . zoom-mode)
-  :custom ((zoom-size . '(0.62 . 0.62))
-           (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
-           (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
+  (leaf zoom :straight t
+    :hook (after-init-hook . zoom-mode)
+    :custom ((zoom-size . '(0.62 . 0.62))
+             (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
+             (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
 
-(leaf tab-bar :straight nil
-  :custom ((tab-bar-show . 1)
-           (tab-bar-new-tab-choice . "*scratch*"))
-  :hook (after-init-hook . tab-bar-mode))
+  (leaf tab-bar :straight nil
+    :custom ((tab-bar-show . 1)
+             (tab-bar-new-tab-choice . "*scratch*"))
+    :hook (after-init-hook . tab-bar-mode))
 
-(leaf tab-line :straight nil
-  :hook (after-init-hook . global-tab-line-mode))
+  (leaf tab-line :straight nil
+    :hook (after-init-hook . global-tab-line-mode))
 
-(defvar my:saved-window-config nil)
+  (defvar my:saved-window-config nil)
 
-(defun my/save-window-layout () (interactive)
-  (setq my:saved-window-config (window-state-get nil t))
-  (message "Window configuration saved."))
+  (defun my/save-window-layout () (interactive)
+    (setq my:saved-window-config (window-state-get nil t))
+    (message "Window configuration saved."))
 
-(defun my/restore-window-layout () (interactive)
-  (if my:saved-window-config
-      (window-state-put my:saved-window-config)
-    (message "No saved window configuration found.")))
+  (defun my/restore-window-layout () (interactive)
+    (if my:saved-window-config
+        (window-state-put my:saved-window-config)
+      (message "No saved window configuration found.")))
 
-(provide 'ui/ui-window)
-;;; ui/ui-window.el ends here
+  (provide 'ui/ui-window)
+  ;;; ui/ui-window.el ends here
 #+end_src
 
 *** ui/ui-treemacs.el
@@ -1582,25 +1802,25 @@ Treemacs + nerd-icons-dired.
 GUI only.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-treemacs.el
-;;; ui/ui-treemacs.el --- Treemacs configuration -*- lexical-binding: t; -*-
+  ;;; ui/ui-treemacs.el --- Treemacs configuration -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(leaf treemacs :straight t
-  :if (display-graphic-p)
-  :custom ((treemacs-filewatch-mode . t)
-           (treemacs-follow-mode . t)
-           (treemacs-indentation . 2)
-           (treemacs-missing-project-action . 'remove)))
+  (leaf treemacs :straight t
+    :if (display-graphic-p)
+    :custom ((treemacs-filewatch-mode . t)
+             (treemacs-follow-mode . t)
+             (treemacs-indentation . 2)
+             (treemacs-missing-project-action . 'remove)))
 
-(leaf nerd-icons-dired :straight t
-  :hook (dired-mode . nerd-icons-dired-mode))
+  (leaf nerd-icons-dired :straight t
+    :hook (dired-mode . nerd-icons-dired-mode))
 
-(provide 'ui/ui-treemacs)
-;;; ui/ui-treemacs.el ends here
+  (provide 'ui/ui-treemacs)
+  ;;; ui/ui-treemacs.el ends here
 #+end_src
 
 *** ui/ui-clipboard.el
@@ -1618,127 +1838,127 @@ Enables `pbcopy` on macOS frames.
 Conditional on `window-system` being `mac`/`ns`.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-clipboard.el
-;;; ui/ui-clipboard.el --- macOS clipboard integration -*- lexical-binding: t; -*-
+  ;;; ui/ui-clipboard.el --- macOS clipboard integration -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(leaf pbcopy
-  :if (memq window-system '(mac ns))
-  :straight t
-  :config (turn-on-pbcopy))
+  (leaf pbcopy
+    :if (memq window-system '(mac ns))
+    :straight t
+    :config (turn-on-pbcopy))
 
-(provide 'ui/ui-clipboard)
-;;; ui/ui-clipboard.el ends here
+  (provide 'ui/ui-clipboard)
+  ;;; ui/ui-clipboard.el ends here
 #+end_src
 
 *** completion/completion-core.el
 #+begin_src emacs-lisp :tangle lisp/completion/completion-core.el
-;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
-(eval-when-compile (require 'leaf))
+  ;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
+  (eval-when-compile (require 'leaf))
 
-(leaf orderless
-  :straight t
-  :custom
-  ((completion-styles . '(orderless basic))
-   (completion-category-overrides
-    . '((file (styles . (partial-completion)))
-        (symbol (styles . (orderless)))
-        (command (styles . (orderless)))))))
+  (leaf orderless
+    :straight t
+    :custom
+    ((completion-styles . '(orderless basic))
+     (completion-category-overrides
+      . '((file (styles . (partial-completion)))
+          (symbol (styles . (orderless)))
+          (command (styles . (orderless)))))))
 
-(provide 'completion/completion-core)
+  (provide 'completion/completion-core)
 #+end_src
 
 *** completion/completion-vertico.el
 #+begin_src emacs-lisp :tangle lisp/completion/completion-vertico.el
-;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
-(eval-when-compile (require 'leaf))
+  ;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
+  (eval-when-compile (require 'leaf))
 
-(leaf vertico :straight t
-  :global-minor-mode vertico-mode
-  :custom ((vertico-count . 15)))
+  (leaf vertico :straight t
+    :global-minor-mode vertico-mode
+    :custom ((vertico-count . 15)))
 
-(leaf vertico-posframe :straight t
-  :if (display-graphic-p)
-  :after vertico
-  :custom ((vertico-posframe-border-width . 2))
-  :config (vertico-posframe-mode 1))
+  (leaf vertico-posframe :straight t
+    :if (display-graphic-p)
+    :after vertico
+    :custom ((vertico-posframe-border-width . 2))
+    :config (vertico-posframe-mode 1))
 
-(leaf marginalia :straight t
-  :global-minor-mode marginalia-mode)
+  (leaf marginalia :straight t
+    :global-minor-mode marginalia-mode)
 
-(provide 'completion/completion-vertico)
+  (provide 'completion/completion-vertico)
 #+end_src
 
 *** completion/completion-consult.el
 #+begin_src emacs-lisp :tangle lisp/completion/completion-consult.el
-;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
-(eval-when-compile (require 'leaf))
+  ;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
+  (eval-when-compile (require 'leaf))
 
-(leaf consult :straight t
-  :custom
-  ((xref-show-xrefs-function . #'consult-xref)
-   (xref-show-definitions-function . #'consult-xref)))
+  (leaf consult :straight t
+    :custom
+    ((xref-show-xrefs-function . #'consult-xref)
+     (xref-show-definitions-function . #'consult-xref)))
 
-(provide 'completion/completion-consult)
+  (provide 'completion/completion-consult)
 #+end_src
 
 *** completion/completion-embark.el
 #+begin_src emacs-lisp :tangle lisp/completion/completion-embark.el
-;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
-(eval-when-compile (require 'leaf))
+  ;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
+  (eval-when-compile (require 'leaf))
 
-(leaf embark :straight t
-  :custom ((prefix-help-command . #'embark-prefix-help-command)))
+  (leaf embark :straight t
+    :custom ((prefix-help-command . #'embark-prefix-help-command)))
 
-(leaf embark-consult :straight t
-  :after (embark consult)
-  :hook (embark-collect-mode . consult-preview-at-point-mode))
+  (leaf embark-consult :straight t
+    :after (embark consult)
+    :hook (embark-collect-mode . consult-preview-at-point-mode))
 
-(provide 'completion/completion-embark)
+  (provide 'completion/completion-embark)
 #+end_src
 
 *** completion/completion-corfu.el
 #+begin_src emacs-lisp :tangle lisp/completion/completion-corfu.el
-;;; completion-corfu.el --- Corfu popup completion -*- lexical-binding: t; -*-
-(eval-when-compile (require 'leaf))
+  ;;; completion-corfu.el --- Corfu popup completion -*- lexical-binding: t; -*-
+  (eval-when-compile (require 'leaf))
 
-(leaf corfu :straight t
-  :init (global-corfu-mode)
-  :custom ((corfu-auto . t)
-           (corfu-cycle . t)))
+  (leaf corfu :straight t
+    :init (global-corfu-mode)
+    :custom ((corfu-auto . t)
+             (corfu-cycle . t)))
 
-(leaf kind-icon :straight t
-  :after corfu
-  :custom ((kind-icon-default-face . 'corfu-default))
-  :config (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
+  (leaf kind-icon :straight t
+    :after corfu
+    :custom ((kind-icon-default-face . 'corfu-default))
+    :config (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
 
-(leaf cape :straight t
-  :init
-  (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
-        '(cape-file cape-dabbrev cape-keyword)))
+  (leaf cape :straight t
+    :init
+    (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
+          '(cape-file cape-dabbrev cape-keyword)))
 
-(provide 'completion/completion-corfu)
+  (provide 'completion/completion-corfu)
 #+end_src
 
 *** completion/completion-icons.el
 #+begin_src emacs-lisp :tangle lisp/completion/completion-icons.el
-;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
-(eval-when-compile (require 'leaf))
+  ;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
+  (eval-when-compile (require 'leaf))
 
-(leaf nerd-icons-ibuffer :straight t
-  :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
+  (leaf nerd-icons-ibuffer :straight t
+    :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
 
-(leaf nerd-icons-completion :straight t
-  :hook (marginalia-mode-hook . nerd-icons-completion-marginalia-setup)
-  :config (nerd-icons-completion-mode))
+  (leaf nerd-icons-completion :straight t
+    :hook (marginalia-mode-hook . nerd-icons-completion-marginalia-setup)
+    :config (nerd-icons-completion-mode))
 
-(provide 'completion/completion-icons)
+  (provide 'completion/completion-icons)
 #+end_src
 
-*** org/org-core.el
+*** orgx/org-core.el
 :PROPERTIES:
 :CUSTOM_ID: org-core
 :END:
@@ -1752,8 +1972,8 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
 *Notes*
 `org` is installed via ELPA here (`:straight t`)—必要なら `:straight nil` に変更可。
 
-#+begin_src emacs-lisp :tangle lisp/org/org-core.el
-  ;;; org/org-core.el --- Org Mode core configuration -*- lexical-binding: t; -*-
+#+begin_src emacs-lisp :tangle lisp/orgx/org-core.el
+  ;;; orgx/org-core.el --- Org Mode core configuration -*- lexical-binding: t; -*-
 
   ;; Copyright (c) 2021-2025
   ;; License: GNU GPL v3 or later
@@ -1815,11 +2035,16 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
              "* MEETING with %? :meeting:\n  %U\n  %a"))))
 
-  (provide 'org/org-core)
-  ;;; org/org-core.el ends here
+  (with-eval-after-load 'org
+    (let* ((central (expand-file-name "archive.org" (or (bound-and-true-p org-directory)
+                                                       (expand-file-name "~/org")))))
+      (setopt org-archive-location (concat central "::"))))
+
+  (provide 'orgx/org-core)
+  ;;; orgx/org-core.el ends here
 #+end_src
 
-*** org/org-visual.el
+*** orgx/org-visual.el
 :PROPERTIES:
 :CUSTOM_ID: org-visual
 :END:
@@ -1828,47 +2053,47 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
 *What it does*: Enables `org-modern` for indentation, pretty entities, and agenda visuals.
 *Notes*: Removed `org-superstar` (redundant & conflicts). Use `org-modern` as default.
 
-#+begin_src emacs-lisp :tangle lisp/org/org-visual.el
-;;; org/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
+#+begin_src emacs-lisp :tangle lisp/orgx/org-visual.el
+  ;;; orgx/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
 
-;;; Commentary:
-;; Use org-modern for visual tweaks. org-superstar removed for clarity.
+  ;;; Commentary:
+  ;; Use org-modern for visual tweaks. org-superstar removed for clarity.
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf org-modern
-  :straight t
-  :hook (org-mode . org-modern-mode)
-  :custom
-  ((org-startup-indented . t)
-   (org-hide-leading-stars . t)
-   (org-auto-align-tags . nil)
-   (org-tags-column . 0)
-   (org-catch-invisible-edits . 'show-and-error)
-   (org-special-ctrl-a/e . t)
-   (org-insert-heading-respect-content . t)
-   (org-hide-emphasis-markers . t)
-   (org-pretty-entities . t)
-   (org-agenda-tags-column . 0)
-   (org-agenda-block-separator . ?─)
-   (org-agenda-time-grid
-    . '((daily today require-timed)
-        (800 1000 1200 1400 1600 1800 2000)
-        " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
-   (org-agenda-current-time-string
-    . "⭠ now ─────────────────────────────────────────────────")))
+  (leaf org-modern
+    :straight t
+    :hook (org-mode . org-modern-mode)
+    :custom
+    ((org-startup-indented . t)
+     (org-hide-leading-stars . t)
+     (org-auto-align-tags . nil)
+     (org-tags-column . 0)
+     (org-catch-invisible-edits . 'show-and-error)
+     (org-special-ctrl-a/e . t)
+     (org-insert-heading-respect-content . t)
+     (org-hide-emphasis-markers . t)
+     (org-pretty-entities . t)
+     (org-agenda-tags-column . 0)
+     (org-agenda-block-separator . ?─)
+     (org-agenda-time-grid
+      . '((daily today require-timed)
+          (800 1000 1200 1400 1600 1800 2000)
+          " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
+     (org-agenda-current-time-string
+      . "⭠ now ─────────────────────────────────────────────────")))
 
-(provide 'org/org-visual)
-;;; org-visual.el ends here
+  (provide 'orgx/org-visual)
+  ;;; org-visual.el ends here
 #+end_src
 
-*** org/org-extensions.el
+*** orgx/org-extensions.el
 :PROPERTIES:
 :CUSTOM_ID: org-extensions
 :END:
@@ -1882,40 +2107,40 @@ Configures those packages and their paths.
 *Notes*
 None.
 
-#+begin_src emacs-lisp :tangle lisp/org/org-extensions.el
-;;; org/org-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
+#+begin_src emacs-lisp :tangle lisp/orgx/org-extensions.el
+  ;;; orgx/org-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf org-journal :straight t
-  :custom ((org-journal-dir . my:d:org-journal)))
+  (leaf org-journal :straight t
+    :custom ((org-journal-dir . my:d:org-journal)))
 
-(leaf org-roam :straight t
-  :custom ((org-roam-directory . my:d:org-roam))
-  :config
-  (setq org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
-  (org-roam-db-autosync-mode))
+  (leaf org-roam :straight t
+    :custom ((org-roam-directory . my:d:org-roam))
+    :config
+    (setq org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
+    (org-roam-db-autosync-mode))
 
-(leaf org-download :straight t
-  :custom ((org-download-image-dir . my:d:org-pictures)))
+  (leaf org-download :straight t
+    :custom ((org-download-image-dir . my:d:org-pictures)))
 
-(leaf toc-org :straight t
-  :hook ((org-mode . toc-org-enable)
-         (markdown-mode . toc-org-mode)))
+  (leaf toc-org :straight t
+    :hook ((org-mode . toc-org-enable)
+           (markdown-mode . toc-org-mode)))
 
-(leaf org-cliplink :straight t
-  :bind ("C-x p i" . org-cliplink))
+  (leaf org-cliplink :straight t
+    :bind ("C-x p i" . org-cliplink))
 
-(provide 'org/org-extensions)
-;;; org/org-extensions.el ends here
+  (provide 'orgx/org-extensions)
+  ;;; orgx/org-extensions.el ends here
 #+end_src
 
-*** org/org-export.el
+*** orgx/org-export.el
 :PROPERTIES:
 :CUSTOM_ID: org-export
 :END:
@@ -1929,47 +2154,47 @@ None.
 - Use `with-eval-after-load 'ox-latex` instead of `leaf org-latex` (safer)
 - Markdown tools (`markdown-mode`, `edit-indirect`) included here for convenience
 
-#+begin_src emacs-lisp :tangle lisp/org/org-export.el
-;;; org/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
+#+begin_src emacs-lisp :tangle lisp/orgx/org-export.el
+  ;;; orgx/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
 
-;;; Commentary:
-;; Org export configuration: LaTeX, Hugo, Markdown.
+  ;;; Commentary:
+  ;; Org export configuration: LaTeX, Hugo, Markdown.
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-;; ---------------------------------------------------------------------------
-;; Org LaTeX Export tweaks
-(with-eval-after-load 'ox-latex
-  (setq org-latex-packages-alist
-        '(("" "graphicx" t)
-          ("" "longtable" nil)
-          ("" "wrapfig" nil)))
-  (setq org-latex-pdf-process
-        '("pdflatex -interaction nonstopmode -output-directory %o %f"
-          "bibtex %b"
-          "pdflatex -interaction nonstopmode -output-directory %o %f"
-          "pdflatex -interaction nonstopmode -output-directory %o %f")))
+  ;; ---------------------------------------------------------------------------
+  ;; Org LaTeX Export tweaks
+  (with-eval-after-load 'ox-latex
+    (setq org-latex-packages-alist
+          '(("" "graphicx" t)
+            ("" "longtable" nil)
+            ("" "wrapfig" nil)))
+    (setq org-latex-pdf-process
+          '("pdflatex -interaction nonstopmode -output-directory %o %f"
+            "bibtex %b"
+            "pdflatex -interaction nonstopmode -output-directory %o %f"
+            "pdflatex -interaction nonstopmode -output-directory %o %f")))
 
-;; ---------------------------------------------------------------------------
-;; Hugo Export
-(leaf ox-hugo :straight t
-  :after ox
-  :custom ((org-hugo-front-matter-format . "toml")))
+  ;; ---------------------------------------------------------------------------
+  ;; Hugo Export
+  (leaf ox-hugo :straight t
+    :after ox
+    :custom ((org-hugo-front-matter-format . "toml")))
 
-;; ---------------------------------------------------------------------------
-;; Markdown Editing/Preview
-(leaf markdown-mode :straight t)
-(leaf markdown-preview-mode :straight t)
-(leaf edit-indirect :straight t)
+  ;; ---------------------------------------------------------------------------
+  ;; Markdown Editing/Preview
+  (leaf markdown-mode :straight t)
+  (leaf markdown-preview-mode :straight t)
+  (leaf edit-indirect :straight t)
 
-(provide 'org/org-export)
-;;; org-export.el ends here
+  (provide 'orgx/org-export)
+  ;;; org-export.el ends here
 #+end_src
 
 *** dev/dev-lsp.el
@@ -1989,44 +2214,44 @@ Language Server Protocol support.
 Choose backend via `my:use-lsp`.
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-lsp.el
-;;; dev/dev-lsp.el --- LSP support -*- lexical-binding: t; -*-
+  ;;; dev/dev-lsp.el --- LSP support -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Commentary:
-;; Language Server Protocol support.
+  ;;; Commentary:
+  ;; Language Server Protocol support.
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-;; Eglot
-(leaf eglot :straight t
-  :when (eq my:use-lsp 'eglot)
-  :commands (eglot eglot-ensure)
-  :hook ((prog-mode . (lambda ()
-                        (when (eglot--guess-contact) (eglot-ensure)))))
-  :custom ((eglot-autoreconnect . t)))
+  ;; Eglot
+  (leaf eglot :straight t
+    :when (eq my:use-lsp 'eglot)
+    :commands (eglot eglot-ensure)
+    :hook ((prog-mode . (lambda ()
+                          (when (eglot--guess-contact) (eglot-ensure)))))
+    :custom ((eglot-autoreconnect . t)))
 
-;; lsp-mode
-(leaf lsp-mode :straight t
-  :when (eq my:use-lsp 'lsp)
-  :commands (lsp lsp-deferred)
-  :custom ((lsp-keymap-prefix . "C-c l"))
-  :hook ((prog-mode . lsp-deferred)))
+  ;; lsp-mode
+  (leaf lsp-mode :straight t
+    :when (eq my:use-lsp 'lsp)
+    :commands (lsp lsp-deferred)
+    :custom ((lsp-keymap-prefix . "C-c l"))
+    :hook ((prog-mode . lsp-deferred)))
 
-;; Utility: temporarily enlarge read-process-output-max
-(defun my/with-larger-rpom (size-bytes fn)
-  "Call FN with `read-process-output-max` set to SIZE-BYTES temporarily."
-  (let ((sym 'read-process-output-max)
-        (orig (and (boundp 'read-process-output-max) read-process-output-max)))
-    (when (boundp sym) (set sym size-bytes))
-    (unwind-protect (funcall fn)
-      (when (boundp sym) (set sym orig)))))
+  ;; Utility: temporarily enlarge read-process-output-max
+  (defun my/with-larger-rpom (size-bytes fn)
+    "Call FN with `read-process-output-max` set to SIZE-BYTES temporarily."
+    (let ((sym 'read-process-output-max)
+          (orig (and (boundp 'read-process-output-max) read-process-output-max)))
+      (when (boundp sym) (set sym size-bytes))
+      (unwind-protect (funcall fn)
+        (when (boundp sym) (set sym orig)))))
 
-(provide 'dev/dev-lsp)
-;;; dev/dev-lsp.el ends here
+  (provide 'dev/dev-lsp)
+  ;;; dev/dev-lsp.el ends here
 #+end_src
 
 *** dev/dev-ai.el
@@ -2044,37 +2269,37 @@ Supports OpenRouter/OpenAI backends; sets default model and backend.
 Warns when no API keys.
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-ai.el
-;;; dev/dev-ai.el --- AI-assisted development -*- lexical-binding: t; -*-
+  ;;; dev/dev-ai.el --- AI-assisted development -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Commentary:
-;; AI-assisted coding via Aidermacs.
+  ;;; Commentary:
+  ;; AI-assisted coding via Aidermacs.
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf aidermacs :straight t
-  :init
-  (cond
-   ((getenv "OPENROUTER_API_KEY")
-    (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-    (setenv "OPENAI_API_KEY"  (getenv "OPENROUTER_API_KEY"))
-    (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
-   ((getenv "OPENAI_API_KEY")
-    (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-    (setopt aidermacs-default-model "gpt-4o-mini"))
-   (t
-    (display-warning 'aidermacs
-                     "No API keys set. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")))
-  (setopt aidermacs-retry-attempts 3
-          aidermacs-retry-delay   2.0
-          aidermacs-backend       'vterm))
+  (leaf aidermacs :straight t
+    :init
+    (cond
+     ((getenv "OPENROUTER_API_KEY")
+      (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
+      (setenv "OPENAI_API_KEY"  (getenv "OPENROUTER_API_KEY"))
+      (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
+     ((getenv "OPENAI_API_KEY")
+      (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
+      (setopt aidermacs-default-model "gpt-4o-mini"))
+     (t
+      (display-warning 'aidermacs
+                       "No API keys set. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")))
+    (setopt aidermacs-retry-attempts 3
+            aidermacs-retry-delay   2.0
+            aidermacs-backend       'vterm))
 
-(provide 'dev/dev-ai)
-;;; dev/dev-ai.el ends here
+  (provide 'dev/dev-ai)
+  ;;; dev/dev-ai.el ends here
 #+end_src
 
 *** dev/dev-term.el
@@ -2092,22 +2317,22 @@ Loads vterm package.
 None.
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-term.el
-;;; dev/dev-term.el --- Terminal integration -*- lexical-binding: t; -*-
+  ;;; dev/dev-term.el --- Terminal integration -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Commentary:
-;; Provides terminal integration with vterm.
+  ;;; Commentary:
+  ;; Provides terminal integration with vterm.
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf vterm :straight t)
+  (leaf vterm :straight t)
 
-(provide 'dev/dev-term)
-;;; dev/dev-term.el ends here
+  (provide 'dev/dev-term)
+  ;;; dev/dev-term.el ends here
 #+end_src
 
 *** dev/dev-build.el
@@ -2125,48 +2350,48 @@ Strict tabs for Makefile; compile bindings; colorize compilation buffers.
 None.
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-build.el
-;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
+  ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Commentary:
-;; Build system integration.
+  ;;; Commentary:
+  ;; Build system integration.
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf make-mode :straight nil
-  :mode (("\\`Makefile\\'"    . makefile-gmake-mode)
-         ("\\`GNUmakefile\\'" . makefile-gmake-mode)
-         ("\\`makefile\\'"    . makefile-gmake-mode))
-  :hook ((makefile-mode . (lambda ()
-                            (setq-local indent-tabs-mode t
-                                        tab-width 8
-                                        show-trailing-whitespace t))))
-  :config
-  (leaf compile :straight nil
-    :bind (("C-c m c" . compile)
-           ("C-c m r" . recompile)
-           ("C-c m p" . project-compile))
-    :custom ((compilation-scroll-output . t)
-             (compilation-skip-threshold . 2))
-    :init
-    (defun my/set-make-compile-command ()
-      "Use `make -k` when Makefile is present."
-      (when (or (derived-mode-p 'makefile-mode)
-                (locate-dominating-file default-directory "Makefile")
-                (locate-dominating-file default-directory "GNUmakefile"))
-        (setq-local compile-command "make -k")))
-    (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
-  (leaf ansi-color :straight nil
-    :hook (compilation-filter . (lambda ()
-                                  (let ((inhibit-read-only t))
-                                    (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
+  (leaf make-mode :straight nil
+    :mode (("\\`Makefile\\'"    . makefile-gmake-mode)
+           ("\\`GNUmakefile\\'" . makefile-gmake-mode)
+           ("\\`makefile\\'"    . makefile-gmake-mode))
+    :hook ((makefile-mode . (lambda ()
+                              (setq-local indent-tabs-mode t
+                                          tab-width 8
+                                          show-trailing-whitespace t))))
+    :config
+    (leaf compile :straight nil
+      :bind (("C-c m c" . compile)
+             ("C-c m r" . recompile)
+             ("C-c m p" . project-compile))
+      :custom ((compilation-scroll-output . t)
+               (compilation-skip-threshold . 2))
+      :init
+      (defun my/set-make-compile-command ()
+        "Use `make -k` when Makefile is present."
+        (when (or (derived-mode-p 'makefile-mode)
+                  (locate-dominating-file default-directory "Makefile")
+                  (locate-dominating-file default-directory "GNUmakefile"))
+          (setq-local compile-command "make -k")))
+      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
+    (leaf ansi-color :straight nil
+      :hook (compilation-filter . (lambda ()
+                                    (let ((inhibit-read-only t))
+                                      (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
 
-(provide 'dev/dev-build)
-;;; dev/dev-build.el ends here
+  (provide 'dev/dev-build)
+  ;;; dev/dev-build.el ends here
 #+end_src
 
 *** dev/dev-docker.el
@@ -2184,56 +2409,56 @@ dockerfile-mode, yaml-mode for compose, docker.el dashboard, tramp-container, te
 None.
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-docker.el
-;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
+  ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Commentary:
-;; Docker development support.
+  ;;; Commentary:
+  ;; Docker development support.
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf dockerfile-mode :straight t
-  :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
-         ("\\.dockerfile\\'"         . dockerfile-mode))
-  :custom ((dockerfile-mode-command . "docker")))
+  (leaf dockerfile-mode :straight t
+    :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
+           ("\\.dockerfile\\'"         . dockerfile-mode))
+    :custom ((dockerfile-mode-command . "docker")))
 
-(leaf yaml-mode :straight t
-  :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode)
-         ("\\.ya?ml\\'"                   . yaml-mode)))
+  (leaf yaml-mode :straight t
+    :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode)
+           ("\\.ya?ml\\'"                   . yaml-mode)))
 
-(leaf docker :straight t
-  :commands (docker docker-containers docker-images docker-volumes docker-networks)
-  :bind (("C-c d d" . docker)
-         ("C-c d c" . docker-containers)
-         ("C-c d i" . docker-images)
-         ("C-c d v" . docker-volumes)
-         ("C-c d n" . docker-networks)))
+  (leaf docker :straight t
+    :commands (docker docker-containers docker-images docker-volumes docker-networks)
+    :bind (("C-c d d" . docker)
+           ("C-c d c" . docker-containers)
+           ("C-c d i" . docker-images)
+           ("C-c d v" . docker-volumes)
+           ("C-c d n" . docker-networks)))
 
-(leaf tramp-container :straight nil
-  :after tramp
-  :init
-  (setq tramp-container-method "docker"))
+  (leaf tramp-container :straight nil
+    :after tramp
+    :init
+    (setq tramp-container-method "docker"))
 
-(leaf tempel :straight t
-  :commands (tempel-insert)
-  :bind (dockerfile-mode-map
-         ("C-c d t" . tempel-insert))
-  :init
-  (with-eval-after-load 'tempel
-    (defvar my:tempel-docker-templates
-      '((dockerfile "FROM " p n
-                    "WORKDIR /app" n
-                    "COPY . /app" n
-                    "RUN " p n
-                    "CMD [" p "]" n)))
-    (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
+  (leaf tempel :straight t
+    :commands (tempel-insert)
+    :bind (dockerfile-mode-map
+           ("C-c d t" . tempel-insert))
+    :init
+    (with-eval-after-load 'tempel
+      (defvar my:tempel-docker-templates
+        '((dockerfile "FROM " p n
+                      "WORKDIR /app" n
+                      "COPY . /app" n
+                      "RUN " p n
+                      "CMD [" p "]" n)))
+      (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
 
-(provide 'dev/dev-docker)
-;;; dev/dev-docker.el ends here
+  (provide 'dev/dev-docker)
+  ;;; dev/dev-docker.el ends here
 #+end_src
 
 *** dev/web-core.el
@@ -2511,20 +2736,20 @@ Binds `C-x g` to `magit-status`.
 None.
 
 #+begin_src emacs-lisp :tangle lisp/vcs/vcs-magit.el
-;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
+  ;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf magit :straight t
-  :bind (("C-x g" . magit-status)))
+  (leaf magit :straight t
+    :bind (("C-x g" . magit-status)))
 
-(provide 'vcs/vcs-magit)
-;;; vcs/vcs-magit.el ends here
+  (provide 'vcs/vcs-magit)
+  ;;; vcs/vcs-magit.el ends here
 #+end_src
 
 *** vcs/vcs-gutter.el
@@ -2646,6 +2871,13 @@ None.
                   "[utils] failed to load %s: %s"
                   file (error-message-string err))))))
 
+  (defun my/kill-buffer-smart ()
+    "Kill buffer and window, or just buffer if only one window."
+    (interactive)
+    (if (one-window-p)
+        (kill-buffer)
+      (kill-buffer-and-window)))
+
   (provide 'utils/utils-functions)
 #+end_src
 
@@ -2710,30 +2942,30 @@ Deletes old backups on startup.
 Keeps `.var/backup/` clean.
 
 #+begin_src emacs-lisp :tangle lisp/utils/utils-backup.el
-;;; utils/utils-backup.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
+  ;;; utils/utils-backup.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(defun my/delete-old-backups ()
-  "Delete backup files older than 7 days."
-  (interactive)
-  (let ((backup-dir (concat no-littering-var-directory "backup/"))
-        (threshold (- (float-time (current-time)) (* 7 24 60 60))))
-    (when (file-directory-p backup-dir)
-      (dolist (file (directory-files backup-dir t))
-        (when (and (file-regular-p file)
-                   (< (float-time (file-attribute-modification-time
-                                   (file-attributes file)))
-                      threshold))
-          (delete-file file))))))
+  (defun my/delete-old-backups ()
+    "Delete backup files older than 7 days."
+    (interactive)
+    (let ((backup-dir (concat no-littering-var-directory "backup/"))
+          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
+      (when (file-directory-p backup-dir)
+        (dolist (file (directory-files backup-dir t))
+          (when (and (file-regular-p file)
+                     (< (float-time (file-attribute-modification-time
+                                     (file-attributes file)))
+                        threshold))
+            (delete-file file))))))
 
-(add-hook 'emacs-startup-hook #'my/delete-old-backups)
+  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
 
-(provide 'utils/utils-backup)
-;;; utils/utils-backup.el ends here
+  (provide 'utils/utils-backup)
+  ;;; utils/utils-backup.el ends here
 #+end_src
 
 *** utils/utils-async.el
@@ -2751,23 +2983,23 @@ Provides `my/safe-run-async`.
 None.
 
 #+begin_src emacs-lisp :tangle lisp/utils/utils-async.el
-;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
+  ;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021-2025
-;; License: GNU GPL v3 or later
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-;;; Code:
+  ;;; Code:
 
-(defun my/safe-run-async (task)
-  "Run TASK asynchronously, catching and reporting any errors."
-  (run-at-time 0 nil
-               (lambda ()
-                 (condition-case err
-                     (funcall task)
-                   (error (message "[async] error: %s" err))))))
+  (defun my/safe-run-async (task)
+    "Run TASK asynchronously, catching and reporting any errors."
+    (run-at-time 0 nil
+                 (lambda ()
+                   (condition-case err
+                       (funcall task)
+                     (error (message "[async] error: %s" err))))))
 
-(provide 'utils/utils-async)
-;;; utils/utils-async.el ends here
+  (provide 'utils/utils-async)
+  ;;; utils/utils-async.el ends here
 #+end_src
 
 *** utils/search-nav.el
@@ -2814,55 +3046,48 @@ None.
   ;;; utils-search-nav.el ends here
 #+end_src
 
-** Personal Configuration
+** personal/user.el
 :PROPERTIES:
-:CUSTOM_ID: personal
+:CUSTOM_ID: personal-user
 :END:
 
-This module defines **personal settings and device-specific configurations**.
-It customizes identity, fonts, input sources, device preferences, and Apple Music control.
+**Purpose**
+Personal, device-specific settings for macOS-first workflows: identity, fonts, directories, input source switching, pointing-device tuning, and Apple Music control.
 
-- **Purpose**
-  Centralize personal identity, fonts, input methods, device preferences, and music control.
+**What it does**
+- Sets user identity and preferred fonts (picked up by `ui/ui-font.el`).
+- Establishes personal directories (cloud/org/blog) and ensures their presence.
+- Recomputes `org-directory` and agenda files.
+- Configures **macOS IME auto-switch** via `sis` (with `macism`).
+- Tunes Logitech MX Ergo S scrolling and simple mouse gestures.
+- Provides **Apple Music** control (play/pause, next/prev, playlist, info) with a personal hydra.
 
-- **What it does**
-  - Sets user identity and fonts.
-  - Defines cloud/blog directories and ensures they exist.
-  - Cleans load-path from unwanted dirs.
-  - Configures IME auto-switching (`sis`) on macOS.
-  - Adjusts Logitech MX Ergo S mouse behavior.
-  - Provides Apple Music control with Hydra UI (macOS only).
+**Notes**
+- Relies on helpers and paths prepared in `early-init.el` (e.g. `my/ensure-directory-exists`, `my:d`, `my:d:var`, etc.).
+- `sis` requires macOS and `macism` (`brew install macism`).
+- Public interactive commands are annotated with `;;;###autoload`.
 
-- **Notes**
-  - Requires `my/ensure-directory-exists` from utils.
-  - `sis` needs macOS + `macism` (install via Homebrew).
-  - Apple Music functions only work on macOS.
-
-#+begin_src emacs-lisp :tangle personal/user.el
+#+begin_src emacs-lisp :tangle (eval (format "personal/%s.el" (user-login-name)))
   ;;; user.el --- Personal configuration -*- lexical-binding: t; -*-
-
+  ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-
+  ;;;
   ;;; Commentary:
-  ;; Personal settings and device-specific configurations.
-  ;;
-  ;; Includes:
+  ;; Personal settings and device-specific configurations (category: personal).
   ;; - Identity, fonts, directories
   ;; - macOS IME auto-switch (sis)
-  ;; - Device: Logitech MX Ergo S
-  ;; - Apple Music control with Hydra UI
-  ;;
-  ;; Requirements:
-  ;; - my/ensure-directory-exists (from utils)
-  ;; - macOS + `macism` for sis integration (brew install macism)
-
+  ;; - Device tweaks (Logitech MX Ergo S)
+  ;; - Apple Music control with personal hydra
+  ;;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x)) ;; string-trim
 
-  ;; ---------------------------------------------------------------------------
+  ;; -----------------------------------------------------------------------------
   ;; Personal identity, fonts, and directories
   (leaf *personals
     :straight nil
@@ -2873,11 +3098,11 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
           inhibit-compacting-font-caches t
           plstore-cache-passphrase-for-symmetric-encryption t)
 
-    ;; Fonts (picked up by ui-font.el)
+    ;; Fonts (picked up by ui/ui-font.el)
     (setq my:font-default "JetBrains Mono NL"
-          my:font-alt "Noto Sans JP"
-          my:emoji-font "Apple Color Emoji"
-          my:font-size 20)
+          my:font-alt     "Noto Sans JP"
+          my:emoji-font   "Apple Color Emoji"
+          my:font-size    20)
 
     ;; Directories
     (defvar my:d:cloud
@@ -2899,15 +3124,13 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
     ;; Ensure directories exist
     (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:org my:d:blog))
 
-    ;; Recompute org-directory
+    ;; Recompute Org paths
     (setq org-directory my:d:org)
-
-    ;; Recompute agenda files
     (setq org-agenda-files
           (seq-filter (lambda (file)
-                        (and (string-match-p "\\.org$" file)
+                        (and (string-match-p "\\.org\\'" file)
                              (not (string-match-p "archives" file))))
-                      (directory-files-recursively org-directory "\\.org$")))
+                      (directory-files-recursively org-directory "\\.org\\'")))
 
     ;; Clean up load-path
     (setq load-path
@@ -2915,9 +3138,10 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
                         (member dir my:d:excluded-directories))
                       load-path)))
 
-  ;; ---------------------------------------------------------------------------
+  ;; -----------------------------------------------------------------------------
   ;; Smart Input Source (macOS only, requires macism)
   (leaf sis
+    :if (eq system-type 'darwin)
     :straight t
     :commands (sis-ism-lazyman-config
                sis-global-cursor-color-mode
@@ -2937,12 +3161,12 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
              (when (fboundp 'sis-global-inline-mode)
                (sis-global-inline-mode t)))))
 
-  ;; Cursor color sync after theme changes
+  ;; Keep cursor color consistent after theme changes
   (add-hook 'after-load-theme-hook
             (lambda ()
               (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
 
-  ;; ---------------------------------------------------------------------------
+  ;; -----------------------------------------------------------------------------
   ;; Logitech MX Ergo S configuration
   (leaf *device/MX_ErgoS
     :straight nil
@@ -2956,16 +3180,16 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
           mouse-wheel-tilt-scroll t
           mouse-wheel-flip-direction nil)
     ;; Quick gestures
-    (global-set-key [mouse-2] 'yank)
-    (global-set-key [mouse-4] 'previous-buffer)
-    (global-set-key [mouse-5] 'next-buffer))
+    (global-set-key [mouse-2] #'yank)
+    (global-set-key [mouse-4] #'previous-buffer)
+    (global-set-key [mouse-5] #'next-buffer))
 
-  ;; ---------------------------------------------------------------------------
+  ;; -----------------------------------------------------------------------------
   ;; Apple Music Control (macOS only)
   (when (eq system-type 'darwin)
     ;; Core AppleScript helpers
     (defun my/apple-music-osascript-async (script &optional callback)
-      "Run AppleScript SCRIPT asynchronously, invoking CALLBACK with output."
+      "Run AppleScript SCRIPT asynchronously, invoking CALLBACK with its output."
       (let* ((proc-name "apple-music-async")
              (buffer-name "*Apple Music Async*")
              (osascript-cmd (list "osascript" "-e" script))
@@ -2987,28 +3211,30 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
         (format "osascript -e '%s'" script))))
 
     ;; Player controls
+    ;;;###autoload
     (defun my/apple-music-play-pause () (interactive)
       "Toggle play/pause in Apple Music."
       (my/apple-music-osascript-async "tell application \"Music\" to playpause"))
 
+    ;;;###autoload
     (defun my/apple-music-next-track () (interactive)
       "Skip to the next track in Apple Music."
       (my/apple-music-osascript-async "tell application \"Music\" to next track"))
 
+    ;;;###autoload
     (defun my/apple-music-previous-track () (interactive)
       "Return to the previous track in Apple Music."
       (my/apple-music-osascript-async "tell application \"Music\" to previous track"))
 
     ;; Track info
-    (defun my/apple-music-current-track-info ()
-      "Return and display current track info: Title — Artist [Album]."
-      (interactive)
+    ;;;###autoload
+    (defun my/apple-music-current-track-info () (interactive)
+      "Echo current track info: Title — Artist [Album]."
       (let ((info (my/apple-music-osascript-sync
                    "tell application \"Music\" \
   to (get name of current track) & \" — \" & (get artist of current track) & \" [\" & (get album of current track) & \"]\"")))
-        (if (called-interactively-p 'any)
-            (message "%s" info)
-          info)))
+        (message "%s" info)
+        info))
 
     ;; Playlists
     (defun my/apple-music-get-playlists ()
@@ -3018,6 +3244,7 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
         "tell application \"Music\" to get name of playlists")
        ", "))
 
+    ;;;###autoload
     (defun my/apple-music-play-playlist (playlist)
       "Prompt for PLAYLIST and play it in Apple Music."
       (interactive
@@ -3025,9 +3252,9 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
       (my/apple-music-osascript-async
        (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
 
-    ;; Hydra UI
+    ;; Hydra UI (namespaced hydra: my/hydra-apple-music)
     (with-eval-after-load 'hydra
-      (defhydra hydra-apple-music (:hint nil)
+      (defhydra my/hydra-apple-music (:hint nil)
         "
   Apple Music:
   _p_: Play/Pause  _n_: Next  _b_: Back  _l_: Playlist  _i_: Info  _q_: Quit
@@ -3038,7 +3265,7 @@ It customizes identity, fonts, input sources, device preferences, and Apple Musi
         ("l" my/apple-music-play-playlist)
         ("i" my/apple-music-current-track-info)
         ("q" nil "quit"))
-      (global-set-key (kbd "C-c m") #'hydra-apple-music/body)))
+      (global-set-key (kbd "C-c m") #'my/hydra-apple-music/body)))
 
   (provide 'user)
   ;;; user.el ends here
