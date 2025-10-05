@@ -649,7 +649,7 @@ Deterministic, resilient loader for modular config under `lisp/`, updated to loa
   (defconst my:modules
     '(
       ;; --- Core (compat first) --------------------------------------------------
-      ;; core/compat
+      core/compat
       core/general
       core/tools
       core/utils
@@ -787,6 +787,55 @@ Deterministic, resilient loader for modular config under `lisp/`, updated to loa
 
   (provide 'modules)
   ;;; modules.el ends here
+#+end_src
+
+*** core/compat.el
+:PROPERTIES:
+:CUSTOM_ID: core-compat
+:END:
+
+**Purpose**
+Provide **forward-compatible shims** so legacy helpers like `my--nl-var` won’t break byte-compilation or eager macro-expansion. Also supplies a safe fallback for `no-littering-var-directory`.
+
+**What it does**
+- Defines `no-littering-var-directory` fallback (uses `~/.emacs.d/.var/` by default).
+- Defines `(my--nl-var &rest SEGMENTS)` helper that **joins under** `no-littering-var-directory`.
+- Exposes `my:d:var` pointing at `.var/` so other modules can rely on a stable root.
+- Contains **no side effects** beyond definitions; safe to load very early.
+
+**Notes**
+- Put `core/compat` **before** `core/general` in your module order (or add `(require 'core/compat)` at the top of `core/general.el`).
+- This removes the error:
+  `[modules] Failed to load core/general: Eager macro-expansion failure: (void-function my--nl-var)`.
+
+#+begin_src emacs-lisp :tangle lisp/core/compat.el
+  ;;; compat.el --- Lightweight shims for legacy helpers -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Provide forward-compatible helpers used by older snippets (e.g., my--nl-var).
+  ;;; Code:
+
+  (require 'subr-x)
+
+  ;; Fallback when no-littering is not present.
+  (defvar no-littering-var-directory
+    (expand-file-name ".var/"
+                      (or (and load-file-name
+                               (file-name-directory (file-chase-links load-file-name)))
+                          user-emacs-directory))
+    "Variable data directory. If `no-littering` is installed, it usually sets this.")
+
+  (defvar my:d:var no-littering-var-directory
+    "Canonical variable-data root for this config (defaults to `.var/`).")
+
+  ;; Legacy helper used by some configs/snippets: (my--nl-var \"sub/dir\" \"file\")
+  (unless (fboundp 'my--nl-var)
+    (defun my--nl-var (&rest segments)
+      "Join SEGMENTS under `no-littering-var-directory` and return an absolute path."
+      (let ((base (file-name-as-directory no-littering-var-directory)))
+        (expand-file-name (mapconcat #'identity segments "/") base))))
+
+  (provide 'core/compat)
+  ;;; compat.el ends here
 #+end_src
 
 *** core/general.el
