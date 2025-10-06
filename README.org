@@ -546,19 +546,13 @@ Bootstrap packages, configure base behavior, and load modular files.
         (add-to-list 'exec-path p)
         (setenv "PATH" (concat p ":" (getenv "PATH"))))))
 
-  ;; Dired defaults
   (leaf dired
     :straight nil
-    :after dired-subtree
     :custom ((dired-listing-switches . "-aBhl --group-directories-first"))
     :config
-    (when (and (eq system-type 'darwin) (executable-find "gls"))
-      (setq insert-directory-program "gls"
-            dired-use-ls-dired t))
-    :bind (:dired-mode-map
-           ("i"   . dired-subtree-insert)
-           ("TAB" . dired-subtree-toggle)
-           ("z"   . my/dired-view-file-other-window)))
+    (when-let* ((gls (executable-find "gls")))
+      (setq insert-directory-program gls
+            dired-use-ls-dired t)))
 
   ;; ---------------------------------------------------------------------------
   ;;; Misc
@@ -1298,9 +1292,9 @@ Utility commands for windows, Dired helpers, Tree-sitter, environment/build info
         (if (org-fold-folded-p (point))
             (org-show-subtree)
           (org-fold-subtree t))))
-    (define-key org-mode-map (kbd "C-c C-f") #'my/org-fold-subtree)
-    (define-key org-mode-map (kbd "C-c C-e") #'my/org-unfold-subtree)
-    (define-key org-mode-map (kbd "C-c C-t") #'my/org-toggle-fold))
+    (define-key org-mode-map (kbd "C-c f") #'my/org-fold-subtree)
+    (define-key org-mode-map (kbd "C-c e") #'my/org-unfold-subtree)
+    (define-key org-mode-map (kbd "C-c t") #'my/org-toggle-fold))
 
   (provide 'core/tools)
   ;;; core/tools.el ends here
@@ -1466,54 +1460,66 @@ Modern structural editing, paren/sexp helpers, which-key, undo helpers, soft wra
 - Built-ins marked `:straight nil`. Avoids loading non-existent libraries by using proper features.
 
 #+begin_src emacs-lisp :tangle lisp/core/editing.el
-;;; core/editing.el --- Editing helpers & UX aids -*- lexical-binding: t; -*-
-;; License: GNU GPL v3 or later
-;;; Commentary:
-;; Editing comfort features with minimal global side effects.
-;;; Code:
+  ;;; core/editing.el --- Editing helpers & UX aids -*- lexical-binding: t; -*-
+  ;; License: GNU GPL v3 or later
+  ;;; Commentary:
+  ;; Editing comfort features with minimal global side effects.
+  ;;; Code:
 
-(leaf paredit :straight t
-  :hook (emacs-lisp-mode . (lambda () (paredit-mode 1) (electric-pair-local-mode -1))))
+  (leaf paredit :straight t
+    :hook (emacs-lisp-mode . (lambda () (paredit-mode 1) (electric-pair-local-mode -1))))
 
-(leaf paren :straight nil
-  :custom ((show-paren-delay . 0)
-           (show-paren-style . 'expression)
-           (show-paren-highlight-openparen . t))
-  :global-minor-mode show-paren-mode)
+  (leaf paren :straight nil
+    :custom ((show-paren-delay . 0)
+             (show-paren-style . 'expression)
+             (show-paren-highlight-openparen . t))
+    :global-minor-mode show-paren-mode)
 
-(leaf puni :straight t
-  :global-minor-mode puni-global-mode
-  :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
+  (leaf puni :straight t
+    :global-minor-mode puni-global-mode
+    :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
 
-(leaf which-key :straight t
-  :global-minor-mode t
-  :custom ((which-key-idle-delay . 0.5)))
+  (leaf which-key :straight t
+    :global-minor-mode t
+    :custom ((which-key-idle-delay . 0.5)))
 
-(leaf undo-fu :straight t
-  :custom ((undo-fu-allow-undo-in-region . t)))
+  (leaf undo-fu :straight t
+    :custom ((undo-fu-allow-undo-in-region . t)))
 
-(leaf vundo :straight t
-  :bind (("C-c u" . vundo)))
+  (leaf vundo :straight t
+    :bind (("C-c u" . vundo)))
 
-(leaf ace-window :straight t
-  :custom ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
-           (aw-scope . 'frame)
-           (aw-background . t))
-  :config (ace-window-display-mode 1))
+  (leaf ace-window :straight t
+    :custom ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
+             (aw-scope . 'frame)
+             (aw-background . t))
+    :config (ace-window-display-mode 1))
 
-;; Soft wrap (feature 'simple provides visual-line-mode)
-(leaf simple :straight nil
-  :hook (text-mode . visual-line-mode))
+  ;; Soft wrap (feature 'simple provides visual-line-mode)
+  (leaf simple :straight nil
+    :hook (text-mode . visual-line-mode))
 
-(leaf dired-filter :straight t)
-(leaf dired-subtree :straight t :after dired)
+  ;; Dired defaults
+  (leaf dired
+    :straight nil
+    :after dired-subtree
+    :bind (:dired-mode-map
+           ("i"   . dired-subtree-insert)
+           ("TAB" . dired-subtree-toggle)
+           ("z"   . my/dired-view-file-other-window)))
 
-(leaf expand-region :straight t :after treesit)
-(leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
-(leaf delsel :straight nil :global-minor-mode delete-selection-mode)
+  (leaf nerd-icons-dired :straight t
+    :hook (dired-mode . nerd-icons-dired-mode))
+  (leaf dired-filter :straight t)
+  ;; (leaf dired-subtree :straight t :after dired)
+  (leaf dired-subtree :straight t)
 
-(provide 'core/editing)
-;;; core/editing.el ends here
+  (leaf expand-region :straight t :after treesit)
+  (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
+  (leaf delsel :straight nil :global-minor-mode delete-selection-mode)
+
+  (provide 'core/editing)
+  ;;; core/editing.el ends here
 #+end_src
 
 *** core/eww.el
@@ -1811,9 +1817,6 @@ Sidebar project/file explorer with icons.
              (treemacs-follow-mode . t)
              (treemacs-indentation . 2)
              (treemacs-missing-project-action . 'remove)))
-
-  (leaf nerd-icons-dired :straight t
-    :hook (dired-mode . nerd-icons-dired-mode))
 
   (provide 'ui/ui-treemacs)
   ;;; ui/ui-treemacs.el ends here
