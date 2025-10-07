@@ -174,11 +174,8 @@ build-emacs.sh --native-compilation
 *** Makefile
 
 #+begin_src text :tangle Makefile :comments no
-  # Makefile for Emacs config build
-  # Emacs 30+, Org Babel (tangle), byte-compilation
-  # Safe, minimal, maintainable
+  # Makefile for Emacs config build (safe clean)
 
-  # Variables
   EMACS       ?= emacs
   ORG         ?= README.org
   LISPDIR     ?= lisp
@@ -186,29 +183,23 @@ build-emacs.sh --native-compilation
   ELFILES     = $(wildcard $(LISPDIR)/*.el) $(wildcard $(PERSONALDIR)/*.el)
   ELCFILES    = $(ELFILES:.el=.elc)
 
-  # Default target
   all: tangle
 
-  # Tangle all .el files from README.org
   tangle: $(ORG)
   	$(EMACS) --batch -Q \
   		--eval "(require 'org)" \
   		--eval "(org-babel-tangle-file \"$(ORG)\")"
 
-  # Byte-compile all tangled .el files
   compile: tangle $(ELCFILES)
 
   $(LISPDIR)/%.elc: $(LISPDIR)/%.el
-  	$(EMACS) --batch -Q \
-  		--eval "(byte-compile-file \"$<\")"
+  	$(EMACS) --batch -Q --eval "(byte-compile-file \"$<\")"
 
   $(PERSONALDIR)/%.elc: $(PERSONALDIR)/%.el
-  	$(EMACS) --batch -Q \
-  		--eval "(byte-compile-file \"$<\")"
+  	$(EMACS) --batch -Q --eval "(byte-compile-file \"$<\")"
 
-  # Remove compilation artifacts
   clean:
-  	rm -fr $(LISPDIR) $(PERSONALDIR)
+  	find $(LISPDIR) $(PERSONALDIR) -name "*.elc" -delete
 
   .PHONY: all tangle compile clean
 #+end_src
@@ -286,75 +277,50 @@ Provide early, minimal startup optimizations and a hidden, tidy directory layout
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
+  ;;
   ;;; Commentary:
-  ;; Early startup optimizations and directory setup for Emacs 30+.
-  ;; Safe, reversible, and compatible with straight.el + leaf.el.
-  ;;;
+  ;; - Disable package.el (use straight.el + leaf)
+  ;; - Speed up startup (widen GC/file-name-handlers, then restore at startup)
+  ;; - Keep artifacts under hidden dirs (.cache/ .etc/ .var/)
+  ;; - Predefine paths for native-compile / Tree-sitter / straight / no-littering
+  ;; - Handle macOS Homebrew libgccjit in LIBRARY_PATH
+  ;; - Do not create auto-save-list (use auto-save-visited instead)
+  ;; - Turn off menu/tool/scroll bars after the first frame
+
   ;;; Code:
 
-  ;; Keep package.el dormant (straight handles packages)
-  (setopt package-enable-at-startup nil)
-
-  ;; We use string-trim / when-let; ensure availability at compile time.
-  (eval-when-compile (require 'subr-x))
-
-  ;; Save & widen GC limits during startup, restore later
-  (defvar my:orig:gc-cons-threshold gc-cons-threshold)
-  (defvar my:orig:gc-cons-percentage gc-cons-percentage)
-  (setopt gc-cons-threshold most-positive-fixnum
-          gc-cons-percentage 0.6)
-
-  ;; Suppress file-name-handler overhead during init, then restore
-  (defvar my:orig:file-name-handler-alist file-name-handler-alist)
-  (setq file-name-handler-alist nil)
-
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (setopt gc-cons-threshold my:orig:gc-cons-threshold
-                      gc-cons-percentage my:orig:gc-cons-percentage)
-              (setq file-name-handler-alist my:orig:file-name-handler-alist)))
-
   (defun my/ensure-directory-exists (dir)
-    "Ensure DIR exists, creating it if necessary (warn on failure)."
+    "Ensure DIR exists, creating it if necessary."
     (unless (file-directory-p dir)
       (condition-case err
           (make-directory dir t)
         (error (warn "Failed to create directory: %s (%s)"
                      dir (error-message-string err))))))
 
-  ;; Root dir for this config (prefer the file's directory)
-  (defvar my:d (or (and load-file-name
-                        (file-name-directory (file-chase-links load-file-name)))
-                   user-emacs-directory)
-    "Root directory for this Emacs configuration.")
+  ;; 1) Disable package.el
+  (setq package-enable-at-startup nil)
 
-  ;; Hidden layout under my:d
-  (defvar my:d:cache   (expand-file-name ".cache/"             my:d))
-  (defvar my:d:etc     (expand-file-name ".etc/"               my:d))
-  (defvar my:d:var     (expand-file-name ".var/"               my:d))
-  (defvar my:d:lisp    (expand-file-name "lisp/"               my:d))
-  (defvar my:d:eln     (expand-file-name "eln-cache/"          my:d:cache))
-  (defvar my:d:treesit (expand-file-name "tree-sitter/"        my:d:var))
-  (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache))
-  (defvar my:f:custom  (expand-file-name "custom.el"           my:d:etc))
+  ;; 2) Base directory (where this file lives; fallback to user-emacs-directory)
+  (defvar my:d
+    (or (and load-file-name (file-name-directory (file-chase-links load-file-name)))
+        user-emacs-directory)
+    "Base directory for this Emacs configuration.")
+  (setq user-emacs-directory (file-name-as-directory my:d))
 
-  (dolist (dir (list my:d:cache my:d:etc my:d:var my:d:lisp
-                     my:d:eln my:d:treesit my:d:treesit-build))
+  ;; 3) Hidden sub-directories
+  (defconst my:d:var    (expand-file-name ".var/"    my:d))
+  (defconst my:d:etc    (expand-file-name ".etc/"    my:d))
+  (defconst my:d:cache  (expand-file-name ".cache/"  my:d))
+  (defconst my:d:lisp   (expand-file-name "lisp/"    my:d))
+  (defconst my:d:treesit        (expand-file-name "treesit/"        my:d:var))
+  (defconst my:d:treesit-build  (expand-file-name "treesit-build/"  my:d:cache))
+
+  (dolist (dir (list my:d:var my:d:etc my:d:cache my:d:lisp
+                     my:d:treesit my:d:treesit-build
+                     (expand-file-name "eln-cache/" my:d:cache)))
     (my/ensure-directory-exists dir))
 
-  (add-to-list 'load-path my:d:lisp)
-
-  ;; Native compilation (defensive)
-  (when (featurep 'native-compile)
-    (setopt native-comp-async-report-warnings-errors 'silent
-            native-comp-eln-load-path (list my:d:eln)))
-
-  ;; Tree-sitter extra search path
-  (when (boundp 'treesit-extra-load-path)
-    (add-to-list 'treesit-extra-load-path my:d:treesit))
-
-  ;; macOS + Homebrew libgccjit support (prepend safely to LIBRARY_PATH)
+  ;; 4) macOS: prepend Homebrew libgccjit to LIBRARY_PATH if present
   (when (and (eq system-type 'darwin) (executable-find "brew"))
     (condition-case err
         (let* ((prefix (string-trim (shell-command-to-string "brew --prefix")))
@@ -362,26 +328,81 @@ Provide early, minimal startup optimizations and a hidden, tidy directory layout
           (when (file-directory-p brew-libgccjit)
             (setenv "LIBRARY_PATH"
                     (concat brew-libgccjit
-                            (when-let ((orig (getenv "LIBRARY_PATH")))
+                            (when-let* ((orig (getenv "LIBRARY_PATH")))
                               (concat ":" orig))))))
       (error (message "[early-init] brew probe failed: %s"
                       (error-message-string err)))))
 
-  ;; Disable heavy UI *after* first frame (safe for tty/daemon)
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (dolist (mode '(menu-bar-mode tool-bar-mode scroll-bar-mode))
-                (when (fboundp mode) (funcall mode -1)))))
+  ;; 5) Native compilation: keep ELN under .cache/
+  (when (featurep 'native-compile)
+    (setopt native-comp-eln-load-path (list (expand-file-name "eln-cache/" my:d:cache))
+            native-comp-async-report-warnings-errors 'silent))
 
-  ;; straight.el: keep everything inside .cache/
+  ;; 6) Pre-wire no-littering directories
+  (defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
+  (defvar no-littering-var-directory (file-name-as-directory my:d:var))
+
+  ;; 7) straight.el base under .cache/
   (setopt straight-base-dir my:d:cache
           straight-use-package-by-default t
           straight-profiles '((nil . "default.el")))
 
-  ;; Custom settings file in .etc/
-  (setopt custom-file my:f:custom)
-  (when (file-exists-p my:f:custom)
-    (load custom-file 'noerror 'nomessage))
+  ;; 8) custom-file under .etc/ (loaded quietly in init.el)
+  (defconst my:f:custom (expand-file-name "custom.el" my:d:etc))
+  (setq custom-file my:f:custom)
+
+  ;; 9) Startup speedups (restore on startup)
+  (defvar my:orig-file-name-handler-alist file-name-handler-alist)
+  (setq file-name-handler-alist nil
+        gc-cons-threshold most-positive-fixnum
+        gc-cons-percentage 0.6)
+
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (setq file-name-handler-alist my:orig-file-name-handler-alist
+                    gc-cons-threshold 16777216    ;; 16MB
+                    gc-cons-percentage 0.1)))
+
+  ;; 10) Backups/auto-save: do not create auto-save-list directory
+  (setq backup-directory-alist `(("." . ,(expand-file-name "backups/" my:d:var)))
+        auto-save-default nil
+        auto-save-list-file-prefix nil)
+  (my/ensure-directory-exists (expand-file-name "backups/" my:d:var))
+
+  ;; 11) Turn off bars after first frame
+  (custom-set-variables
+   ;; custom-set-variables was added by Custom.
+   ;; If you edit it by hand, you could mess it up, so be careful.
+   ;; Your init file should contain only one such instance.
+   ;; If there is more than one, they won't work right.
+   '(inhibit-startup-screen t)
+   '(inhibit-startup-message t)
+   '(inhibit-startup-echo-area-message t)
+   '(initial-scratch-message nil)
+   '(initial-frame-alist
+     '((left-fringe . 0)
+       (right-fringe   . 0)
+       (internal-border-width . 8)
+       (tool-bar-lines . 0)))
+   '(menu-bar-mode nil)
+   '(scroll-bar-mode nil)
+   '(tool-bar-mode nil)
+   '(initial-buffer-choice t)
+   '(initial-major-mode 'fundamental-mode)
+   '(frame-inhibit-implied-resize t)
+   '(frame-title-format t)
+   '(cursor-in-non-selected-windows nil)
+   '(font-lock-maximum-decoration nil)
+   '(font-lock-maximum-size nil)
+   '(x-underline-at-descent-line t)
+   '(window-divider-default-right-width 16)
+   '(window-divider-default-places 'right-only))
+
+  ;; For Emacs v29
+  (add-to-list 'default-frame-alist '(undecorated . t))
+
+  ;; One-shot: make the face valid right now
+  (set-face-attribute 'font-lock-doc-markup-face nil :foreground 'unspecified)
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -418,7 +439,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
   ;; License: GNU GPL v3 or later
   ;;
-  ;; $Lastupdate: 2025/10/06 17:54:16 $
+  ;; $Lastupdate: 2025/10/08 01:15:32 $
   ;;
   ;;; Commentary:
   ;; Entry point for Emacs 30+ configuration.
@@ -456,7 +477,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   (when (fboundp 'leaf-keywords-init)
     (leaf-keywords-init))
 
-  (require 'org) ;; keep org available early
+  (require 'org)
 
   ;;;; Customization group --------------------------------------------------------
   (defgroup my nil
@@ -1594,20 +1615,32 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
 #+begin_src emacs-lisp :tangle lisp/ui/ui-theme.el
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Theme management (ef-themes + spacious-padding) and a face normalizer that
-  ;; replaces invalid `nil` attributes with `unspecified` to avoid warnings on
-  ;; Emacs 30+ (e.g., font-lock-doc-markup-face :foreground nil).
-  ;; Category: ui
-  ;;;
-  ;;; Code:
+  ;; Theme management (ef-themes + spacious-padding) and safe face normalization.
+  ;; Prevent warnings when faces receive nil attributes (use 'unspecified).
+
+  (eval-when-compile (require 'leaf))
+
+  ;;; Guard: rewrite nil face-attrs to 'unspecified before they are applied
+  (eval-when-compile (require 'cl-lib))
+
+  (defvar ui--coerce-nil-face-attrs t
+    "If non-nil, coerce nil face attributes to 'unspecified globally.")
+
+  (when ui--coerce-nil-face-attrs
+    (advice-add
+     'set-face-attribute :around
+     (lambda (orig face frame &rest args)
+       ;; Rewrite every (ATTR NIL) pair in ARGS to (ATTR 'unspecified)
+       (let ((v (copy-sequence args)))
+         (cl-loop for i from 1 below (length v) by 2
+                  do (when (null (nth i v)) (setf (nth i v) 'unspecified)))
+         (apply orig face frame v)))))
+
+  ;; Keep your existing normalization hooks as a safety net:
+  ;; (add-hook 'enable-theme-functions (lambda (_th) (ui--normalize-faces)))
+  ;; (add-hook 'emacs-startup-hook #'ui--normalize-faces)
 
   (leaf ef-themes :straight t
-    ;; Keep the user's original toggle pair as requested.
     :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
     :config
     (unless custom-enabled-themes
@@ -1619,9 +1652,7 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
              (spacious-padding-subtle-mode-line . t))
     :config (spacious-padding-mode 1))
 
-  ;;;; Face normalization --------------------------------------------------------
-  ;; Emacs 30+: setting a face attribute to NIL is invalid; use 'unspecified.
-
+  ;; --- Face normalization --------------------------------------------------------
   (defgroup ui-theme-normalize nil
     "Normalize face attributes set to nil."
     :group 'faces)
@@ -1647,43 +1678,8 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
         (dolist (attr attrs)
           (ui--normalize-face-attr face attr)))))
 
-  ;; Run after any theme is enabled (THEME arg is ignored).
-  (add-hook 'enable-theme-functions
-            (lambda (_theme) (ui--normalize-faces)))
-
-  ;; Also run once at startup (covers custom-file faces before first theme load).
-  (add-hook 'emacs-startup-hook #'ui--normalize-faces)
-
-  ;; Back-compat: if something still calls the old name with args, don't error.
-  (defun ui--normalize-faces-after-theme (&rest _ignore)
-    "Compatibility shim; call `ui--normalize-faces' and ignore extra args."
-    (ui--normalize-faces))
-
-  (defcustom ui:normalize-face-attrs
-    '((font-lock-doc-markup-face :foreground))
-    "List of (FACE ATTR ...) pairs to ensure are not nil."
-    :type '(repeat (cons symbol (repeat symbol)))
-    :group 'ui-theme-normalize)
-
-  (defun ui--normalize-face-attr (face attr)
-    "If FACE's ATTR is nil, set it to 'unspecified to avoid warnings."
-    (when (facep face)
-      (let ((val (face-attribute face attr nil 'default)))
-        (when (null val)
-          (set-face-attribute face nil attr 'unspecified)))))
-
-  (defun ui--normalize-faces ()
-    "Normalize all faces declared in `ui:normalize-face-attrs`."
-    (dolist (entry ui:normalize-face-attrs)
-      (let ((face (car entry))
-            (attrs (cdr entry)))
-        (dolist (attr attrs)
-          (ui--normalize-face-attr face attr)))))
-
   (add-hook 'enable-theme-functions (lambda (_theme) (ui--normalize-faces)))
   (add-hook 'emacs-startup-hook #'ui--normalize-faces)
-
-  (defun ui--normalize-faces-after-theme (&rest _) (ui--normalize-faces))
 
   (provide 'ui/ui-theme)
   ;;; ui/ui-theme.el ends here
@@ -1705,16 +1701,16 @@ None.
 #+begin_src emacs-lisp :tangle lisp/ui/ui-modeline.el
   ;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
+  (eval-when-compile (require 'leaf))
 
-  ;;; Code:
+  (defcustom my:modeline 'doom
+    "Choose modeline implementation: 'doom or 'nano."
+    :type '(choice (const doom) (const nano))
+    :group 'ui)
 
-  ;; (leaf doom-modeline :straight t
-  ;;   :hook (after-init-hook . doom-modeline-mode))
-
+  ;; Small, robust status helpers
   (leaf minions :straight t
-    :custom ((minions-mode-line-lighter . "⚙"))
+    :custom ((minions-mode-line-lighter . "Min"))
     :hook (after-init-hook . minions-mode))
 
   (setq display-time-interval 30
@@ -1723,25 +1719,26 @@ None.
   (display-time-mode 1)
   (when (fboundp 'display-battery-mode) (display-battery-mode 1))
 
-  (leaf nano-modeline
-    :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
-    :require t
-    :init (setopt nano-modeline-padding '(0.20 . 0.25))
-    :config (nano-modeline-text-mode t))
+  ;; ---- Doom modeline (default) --------------------------------------------------
+  (when (eq my:modeline 'doom)
+    (leaf doom-modeline :straight t
+      :hook (after-init-hook . doom-modeline-mode)))
 
-  (add-hook 'prog-mode-hook            #'nano-modeline-prog-mode)
-  (add-hook 'text-mode-hook            #'nano-modeline-text-mode)
-  (add-hook 'org-mode-hook             #'nano-modeline-org-mode)
-  (add-hook 'pdf-view-mode-hook        #'nano-modeline-pdf-mode)
-  (add-hook 'mu4e-headers-mode-hook    #'nano-modeline-mu4e-headers-mode)
-  (add-hook 'mu4e-view-mode-hook       #'nano-modeline-mu4e-message-mode)
-  (add-hook 'elfeed-show-mode-hook     #'nano-modeline-elfeed-entry-mode)
-  (add-hook 'elfeed-search-mode-hook   #'nano-modeline-elfeed-search-mode)
-  (add-hook 'term-mode-hook            #'nano-modeline-term-mode)
-  (add-hook 'xwidget-webkit-mode-hook  #'nano-modeline-xwidget-mode)
-  (add-hook 'messages-buffer-mode-hook #'nano-modeline-message-mode)
-  (add-hook 'org-capture-mode-hook     #'nano-modeline-org-capture-mode)
-  (add-hook 'org-agenda-mode-hook      #'nano-modeline-org-agenda-mode)
+  ;; ---- Nano modeline (optional) -------------------------------------------------
+  (when (eq my:modeline 'nano)
+    (leaf nano-modeline
+      :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
+      :init
+      ;; Keep configuration minimal and avoid heavy per-mode setup
+      (setq nano-modeline-position 'bottom)
+      :config
+      ;; Add only a few safe hooks, guarded by fboundp
+      (when (fboundp 'nano-modeline-prog-mode)
+        (add-hook 'prog-mode-hook #'nano-modeline-prog-mode))
+      (when (fboundp 'nano-modeline-text-mode)
+        (add-hook 'text-mode-hook #'nano-modeline-text-mode))
+      (when (fboundp 'nano-modeline-org-mode)
+        (add-hook 'org-mode-hook  #'nano-modeline-org-mode))))
 
   (provide 'ui/ui-modeline)
   ;;; ui/ui-modeline.el ends here
@@ -1784,13 +1781,13 @@ None.
              (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
              (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
 
-  (leaf tab-bar :straight nil
-    :custom ((tab-bar-show . 1)
-             (tab-bar-new-tab-choice . "*scratch*"))
-    :hook (after-init-hook . tab-bar-mode))
+  ;; (leaf tab-bar :straight nil
+  ;;   :custom ((tab-bar-show . 1)
+  ;;            (tab-bar-new-tab-choice . "*scratch*"))
+  ;;   :hook (after-init-hook . tab-bar-mode))
 
-  (leaf tab-line :straight nil
-    :hook (after-init-hook . global-tab-line-mode))
+  ;; (leaf tab-line :straight nil
+  ;;   :hook (after-init-hook . global-tab-line-mode))
 
   (defvar my:saved-window-config nil)
 
@@ -3140,6 +3137,9 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
     (defvar my:d:excluded-directories
       (list (expand-file-name "Library/Accounts" (getenv "HOME")))
       "Directories excluded from `load-path` for safety.")
+
+    ;; modeline nano / doom
+    (setq my:modeline 'nano)
 
     ;; Ensure directories exist
     (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:org my:d:blog))
