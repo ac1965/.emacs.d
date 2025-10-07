@@ -401,9 +401,6 @@ Provide early, minimal startup optimizations and a hidden, tidy directory layout
   ;; For Emacs v29
   (add-to-list 'default-frame-alist '(undecorated . t))
 
-  ;; One-shot: make the face valid right now
-  (set-face-attribute 'font-lock-doc-markup-face nil :foreground 'unspecified)
-
   (provide 'early-init)
   ;;; early-init.el ends here
 #+end_src
@@ -439,7 +436,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
   ;; License: GNU GPL v3 or later
   ;;
-  ;; $Lastupdate: 2025/10/08 01:15:32 $
+  ;; $Lastupdate: 2025/10/08 02:20:09 $
   ;;
   ;;; Commentary:
   ;; Entry point for Emacs 30+ configuration.
@@ -584,11 +581,15 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   ;; Dired defaults (GNU ls if available)
   (leaf dired
     :straight nil
-    :custom ((dired-listing-switches . "-aBhl --group-directories-first"))
     :config
-    (when (and (eq system-type 'darwin) (executable-find "gls"))
+    (cond
+     ((and (eq system-type 'darwin) (executable-find "gls"))
       (setq insert-directory-program "gls"
-            dired-use-ls-dired t)))
+            dired-use-ls-dired t
+            dired-listing-switches "-aBhl --group-directories-first"))
+     (t
+      (setq dired-use-ls-dired nil
+            dired-listing-switches "-alh"))))
 
   ;;;; Misc helpers ---------------------------------------------------------------
   (leaf hydra :straight t :commands (defhydra))
@@ -831,21 +832,21 @@ Global policies and keymaps for navigation, windows, files, session persistence,
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
+  ;;
   ;;; Commentary:
   ;; - Namespaced text-scale hydra
   ;; - Centralized global keybindings
   ;; - Desktop save, Winner mode, TRAMP
-  ;; - Visited-mode auto-save (no #...# artifacts)
+  ;; - Lean visited-file auto-save (no #...# artifacts)
   ;; - Backups into hidden .var/ dirs
-  ;;;
+  ;;
   ;;; Code:
 
   (eval-when-compile
     (require 'leaf)
     (require 'subr-x)) ;; when-let, string-join
 
-  ;;;; Text scaling hydra ---------------------------------------------------------
+  ;;;; Text scaling hydra ----------------------------------------------------------
   (leaf hydra
     :straight t
     :config
@@ -859,7 +860,7 @@ Global policies and keymaps for navigation, windows, files, session persistence,
       ("0" (text-scale-set 0) :color blue)
       ("q" nil "quit" :color blue)))
 
-  ;;;; Global key bindings --------------------------------------------------------
+  ;;;; Global key bindings ---------------------------------------------------------
   (leaf my:key
     :straight nil
     :bind
@@ -910,25 +911,25 @@ Global policies and keymaps for navigation, windows, files, session persistence,
      ("C-c d f"   . org-roam-node-find)
      ;; Aider
      ("C-c a a"   . aidermacs-transient-menu)
-     ;; EWW (helpers in core/eww.el)
+     ;; EWW
      ("C-c w w"   . eww)
      ("C-c w s"   . my/eww-search)
      ("C-c w o"   . eww-open-file)
      ("C-c w b"   . eww-list-bookmarks)
      ("C-c w r"   . eww-readable)
      ("C-c w u"   . my/eww-toggle-images)
-     ;; Misc
+     ;; VCS
      ("C-x g"     . magit-status)
+     ;; Session
      ("s-r"       . my/restart-or-exit)
      ("M-x"       . execute-extended-command))
     :init
-    ;; Small helpers to keep lambdas out of keymaps (namespaced)
     (defun my/new-frame-with-scratch ()
       "Create a new frame and switch to a fresh buffer."
       (interactive)
       (let ((frame (make-frame)))
         (with-selected-frame frame
-          (switch-to-buffer (generate-new-buffer \"untitled\")))))
+          (switch-to-buffer (generate-new-buffer "untitled")))))
     (defun my/restart-or-exit ()
       "Restart Emacs if `restart-emacs' exists, otherwise save & exit."
       (interactive)
@@ -937,7 +938,7 @@ Global policies and keymaps for navigation, windows, files, session persistence,
         (save-buffers-kill-emacs)))
     (windmove-default-keybindings))
 
-  ;;;; Dired key additions (packages configured elsewhere) -----------------------
+  ;;;; Dired key additions (packages configured elsewhere) -------------------------
   (leaf dired
     :straight nil
     :bind (:dired-mode-map
@@ -945,30 +946,31 @@ Global policies and keymaps for navigation, windows, files, session persistence,
            ("TAB" . dired-subtree-toggle)
            ("z"   . my/dired-view-file-other-window)))
 
-  ;;;; Desktop Save Mode ---------------------------------------------------------
+  ;;;; Desktop Save Mode -----------------------------------------------------------
   (leaf desktop
     :straight nil
     :config
-    (let* ((dir (concat no-littering-var-directory "desktop/")))
-      (setq desktop-dirname            dir
-            desktop-path               (list dir)
-            desktop-base-file-name     "desktop"
-            desktop-base-lock-name     "lock"
-            desktop-restore-eager      10
-            desktop-save               t
+    (let ((dir (concat no-littering-var-directory "desktop/")))
+      (setq desktop-dirname             dir
+            desktop-path                (list dir)
+            desktop-base-file-name      "desktop"
+            desktop-base-lock-name      "lock"
+            desktop-restore-eager       10
+            desktop-save                t
             desktop-load-locked-desktop nil
-            desktop-auto-save-timeout  300)
-      (my/ensure-directory-exists dir)
+            desktop-auto-save-timeout   300)
+      (when (fboundp 'my/ensure-directory-exists)
+        (my/ensure-directory-exists dir))
       (desktop-save-mode 1)))
 
-  ;;;; Winner mode (window configuration undo/redo) ------------------------------
+  ;;;; Winner mode (window configuration undo/redo) --------------------------------
   (leaf winner
     :straight nil
     :global-minor-mode t
     :bind (("M-[" . winner-undo)
            ("M-]" . winner-redo)))
 
-  ;;;; TRAMP setup ---------------------------------------------------------------
+  ;;;; TRAMP setup -----------------------------------------------------------------
   (leaf tramp
     :straight nil
     :pre-setq
@@ -978,23 +980,40 @@ Global policies and keymaps for navigation, windows, files, session persistence,
     '((tramp-default-method . "scp")
       (tramp-verbose        . 3)))
 
-  ;;;; Auto-save (visited-mode) & backups ----------------------------------------
-  ;; Backups go into hidden .var/; classic #...# auto-save settings are removed.
+  ;;;; Backups into hidden .var/ ---------------------------------------------------
   (leaf files
     :straight nil
     :custom
     `((backup-directory-alist
        . '(("." . ,(concat no-littering-var-directory "backup/"))))
       (delete-old-versions . t)))
-  (my/ensure-directory-exists (concat no-littering-var-directory "backup/"))
+  (when (fboundp 'my/ensure-directory-exists)
+    (my/ensure-directory-exists (concat no-littering-var-directory "backup/")))
 
-  ;; Visited-mode saves the *real* file after brief idle.
-  (setopt auto-save-visited-interval 1   ;; seconds of idle before saving
-          auto-save-default        nil)  ;; don't create #...# files
+  ;;;; Lean auto-save for visited files -------------------------------------------
+  ;; Save the *real file* on idle; no #...# artifacts.
+  (setopt auto-save-visited-interval 2)   ;; seconds
   (when (fboundp 'auto-save-visited-mode)
     (auto-save-visited-mode 1))
 
-  ;;;; Authentication management -------------------------------------------------
+  ;; Some modes flip it off; re-enable for file-visiting buffers.
+  (add-hook 'after-change-major-mode-hook
+            (lambda ()
+              (when (and (buffer-file-name)
+                         (not (bound-and-true-p auto-save-visited-mode)))
+                (auto-save-visited-mode 1))))
+
+  ;; Bonus: when Emacs loses focus, save modified file-visiting local buffers.
+  (add-hook 'focus-out-hook
+            (lambda ()
+              (save-some-buffers
+               t
+               (lambda ()
+                 (and (buffer-file-name)
+                      (buffer-modified-p)
+                      (not (file-remote-p default-directory)))))))
+
+  ;;;; Authentication management ----------------------------------------------------
   (defvar my:d:password-store
     (or (getenv "PASSWORD_STORE_DIR")
         (concat no-littering-var-directory "password-store/"))
@@ -1253,6 +1272,79 @@ None.
 
   (defun my/enable-view-mode-on-read-only () (if buffer-read-only (view-mode 1) (view-mode -1)))
   (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
+
+  (defun my/config-self-check ()
+    "Lightweight sanity check for this Emacs config.
+
+  Performs two best-effort validations:
+
+  1. **provide vs path check**
+     Ensure each file under `lisp/` ends with a `(provide 'path/feature)`
+     whose symbol matches the file's relative path (e.g., lisp/ui/ui-theme.el
+     should provide `ui/ui-theme`).
+
+  2. **Undefined command check (keymap targets)**
+     Spot obvious cases where a command referenced by a key binding
+     isn't actually defined (via `fboundp`). This is only a smoke test
+     for a small, curated set of common bindings.
+
+  If issues are found, they are listed in the buffer `*Config Self-Check*`.
+  Otherwise, a success message is shown."
+
+    (interactive)
+    (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
+           (lisp (expand-file-name "lisp" root))
+           (bad '()))
+
+      ;; -----------------------------------------------------------------------
+      ;; 1) Check that (provide 'feature) roughly matches its lisp/ path.
+      ;;    We open each *.el under lisp/ and look for the last `(provide '...)`.
+      ;;    Then we compare that symbol with the file's path relative to lisp/.
+      ;;    Example:
+      ;;      file:   lisp/ui/ui-theme.el
+      ;;      expect: (provide 'ui/ui-theme)
+      ;; -----------------------------------------------------------------------
+      (dolist (file (directory-files-recursively lisp "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-max))
+          (when (re-search-backward "^(provide '\\([^)\n]+\\))" nil t)
+            (let* ((feat (match-string 1))
+                   ;; Derive relative path without extension, then strip leading .../lisp/
+                   (want (string-replace "/" "/"
+                          (string-remove-prefix
+                           (file-name-as-directory lisp)
+                           (file-name-sans-extension file))))
+                   ;; Normalize to \"ui/ui-theme\" style (no absolute bits).
+                   (want (replace-regexp-in-string ".*/lisp/\\|^" "" want)))
+              (unless (string-match-p (regexp-quote feat) want)
+                (push (format "[provide-mismatch] %s -> provide '%s" file feat) bad))))))
+
+      ;; -----------------------------------------------------------------------
+      ;; 2) Very rough undefined-command check.
+      ;;    For a small set of commonly bound keys, ensure the target command
+      ;;    is actually defined. This won't scan your whole keymap; it's only
+      ;;    meant to catch obvious missing deps in a fresh setup.
+      ;; -----------------------------------------------------------------------
+      (dolist (pair '(("C-x g" magit-status)
+                      ("C-c d d" docker)
+                      ("C-c m c" compile)
+                      ("C-c m r" recompile)))
+        (let ((cmd (cadr pair)))
+          (unless (fboundp cmd)
+            (push (format "[undef] command not found: %s" cmd) bad))))
+
+      ;; -----------------------------------------------------------------------
+      ;; Report
+      ;; -----------------------------------------------------------------------
+      (if bad
+          (progn
+            (with-current-buffer (get-buffer-create "*Config Self-Check*")
+              (erase-buffer)
+              (insert (mapconcat #'identity (nreverse bad) "\n"))
+              (display-buffer (current-buffer)))
+            (message "Config check found issues (see *Config Self-Check*)."))
+        (message "Config self-check passed ✓"))))
 
   (provide 'core/utils)
   ;;; core/utils.el ends here
@@ -1516,85 +1608,6 @@ Works for GUI frames/daemon.
   ;;; ui/ui-font.el ends here
 #+end_src
 
-
-:PROPERTIES:
-:CUSTOM_ID: ui-theme
-:END:
-
-**Purpose**
-Theme management with `ef-themes` and `spacious-padding`, plus a **safe face-normalizer** that avoids setting face attributes to `nil` (which causes warnings in Emacs 30+).
-
-**What it does**
-- Keeps your original theme setup (incl. `(modus-themes-to-toggle . '(ef-frost ef-spring))`).
-- Adds `ui--normalize-faces-after-theme` to set problematic face attributes to `'unspecified` instead of `nil`.
-- Hooks the normalizer to `after-load-theme-hook` and runs it once at init.
-
-**Notes**
-If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`, this helper will correct it at runtime to prevent warnings like:
-`Warning: setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead.`
-
-#+begin_src emacs-lisp :tangle lisp/ui/ui-theme.el
-  ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Theme management (ef-themes + spacious-padding) and a face normalizer that
-  ;; replaces invalid `nil` attributes with `unspecified` to avoid warnings on
-  ;; Emacs 30+ (e.g., font-lock-doc-markup-face :foreground nil).
-  ;; Category: ui
-  ;;;
-  ;;; Code:
-
-  (leaf ef-themes :straight t
-    ;; Keep the user's original toggle pair as requested.
-    :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
-    :config
-    (unless custom-enabled-themes
-      (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t)))
-
-  (leaf spacious-padding :straight t
-    :if (display-graphic-p)
-    :custom ((spacious-padding-widths . '((left . 15) (right . 15)))
-             (spacious-padding-subtle-mode-line . t))
-    :config (spacious-padding-mode 1))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Face normalization to avoid `nil` attribute warnings on Emacs 30+
-  ;;
-  ;; Emacs warns if a face attribute is set to NIL explicitly. Use 'unspecified.
-  ;; We fix known offenders conservatively (extend list if needed).
-
-  (defun ui--normalize-face-attr (face &rest plist)
-    "Set FACE attributes from PLIST, rewriting any nil values to 'unspecified."
-    (when (facep face)
-      (let ((fixed '()))
-        (while plist
-          (let* ((attr (pop plist))
-                 (val  (pop plist)))
-            (push (if (null val) 'unspecified val) fixed)
-            (push attr fixed)))
-        (apply #'set-face-attribute face nil (nreverse fixed)))))
-
-  (defun ui--normalize-faces-after-theme ()
-    "Normalize face attributes that may have been set to nil by themes/custom."
-    ;; Your reported warning: font-lock-doc-markup-face :foreground nil
-    (ui--normalize-face-attr 'font-lock-doc-markup-face :foreground (face-attribute 'font-lock-doc-markup-face :foreground))
-    ;; Add other normalizations here if you encounter similar warnings, e.g.:
-    ;; (ui--normalize-face-attr 'font-lock-doc-face :foreground (face-attribute 'font-lock-doc-face :foreground))
-    )
-
-  (add-hook 'after-load-theme-hook #'ui--normalize-faces-after-theme)
-
-  ;; Run once at startup to cover faces set by custom-file before theme changes.
-  (add-hook 'emacs-startup-hook #'ui--normalize-faces-after-theme)
-
-  (provide 'ui/ui-theme)
-  ;;; ui/ui-theme.el ends here
-#+end_src
-
 *** ui/ui-theme.el
 :PROPERTIES:
 :CUSTOM_ID: ui-theme
@@ -1618,11 +1631,11 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
   ;; Theme management (ef-themes + spacious-padding) and safe face normalization.
   ;; Prevent warnings when faces receive nil attributes (use 'unspecified).
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf)
+    (require 'cl-lib))
 
-  ;;; Guard: rewrite nil face-attrs to 'unspecified before they are applied
-  (eval-when-compile (require 'cl-lib))
-
+  ;; ---- Guard: rewrite any NIL face attrs to 'unspecified -----------------------
   (defvar ui--coerce-nil-face-attrs t
     "If non-nil, coerce nil face attributes to 'unspecified globally.")
 
@@ -1636,11 +1649,9 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
                   do (when (null (nth i v)) (setf (nth i v) 'unspecified)))
          (apply orig face frame v)))))
 
-  ;; Keep your existing normalization hooks as a safety net:
-  ;; (add-hook 'enable-theme-functions (lambda (_th) (ui--normalize-faces)))
-  ;; (add-hook 'emacs-startup-hook #'ui--normalize-faces)
-
+  ;; ---- Themes ------------------------------------------------------------------
   (leaf ef-themes :straight t
+    ;; Keep the user's original toggle pair.
     :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
     :config
     (unless custom-enabled-themes
@@ -1652,7 +1663,7 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
              (spacious-padding-subtle-mode-line . t))
     :config (spacious-padding-mode 1))
 
-  ;; --- Face normalization --------------------------------------------------------
+  ;; ---- Normalization pass (belt-and-suspenders) --------------------------------
   (defgroup ui-theme-normalize nil
     "Normalize face attributes set to nil."
     :group 'faces)
@@ -1728,6 +1739,7 @@ None.
   (when (eq my:modeline 'nano)
     (leaf nano-modeline
       :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
+      :require t
       :init
       ;; Keep configuration minimal and avoid heavy per-mode setup
       (setq nano-modeline-position 'bottom)
@@ -1738,7 +1750,9 @@ None.
       (when (fboundp 'nano-modeline-text-mode)
         (add-hook 'text-mode-hook #'nano-modeline-text-mode))
       (when (fboundp 'nano-modeline-org-mode)
-        (add-hook 'org-mode-hook  #'nano-modeline-org-mode))))
+        (add-hook 'org-mode-hook  #'nano-modeline-org-mode))
+        (unless (featurep 'nano-modeline)
+      (message "[ui-modeline] nano-modeline not loaded yet; hooks will attach when available."))))
 
   (provide 'ui/ui-modeline)
   ;;; ui/ui-modeline.el ends here
@@ -3182,8 +3196,8 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
                (sis-global-inline-mode t)))))
 
   ;; Keep cursor color consistent after theme changes
-  (add-hook 'after-load-theme-hook
-            (lambda ()
+  (add-hook 'enable-theme-functions
+            (lambda (_theme)
               (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
 
   ;; -----------------------------------------------------------------------------
