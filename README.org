@@ -315,44 +315,9 @@ Provide early, minimal startup optimizations and a hidden, tidy directory layout
                       gc-cons-percentage my:orig:gc-cons-percentage)
               (setq file-name-handler-alist my:orig:file-name-handler-alist)))
 
-  (defun my/ensure-directory-exists (dir)
-    "Ensure DIR exists, creating it if necessary (warn on failure)."
-    (unless (file-directory-p dir)
-      (condition-case err
-          (make-directory dir t)
-        (error (warn "Failed to create directory: %s (%s)"
-                     dir (error-message-string err))))))
-
-  ;; Root dir for this config (prefer the file's directory)
-  (defvar my:d (or (and load-file-name
-                        (file-name-directory (file-chase-links load-file-name)))
-                   user-emacs-directory)
-    "Root directory for this Emacs configuration.")
-
-  ;; Hidden layout under my:d
-  (defvar my:d:cache   (expand-file-name ".cache/"             my:d))
-  (defvar my:d:etc     (expand-file-name ".etc/"               my:d))
-  (defvar my:d:var     (expand-file-name ".var/"               my:d))
-  (defvar my:d:lisp    (expand-file-name "lisp/"               my:d))
-  (defvar my:d:eln     (expand-file-name "eln-cache/"          my:d:cache))
-  (defvar my:d:treesit (expand-file-name "tree-sitter/"        my:d:var))
-  (defvar my:d:treesit-build (expand-file-name "treesit-build/" my:d:cache))
-  (defvar my:f:custom  (expand-file-name "custom.el"           my:d:etc))
-
-  (dolist (dir (list my:d:cache my:d:etc my:d:var my:d:lisp
-                     my:d:eln my:d:treesit my:d:treesit-build))
-    (my/ensure-directory-exists dir))
-
-  (add-to-list 'load-path my:d:lisp)
-
   ;; Native compilation (defensive)
   (when (featurep 'native-compile)
-    (setopt native-comp-async-report-warnings-errors 'silent
-            native-comp-eln-load-path (list my:d:eln)))
-
-  ;; Tree-sitter extra search path
-  (when (boundp 'treesit-extra-load-path)
-    (add-to-list 'treesit-extra-load-path my:d:treesit))
+    (setopt native-comp-async-report-warnings-errors 'silent))
 
   ;; macOS + Homebrew libgccjit support (prepend safely to LIBRARY_PATH)
   (when (and (eq system-type 'darwin) (executable-find "brew"))
@@ -367,21 +332,40 @@ Provide early, minimal startup optimizations and a hidden, tidy directory layout
       (error (message "[early-init] brew probe failed: %s"
                       (error-message-string err)))))
 
-  ;; Disable heavy UI *after* first frame (safe for tty/daemon)
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (dolist (mode '(menu-bar-mode tool-bar-mode scroll-bar-mode))
-                (when (fboundp mode) (funcall mode -1)))))
+  ;; Native compilation (defensive)
+  (when (featurep 'native-compile)
+    (setopt native-comp-async-report-warnings-errors 'silent))
 
-  ;; straight.el: keep everything inside .cache/
-  (setopt straight-base-dir my:d:cache
-          straight-use-package-by-default t
-          straight-profiles '((nil . "default.el")))
+  (custom-set-variables
+   ;; custom-set-variables was added by Custom.
+   ;; If you edit it by hand, you could mess it up, so be careful.
+   ;; Your init file should contain only one such instance.
+   ;; If there is more than one, they won't work right.
+   '(inhibit-startup-screen t)
+   '(inhibit-startup-message t)
+   '(inhibit-startup-echo-area-message t)
+   '(initial-scratch-message nil)
+   '(initial-frame-alist
+     '((left-fringe . 0)
+       (right-fringe   . 0)
+       (internal-border-width . 8)
+       (tool-bar-lines . 0)))
+   '(menu-bar-mode nil)
+   '(scroll-bar-mode nil)
+   '(tool-bar-mode nil)
+   '(initial-buffer-choice t)
+   '(initial-major-mode 'fundamental-mode)
+   '(frame-inhibit-implied-resize t)
+   '(frame-title-format t)
+   '(cursor-in-non-selected-windows nil)
+   '(font-lock-maximum-decoration nil)
+   '(font-lock-maximum-size nil)
+   '(x-underline-at-descent-line t)
+   '(window-divider-default-right-width 16)
+   '(window-divider-default-places 'right-only))
 
-  ;; Custom settings file in .etc/
-  (setopt custom-file my:f:custom)
-  (when (file-exists-p my:f:custom)
-    (load custom-file 'noerror 'nomessage))
+  ;; For Emacs v29
+  (add-to-list 'default-frame-alist '(undecorated . t))
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -418,7 +402,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
   ;; License: GNU GPL v3 or later
   ;;
-  ;; $Lastupdate: 2025/10/06 17:54:16 $
+  ;; $Lastupdate: 2025/10/06 22:14:26 $
   ;;
   ;;; Commentary:
   ;; Entry point for Emacs 30+ configuration.
@@ -429,6 +413,109 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   ;; - Optionally loads personal overrides
   ;;;
   ;;; Code:
+
+  ;;;; Directory Settings -----------------------------------------------------
+
+  (defun my/ensure-directory-exists (dir)
+    "Ensure DIR exists, creating it if necessary (warn on failure)."
+    (unless (file-directory-p dir)
+      (condition-case err
+          (make-directory dir t)
+        (error (warn "Failed to create directory: %s (%s)"
+                     dir (error-message-string err))))))
+
+  ;; Safe file loader (utility)
+  (defun my/safe-load-file (file &optional noerror)
+    "Load FILE safely. If NOERROR is non-nil, log instead of raising."
+    (when (and file (file-exists-p file))
+      (condition-case err
+          (load file nil 'nomessage)
+        (error
+         (funcall (if noerror #'message #'user-error)
+                  "[load] failed to load %s: %s"
+                  file (error-message-string err))))))
+
+  ;; Tiny utilities to safely ensure packages with straight.el.
+  (defun my/ensure-straight-packages (packages &optional quiet)
+    "Ensure PACKAGES are installed via straight.el.
+  PACKAGES is a list of package symbols or straight recipes.
+  If QUIET is non-nil, suppress progress messages.
+  Return an alist like ((PKG . :ok) (PKG . :error))."
+    (unless (featurep 'straight)
+      ;; Attempt to load straight without failing hard in non-straight setups.
+      (require 'straight nil :noerror))
+    (let ((report '()))
+      (dolist (pkg packages (nreverse report))
+        (condition-case err
+            (progn
+              (when (fboundp 'straight-use-package)
+                (straight-use-package pkg))
+              (push (cons pkg :ok) report)
+              (unless quiet
+                (message "[straight] OK: %s" pkg)))
+          (error
+           (push (cons pkg :error) report)
+           (unless quiet
+             (message "[straight] ERROR: %s -> %s"
+                      pkg (error-message-string err))))))))
+
+  (defcustom my:bootstrap-packages
+    '(leaf leaf-keywords leaf-convert blackout org)
+    "Default package set ensured by `my/ensure-bootstrap'."
+    :group 'my
+    :type '(repeat sexp))
+
+  (defun my/ensure-bootstrap (&optional quiet)
+    "Ensure `my:bootstrap-packages' via straight.el.
+  If QUIET is non-nil, suppress progress messages.
+  When called interactively, print a compact summary."
+    (interactive "P")
+    (let ((result (my/ensure-straight-packages my:bootstrap-packages quiet)))
+      (when (called-interactively-p 'any)
+        (message "Bootstrap result: %S" result))
+      result))
+
+  ;; --- Examples ---------------------------------------------------------------
+  ;; Run once interactively:
+  ;;   M-x my/ensure-bootstrap
+  ;;
+  ;; Ensure a custom list silently:
+  ;; (my/ensure-straight-packages
+  ;;  '(vertico orderless marginalia nerd-icons) t)
+  ;;
+  ;; Run quietly after startup:
+  ;; (add-hook 'emacs-startup-hook (lambda () (my/ensure-bootstrap t)))
+
+  ;; Root dir for this config (prefer the file's directory)
+  (defvar my:d (or (and load-file-name
+                        (file-name-directory (file-chase-links load-file-name)))
+                   user-emacs-directory)
+    "Root directory for this Emacs configuration.")
+
+  ;; Hidden layout under my:d
+  (defvar my:d:etc     (expand-file-name ".etc/"               my:d))
+  (defvar my:d:var     (expand-file-name ".var/"               my:d))
+  (defvar my:d:lisp    (expand-file-name "lisp/"               my:d))
+  (defvar my:d:treesit (expand-file-name "tree-sitter/"        my:d:var))
+  (defvar my:d:treesit-build
+    (expand-file-name "tree-sitter-build"                      my:d:var))
+  (defvar my:f:custom  (expand-file-name "custom.el"           my:d:etc))
+
+  (dolist (dir (list my:d:etc my:d:var my:d:lisp my:d:treesit))
+    (my/ensure-directory-exists dir))
+
+  ;; Keep ~/.emacs.d clean with no-littering and stop auto-save-list dir creation
+  (setq user-emacs-directory my:d)
+  (setq auto-save-list-file-prefix nil)   ;; don't create auto-save-list/
+
+  ;; Tree-sitter extra search path
+  (when (boundp 'treesit-extra-load-path)
+    (add-to-list 'treesit-extra-load-path my:d:treesit))
+
+  ;; straight.el: keep everything inside .cache/
+  (setopt straight-base-dir my:d:var
+          straight-use-package-by-default t
+          straight-profiles '((nil . "default.el")))
 
   ;;;; Bootstrap straight.el -----------------------------------------------------
   (require 'url) ;; for url-retrieve-synchronously
@@ -447,8 +534,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
                            (error-message-string err)))))
     (load bootstrap-file nil 'nomessage))
 
-  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout org))
-    (ignore-errors (straight-use-package pkg)))
+  (my/ensure-bootstrap)
 
   (eval-when-compile
     (require 'leaf)
@@ -541,6 +627,11 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
     (setq no-littering-etc-directory (file-name-as-directory (or (bound-and-true-p my:d:etc) (expand-file-name ".etc/" user-emacs-directory)))
           no-littering-var-directory (file-name-as-directory (or (bound-and-true-p my:d:var) (expand-file-name ".var/" user-emacs-directory)))))
 
+  (leaf cus-edit
+    :straight nil
+    :doc "tools for customizing Emacs and Lisp packages"
+    :custom `((custom-file . my:f:custom)))
+
   (leaf exec-path-from-shell
     :straight t
     :if (memq window-system '(mac ns))
@@ -569,24 +660,15 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
       (setq insert-directory-program "gls"
             dired-use-ls-dired t)))
 
+  (leaf *server
+    :straight nil
+    :doc "Use Emacs as a Server"
+    :global-minor-mode server-mode
+    :custom
+    (confirm-kill-emacs . #'yes-or-no-p))
+
   ;;;; Misc helpers ---------------------------------------------------------------
   (leaf hydra :straight t :commands (defhydra))
-
-  ;; Respect custom-file from early-init and load quietly if present
-  (setq custom-file (or (bound-and-true-p my:f:custom) custom-file))
-  (when (and custom-file (file-readable-p custom-file))
-    (ignore-errors (load custom-file nil 'nomessage)))
-
-  ;; Safe file loader (utility)
-  (defun my/safe-load-file (file &optional noerror)
-    "Load FILE safely. If NOERROR is non-nil, log instead of raising."
-    (when (and file (file-exists-p file))
-      (condition-case err
-          (load file nil 'nomessage)
-        (error
-         (funcall (if noerror #'message #'user-error)
-                  "[load] failed to load %s: %s"
-                  file (error-message-string err))))))
 
   ;;;; User-specific overrides ----------------------------------------------------
   (my/safe-load-file (expand-file-name (concat "personal/" user-login-name ".el")
@@ -704,22 +786,22 @@ Central loader for modular configuration under `lisp/`. Uses **module namespace 
       orgx/org-core
       orgx/org-visual
       orgx/org-extensions
-      orgx/org-export
+      ;; orgx/org-export
 
-      ;; Development
-      dev/dev-lsp
-      dev/dev-ai
-      dev/dev-term
-      dev/dev-build
-      dev/dev-docker
+      ;; ;; Development
+      ;; dev/dev-lsp
+      ;; dev/dev-ai
+      ;; dev/dev-term
+      ;; dev/dev-build
+      ;; dev/dev-docker
 
-      ;; Web/Infra
-      dev/web-core
-      dev/lsp-web
-      dev/format
-      dev/infra-modes
-      dev/sql
-      dev/rest
+      ;; ;; Web/Infra
+      ;; dev/web-core
+      ;; dev/lsp-web
+      ;; dev/format
+      ;; dev/infra-modes
+      ;; dev/sql
+      ;; dev/rest
 
       ;; VCS
       vcs/vcs-magit
@@ -1167,9 +1249,9 @@ Treesitter advice cooperates with `treesit-auto`.
       (save-excursion
         (org-back-to-heading t)
         (if (org-fold-folded-p (point)) (org-show-subtree) (org-fold-subtree t))))
-    (define-key org-mode-map (kbd "C-c C-f") #'my/org-fold-subtree)
-    (define-key org-mode-map (kbd "C-c C-e") #'my/org-unfold-subtree)
-    (define-key org-mode-map (kbd "C-c C-t") #'my/org-toggle-fold))
+    (define-key org-mode-map (kbd "C-c f") #'my/org-fold-subtree)
+    (define-key org-mode-map (kbd "C-c e") #'my/org-unfold-subtree)
+    (define-key org-mode-map (kbd "C-c t") #'my/org-toggle-fold))
 
   (provide 'core/tools)
   ;;; core/tools.el ends here
@@ -1710,9 +1792,6 @@ None.
 
   ;;; Code:
 
-  ;; (leaf doom-modeline :straight t
-  ;;   :hook (after-init-hook . doom-modeline-mode))
-
   (leaf minions :straight t
     :custom ((minions-mode-line-lighter . "⚙"))
     :hook (after-init-hook . minions-mode))
@@ -1723,25 +1802,28 @@ None.
   (display-time-mode 1)
   (when (fboundp 'display-battery-mode) (display-battery-mode 1))
 
+  ;; (leaf doom-modeline :straight t
+  ;;   :hook (after-init-hook . doom-modeline-mode))
+
   (leaf nano-modeline
     :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
     :require t
     :init (setopt nano-modeline-padding '(0.20 . 0.25))
-    :config (nano-modeline-text-mode t))
-
-  (add-hook 'prog-mode-hook            #'nano-modeline-prog-mode)
-  (add-hook 'text-mode-hook            #'nano-modeline-text-mode)
-  (add-hook 'org-mode-hook             #'nano-modeline-org-mode)
-  (add-hook 'pdf-view-mode-hook        #'nano-modeline-pdf-mode)
-  (add-hook 'mu4e-headers-mode-hook    #'nano-modeline-mu4e-headers-mode)
-  (add-hook 'mu4e-view-mode-hook       #'nano-modeline-mu4e-message-mode)
-  (add-hook 'elfeed-show-mode-hook     #'nano-modeline-elfeed-entry-mode)
-  (add-hook 'elfeed-search-mode-hook   #'nano-modeline-elfeed-search-mode)
-  (add-hook 'term-mode-hook            #'nano-modeline-term-mode)
-  (add-hook 'xwidget-webkit-mode-hook  #'nano-modeline-xwidget-mode)
-  (add-hook 'messages-buffer-mode-hook #'nano-modeline-message-mode)
-  (add-hook 'org-capture-mode-hook     #'nano-modeline-org-capture-mode)
-  (add-hook 'org-agenda-mode-hook      #'nano-modeline-org-agenda-mode)
+    :config
+    (nano-modeline-text-mode t)
+    (add-hook 'prog-mode-hook            #'nano-modeline-prog-mode)
+    (add-hook 'text-mode-hook            #'nano-modeline-text-mode)
+    (add-hook 'org-mode-hook             #'nano-modeline-org-mode)
+    (add-hook 'pdf-view-mode-hook        #'nano-modeline-pdf-mode)
+    (add-hook 'mu4e-headers-mode-hook    #'nano-modeline-mu4e-headers-mode)
+    (add-hook 'mu4e-view-mode-hook       #'nano-modeline-mu4e-message-mode)
+    (add-hook 'elfeed-show-mode-hook     #'nano-modeline-elfeed-entry-mode)
+    (add-hook 'elfeed-search-mode-hook   #'nano-modeline-elfeed-search-mode)
+    (add-hook 'term-mode-hook            #'nano-modeline-term-mode)
+    (add-hook 'xwidget-webkit-mode-hook  #'nano-modeline-xwidget-mode)
+    (add-hook 'messages-buffer-mode-hook #'nano-modeline-message-mode)
+    (add-hook 'org-capture-mode-hook     #'nano-modeline-org-capture-mode)
+    (add-hook 'org-agenda-mode-hook      #'nano-modeline-org-agenda-mode))
 
   (provide 'ui/ui-modeline)
   ;;; ui/ui-modeline.el ends here
@@ -1784,13 +1866,13 @@ None.
              (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
              (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
 
-  (leaf tab-bar :straight nil
-    :custom ((tab-bar-show . 1)
-             (tab-bar-new-tab-choice . "*scratch*"))
-    :hook (after-init-hook . tab-bar-mode))
+  ;; (leaf tab-bar :straight nil
+  ;;   :custom ((tab-bar-show . 1)
+  ;;            (tab-bar-new-tab-choice . "*scratch*"))
+  ;;   :hook (after-init-hook . tab-bar-mode))
 
-  (leaf tab-line :straight nil
-    :hook (after-init-hook . global-tab-line-mode))
+  ;; (leaf tab-line :straight nil
+  ;;   :hook (after-init-hook . global-tab-line-mode))
 
   (defvar my:saved-window-config nil)
 
@@ -2049,7 +2131,6 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
              "* TODO %?\n %i\n %a")
             ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
              "* %?\nEntered on %U\n %i\n %a")
-            ;; ← 標準の org-journal 関数を使う
             ("j" "Journal" entry (function org-journal-find-location)
              "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
