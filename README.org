@@ -22,7 +22,7 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 :END:
 
 - *Performance & Native Compilation* - JIT compilation with optimized settings, intelligent GC via GCMH, and async compilation
-- *Language Server Protocol* - Configurable LSP backends (Eglot/LSP-Mode) with automatic server management
+- *Language Server Protocol* - Switchable LSP backend (Eglot/LSP-Mode via ~my:use-lsp~) with automatic server management
 - *AI Integration* - Aidermacs with vterm backend supporting GPT-4, Claude 3.5 Sonnet, and OpenRouter APIs
 - *Modern UI & Editing* - Tree-Sitter syntax highlighting, ef-themes, Nerd Icons, and advanced completion
 - *Productivity Tools* - GTD-style Org workflow, Org-roam networked notes, and modern styling
@@ -48,7 +48,7 @@ _For documentation only; block-level :tangle always takes precedence._
 | core/         | eww.el                | EWW helpers (search, toggle images)                         |
 | ui/           | ui-font.el            | Font setup, ligatures                                       |
 | ui/           | ui-theme.el           | Theme mgmt (ef-themes, spacious-padding)                    |
-| ui/           | ui-modeline.el        | Doom-modeline, minions, time, battery                       |
+| ui/           | ui-modeline.el        | Modeline, minions, time, battery                            |
 | ui/           | ui-window.el          | Fullscreen, zoom, tab-bar/line, layouts                     |
 | ui/           | ui-treemacs.el        | Sidebar project/file explorer                               |
 | ui/           | ui-clipboard.el       | macOS clipboard integration                                 |
@@ -58,10 +58,10 @@ _For documentation only; block-level :tangle always takes precedence._
 | completion/   | completion-embark.el  | Embark + consult integration                                |
 | completion/   | completion-corfu.el   | Corfu, kind-icon, cape                                      |
 | completion/   | completion-icons.el   | Nerd-icons integration                                      |
-| org/          | org-core.el           | GTD workflow, agenda, capture, refiling                     |
-| org/          | org-visual.el         | Org-modern (no org-superstar)                               |
-| org/          | org-extensions.el     | Org-journal, org-roam, org-download, toc-org, cliplink      |
-| org/          | org-export.el         | LaTeX export, Hugo, Markdown                                |
+| orgx/         | org-core.el           | GTD workflow, agenda, capture, refiling                     |
+| orgx/         | org-visual.el         | Org-modern visuals (no org-superstar)                       |
+| orgx/         | org-extensions.el     | Journal, Roam, download, toc-org, cliplink                  |
+| orgx/         | org-export.el         | LaTeX export, Hugo, Markdown                                |
 | dev/          | dev-lsp.el            | Eglot / lsp-mode integration                                |
 | dev/          | lsp-web.el            | LSP for web stack (only when my:use-lsp = 'lsp)             |
 | dev/          | web-core.el           | Project.el + treesit + editorconfig                         |
@@ -79,7 +79,7 @@ _For documentation only; block-level :tangle always takes precedence._
 | utils/        | utils-scratch.el      | Scratch buffer management                                   |
 | utils/        | utils-backup.el       | Backup/auto-save cleanup                                    |
 | utils/        | utils-async.el        | Async task wrapper                                          |
-| utils/        | search-nav.el         | Dumb-jump fallback, multiple-cursors (projectile removed)   |
+| utils/        | search-nav.el         | Dumb-jump fallback, multiple-cursors                        |
 | personal/     | <username>.el         | Optional per-user, per-machine overrides                    |
 | personal/     | user.el               | Personal entry point, loaded last if present                |
 
@@ -142,12 +142,12 @@ _For documentation only; block-level :tangle always takes precedence._
   - Git
   - GNU Make
   - GCC **10+** with `libgccjit`
-
 - **Optional but Recommended**
   - ripgrep (`rg`) → faster project-wide search
   - aspell or hunspell → spell checking
   - pass + GnuPG → password and auth-source integration
   - Homebrew (macOS only) → for consistent toolchain installation
+  - (*Note*) Homebrew libgccjit / `LIBRARY_PATH` is auto-assisted in *early-init* on macOS.
 
 *** Building Emacs
 
@@ -439,7 +439,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
   ;; License: GNU GPL v3 or later
   ;;
-  ;; $Lastupdate: 2025/10/09 23:36:45 $
+  ;; $Lastupdate: 2025/10/10 00:05:50 $
   ;;
   ;;; Commentary:
   ;; Entry point for Emacs 30+ configuration.
@@ -510,18 +510,8 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
     (let ((result (my/ensure-straight-packages my:bootstrap-packages quiet)))
       (when (called-interactively-p 'any)
         (message "Bootstrap result: %S" result))
+      (when noninteractive (ignore result))
       result))
-
-  ;; --- Examples ---------------------------------------------------------------
-  ;; Run once interactively:
-  ;;   M-x my/ensure-bootstrap
-  ;;
-  ;; Ensure a custom list silently:
-  ;; (my/ensure-straight-packages
-  ;;  '(vertico orderless marginalia nerd-icons) t)
-  ;;
-  ;; Run quietly after startup:
-  ;; (add-hook 'emacs-startup-hook (lambda () (my/ensure-bootstrap t)))
 
   ;; Root dir for this config (prefer the file's directory)
   (defvar my:d (or (and load-file-name
@@ -549,7 +539,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   (when (boundp 'treesit-extra-load-path)
     (add-to-list 'treesit-extra-load-path my:d:treesit))
 
-  ;; straight.el: keep everything inside .cache/
+  ;; straight.el: keep everything inside .var/
   (setopt straight-base-dir my:d:var
           straight-use-package-by-default t
           straight-profiles '((nil . "default.el")))
@@ -635,7 +625,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
             version-control               t
             idle-update-delay             0.2
             ring-bell-function            #'ignore
-  	  display-line-numbers-type     'relative)
+            display-line-numbers-type     'relative)
     (electric-pair-mode 1)
     (add-hook 'prog-mode-hook #'display-line-numbers-mode)
     (auto-save-visited-mode 1))
@@ -1026,7 +1016,7 @@ Global policies and keymaps for navigation, windows, files, session persistence,
       (interactive)
       (let ((frame (make-frame)))
         (with-selected-frame frame
-          (switch-to-buffer (generate-new-buffer \"untitled\")))))
+          (switch-to-buffer (generate-new-buffer "untitled")))))
     (defun my/restart-or-exit ()
       "Restart Emacs if `restart-emacs' exists, otherwise save & exit."
       (interactive)
@@ -1245,7 +1235,7 @@ Treesitter advice cooperates with `treesit-auto`.
      (list (intern (completing-read "Language: " (mapcar #'car treesit-language-source-alist)))))
     (treesit-install-language-grammar lang))
 
-  (with-eval-after-load 'treesit
+  (with-eval-after-load 'treesit'
     (add-to-list 'treesit-extra-load-path my:d:treesit)
     (advice-add 'treesit-install-language-grammar :around #'my/treesit--call-with-outdir))
 
@@ -1267,8 +1257,8 @@ Treesitter advice cooperates with `treesit-auto`.
           (insert "|Property|Value|\n|--------|-----|\n")
           (insert (format "|Commit|%s|\n" (if (fboundp 'emacs-repository-get-version)
                                       (emacs-repository-get-version) "N/A")))
-  	(insert (format "|Branch|%s|\n" (if (fboundp 'emacs-repository-get-branch)
-  					    (emacs-repository-get-branch) "N/A")))
+          (insert (format "|Branch|%s|\n" (if (fboundp 'emacs-repository-get-branch)
+                                              (emacs-repository-get-branch) "N/A")))
           (insert (format "|System|%s|\n" system-configuration))
           (insert (format "|Date|%s|\n" (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
           (insert (format "|Patch|%s ns-inline.patch|\n" (if (boundp 'mac-ime--cursor-type) "with" "N/A")))
@@ -1298,15 +1288,6 @@ Treesitter advice cooperates with `treesit-auto`.
 :PROPERTIES:
 :CUSTOM_ID: core-utils
 :END:
-
-*Purpose*
-Core hooks/utilities: timestamp, org auto-tangle, quick revert, lexical-binding header, read-only view-mode.
-
-*What it does*
-Adds hooks for after-save, org-tangle-on-save, find-file, read-only-mode.
-
-*Notes*
-None.
 
 #+begin_src emacs-lisp :tangle lisp/core/utils.el
   ;;; core/utils.el --- Core utility helpers -*- lexical-binding: t; -*-
@@ -1361,15 +1342,6 @@ None.
 :CUSTOM_ID: core-history
 :END:
 
-*Purpose*
-Persist cursor positions, recent files, minibuffer history; auto-revert changed files.
-
-*What it does*
-Enables `save-place-mode`, `recentf-mode`, `savehist-mode`, `global-auto-revert-mode`.
-
-*Notes*
-All built-in ⇒ `:straight nil`.
-
 #+begin_src emacs-lisp :tangle lisp/core/history.el
   ;;; core/history.el --- Session persistence & autorevert -*- lexical-binding: t; -*-
 
@@ -1422,18 +1394,6 @@ All built-in ⇒ `:straight nil`.
 :PROPERTIES:
 :CUSTOM_ID: core-editing
 :END:
-
-*Purpose*
-Modern structural editing, pairs, which-key, undo helpers, visual line wrap.
-
-*What it does*
-- Lisp: `paredit`(+disable `electric-pair-local-mode`), `show-paren-mode`, `puni`
-- UI aids: `which-key`, `ace-window`, `vundo`, `undo-fu`
-- Editing: `expand-region`, `aggressive-indent`, `delete-selection-mode`, `visual-line-mode`
-- Dired UI: `dired-filter`, `dired-subtree`
-
-*Notes*
-Built-ins use `:straight nil`.
 
 #+begin_src emacs-lisp :tangle lisp/core/editing.el
   ;;; core/editing.el --- Editing helpers & UX aids -*- lexical-binding: t; -*-
@@ -1490,15 +1450,6 @@ Built-ins use `:straight nil`.
 :CUSTOM_ID: core-eww
 :END:
 
-*Purpose*
-QoL for EWW: search with isearch primed, toggle images, history/bookmarks paths.
-
-*What it does*
-Defines `my/eww-search` & `my/eww-toggle-images`; sets paths.
-
-*Notes*
-EWW is built-in (`:straight nil`). Keybindings in `core/general.el`.
-
 #+begin_src emacs-lisp :tangle lisp/core/eww.el
   ;;; core/eww.el --- EWW helpers -*- lexical-binding: t; -*-
 
@@ -1537,15 +1488,6 @@ EWW is built-in (`:straight nil`). Keybindings in `core/general.el`.
 :PROPERTIES:
 :CUSTOM_ID: ui-font
 :END:
-
-*Purpose*
-Font setup for default, variable-pitch, emoji, ligatures.
-
-*What it does*
-Applies fonts and enables `ligature` in `prog-mode`.
-
-*Notes*
-Works for GUI frames/daemon.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-font.el
   ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
@@ -1590,7 +1532,7 @@ Works for GUI frames/daemon.
       (set-fontset-font t 'emoji
                         (font-spec :family (or my:emoji-font (my/system-emoji-font))))
       (message "[font] emoji: %s"
-  	     (or my:emoji-font (my/system-emoji-font)))))
+               (or my:emoji-font (my/system-emoji-font)))))
 
   (defun my/show-current-font ()
     "Echo the current default font family and point size."
@@ -1623,13 +1565,13 @@ Works for GUI frames/daemon.
 Theme management with `ef-themes` and `spacious-padding`, plus a **safe face-normalizer** that avoids setting face attributes to `nil` (which causes warnings in Emacs 30+).
 
 **What it does**
-- Keeps your original theme setup (incl. `(modus-themes-to-toggle . '(ef-frost ef-spring))`).
-- Adds `ui--normalize-faces-after-theme` to set problematic face attributes to `'unspecified` instead of `nil`.
-- Hooks the normalizer to `after-load-theme-hook` and runs it once at init.
+- Keeps your original theme setup (incl. `(ef-themes-to-toggle . '(ef-frost ef-spring))`).
+- Adds `ui--normalize-faces` to set problematic face attributes to `'unspecified` instead of `nil`.
+- Hooks the normalizer to theme enabling and runs it once at init.
 
 **Notes**
 If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`, this helper will correct it at runtime to prevent warnings like:
-`Warning: setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead.`
+=Warning: setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead.=
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-theme.el
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
@@ -1646,8 +1588,9 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
   ;;; Code:
 
   (leaf ef-themes :straight t
-    ;; Keep the user's original toggle pair as requested.
-    :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
+    ;; ef-themes toggle pair
+    :custom
+    ((ef-themes-to-toggle . '(ef-frost ef-spring)))
     :config
     (unless custom-enabled-themes
       (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t)))
@@ -1699,15 +1642,6 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
 :CUSTOM_ID: ui-modeline
 :END:
 
-*Purpose*
-Modeline, time, battery.
-
-*What it does*
-Enables doom-modeline and minions, shows time/battery.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/ui/ui-modeline.el
   ;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
 
@@ -1726,15 +1660,10 @@ None.
   (display-time-mode 1)
   (when (fboundp 'display-battery-mode) (display-battery-mode 1))
 
-  ;; (leaf doom-modeline :straight t
-  ;;   :hook (after-init-hook . doom-modeline-mode))
-
-  (leaf nano-modeline
-    :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
-    :require t
-    :init (setopt nano-modeline-padding '(0.20 . 0.25))
-    :config
-    (nano-modeline-text-mode t)
+  ;; ---- Try nano-modeline; fallback to doom-modeline if unavailable ----
+  (when (require 'nano-modeline nil t)
+    (setopt nano-modeline-padding '(0.20 . 0.25))
+    (when (fboundp 'nano-modeline-mode) (nano-modeline-mode 1))
     (add-hook 'prog-mode-hook            #'nano-modeline-prog-mode)
     (add-hook 'text-mode-hook            #'nano-modeline-text-mode)
     (add-hook 'org-mode-hook             #'nano-modeline-org-mode)
@@ -1749,6 +1678,10 @@ None.
     (add-hook 'org-capture-mode-hook     #'nano-modeline-org-capture-mode)
     (add-hook 'org-agenda-mode-hook      #'nano-modeline-org-agenda-mode))
 
+  (unless (featurep 'nano-modeline)
+    (when (require 'doom-modeline nil t)
+      (add-hook 'after-init-hook #'doom-modeline-mode)))
+
   (provide 'ui/ui-modeline)
   ;;; ui/ui-modeline.el ends here
 #+end_src
@@ -1757,15 +1690,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: ui-window
 :END:
-
-*Purpose*
-Window management: fullscreen, zoom, tabs, save/restore layout.
-
-*What it does*
-For GUI frames set fullscreen; zoom-mode; tab-bar/line; save/restore functions.
-
-*Notes*
-None.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-window.el
   ;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
@@ -1818,15 +1742,6 @@ None.
 :CUSTOM_ID: ui-treemacs
 :END:
 
-*Purpose*
-Sidebar project/file explorer with icons.
-
-*What it does*
-Treemacs + nerd-icons-dired.
-
-*Notes*
-GUI only.
-
 #+begin_src emacs-lisp :tangle lisp/ui/ui-treemacs.el
   ;;; ui/ui-treemacs.el --- Treemacs configuration -*- lexical-binding: t; -*-
 
@@ -1853,15 +1768,6 @@ GUI only.
 :PROPERTIES:
 :CUSTOM_ID: ui-clipboard
 :END:
-
-*Purpose*
-Use macOS clipboard seamlessly from Emacs.
-
-*What it does*
-Enables `pbcopy` on macOS frames.
-
-*Notes*
-Conditional on `window-system` being `mac`/`ns`.
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-clipboard.el
   ;;; ui/ui-clipboard.el --- macOS clipboard integration -*- lexical-binding: t; -*-
@@ -1989,15 +1895,6 @@ Conditional on `window-system` being `mac`/`ns`.
 :CUSTOM_ID: org-core
 :END:
 
-*Purpose*
-Core Org: GTD workflow, agenda, capture, refile, paths.
-
-*What it does*
-Sets directories, agenda files, TODO keywords, refile targets, capture templates.
-
-*Notes*
-`org` is installed via ELPA here (`:straight t`)—必要なら `:straight nil` に変更可。
-
 #+begin_src emacs-lisp :tangle lisp/orgx/org-core.el
   ;;; orgx/org-core.el --- Org Mode core configuration -*- lexical-binding: t; -*-
 
@@ -2075,10 +1972,6 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
 :CUSTOM_ID: org-visual
 :END:
 
-*Purpose*: Provide modern Org Mode visual enhancements.
-*What it does*: Enables `org-modern` for indentation, pretty entities, and agenda visuals.
-*Notes*: Removed `org-superstar` (redundant & conflicts). Use `org-modern` as default.
-
 #+begin_src emacs-lisp :tangle lisp/orgx/org-visual.el
   ;;; orgx/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
 
@@ -2094,7 +1987,7 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
   (eval-when-compile (require 'leaf))
 
   (leaf org-modern
-    :straight nil
+    :straight t
     :hook (org-mode . org-modern-mode)
     :custom
     ((org-startup-indented . t)
@@ -2123,15 +2016,6 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
 :PROPERTIES:
 :CUSTOM_ID: org-extensions
 :END:
-
-*Purpose*
-Org extensions: journal, roam, download, toc-org, cliplink.
-
-*What it does*
-Configures those packages and their paths.
-
-*Notes*
-None.
 
 #+begin_src emacs-lisp :tangle lisp/orgx/org-extensions.el
   ;;; orgx/org-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
@@ -2170,15 +2054,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: org-export
 :END:
-
-*Purpose*: Configure Org export backends (LaTeX, Hugo, Markdown).
-*What it does*:
-- Tweak LaTeX export process
-- Enable Hugo export (`ox-hugo`)
-- Provide Markdown preview/editing helpers
-*Notes*:
-- Use `with-eval-after-load 'ox-latex` instead of `leaf org-latex` (safer)
-- Markdown tools (`markdown-mode`, `edit-indirect`) included here for convenience
 
 #+begin_src emacs-lisp :tangle lisp/orgx/org-export.el
   ;;; orgx/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
@@ -2228,17 +2103,6 @@ None.
 :CUSTOM_ID: dev-lsp
 :END:
 
-*Purpose*
-Language Server Protocol support.
-
-*What it does*
-- `eglot` (when `my:use-lsp` is `'eglot`)
-- `lsp-mode` (when `my:use-lsp` is `'lsp`)
-- Utility: temporarily enlarge `read-process-output-max`.
-
-*Notes*
-Choose backend via `my:use-lsp`.
-
 #+begin_src emacs-lisp :tangle lisp/dev/dev-lsp.el
   ;;; dev/dev-lsp.el --- LSP support -*- lexical-binding: t; -*-
 
@@ -2285,15 +2149,6 @@ Choose backend via `my:use-lsp`.
 :CUSTOM_ID: dev-ai
 :END:
 
-*Purpose*
-AI-assisted coding via Aidermacs.
-
-*What it does*
-Supports OpenRouter/OpenAI backends; sets default model and backend.
-
-*Notes*
-Warns when no API keys.
-
 #+begin_src emacs-lisp :tangle lisp/dev/dev-ai.el
   ;;; dev/dev-ai.el --- AI-assisted development -*- lexical-binding: t; -*-
 
@@ -2333,15 +2188,6 @@ Warns when no API keys.
 :CUSTOM_ID: dev-term
 :END:
 
-*Purpose*
-Terminal integration with vterm.
-
-*What it does*
-Loads vterm package.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/dev/dev-term.el
   ;;; dev/dev-term.el --- Terminal integration -*- lexical-binding: t; -*-
 
@@ -2365,15 +2211,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: dev-build
 :END:
-
-*Purpose*
-Build system integration (Makefile, compile, ANSI color).
-
-*What it does*
-Strict tabs for Makefile; compile bindings; colorize compilation buffers.
-
-*Notes*
-None.
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-build.el
   ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
@@ -2424,15 +2261,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: dev-docker
 :END:
-
-*Purpose*
-Docker development support.
-
-*What it does*
-dockerfile-mode, yaml-mode for compose, docker.el dashboard, tramp-container, tempel snippets.
-
-*Notes*
-None.
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-docker.el
   ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
@@ -2492,10 +2320,6 @@ None.
 :CUSTOM_ID: dev-web-core
 :END:
 
-*Purpose*: Provide modern syntax highlighting and project management.
-*What it does*: Configures built-in `project`, `files`, `treesit`, and associates file extensions with Tree-sitter modes. Also enables EditorConfig.
-*Notes*: Tree-sitter is native in Emacs 30+. Ensure grammar installation via `M-x treesit-install-language-grammar`.
-
 #+begin_src emacs-lisp :tangle lisp/dev/web-core.el
   ;;; web-core.el --- Treesit & project core -*- lexical-binding: t; -*-
 
@@ -2550,10 +2374,6 @@ None.
 :CUSTOM_ID: dev-lsp-web
 :END:
 
-*Purpose*: Enable LSP support for TypeScript, JSON, CSS, HTML, YAML, Docker, and Prisma.
-*What it does*: Loads `lsp-mode` and `lsp-ui` **only when `my:use-lsp` is `'lsp`**.
-*Notes*: Prevents conflicts with `eglot` by wrapping the entire configuration in a conditional.
-
 #+begin_src emacs-lisp :tangle lisp/dev/lsp-web.el
   ;;; lsp-web.el --- LSP for web stack -*- lexical-binding: t; -*-
 
@@ -2581,7 +2401,7 @@ None.
              (css-ts-mode        . lsp-deferred)
              (html-mode          . lsp-deferred)
              (yaml-ts-mode       . lsp-deferred)
-  	   (dockerfile-mode    . lsp-deferred)
+             (dockerfile-mode    . lsp-deferred)
              (prisma-mode        . lsp-deferred))
       :custom ((lsp-enable-file-watchers . t)
                (lsp-file-watch-threshold . 5000)
@@ -2620,10 +2440,6 @@ None.
 :CUSTOM_ID: dev-format
 :END:
 
-*Purpose*: Provide auto-formatting for TypeScript/JavaScript/JSON/CSS/Markdown.
-*What it does*: Configures Apheleia with `prettierd`/`prettier` formatters and enables global mode.
-*Notes*: `prettierd` is preferred for performance; falls back to `npx prettier`.
-
 #+begin_src emacs-lisp :tangle lisp/dev/format.el
   ;;; format.el --- Prettier/ESLint via Apheleia -*- lexical-binding: t; -*-
 
@@ -2653,10 +2469,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: dev-infra-modes
 :END:
-
-*Purpose*: Enable syntax modes for infrastructure files (`.env`, Compose, TOML, Makefiles).
-*What it does*: Configures `docker-compose-mode`, `dotenv-mode`, `toml-mode`, and builtin `make-mode`.
-*Notes*: Built-in `make-mode` remaps `Makefile` to GNU Make variant.
 
 #+begin_src emacs-lisp :tangle lisp/dev/infra-modes.el
   ;;; infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
@@ -2691,10 +2503,6 @@ None.
 :CUSTOM_ID: dev-sql
 :END:
 
-*Purpose*: Provide SQL/PostgreSQL development helpers and formatting.
-*What it does*: Configures built-in `sql` with indentation mode, and uses `sqlformat` for auto-formatting with `pgformatter`.
-*Notes*: Ensure `pgformatter` is installed in your system PATH.
-
 #+begin_src emacs-lisp :tangle lisp/dev/sql.el
   ;;; lisp/dev/sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
   (eval-when-compile (require 'leaf))
@@ -2721,10 +2529,6 @@ None.
 :CUSTOM_ID: dev-rest
 :END:
 
-*Purpose*: Provide HTTP request testing inside Emacs.
-*What it does*: Installs `restclient` and `restclient-jq` for `.http` files with JSON parsing.
-*Notes*: Useful for API testing in Next.js, Ollama, Qdrant workflows.
-
 #+begin_src emacs-lisp :tangle lisp/dev/rest.el
   ;;; rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
 
@@ -2744,22 +2548,13 @@ None.
   (leaf restclient-jq :straight t :after restclient)
 
   (provide 'dev/rest)
-  ;;; rest.el ends here
+  ;;; dev/rest.el ends here
 #+end_src
 
 *** vcs/vcs-magit.el
 :PROPERTIES:
 :CUSTOM_ID: vcs-magit
 :END:
-
-*Purpose*
-Magit bindings.
-
-*What it does*
-Binds `C-x g` to `magit-status`.
-
-*Notes*
-None.
 
 #+begin_src emacs-lisp :tangle lisp/vcs/vcs-magit.el
   ;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
@@ -2782,10 +2577,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: vcs-gutter
 :END:
-
-*Purpose*: Show Git changes in the fringe.
-*What it does*: Uses `diff-hl` for inline VC indicators and integrates with Magit refresh.
-*Notes*: Removed `git-gutter` to avoid duplication and possible conflicts.
 
 #+begin_src emacs-lisp :tangle lisp/vcs/vcs-gutter.el
   ;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
@@ -2817,15 +2608,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: vcs-forge
 :END:
-
-*Purpose*
-Forge: GitHub/GitLab issues/PRs integration.
-
-*What it does*
-Loads `forge` after `magit`.
-
-*Notes*
-Optional.
 
 #+begin_src emacs-lisp :tangle lisp/vcs/vcs-forge.el
   ;;; vcs/vcs-forge.el --- GitHub/GitLab integration via Forge -*- lexical-binding: t; -*-
@@ -2859,15 +2641,6 @@ Optional.
 :CUSTOM_ID: utils-functions
 :END:
 
-*Purpose*
-General utility helpers.
-
-*What it does*
-Directory ensure, safe load.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/utils/utils-functions.el
   ;;; utils/utils-functions.el --- General utility functions -*- lexical-binding: t; -*-
 
@@ -2875,8 +2648,6 @@ None.
   ;; License: GNU GPL v3 or later
 
   ;;; Code:
-
-  ;;; lisp/utils/utils-functions.el --- General utility functions -*- lexical-binding: t; -*-
 
   ;; Define only if not already defined (e.g., from early-init).
   (unless (fboundp 'my/ensure-directory-exists)
@@ -2911,15 +2682,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: utils-scratch
 :END:
-
-*Purpose*
-Ensure `*scratch*` buffer existence and quick recreate.
-
-*What it does*
-Creates scratch on kill, offers recreate command.
-
-*Notes*
-None.
 
 #+begin_src emacs-lisp :tangle lisp/utils/utils-scratch.el
   ;;; utils/utils-scratch.el --- Scratch buffer helpers -*- lexical-binding: t; -*-
@@ -2958,15 +2720,6 @@ None.
 :CUSTOM_ID: utils-backup
 :END:
 
-*Purpose*
-Backup/auto-save helpers.
-
-*What it does*
-Deletes old backups on startup.
-
-*Notes*
-Keeps `.var/backup/` clean.
-
 #+begin_src emacs-lisp :tangle lisp/utils/utils-backup.el
   ;;; utils/utils-backup.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
 
@@ -2999,15 +2752,6 @@ Keeps `.var/backup/` clean.
 :CUSTOM_ID: utils-async
 :END:
 
-*Purpose*
-Run tasks safely async.
-
-*What it does*
-Provides `my/safe-run-async`.
-
-*Notes*
-None.
-
 #+begin_src emacs-lisp :tangle lisp/utils/utils-async.el
   ;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
 
@@ -3032,16 +2776,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: utils-search-nav
 :END:
-
-*Purpose*: Provide project-level search and navigation tools.
-*What it does*:
-- Use `consult-ripgrep` (from completion-consult) for live grep if `rg` is installed
-- Provide `dumb-jump` as a fallback xref backend (when no LSP available)
-- Optional: `multiple-cursors` for multi-editing
-*Notes*:
-- Removed `leaf rg` (redundant with consult)
-- `projectile` dropped in favor of built-in `project.el` (Emacs 30+)
-- Safer and avoids duplication with `completion-consult.el`
 
 #+begin_src emacs-lisp :tangle lisp/utils/search-nav.el
   ;;; utils/search-nav.el --- Project search & navigation -*- lexical-binding: t; -*-
@@ -3076,22 +2810,6 @@ None.
 :PROPERTIES:
 :CUSTOM_ID: personal-user
 :END:
-
-**Purpose**
-Personal, device-specific settings for macOS-first workflows: identity, fonts, directories, input source switching, pointing-device tuning, and Apple Music control.
-
-**What it does**
-- Sets user identity and preferred fonts (picked up by `ui/ui-font.el`).
-- Establishes personal directories (cloud/org/blog) and ensures their presence.
-- Recomputes `org-directory` and agenda files.
-- Configures **macOS IME auto-switch** via `sis` (with `macism`).
-- Tunes Logitech MX Ergo S scrolling and simple mouse gestures.
-- Provides **Apple Music** control (play/pause, next/prev, playlist, info) with a personal hydra.
-
-**Notes**
-- Relies on helpers and paths prepared in `early-init.el` (e.g. `my/ensure-directory-exists`, `my:d`, `my:d:var`, etc.).
-- `sis` requires macOS and `macism` (`brew install macism`).
-- Public interactive commands are annotated with `;;;###autoload`.
 
 #+begin_src emacs-lisp :tangle (eval (format "personal/%s.el" (user-login-name)))
   ;;; user.el --- Personal configuration -*- lexical-binding: t; -*-
@@ -3229,7 +2947,6 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
                  (let ((output (string-trim (buffer-string))))
                    (funcall callback output)))
                (kill-buffer (process-buffer process))))))))
-
 
     (defun my/apple-music-osascript-sync (script)
       "Run AppleScript SCRIPT synchronously and return trimmed output."
