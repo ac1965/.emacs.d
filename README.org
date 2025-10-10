@@ -436,7 +436,7 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
   ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
   ;; License: GNU GPL v3 or later
   ;;
-  ;; $Lastupdate: 2025/10/09 16:44:59 $
+  ;; $Lastupdate: 2025/10/10 17:50:22 $
   ;;
   ;;; Commentary:
   ;; Entry point for Emacs 30+ configuration.
@@ -764,6 +764,7 @@ Central loader for modular configuration under `lisp/`. Uses **module namespace 
       core/eww
 
       ;; UI
+      ui/ui-modules
       ui/ui-font
       ui/ui-theme
       ui/ui-modeline
@@ -1493,6 +1494,53 @@ EWW is built-in (`:straight nil`). Keybindings in `core/general.el`.
   ;;; core/eww.el ends here
 #+end_src
 
+*** ui/ui-modules.el
+:PROPERTIES:
+:CUSTOM_ID: ui-bundles-switch
+:END:
+This optional shim delegates UI setup to a bundle if you have one installed. Put this module **before** other UI modules (theme/modeline/etc.).
+- =my:use:modules= can be ='none=, ='doom=, or ='nano=.
+- Each bundle is expected to =provide= its feature: =(provide 'doom-modules)= or =(provide 'nano-modules)=.
+
+#+begin_src emacs-lisp :tangle lisp/ui/ui-modules.el
+  ;;; ui/ui-modules.el --- UI bundle switcher -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Load a UI bundle (doom-modules or nano-modules) if requested and available.
+  ;; Safe: does nothing if bundle isn't installed.
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x)) ;; when-let
+
+  (defgroup my:ui-modules nil
+    "UI bundle switcher."
+    :group 'convenience)
+
+  (defcustom my:use:modules 'none
+    "Which UI bundle to use. One of: 'none, 'doom, 'nano."
+    :type '(choice (const none) (const doom) (const nano))
+    :group 'my:ui-modules)
+
+  (defun my/require-soft (feature)
+    "Try to (require FEATURE) quietly; return non-nil on success."
+    (when feature
+      (condition-case err
+          (progn (require feature) t)
+        (error (message "[ui-modules] Missing feature: %s. Ensure it is on `load-path' and `(provide '%s)'."
+                        feature feature)
+               nil))))
+
+  (let ((ok
+         (pcase my:use:modules
+           ('doom (my/require-soft 'ui/ui-doom-modeline))
+           ('nano (my/require-soft 'ui/ui-nano-modeline))
+           (_     nil))))
+    (when ok
+      (message "[ui-modules] Loaded bundle: %s" my:use:modules)))
+
+  (provide 'ui/ui-modules)
+  ;;; ui/ui-modules.el ends here
+#+end_src
+
 *** ui/ui-font.el
 :PROPERTIES:
 :CUSTOM_ID: ui-font
@@ -1688,19 +1736,17 @@ If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`,
   (provide 'ui/ui-theme)
   ;;; ui/ui-theme.el ends here
 #+end_src
+
 *** ui/ui-modeline.el
 :PROPERTIES:
 :CUSTOM_ID: ui-modeline
 :END:
 
-*Purpose*
-Modeline, time, battery.
+**Purpose**
 
-*What it does*
-Enables doom-modeline and minions, shows time/battery.
+**What it does**
 
-*Notes*
-None.
+**Notes**
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-modeline.el
   ;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
@@ -1719,6 +1765,55 @@ None.
         display-time-24hr-format t)
   (display-time-mode 1)
   (when (fboundp 'display-battery-mode) (display-battery-mode 1))
+
+  (provide 'ui/ui-modeline)
+  ;;; ui/ui-modeline.el ends here
+#+end_src
+
+*** ui/ui-doom-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-doom-modeline
+:END:
+
+**Purpose**
+
+**What it does**
+
+**Notes**
+
+#+begin_src emacs-lisp :tangle lisp/ui/ui-doom-modeline.el
+  ;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
+
+  ;;; Code:
+
+  (leaf doom-modeline :straight t
+    :hook (after-init-hook . doom-modeline-mode))
+
+  (provide 'ui/ui-doom-modeline)
+  ;;; ui/ui-doom-modeline.el ends here
+#+end_src
+
+*** ui/ui-nano-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-nano-modeline
+:END:
+
+**Purpose**
+
+**What it does**
+
+**Notes**
+
+#+begin_src emacs-lisp :tangle lisp/ui/ui-nano-modeline.el
+  ;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
+
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
+
+  ;;; Code:
 
   ;; (leaf doom-modeline :straight t
   ;;   :hook (after-init-hook . doom-modeline-mode))
@@ -1743,8 +1838,8 @@ None.
     (add-hook 'org-capture-mode-hook     #'nano-modeline-org-capture-mode)
     (add-hook 'org-agenda-mode-hook      #'nano-modeline-org-agenda-mode))
 
-  (provide 'ui/ui-modeline)
-  ;;; ui/ui-modeline.el ends here
+  (provide 'ui/ui-nano-modeline)
+  ;;; ui/ui-nano-modeline.el ends here
 #+end_src
 
 *** ui/ui-window.el
@@ -3117,13 +3212,16 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
           user-mail-address "tjy1965@gmail.com"
           inhibit-compacting-font-caches t
           plstore-cache-passphrase-for-symmetric-encryption t)
-
+    
     ;; Fonts (picked up by ui/ui-font.el)
     (setq my:font-default "JetBrains Mono NL"
           my:font-alt     "Noto Sans JP"
           my:emoji-font   "Apple Color Emoji"
           my:font-size    20)
-
+    
+    ;; Modelines
+    (setq my:use:modules 'nano)
+    
     ;; Directories
     (defvar my:d:cloud
       (expand-file-name "Documents/" (getenv "HOME"))
