@@ -369,21 +369,40 @@ Provide early, minimal startup optimizations and a hidden, tidy directory layout
         auto-save-list-file-prefix nil)
   (my/ensure-directory-exists (expand-file-name "backups/" my:d:var))
 
-  ;; 11) Turn off bars after first frame
+  ;; 11) UI bars off + maximize all frames
   (custom-set-variables
    ;; custom-set-variables was added by Custom.
    '(inhibit-startup-screen t)
    '(inhibit-startup-message t)
    '(inhibit-startup-echo-area-message t)
    '(initial-scratch-message nil)
+
+   ;; Resize frames in pixel units (improves maximize accuracy)
+   '(frame-resize-pixelwise t)
+
+   ;; First frame: open maximized with basic borders/fringes
    '(initial-frame-alist
-     '((left-fringe . 0)
-       (right-fringe   . 0)
+     '((fullscreen . fullboth)
+       (undecorated . nil)
+       (left-fringe . 0)
+       (right-fringe . 0)
        (internal-border-width . 8)
        (tool-bar-lines . 0)))
+
+   ;; All subsequent frames: always open maximized with the same look
+   '(default-frame-alist
+     '((fullscreen . fullboth)
+       (undecorated . nil)
+       (internal-border-width . 8)
+       (left-fringe . 0)
+       (right-fringe . 0)))
+
+   ;; Explicitly disable UI bars for consistency
    '(menu-bar-mode nil)
    '(scroll-bar-mode nil)
    '(tool-bar-mode nil)
+
+   ;; Existing settings retained (adjust as needed)
    '(initial-buffer-choice t)
    '(initial-major-mode 'fundamental-mode)
    '(frame-inhibit-implied-resize t)
@@ -395,8 +414,12 @@ Provide early, minimal startup optimizations and a hidden, tidy directory layout
    '(window-divider-default-right-width 16)
    '(window-divider-default-places 'right-only))
 
-  ;; For Emacs v29
-  (add-to-list 'default-frame-alist '(undecorated . t))
+  ;; NOTE:
+  ;; - If you prefer true fullscreen (covering the OS menu/Dock), use:
+  ;;     (fullscreen . fullboth)
+  ;;   instead of (fullscreen . maximized).
+  ;; - On macOS, to avoid the native fullscreen animation, set in init.el:
+  ;;     (setq ns-use-native-fullscreen nil)
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -426,212 +449,211 @@ Main entry point for Emacs 30+ that bootstraps **straight.el + leaf**, applies s
 - Built-ins explicitly declare `:straight nil` per policy.
 - You can toggle LSP backend by setting `(setq my:use-lsp 'eglot)` or `'lsp`.
 
-#+begin_src emacs-lisp :tangle init.el
-  ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; $Lastupdate: 2025/10/08 17:25:00 $
-  ;;
-  ;;; Commentary:
-  ;; Entry point for Emacs 30+ configuration.
-  ;; - Bootstraps package management (straight.el + leaf)
-  ;; - Defines customization groups and defaults
-  ;; - Configures basic UI and performance
-  ;; - Loads modular configuration via lisp/modules.el
-  ;; - Optionally loads personal overrides
-  ;;;
-  ;;; Code:
+ #+begin_src emacs-lisp :tangle init.el
+   ;;; init.el --- Main initialization -*- lexical-binding: t; -*-
+   ;;
+   ;; Copyright (c) 2021-2025
+   ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+   ;; License: GNU GPL v3 or later
+   ;;
+   ;; $Lastupdate: 2025/10/11 11:28:01 $
+   ;;
+   ;;; Commentary:
+   ;; Entry point for Emacs 30+ configuration.
+   ;; - Bootstraps package management (straight.el + leaf)
+   ;; - Defines customization groups and defaults
+   ;; - Configures basic UI and performance
+   ;; - Loads modular configuration via lisp/modules.el
+   ;; - Optionally loads personal overrides
+   ;;;
+   ;;; Code:
 
-  ;;;; Bootstrap straight.el -----------------------------------------------------
-  (require 'url) ;; for url-retrieve-synchronously
-  (defvar bootstrap-version 7)
-  (let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
-         (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
-    (unless (file-exists-p bootstrap-file)
-      (condition-case err
-          (with-current-buffer
-              (url-retrieve-synchronously
-               "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-               'silent 'inhibit-cookies)
-            (goto-char (point-max))
-            (eval-print-last-sexp))
-        (error (user-error "[straight] bootstrap failed: %s"
-                           (error-message-string err)))))
-    (load bootstrap-file nil 'nomessage))
+   ;;;; Bootstrap straight.el -----------------------------------------------------
+   (require 'url) ;; for url-retrieve-synchronously
+   (defvar bootstrap-version 7)
+   (let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
+          (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
+     (unless (file-exists-p bootstrap-file)
+       (condition-case err
+           (with-current-buffer
+               (url-retrieve-synchronously
+                "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+                'silent 'inhibit-cookies)
+             (goto-char (point-max))
+             (eval-print-last-sexp))
+         (error (user-error "[straight] bootstrap failed: %s"
+                            (error-message-string err)))))
+     (load bootstrap-file nil 'nomessage))
 
-  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout org))
-    (ignore-errors (straight-use-package pkg)))
+   (dolist (pkg '(leaf leaf-keywords leaf-convert blackout hydra org))
+     (ignore-errors (straight-use-package pkg)))
 
-  (eval-when-compile
-    (require 'leaf)
-    (require 'leaf-keywords))
-  (when (fboundp 'leaf-keywords-init)
-    (leaf-keywords-init))
+   (eval-when-compile
+     (require 'leaf)
+     (require 'leaf-keywords))
+   (when (fboundp 'leaf-keywords-init)
+     (leaf-keywords-init))
 
-  (require 'org)
+   (require 'org)
 
-  ;;;; Customization group --------------------------------------------------------
-  (defgroup my nil
-    "User customizations."
-    :group 'convenience)
+   ;;;; Customization group --------------------------------------------------------
+   (defgroup my:lsp-modules nil
+     "User customizations."
+     :group 'convenience)
 
-  (defcustom my:use-lsp 'eglot
-    "Select which LSP client to use. Valid values: `eglot' or `lsp`."
-    :type '(choice (const :tag "Eglot" eglot)
-                   (const :tag "lsp-mode" lsp))
-    :group 'my)
+   (defcustom my:use-lsp 'eglot
+     "Select which LSP client to use. Valid values: `eglot' or `lsp`."
+     :type '(choice (const :tag "Eglot" eglot)
+                    (const :tag "lsp-mode" lsp))
+     :group 'my:lsp-modules)
 
-  ;;;; Performance tweaks ---------------------------------------------------------
-  (defvar my:orig:read-process-output-max
-    (and (boundp 'read-process-output-max) read-process-output-max))
-  (when (boundp 'read-process-output-max)
-    ;; 4MB improves LSP and terminals throughput.
-    (setq read-process-output-max (* 4 1024 1024)))
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              (when (boundp 'read-process-output-max)
-                (setq read-process-output-max my:orig:read-process-output-max))))
+   ;;;; Performance tweaks ---------------------------------------------------------
+   (defvar my:orig:read-process-output-max
+     (and (boundp 'read-process-output-max) read-process-output-max))
+   (when (boundp 'read-process-output-max)
+     ;; 4MB improves LSP and terminals throughput.
+     (setq read-process-output-max (* 4 1024 1024)))
+   (add-hook 'emacs-startup-hook
+             (lambda ()
+               (when (boundp 'read-process-output-max)
+                 (setq read-process-output-max my:orig:read-process-output-max))))
 
-  (leaf gcmh
-    :straight t
-    :custom
-    ((gcmh-idle-delay . 5)
-     (gcmh-high-cons-threshold . 16777216))
-    :config
-    (gcmh-mode 1))
+   (leaf gcmh
+     :straight t
+     :custom
+     ((gcmh-idle-delay . 5)
+      (gcmh-high-cons-threshold . 16777216))
+     :config
+     (gcmh-mode 1))
 
-  ;;;; Basic UI and editing defaults ---------------------------------------------
-  (leaf emacs
-    :straight nil
-    :init
-    ;; Unset disruptive keys
-    (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
-      (when (lookup-key (current-global-map) (kbd k))
-        (keymap-global-unset k)))
-    ;; Prefer CAPE dabbrev if present
-    (when (fboundp 'cape-dabbrev)
-      (keymap-global-set "M-/" #'cape-dabbrev))
-    ;; Smooth scrolling (Emacs 29+)
-    (when (fboundp 'pixel-scroll-precision-mode)
-      (pixel-scroll-precision-mode 1))
-    :config
-    (setopt inhibit-startup-screen        t
-            initial-scratch-message       nil
-            use-short-answers             t
-            create-lockfiles              nil
-            make-backup-files             t
-            delete-old-versions           t
-            version-control               t
-            idle-update-delay             0.2
-            ring-bell-function            #'ignore
-            display-line-numbers-type     'relative)
-    (electric-pair-mode 1)
-    (add-hook 'prog-mode-hook #'display-line-numbers-mode)
-    (auto-save-visited-mode 1))
+   ;;;; Basic UI and editing defaults ---------------------------------------------
+   (leaf emacs
+     :straight nil
+     :init
+     ;; Unset disruptive keys
+     (dolist (k '("C-z" "C-x C-z" "M-z" "M-m" "M-/"))
+       (when (lookup-key (current-global-map) (kbd k))
+         (keymap-global-unset k)))
+     ;; Prefer CAPE dabbrev if present
+     (when (fboundp 'cape-dabbrev)
+       (keymap-global-set "M-/" #'cape-dabbrev))
+     ;; Smooth scrolling (Emacs 29+)
+     (when (fboundp 'pixel-scroll-precision-mode)
+       (pixel-scroll-precision-mode 1))
+     :config
+     (setopt inhibit-startup-screen        t
+             initial-scratch-message       nil
+             use-short-answers             t
+             create-lockfiles              nil
+             make-backup-files             t
+             delete-old-versions           t
+             version-control               t
+             idle-update-delay             0.2
+             ring-bell-function            #'ignore
+             display-line-numbers-type     'relative)
+     (electric-pair-mode 1)
+     (add-hook 'prog-mode-hook #'display-line-numbers-mode)
+     (auto-save-visited-mode 1))
 
-  ;; Modifier keys (per-OS)
-  (leaf my:modifier
-    :straight nil
-    :config
-    (pcase system-type
-      ('darwin
-       (setq mac-option-modifier 'meta
-             mac-command-modifier 'super
-             mac-control-modifier 'control
-             mac-function-modifier 'hyper))
-      ('windows-nt
-       (setq w32-lwindow-modifier 'super
-             w32-rwindow-modifier 'super
-             w32-apps-modifier   'hyper))
-      (_ nil)))
+   ;; Modifier keys (per-OS)
+   (leaf my:modifier
+     :straight nil
+     :config
+     (pcase system-type
+       ('darwin
+        (setq mac-option-modifier 'meta
+              mac-command-modifier 'super
+              mac-control-modifier 'control
+              mac-function-modifier 'hyper))
+       ('windows-nt
+        (setq w32-lwindow-modifier 'super
+              w32-rwindow-modifier 'super
+              w32-apps-modifier   'hyper))
+       (_ nil)))
 
-  ;;;; Files and environment ------------------------------------------------------
-  (leaf no-littering
-    :straight t
-    :init
-    ;; Align with early-init hidden dirs
-    (setq no-littering-etc-directory (file-name-as-directory (or (bound-and-true-p my:d:etc) (expand-file-name ".etc/" user-emacs-directory)))
-          no-littering-var-directory (file-name-as-directory (or (bound-and-true-p my:d:var) (expand-file-name ".var/" user-emacs-directory)))))
+   ;;;; Files and environment ------------------------------------------------------
+   (leaf no-littering
+     :straight t
+     :init
+     ;; Align with early-init hidden dirs
+     (setq no-littering-etc-directory (file-name-as-directory (or (bound-and-true-p my:d:etc) (expand-file-name ".etc/" user-emacs-directory)))
+           no-littering-var-directory (file-name-as-directory (or (bound-and-true-p my:d:var) (expand-file-name ".var/" user-emacs-directory)))))
 
-  (leaf exec-path-from-shell
-    :straight t
-    :if (memq window-system '(mac ns))
-    :custom ((exec-path-from-shell-check-startup-files . nil)
-             (exec-path-from-shell-arguments . '("-l" "-i"))
-             (exec-path-from-shell-variables
-              . '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
-                  "OPENROUTER_API_KEY" "OPENAI_API_KEY")))
-    :config
-    (ignore-errors (exec-path-from-shell-initialize)))
+   (leaf exec-path-from-shell
+     :straight t
+     :if (memq window-system '(mac ns))
+     :custom ((exec-path-from-shell-check-startup-files . nil)
+              (exec-path-from-shell-arguments . '("-l" "-i"))
+              (exec-path-from-shell-variables
+               . '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
+                   "OPENROUTER_API_KEY" "OPENAI_API_KEY")))
+     :config
+     (ignore-errors (exec-path-from-shell-initialize)))
 
-  ;; Prefer Homebrew paths on macOS (Apple Silicon/Intel)
-  (when (eq system-type 'darwin)
-    (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
-      (when (and (file-directory-p p)
-                 (not (member p exec-path)))
-        (add-to-list 'exec-path p)
-        (setenv "PATH" (concat p ":" (getenv "PATH"))))))
+   ;; Prefer Homebrew paths on macOS (Apple Silicon/Intel)
+   (when (eq system-type 'darwin)
+     (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
+       (when (and (file-directory-p p)
+                  (not (member p exec-path)))
+         (add-to-list 'exec-path p)
+         (setenv "PATH" (concat p ":" (getenv "PATH"))))))
 
-  ;; Dired defaults (GNU ls if available)
-  (leaf dired
-    :straight nil
-    :config
-    (cond
-     ((and (eq system-type 'darwin) (executable-find "gls"))
-      (setq insert-directory-program "gls"
-            dired-use-ls-dired t
-            dired-listing-switches "-aBhl --group-directories-first"))
-     (t
-      (setq dired-use-ls-dired nil
-            dired-listing-switches "-alh"))))
+   ;; Dired defaults (GNU ls if available)
+   (leaf dired
+     :straight nil
+     :config
+     (cond
+      ((and (eq system-type 'darwin) (executable-find "gls"))
+       (setq insert-directory-program "gls"
+             dired-use-ls-dired t
+             dired-listing-switches "-aBhl --group-directories-first"))
+      (t
+       (setq dired-use-ls-dired nil
+             dired-listing-switches "-alh"))))
 
-  ;;;; Misc helpers ---------------------------------------------------------------
-  (leaf hydra :straight t :commands (defhydra))
+   ;; Respect custom-file from early-init and load quietly if present
+   (setq custom-file (or (bound-and-true-p my:f:custom) custom-file))
+   (when (and custom-file (file-readable-p custom-file))
+     (ignore-errors (load custom-file nil 'nomessage)))
 
-  ;; Respect custom-file from early-init and load quietly if present
-  (setq custom-file (or (bound-and-true-p my:f:custom) custom-file))
-  (when (and custom-file (file-readable-p custom-file))
-    (ignore-errors (load custom-file nil 'nomessage)))
+   ;; Safe file loader (utility)
+   (defun my/safe-load-file (file &optional noerror)
+     "Load FILE safely. If NOERROR is non-nil, log instead of raising."
+     (when (and file (file-exists-p file))
+       (condition-case err
+           (load file nil 'nomessage)
+         (error
+          (funcall (if noerror #'message #'user-error)
+                   "[load] failed to load %s: %s"
+                   file (error-message-string err))))))
 
-  ;; Safe file loader (utility)
-  (defun my/safe-load-file (file &optional noerror)
-    "Load FILE safely. If NOERROR is non-nil, log instead of raising."
-    (when (and file (file-exists-p file))
-      (condition-case err
-          (load file nil 'nomessage)
-        (error
-         (funcall (if noerror #'message #'user-error)
-                  "[load] failed to load %s: %s"
-                  file (error-message-string err))))))
+   ;;;; User-specific overrides ----------------------------------------------------
+   (my/safe-load-file
+    (expand-file-name
+     (concat "personal/" user-login-name ".el")
+     (or (bound-and-true-p my:d) user-emacs-directory))
+    t)
 
-  ;;;; User-specific overrides ----------------------------------------------------
-  (my/safe-load-file (expand-file-name (concat "personal/" user-login-name ".el")
-                                       (or (bound-and-true-p my:d) user-emacs-directory))
-                     t)
+   ;;;; Modular configuration loader ----------------------------------------------
+   (let* ((root (or (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d) my:d)
+                    user-emacs-directory))
+          (lisp-dir (expand-file-name "lisp" root)))
+     (add-to-list 'load-path lisp-dir)
+     ;; lisp/modules.el — central loader that specifies which files to load.
+     (require 'modules nil t))
 
-  ;;;; Modular configuration loader ----------------------------------------------
-  (let* ((root (or (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d) my:d)
-                   user-emacs-directory))
-         (lisp-dir (expand-file-name "lisp" root)))
-    (add-to-list 'load-path lisp-dir)
-    ;; lisp/modules.el — central loader that specifies which files to load.
-    (require 'modules nil t))
+   ;;;; Startup report -------------------------------------------------------------
+   (add-hook 'after-init-hook
+             (lambda ()
+               (run-with-idle-timer
+                0 nil
+                (lambda ()
+                  (message "Emacs ready in %.2f seconds with %d GCs."
+                           (float-time (time-subtract after-init-time before-init-time))
+                           gcs-done)))))
 
-  ;;;; Startup report -------------------------------------------------------------
-  (add-hook 'after-init-hook
-            (lambda ()
-              (run-with-idle-timer
-               0 nil
-               (lambda ()
-                 (message "Emacs ready in %.2f seconds with %d GCs."
-                          (float-time (time-subtract after-init-time before-init-time))
-                          gcs-done)))))
-
-  (provide 'init)
-  ;;; init.el ends here
+   (provide 'init)
+   ;;; init.el ends here
 #+end_src
 
 ** Modular Configuration
@@ -697,13 +719,14 @@ Central loader for modular configuration under `lisp/`. Uses **module namespace 
     '(
       ;; Core
       core/general
-      core/tools
-      core/utils
-      core/history
-      core/editing
-      core/eww
+      ;; core/tools
+      ;; core/utils
+      ;; core/history
+      ;; core/editing
+      ;; core/eww
 
       ;; UI
+      ui/ui-modules
       ui/ui-font
       ui/ui-theme
       ui/ui-modeline
@@ -726,19 +749,19 @@ Central loader for modular configuration under `lisp/`. Uses **module namespace 
       orgx/org-export
 
       ;; Development
-      dev/dev-lsp
-      dev/dev-ai
-      dev/dev-term
-      dev/dev-build
-      dev/dev-docker
+      ;; dev/dev-lsp
+      ;; dev/dev-ai
+      ;; dev/dev-term
+      ;; dev/dev-build
+      ;; dev/dev-docker
 
       ;; Web/Infra
-      dev/web-core
-      dev/lsp-web
-      dev/format
-      dev/infra-modes
-      dev/sql
-      dev/rest
+      ;; dev/web-core
+      ;; dev/lsp-web
+      ;; dev/format
+      ;; dev/infra-modes
+      ;; dev/sql
+      ;; dev/rest
 
       ;; VCS
       vcs/vcs-magit
@@ -829,21 +852,21 @@ Global policies and keymaps for navigation, windows, files, session persistence,
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;
+  ;;;
   ;;; Commentary:
   ;; - Namespaced text-scale hydra
   ;; - Centralized global keybindings
   ;; - Desktop save, Winner mode, TRAMP
-  ;; - Lean visited-file auto-save (no #...# artifacts)
+  ;; - Visited-mode auto-save (no #...# artifacts)
   ;; - Backups into hidden .var/ dirs
-  ;;
+  ;;;
   ;;; Code:
 
   (eval-when-compile
     (require 'leaf)
     (require 'subr-x)) ;; when-let, string-join
 
-  ;;;; Text scaling hydra ----------------------------------------------------------
+  ;;;; Text scaling hydra ---------------------------------------------------------
   (leaf hydra
     :straight t
     :config
@@ -857,7 +880,7 @@ Global policies and keymaps for navigation, windows, files, session persistence,
       ("0" (text-scale-set 0) :color blue)
       ("q" nil "quit" :color blue)))
 
-  ;;;; Global key bindings ---------------------------------------------------------
+  ;;;; Global key bindings --------------------------------------------------------
   (leaf my:key
     :straight nil
     :bind
@@ -908,25 +931,25 @@ Global policies and keymaps for navigation, windows, files, session persistence,
      ("C-c d f"   . org-roam-node-find)
      ;; Aider
      ("C-c a a"   . aidermacs-transient-menu)
-     ;; EWW
+     ;; EWW (helpers in core/eww.el)
      ("C-c w w"   . eww)
      ("C-c w s"   . my/eww-search)
      ("C-c w o"   . eww-open-file)
      ("C-c w b"   . eww-list-bookmarks)
      ("C-c w r"   . eww-readable)
      ("C-c w u"   . my/eww-toggle-images)
-     ;; VCS
+     ;; Misc
      ("C-x g"     . magit-status)
-     ;; Session
      ("s-r"       . my/restart-or-exit)
      ("M-x"       . execute-extended-command))
     :init
+    ;; Small helpers to keep lambdas out of keymaps (namespaced)
     (defun my/new-frame-with-scratch ()
       "Create a new frame and switch to a fresh buffer."
       (interactive)
       (let ((frame (make-frame)))
         (with-selected-frame frame
-          (switch-to-buffer (generate-new-buffer "untitled")))))
+          (switch-to-buffer (generate-new-buffer \"untitled\")))))
     (defun my/restart-or-exit ()
       "Restart Emacs if `restart-emacs' exists, otherwise save & exit."
       (interactive)
@@ -935,7 +958,7 @@ Global policies and keymaps for navigation, windows, files, session persistence,
         (save-buffers-kill-emacs)))
     (windmove-default-keybindings))
 
-  ;;;; Dired key additions (packages configured elsewhere) -------------------------
+  ;;;; Dired key additions (packages configured elsewhere) -----------------------
   (leaf dired
     :straight nil
     :bind (:dired-mode-map
@@ -943,31 +966,30 @@ Global policies and keymaps for navigation, windows, files, session persistence,
            ("TAB" . dired-subtree-toggle)
            ("z"   . my/dired-view-file-other-window)))
 
-  ;;;; Desktop Save Mode -----------------------------------------------------------
+  ;;;; Desktop Save Mode ---------------------------------------------------------
   (leaf desktop
     :straight nil
     :config
-    (let ((dir (concat no-littering-var-directory "desktop/")))
-      (setq desktop-dirname             dir
-            desktop-path                (list dir)
-            desktop-base-file-name      "desktop"
-            desktop-base-lock-name      "lock"
-            desktop-restore-eager       10
-            desktop-save                t
+    (let* ((dir (concat no-littering-var-directory "desktop/")))
+      (setq desktop-dirname            dir
+            desktop-path               (list dir)
+            desktop-base-file-name     "desktop"
+            desktop-base-lock-name     "lock"
+            desktop-restore-eager      10
+            desktop-save               t
             desktop-load-locked-desktop nil
-            desktop-auto-save-timeout   300)
-      (when (fboundp 'my/ensure-directory-exists)
-        (my/ensure-directory-exists dir))
+            desktop-auto-save-timeout  300)
+      (my/ensure-directory-exists dir)
       (desktop-save-mode 1)))
 
-  ;;;; Winner mode (window configuration undo/redo) --------------------------------
+  ;;;; Winner mode (window configuration undo/redo) ------------------------------
   (leaf winner
     :straight nil
     :global-minor-mode t
     :bind (("M-[" . winner-undo)
            ("M-]" . winner-redo)))
 
-  ;;;; TRAMP setup -----------------------------------------------------------------
+  ;;;; TRAMP setup ---------------------------------------------------------------
   (leaf tramp
     :straight nil
     :pre-setq
@@ -977,40 +999,23 @@ Global policies and keymaps for navigation, windows, files, session persistence,
     '((tramp-default-method . "scp")
       (tramp-verbose        . 3)))
 
-  ;;;; Backups into hidden .var/ ---------------------------------------------------
+  ;;;; Auto-save (visited-mode) & backups ----------------------------------------
+  ;; Backups go into hidden .var/; classic #...# auto-save settings are removed.
   (leaf files
     :straight nil
     :custom
     `((backup-directory-alist
        . '(("." . ,(concat no-littering-var-directory "backup/"))))
       (delete-old-versions . t)))
-  (when (fboundp 'my/ensure-directory-exists)
-    (my/ensure-directory-exists (concat no-littering-var-directory "backup/")))
+  (my/ensure-directory-exists (concat no-littering-var-directory "backup/"))
 
-  ;;;; Lean auto-save for visited files -------------------------------------------
-  ;; Save the *real file* on idle; no #...# artifacts.
-  (setopt auto-save-visited-interval 2)   ;; seconds
+  ;; Visited-mode saves the *real* file after brief idle.
+  (setopt auto-save-visited-interval 1   ;; seconds of idle before saving
+          auto-save-default        nil)  ;; don't create #...# files
   (when (fboundp 'auto-save-visited-mode)
     (auto-save-visited-mode 1))
 
-  ;; Some modes flip it off; re-enable for file-visiting buffers.
-  (add-hook 'after-change-major-mode-hook
-            (lambda ()
-              (when (and (buffer-file-name)
-                         (not (bound-and-true-p auto-save-visited-mode)))
-                (auto-save-visited-mode 1))))
-
-  ;; Bonus: when Emacs loses focus, save modified file-visiting local buffers.
-  (add-hook 'focus-out-hook
-            (lambda ()
-              (save-some-buffers
-               t
-               (lambda ()
-                 (and (buffer-file-name)
-                      (buffer-modified-p)
-                      (not (file-remote-p default-directory)))))))
-
-  ;;;; Authentication management ----------------------------------------------------
+  ;;;; Authentication management -------------------------------------------------
   (defvar my:d:password-store
     (or (getenv "PASSWORD_STORE_DIR")
         (concat no-littering-var-directory "password-store/"))
@@ -1185,7 +1190,7 @@ Treesitter advice cooperates with `treesit-auto`.
           (insert "|Property|Value|\n|--------|-----|\n")
           (insert (format "|Commit|%s|\n" (if (fboundp 'emacs-repository-get-version)
                                       (emacs-repository-get-version) "N/A")))
-          (insert (format "|Branch|%s|\n" (if (fboundp 'emacs-repository-get-branch)
+  	(insert (format "|Branch|%s|\n" (if (fboundp 'emacs-repository-get-branch)
   					    (emacs-repository-get-branch) "N/A")))
           (insert (format "|System|%s|\n" system-configuration))
           (insert (format "|Date|%s|\n" (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
@@ -1204,9 +1209,9 @@ Treesitter advice cooperates with `treesit-auto`.
       (save-excursion
         (org-back-to-heading t)
         (if (org-fold-folded-p (point)) (org-show-subtree) (org-fold-subtree t))))
-    (define-key org-mode-map (kbd "C-c C-f") #'my/org-fold-subtree)
-    (define-key org-mode-map (kbd "C-c C-e") #'my/org-unfold-subtree)
-    (define-key org-mode-map (kbd "C-c C-t") #'my/org-toggle-fold))
+    (define-key org-mode-map (kbd "C-c f") #'my/org-fold-subtree)
+    (define-key org-mode-map (kbd "C-c e") #'my/org-unfold-subtree)
+    (define-key org-mode-map (kbd "C-c t") #'my/org-toggle-fold))
 
   (provide 'core/tools)
   ;;; core/tools.el ends here
@@ -1270,60 +1275,6 @@ None.
   (defun my/enable-view-mode-on-read-only () (if buffer-read-only (view-mode 1) (view-mode -1)))
   (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
 
-  (defun my/config-self-check ()
-    "Lightweight sanity check for this Emacs config.
-
-  Performs two best-effort validations:
-
-  1. **provide vs path check**
-     Ensure each file under `lisp/` ends with a `(provide 'path/feature)`
-     whose symbol matches the file's relative path (e.g., lisp/ui/ui-theme.el
-     should provide `ui/ui-theme`).
-
-  2. **Undefined command check (keymap targets)**
-     Spot obvious cases where a command referenced by a key binding
-     isn't actually defined (via `fboundp`). This is only a smoke test
-     for a small, curated set of common bindings.
-
-  If issues are found, they are listed in the buffer `*Config Self-Check*`.
-  Otherwise, a success message is shown."
-
-    (interactive)
-    (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
-           (lisp (expand-file-name "lisp" root))
-           (bad '()))
-
-      ;; 1) provide vs path
-      (dolist (file (directory-files-recursively lisp "\\.el\\'"))
-        (with-temp-buffer
-          (insert-file-contents file)
-          (goto-char (point-max))
-          (when (re-search-backward "^(provide '\\([^)\n]+\\))" nil t)
-            (let* ((feat (match-string 1))
-                   (want (string-remove-prefix
-                          (file-name-as-directory lisp)
-                          (file-name-sans-extension file))))
-              (unless (string-match-p (regexp-quote feat) want)
-                (push (format "[provide-mismatch] %s -> provide '%s" file feat) bad))))))
-
-      ;; 2) very rough undefined-command check
-      (dolist (pair '(("C-x g" magit-status)
-                      ("C-c d d" docker)
-                      ("C-c m c" compile)
-                      ("C-c m r" recompile)))
-        (let ((cmd (cadr pair)))
-          (unless (fboundp cmd)
-            (push (format "[undef] command not found: %s" cmd) bad))))
-
-      (if bad
-          (progn
-            (with-current-buffer (get-buffer-create "*Config Self-Check*")
-              (erase-buffer)
-              (insert (mapconcat #'identity (nreverse bad) "\n"))
-              (display-buffer (current-buffer)))
-            (message "Config check found issues (see *Config Self-Check*)."))
-        (message "Config self-check passed ✓"))))
-
   (provide 'core/utils)
   ;;; core/utils.el ends here
 #+end_src
@@ -1374,14 +1325,17 @@ All built-in ⇒ `:straight nil`.
              (auto-revert-verbose . nil))
     :global-minor-mode global-auto-revert-mode)
 
-  ;; Transient (used by Magit, Forge, etc.)
+  ;; ---------------------------------------------------------------------------
+  ;; Transient (prefix command sessions: used by Magit, Forge, etc.)
   (leaf transient
     :straight t
     :config
     (setq transient-history-file (concat no-littering-var-directory "transient/history.el")
           transient-levels-file  (concat no-littering-var-directory "transient/levels.el")
           transient-values-file  (concat no-littering-var-directory "transient/values.el"))
+    ;; Ensure directory exists
     (my/ensure-directory-exists (concat no-littering-var-directory "transient/")))
+
 
   (provide 'core/history)
   ;;; core/history.el ends here
@@ -1502,6 +1456,53 @@ EWW is built-in (`:straight nil`). Keybindings in `core/general.el`.
   ;;; core/eww.el ends here
 #+end_src
 
+*** ui/ui-modules.el
+:PROPERTIES:
+:CUSTOM_ID: ui-bundles-switch
+:END:
+This optional shim delegates UI setup to a bundle if you have one installed. Put this module **before** other UI modules (theme/modeline/etc.).
+- =my:use:modules= can be ='none=, ='doom=, or ='nano=.
+- Each bundle is expected to =provide= its feature: =(provide 'doom-modules)= or =(provide 'nano-modules)=.
+
+#+begin_src emacs-lisp :tangle lisp/ui/ui-modules.el
+  ;;; ui/ui-modules.el --- UI bundle switcher -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Load a UI bundle (doom-modules or nano-modules) if requested and available.
+  ;; Safe: does nothing if bundle isn't installed.
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x)) ;; when-let
+
+  (defgroup my:ui-modules nil
+    "UI bundle switcher."
+    :group 'convenience)
+
+  (defcustom my:use:modules 'none
+    "Which UI bundle to use. One of: 'none, 'doom, 'nano."
+    :type '(choice (const none) (const doom) (const nano))
+    :group 'my:ui-modules)
+
+  (defun my/require-soft (feature)
+    "Try to (require FEATURE) quietly; return non-nil on success."
+    (when feature
+      (condition-case err
+          (progn (require feature) t)
+        (error (message "[ui-modules] Missing feature: %s. Ensure it is on `load-path' and `(provide '%s)'."
+                        feature feature)
+               nil))))
+
+  (let ((ok
+         (pcase my:use:modules
+           ('doom (my/require-soft 'ui/ui-doom-modeline))
+           ('nano (my/require-soft 'ui/ui-nano-modeline))
+           (_     nil))))
+    (when ok
+      (message "[ui-modules] Loaded bundle: %s" my:use:modules)))
+
+  (provide 'ui/ui-modules)
+  ;;; ui/ui-modules.el ends here
+#+end_src
+
 *** ui/ui-font.el
 :PROPERTIES:
 :CUSTOM_ID: ui-font
@@ -1559,7 +1560,7 @@ Works for GUI frames/daemon.
       (set-fontset-font t 'emoji
                         (font-spec :family (or my:emoji-font (my/system-emoji-font))))
       (message "[font] emoji: %s"
-               (or my:emoji-font (my/system-emoji-font)))))
+  	     (or my:emoji-font (my/system-emoji-font)))))
 
   (defun my/show-current-font ()
     "Echo the current default font family and point size."
@@ -1592,42 +1593,32 @@ Works for GUI frames/daemon.
 Theme management with `ef-themes` and `spacious-padding`, plus a **safe face-normalizer** that avoids setting face attributes to `nil` (which causes warnings in Emacs 30+).
 
 **What it does**
-- Keeps your original theme setup (incl. toggle pair).
-- Adds a guard for `set-face-attribute` to coerce `nil` → `'unspecified`.
-- Hooks normalization to theme enable & startup.
+- Keeps your original theme setup (incl. `(modus-themes-to-toggle . '(ef-frost ef-spring))`).
+- Adds `ui--normalize-faces-after-theme` to set problematic face attributes to `'unspecified` instead of `nil`.
+- Hooks the normalizer to `after-load-theme-hook` and runs it once at init.
 
 **Notes**
-This prevents warnings like:
+If your `custom-file` (under `.etc/custom.el`) sets any face attribute to `nil`, this helper will correct it at runtime to prevent warnings like:
 `Warning: setting attribute ‘:foreground’ of face ‘font-lock-doc-markup-face’: nil value is invalid, use ‘unspecified’ instead.`
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-theme.el
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
   ;;
-  ;; Theme management (ef-themes + spacious-padding) and safe face normalization.
-  ;; Prevent warnings when faces receive nil attributes (use 'unspecified).
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Theme management (ef-themes + spacious-padding) and a face normalizer that
+  ;; replaces invalid `nil` attributes with `unspecified` to avoid warnings on
+  ;; Emacs 30+ (e.g., font-lock-doc-markup-face :foreground nil).
+  ;; Category: ui
+  ;;;
+  ;;; Code:
 
-  (eval-when-compile
-    (require 'leaf)
-    (require 'cl-lib))
-
-  ;; ---- Guard: rewrite any NIL face attrs to 'unspecified -----------------------
-  (defvar ui--coerce-nil-face-attrs t
-    "If non-nil, coerce nil face attributes to 'unspecified globally.")
-
-  (when ui--coerce-nil-face-attrs
-    (advice-add
-     'set-face-attribute :around
-     (lambda (orig face frame &rest args)
-       ;; Rewrite every (ATTR NIL) pair in ARGS to (ATTR 'unspecified)
-       (let ((v (copy-sequence args)))
-         (cl-loop for i from 1 below (length v) by 2
-                  do (when (null (nth i v)) (setf (nth i v) 'unspecified)))
-         (apply orig face frame v)))))
-
-  ;; ---- Themes ------------------------------------------------------------------
   (leaf ef-themes :straight t
-    :custom
-    ((ef-themes-to-toggle . '(ef-frost ef-spring)))
+    ;; Keep the user's original toggle pair as requested.
+    :custom ((modus-themes-to-toggle . '(ef-frost ef-spring)))
     :config
     (unless custom-enabled-themes
       (load-theme (if (display-graphic-p) 'ef-frost 'deeper-blue) t)))
@@ -1638,7 +1629,9 @@ This prevents warnings like:
              (spacious-padding-subtle-mode-line . t))
     :config (spacious-padding-mode 1))
 
-  ;; ---- Normalization pass (belt-and-suspenders) --------------------------------
+  ;;;; Face normalization --------------------------------------------------------
+  ;; Emacs 30+: setting a face attribute to NIL is invalid; use 'unspecified.
+
   (defgroup ui-theme-normalize nil
     "Normalize face attributes set to nil."
     :group 'faces)
@@ -1664,8 +1657,43 @@ This prevents warnings like:
         (dolist (attr attrs)
           (ui--normalize-face-attr face attr)))))
 
+  ;; Run after any theme is enabled (THEME arg is ignored).
+  (add-hook 'enable-theme-functions
+            (lambda (_theme) (ui--normalize-faces)))
+
+  ;; Also run once at startup (covers custom-file faces before first theme load).
+  (add-hook 'emacs-startup-hook #'ui--normalize-faces)
+
+  ;; Back-compat: if something still calls the old name with args, don't error.
+  (defun ui--normalize-faces-after-theme (&rest _ignore)
+    "Compatibility shim; call `ui--normalize-faces' and ignore extra args."
+    (ui--normalize-faces))
+
+  (defcustom ui:normalize-face-attrs
+    '((font-lock-doc-markup-face :foreground))
+    "List of (FACE ATTR ...) pairs to ensure are not nil."
+    :type '(repeat (cons symbol (repeat symbol)))
+    :group 'ui-theme-normalize)
+
+  (defun ui--normalize-face-attr (face attr)
+    "If FACE's ATTR is nil, set it to 'unspecified to avoid warnings."
+    (when (facep face)
+      (let ((val (face-attribute face attr nil 'default)))
+        (when (null val)
+          (set-face-attribute face nil attr 'unspecified)))))
+
+  (defun ui--normalize-faces ()
+    "Normalize all faces declared in `ui:normalize-face-attrs`."
+    (dolist (entry ui:normalize-face-attrs)
+      (let ((face (car entry))
+            (attrs (cdr entry)))
+        (dolist (attr attrs)
+          (ui--normalize-face-attr face attr)))))
+
   (add-hook 'enable-theme-functions (lambda (_theme) (ui--normalize-faces)))
   (add-hook 'emacs-startup-hook #'ui--normalize-faces)
+
+  (defun ui--normalize-faces-after-theme (&rest _) (ui--normalize-faces))
 
   (provide 'ui/ui-theme)
   ;;; ui/ui-theme.el ends here
@@ -1676,28 +1704,22 @@ This prevents warnings like:
 :CUSTOM_ID: ui-modeline
 :END:
 
-*Purpose*
-Modeline, time, battery.
+**Purpose**
 
-*What it does*
-Enables doom-modeline and minions, shows time/battery.
+**What it does**
 
-*Notes*
-`my:modeline` can switch between doom / nano.
+**Notes**
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-modeline.el
   ;;; ui/ui-modeline.el --- Modeline configuration -*- lexical-binding: t; -*-
 
-  (eval-when-compile (require 'leaf))
+  ;; Copyright (c) 2021-2025
+  ;; License: GNU GPL v3 or later
 
-  (defcustom my:modeline 'doom
-    "Choose modeline implementation: 'doom or 'nano."
-    :type '(choice (const doom) (const nano))
-    :group 'ui)
+  ;;; Code:
 
-  ;; Small, robust status helpers
   (leaf minions :straight t
-    :custom ((minions-mode-line-lighter . "Min"))
+    :custom ((minions-mode-line-lighter . "⚙"))
     :hook (after-init-hook . minions-mode))
 
   (setq display-time-interval 30
@@ -1705,28 +1727,6 @@ Enables doom-modeline and minions, shows time/battery.
         display-time-24hr-format t)
   (display-time-mode 1)
   (when (fboundp 'display-battery-mode) (display-battery-mode 1))
-
-  ;; ---- Doom modeline (default) --------------------------------------------------
-  (when (eq my:modeline 'doom)
-    (leaf doom-modeline :straight t
-      :hook (after-init-hook . doom-modeline-mode)))
-
-  ;; ---- Nano modeline (optional) -------------------------------------------------
-  (when (eq my:modeline 'nano)
-    (leaf nano-modeline
-      :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
-      :require t
-      :init
-      (setq nano-modeline-position 'bottom)
-      :config
-      (when (fboundp 'nano-modeline-prog-mode)
-        (add-hook 'prog-mode-hook #'nano-modeline-prog-mode))
-      (when (fboundp 'nano-modeline-text-mode)
-        (add-hook 'text-mode-hook #'nano-modeline-text-mode))
-      (when (fboundp 'nano-modeline-org-mode)
-        (add-hook 'org-mode-hook  #'nano-modeline-org-mode))
-      (unless (featurep 'nano-modeline)
-        (message "[ui-modeline] nano-modeline not loaded yet; hooks will attach when available."))))
 
   (provide 'ui/ui-modeline)
   ;;; ui/ui-modeline.el ends here
@@ -1954,11 +1954,11 @@ Conditional on `window-system` being `mac`/`ns`.
   (eval-when-compile (require 'leaf))
 
   (leaf nerd-icons-ibuffer :straight t
-    :hook (ibuffer-mode . nerd-icons-ibuffer-mode))
+    :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
 
   (leaf nerd-icons-completion :straight t
-    :hook (marginalia-mode . nerd-icons-completion-marginalia-setup)
-    :config (nerd-icons-completion-mode 1))
+    :hook (marginalia-mode-hook . nerd-icons-completion-marginalia-setup)
+    :config (nerd-icons-completion-mode))
 
   (provide 'completion/completion-icons)
 #+end_src
@@ -2008,7 +2008,8 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
              when (and file (string-match-p "\\.org\\'" file))
              collect file))
 
-  (leaf org :straight t
+  (leaf org
+    :straight nil
     :custom
     ((org-directory . my:d:org)
      (org-default-notes-file . "notes.org")
@@ -2034,15 +2035,10 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
              "* TODO %?\n %i\n %a")
             ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
              "* %?\nEntered on %U\n %i\n %a")
+            ("j" "Journal" entry (function org-journal-find-location)
+             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
              "* MEETING with %? :meeting:\n  %U\n  %a"))))
-
-  ;; Add “j: Journal” template only after org-journal is available (robust)
-  (with-eval-after-load 'org-journal
-    (add-to-list
-     'org-capture-templates
-     '("j" "Journal" entry (function org-journal-find-location)
-       "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")))
 
   (with-eval-after-load 'org
     (let* ((central (expand-file-name "archive.org" (or (bound-and-true-p org-directory)
@@ -2077,7 +2073,7 @@ Sets directories, agenda files, TODO keywords, refile targets, capture templates
   (eval-when-compile (require 'leaf))
 
   (leaf org-modern
-    :straight t
+    :straight nil
     :hook (org-mode . org-modern-mode)
     :custom
     ((org-startup-indented . t)
@@ -2178,19 +2174,6 @@ None.
   (eval-when-compile (require 'leaf))
 
   ;; ---------------------------------------------------------------------------
-  ;; Org LaTeX Export tweaks
-  (with-eval-after-load 'ox-latex
-    (setq org-latex-packages-alist
-          '(("" "graphicx" t)
-            ("" "longtable" nil)
-            ("" "wrapfig" nil)))
-    (setq org-latex-pdf-process
-          '("pdflatex -interaction nonstopmode -output-directory %o %f"
-            "bibtex %b"
-            "pdflatex -interaction nonstopmode -output-directory %o %f"
-            "pdflatex -interaction nonstopmode -output-directory %o %f")))
-
-  ;; ---------------------------------------------------------------------------
   ;; Hugo Export
   (leaf ox-hugo :straight t
     :after ox
@@ -2204,529 +2187,6 @@ None.
 
   (provide 'orgx/org-export)
   ;;; org-export.el ends here
-#+end_src
-
-*** dev/dev-lsp.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp
-:END:
-
-*Purpose*
-Language Server Protocol support.
-
-*What it does*
-- `eglot` (when `my:use-lsp` is `'eglot`)
-- `lsp-mode` (when `my:use-lsp` is `'lsp`)
-- Utility: temporarily enlarge `read-process-output-max`.
-
-*Notes*
-Choose backend via `my:use-lsp`.
-
-#+begin_src emacs-lisp :tangle lisp/dev/dev-lsp.el
-  ;;; dev/dev-lsp.el --- LSP support -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; Language Server Protocol support.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  ;; Eglot
-  (leaf eglot :straight t
-    :when (eq my:use-lsp 'eglot)
-    :commands (eglot eglot-ensure)
-    :hook ((prog-mode . (lambda ()
-                          (when (eglot--guess-contact) (eglot-ensure)))))
-    :custom ((eglot-autoreconnect . t)))
-
-  ;; lsp-mode
-  (leaf lsp-mode :straight t
-    :when (eq my:use-lsp 'lsp)
-    :commands (lsp lsp-deferred)
-    :custom ((lsp-keymap-prefix . "C-c l"))
-    :hook ((prog-mode . lsp-deferred)))
-
-  ;; Utility: temporarily enlarge read-process-output-max
-  (defun my/with-larger-rpom (size-bytes fn)
-    "Call FN with `read-process-output-max` set to SIZE-BYTES temporarily."
-    (let ((sym 'read-process-output-max)
-          (orig (and (boundp 'read-process-output-max) read-process-output-max)))
-      (when (boundp sym) (set sym size-bytes))
-      (unwind-protect (funcall fn)
-        (when (boundp sym) (set sym orig)))))
-
-  (provide 'dev/dev-lsp)
-  ;;; dev/dev-lsp.el ends here
-#+end_src
-
-*** dev/dev-ai.el
-:PROPERTIES:
-:CUSTOM_ID: dev-ai
-:END:
-
-*Purpose*
-AI-assisted coding via Aidermacs.
-
-*What it does*
-Supports OpenRouter/OpenAI backends; sets default model and backend.
-
-*Notes*
-Warns when no API keys.
-
-#+begin_src emacs-lisp :tangle lisp/dev/dev-ai.el
-  ;;; dev/dev-ai.el --- AI-assisted development -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; AI-assisted coding via Aidermacs.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf aidermacs :straight t
-    :init
-    (cond
-     ((getenv "OPENROUTER_API_KEY")
-      (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-      (setenv "OPENAI_API_KEY"  (getenv "OPENROUTER_API_KEY"))
-      (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
-     ((getenv "OPENAI_API_KEY")
-      (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-      (setopt aidermacs-default-model "gpt-4o-mini"))
-     (t
-      (display-warning 'aidermacs
-                       "No API keys set. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")))
-    (setopt aidermacs-retry-attempts 3
-            aidermacs-retry-delay   2.0
-            aidermacs-backend       'vterm))
-
-  (provide 'dev/dev-ai)
-  ;;; dev/dev-ai.el ends here
-#+end_src
-
-*** dev/dev-term.el
-:PROPERTIES:
-:CUSTOM_ID: dev-term
-:END:
-
-*Purpose*
-Terminal integration with vterm.
-
-*What it does*
-Loads vterm package.
-
-*Notes*
-None.
-
-#+begin_src emacs-lisp :tangle lisp/dev/dev-term.el
-  ;;; dev/dev-term.el --- Terminal integration -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; Provides terminal integration with vterm.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf vterm :straight t)
-
-  (provide 'dev/dev-term)
-  ;;; dev/dev-term.el ends here
-#+end_src
-
-*** dev/dev-build.el
-:PROPERTIES:
-:CUSTOM_ID: dev-build
-:END:
-
-*Purpose*
-Build system integration (Makefile, compile, ANSI color).
-
-*What it does*
-Strict tabs for Makefile; compile bindings; colorize compilation buffers.
-
-*Notes*
-None.
-
-#+begin_src emacs-lisp :tangle lisp/dev/dev-build.el
-  ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; Build system integration.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf make-mode :straight nil
-    :mode (("\\`Makefile\\'"    . makefile-gmake-mode)
-           ("\\`GNUmakefile\\'" . makefile-gmake-mode)
-           ("\\`makefile\\'"    . makefile-gmake-mode))
-    :hook ((makefile-mode . (lambda ()
-                              (setq-local indent-tabs-mode t
-                                          tab-width 8
-                                          show-trailing-whitespace t))))
-    :config
-    (leaf compile :straight nil
-      :bind (("C-c m c" . compile)
-             ("C-c m r" . recompile)
-             ("C-c m p" . project-compile))
-      :custom ((compilation-scroll-output . t)
-               (compilation-skip-threshold . 2))
-      :init
-      (defun my/set-make-compile-command ()
-        "Use `make -k` when Makefile is present."
-        (when (or (derived-mode-p 'makefile-mode)
-                  (locate-dominating-file default-directory "Makefile")
-                  (locate-dominating-file default-directory "GNUmakefile"))
-          (setq-local compile-command "make -k")))
-      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
-    (leaf ansi-color :straight nil
-      :hook (compilation-filter . (lambda ()
-                                    (let ((inhibit-read-only t))
-                                      (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
-
-  (provide 'dev/dev-build)
-  ;;; dev/dev-build.el ends here
-#+end_src
-
-*** dev/dev-docker.el
-:PROPERTIES:
-:CUSTOM_ID: dev-docker
-:END:
-
-*Purpose*
-Docker development support.
-
-*What it does*
-dockerfile-mode, yaml-mode for compose, docker.el dashboard, tramp-container, tempel snippets.
-
-*Notes*
-None.
-
-#+begin_src emacs-lisp :tangle lisp/dev/dev-docker.el
-  ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; Docker development support.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf dockerfile-mode :straight t
-    :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
-           ("\\.dockerfile\\'"         . dockerfile-mode))
-    :custom ((dockerfile-mode-command . "docker")))
-
-  (leaf yaml-mode :straight t
-    :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode)
-           ("\\.ya?ml\\'"                   . yaml-mode)))
-
-  (leaf docker :straight t
-    :commands (docker docker-containers docker-images docker-volumes docker-networks)
-    :bind (("C-c d d" . docker)
-           ("C-c d c" . docker-containers)
-           ("C-c d i" . docker-images)
-           ("C-c d v" . docker-volumes)
-           ("C-c d n" . docker-networks)))
-
-  (leaf tramp-container :straight nil
-    :after tramp
-    :init
-    (setq tramp-container-method "docker"))
-
-  (leaf tempel :straight t
-    :commands (tempel-insert)
-    :bind (dockerfile-mode-map
-           ("C-c d t" . tempel-insert))
-    :init
-    (with-eval-after-load 'tempel
-      (defvar my:tempel-docker-templates
-        '((dockerfile "FROM " p n
-                      "WORKDIR /app" n
-                      "COPY . /app" n
-                      "RUN " p n
-                      "CMD [" p "]" n)))
-      (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
-
-  (provide 'dev/dev-docker)
-  ;;; dev/dev-docker.el ends here
-#+end_src
-
-*** dev/web-core.el
-:PROPERTIES:
-:CUSTOM_ID: dev-web-core
-:END:
-
-*Purpose*: Provide modern syntax highlighting and project management.
-*What it does*: Configures built-in `project`, `files`, `treesit`, and associates file extensions with Tree-sitter modes. Also enables EditorConfig.
-*Notes*: Tree-sitter is native in Emacs 30+. Ensure grammar installation via `M-x treesit-install-language-grammar`.
-
-#+begin_src emacs-lisp :tangle lisp/dev/web-core.el
-  ;;; web-core.el --- Treesit & project core -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; Core configuration for project management and modern syntax highlighting.
-  ;; Includes EditorConfig support and Tree-sitter remapping.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  ;; Built-ins
-  (leaf project :straight nil)
-  (leaf files   :straight nil
-    :custom ((require-final-newline . t)
-             (delete-trailing-lines . t))
-    :hook ((before-save-hook . delete-trailing-whitespace)))
-
-  ;; EditorConfig
-  (leaf editorconfig
-    :straight t
-    :global-minor-mode t)
-
-  ;; Tree-sitter preferences (Emacs 30+)
-  (leaf treesit
-    :straight nil
-    :custom ((major-mode-remap-alist
-              . '((typescript-mode . typescript-ts-mode)
-                  (js-mode         . js-ts-mode)
-                  (json-mode       . json-ts-mode)
-                  (css-mode        . css-ts-mode)
-                  (yaml-mode       . yaml-ts-mode)
-                  (sh-mode         . bash-ts-mode)))))
-
-  ;; File associations
-  (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.ts\\'"  . typescript-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.json\\'" . json-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode))
-  (add-to-list 'auto-mode-alist '("Dockerfile\\'" . dockerfile-mode))
-
-  (provide 'dev/web-core)
-  ;;; web-core.el ends here
-#+end_src
-
-*** dev/lsp-web.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-web
-:END:
-
-*Purpose*: Enable LSP support for TypeScript, JSON, CSS, HTML, YAML, Docker, and Prisma.
-*What it does*: Loads `lsp-mode` and `lsp-ui` **only when `my:use-lsp` is `'lsp`**.
-*Notes*: Prevents conflicts with `eglot` by wrapping the entire configuration in a conditional.
-
-#+begin_src emacs-lisp :tangle lisp/dev/lsp-web.el
-  ;;; lsp-web.el --- LSP for web stack -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; Provides LSP support for the modern web stack including TS/JS, JSON, CSS,
-  ;; HTML, YAML, Docker, and Prisma.
-  ;; Activated only when `my:use-lsp` is set to 'lsp.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (when (eq my:use-lsp 'lsp)
-
-    (leaf lsp-mode
-      :straight t
-      :commands (lsp lsp-deferred)
-      :hook ((typescript-ts-mode . lsp-deferred)
-             (tsx-ts-mode        . lsp-deferred)
-             (json-ts-mode       . lsp-deferred)
-             (css-ts-mode        . lsp-deferred)
-             (html-mode          . lsp-deferred)
-             (yaml-ts-mode       . lsp-deferred)
-             (dockerfile-mode    . lsp-deferred)
-             (prisma-mode        . lsp-deferred))
-      :custom ((lsp-enable-file-watchers . t)
-               (lsp-file-watch-threshold . 5000)
-               (lsp-response-timeout . 5)
-               (lsp-diagnostics-provider . :auto)
-               (lsp-completion-provider . :none)) ;; corfu handles completion
-      :config
-      ;; Prefer project-local TypeScript LSP first
-      (setq lsp-clients-typescript-server "typescript-language-server")
-      (setq lsp-clients-typescript-server-args '("--stdio")))
-
-    (leaf lsp-ui
-      :straight t
-      :after lsp-mode
-      :custom ((lsp-ui-doc-enable . t)
-               (lsp-ui-doc-delay . 0.2)
-               (lsp-ui-sideline-enable . t)))
-
-    ;; Prisma
-    (leaf prisma-mode
-      :straight t
-      :mode ("\\.prisma\\'" . prisma-mode))
-
-    ;; YAML
-    (leaf yaml-ts-mode :straight nil)
-
-    ;; HTML
-    (leaf sgml-mode :straight nil))
-
-  (provide 'dev/lsp-web)
-  ;;; lsp-web.el ends here
-#+end_src
-
-*** dev/format.el
-:PROPERTIES:
-:CUSTOM_ID: dev-format
-:END:
-
-*Purpose*: Provide auto-formatting for TypeScript/JavaScript/JSON/CSS/Markdown.
-*What it does*: Configures Apheleia with `prettierd`/`prettier` formatters and enables global mode.
-*Notes*: `prettierd` is preferred for performance; falls back to `npx prettier`.
-
-#+begin_src emacs-lisp :tangle lisp/dev/format.el
-  ;;; format.el --- Prettier/ESLint via Apheleia -*- lexical-binding: t; -*-
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf apheleia
-    :straight t
-    :require t
-    :config
-    (setf (alist-get 'prettierd apheleia-formatters)
-          '("prettierd" filepath))
-    (setf (alist-get 'prettier apheleia-formatters)
-          '("npx" "prettier" "--stdin-filepath" filepath))
-    (dolist (pair '((typescript-ts-mode . prettierd)
-                    (tsx-ts-mode        . prettierd)
-                    (json-ts-mode       . prettierd)
-                    (css-ts-mode        . prettierd)
-                    (markdown-mode      . prettierd)))
-      (add-to-list 'apheleia-mode-alist pair))
-    (apheleia-global-mode +1))
-
-  (provide 'dev/format)
-  ;;; format.el ends here
-#+end_src
-
-*** dev/infra-modes.el
-:PROPERTIES:
-:CUSTOM_ID: dev-infra-modes
-:END:
-
-*Purpose*: Enable syntax modes for infrastructure files (`.env`, Compose, TOML, Makefiles).
-*What it does*: Configures `docker-compose-mode`, `dotenv-mode`, `toml-mode`, and builtin `make-mode`.
-*Notes*: Built-in `make-mode` remaps `Makefile` to GNU Make variant.
-
-#+begin_src emacs-lisp :tangle lisp/dev/infra-modes.el
-  ;;; infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; Syntax support for infra files such as Docker Compose, .env, TOML, and Makefiles.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf docker-compose-mode :straight t :mode ("docker-compose\\.*ya?ml\\'"))
-  (leaf dotenv-mode :straight t
-    :mode (("\\.env\\..*\\'" . dotenv-mode)
-           ("\\.env\\'"     . dotenv-mode)))
-  (leaf toml-mode :straight t :mode ("\\.toml\\'" . toml-mode))
-
-  ;; Makefile tweaks (builtin)
-  (leaf make-mode :straight nil
-    :mode (("Makefile\\'" . makefile-gmake-mode)))
-
-  (provide 'dev/infra-modes)
-  ;;; infra-modes.el ends here
-#+end_src
-
-*** dev/sql.el
-:PROPERTIES:
-:CUSTOM_ID: dev-sql
-:END:
-
-*Purpose*: Provide SQL/PostgreSQL development helpers and formatting.
-*What it does*: Configures built-in `sql` with indentation mode, and uses `sqlformat` for auto-formatting with `pgformatter`.
-*Notes*: Ensure `pgformatter` is installed in your system PATH.
-
-#+begin_src emacs-lisp :tangle lisp/dev/sql.el
-  ;;; lisp/dev/sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
-  (eval-when-compile (require 'leaf))
-
-  (leaf sql :straight nil
-    :custom ((sql-product . 'postgres)))
-
-  (leaf sql-indent :straight t
-    :hook (sql-mode . sqlind-minor-mode))
-
-  (leaf sqlformat
-    :straight t
-    :custom ((sqlformat-command . 'pgformatter)
-             (sqlformat-args . '("--nostyle")))
-    :hook (sql-mode . sqlformat-on-save-mode)
-    :hook (sql-ts-mode . sqlformat-on-save-mode))
-
-  (provide 'dev/sql)
-  ;;; sql.el ends here
-#+end_src
-
-*** dev/rest.el
-:PROPERTIES:
-:CUSTOM_ID: dev-rest
-:END:
-
-*Purpose*: Provide HTTP request testing inside Emacs.
-*What it does*: Installs `restclient` and `restclient-jq` for `.http` files with JSON parsing.
-*Notes*: Useful for API testing in Next.js, Ollama, Qdrant workflows.
-
-#+begin_src emacs-lisp :tangle lisp/dev/rest.el
-  ;;; rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
-
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-
-  ;;; Commentary:
-  ;; REST client integration for testing HTTP requests inside Emacs.
-  ;; Supports JSON parsing with jq.
-
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
-  (leaf restclient-jq :straight t :after restclient)
-
-  (provide 'dev/rest)
-  ;;; rest.el ends here
 #+end_src
 
 *** vcs/vcs-magit.el
@@ -2963,7 +2423,7 @@ Keeps `.var/backup/` clean.
     (let ((backup-dir (concat no-littering-var-directory "backup/"))
           (threshold (- (float-time (current-time)) (* 7 24 60 60))))
       (when (file-directory-p backup-dir)
-        (dolist (file in (directory-files backup-dir t))
+        (dolist (file (directory-files backup-dir t))
           (when (and (file-regular-p file)
                      (< (float-time (file-attribute-modification-time
                                      (file-attributes file)))
@@ -3105,13 +2565,16 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
           user-mail-address "tjy1965@gmail.com"
           inhibit-compacting-font-caches t
           plstore-cache-passphrase-for-symmetric-encryption t)
-
+    
     ;; Fonts (picked up by ui/ui-font.el)
     (setq my:font-default "JetBrains Mono NL"
           my:font-alt     "Noto Sans JP"
           my:emoji-font   "Apple Color Emoji"
-          my:font-size    20)
-
+          my:font-size    18)
+    
+    ;; Modelines
+    ;; (setq my:use:modules 'nano)
+    
     ;; Directories
     (defvar my:d:cloud
       (expand-file-name "Documents/" (getenv "HOME"))
@@ -3128,9 +2591,6 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
     (defvar my:d:excluded-directories
       (list (expand-file-name "Library/Accounts" (getenv "HOME")))
       "Directories excluded from `load-path` for safety.")
-
-    ;; modeline nano / doom
-    (setq my:modeline 'nano)
 
     ;; Ensure directories exist
     (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:org my:d:blog))
@@ -3173,8 +2633,8 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
                (sis-global-inline-mode t)))))
 
   ;; Keep cursor color consistent after theme changes
-  (add-hook 'enable-theme-functions
-            (lambda (_theme)
+  (add-hook 'after-load-theme-hook
+            (lambda ()
               (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
 
   ;; -----------------------------------------------------------------------------
@@ -3214,6 +2674,7 @@ Personal, device-specific settings for macOS-first workflows: identity, fonts, d
                  (let ((output (string-trim (buffer-string))))
                    (funcall callback output)))
                (kill-buffer (process-buffer process))))))))
+
 
     (defun my/apple-music-osascript-sync (script)
       "Run AppleScript SCRIPT synchronously and return trimmed output."
