@@ -3780,21 +3780,57 @@ Project search & navigation.
 :END:
 
 **Purpose**
-Per-user/macOS-first layer: identity, fonts, paths, input-source switching, pointing-device tuning, and Apple Music control.
+Per-user (macOS-first) layer: identity, font preferences (consumed by the UI font module), feature switches (UI/LSP), directory policy for cloud/Org/blog, safe `load-path` pruning, macOS input-source integration (sis+macism), cursor color sync after theme loads, pointing-device tuning, and Apple Music control (with a Hydra and Meow leader binding).
 
 **What it does**
-- Identity: name/email; performance tweaks for font caches and plstore.
-- Fonts: sets default/alt/emoji families and size.
-- Switches: selects UI (`nano`) and LSP backend (`eglot`).
-- Paths: defines cloud, Org, blog roots and ensures they exist; rebuilds `org-directory`/agenda.
-- Load-path: excludes unsafe directories.
-- macOS IME: `sis` + `macism` with global cursor/respect/inline modes.
-- Cursor color kept in sync after theme load.
-- Mouse: MX Ergo S scrolling/gestures; simple mouse keybindings.
-- Apple Music: async/sync AppleScript wrappers, playlist picker, and a Hydra.
+- **Identity & perf knobs**
+  - Sets `user-full-name`/`user-mail-address`.
+  - Tweaks performance/usability flags: `inhibit-compacting-font-caches`, and `plstore-cache-passphrase-for-symmetric-encryption`.
+- **Font *preferences*** (values only)
+  - Defines `my:font-default` (`JetBrains Mono NL`), `my:font-alt` (`Noto Sans JP`), `my:emoji-font` (`Apple Color Emoji`), and `my:font-size` (`18`).
+    These are *read by* the UI font module (`ui/ui-font.el`) and are not directly applied here.
+- **Global switches**
+  - Chooses **UI bundle** = `nano` and **LSP backend** = `eglot` by setting `my:use-ui` / `my:use-lsp` (consumed by `core/switches.el`).
+- **Directories & Org plumbing**
+  - Declares and creates:
+    - `my:d:cloud` → `~/Documents/`
+    - `my:d:org`   → `<cloud>/org/`
+    - `my:d:blog`  → `<cloud>/devel/repos/mysite/`
+    - `my:f:capture-blog-file` → `<blog>/all-posts.org`
+  - Rebuilds **Org roots** for this user:
+    - Sets `org-directory` to `my:d:org`.
+    - Recomputes `org-agenda-files` by recursively scanning `org-directory` for `*.org` and excluding paths containing `archives`.
+- **Safe `load-path` pruning**
+  - Defines `my:d:excluded-directories` (e.g. `~/Library/Accounts`) and removes them from `load-path`.
+- **macOS IME (sis + macism)**
+  - On macOS, configures **ABC** (English) and **Kotoeri Romaji** (Japanese) via `sis-ism-lazyman-config 'macism`.
+  - Enables:
+    - `sis-global-cursor-color-mode` (cursor color tracks input source),
+    - `sis-global-respect-mode`,
+    - `sis-global-inline-mode`.
+- **Cursor color sync after theming**
+  - Hooks `after-load-theme-hook` to set the cursor face background from the frame’s `cursor-color`, keeping it visually consistent across theme toggles.
+- **Pointing device (MX Ergo S) & scrolling**
+  - Conservative, predictable scroll behavior (`scroll-conservatively`, `scroll-margin`, `scroll-preserve-screen-position`).
+  - Smooth/tilt scrolling on macOS; disables progressive acceleration.
+  - Mouse bindings:
+    - `mouse-2` → `yank`
+    - `mouse-4` → `previous-buffer`
+    - `mouse-5` → `next-buffer`
+- **Apple Music integration (macOS)**
+  - **Async AppleScript runner** using `start-process` + sentinel (`my/apple-music-osascript-async`) and a **sync** variant (`my/apple-music-osascript-sync`).
+  - Commands:
+    - `my/apple-music-play-pause`, `my/apple-music-next-track`, `my/apple-music-previous-track`
+    - `my/apple-music-current-track-info` → echoes *Title — Artist [Album]*
+    - `my/apple-music-play-playlist` with completing-read over `my/apple-music-get-playlists`.
+  - **Hydra**: `my/hydra-apple-music` (`p/n/b/l/i/q`) and global key `C-c M`.
+  - **Meow leader**: binds `SPC M` → `my/hydra-apple-music/body` (only when Meow & Hydra are loaded).
 
 **Notes**
-Assumes directories and helpers from `early-init.el`. macOS-specific commands guard against missing tooling.
+- This file defines *preferences and per-user wiring*; other modules (e.g., `ui/ui-font.el`, `core/switches.el`) consume them.
+- macOS-only bits are guarded (`(eq system-type 'darwin)`); `osascript`, the Music app, `macism`, and `sis` must be available.
+- The **agenda rebuild here overrides** any earlier `org-agenda-files` decisions—useful for per-machine Org layouts.
+- The Meow leader binding for Music appears once both **Meow** and **Hydra** are available; otherwise it’s skipped gracefully.
 
 #+begin_src emacs-lisp :tangle (eval (format "personal/%s.el" (user-login-name)))
   ;;; user.el --- Personal configuration -*- lexical-binding: t; -*-
@@ -3974,6 +4010,13 @@ Assumes directories and helpers from `early-init.el`. macOS-specific commands gu
         ("i" my/apple-music-current-track-info)
         ("q" nil "quit"))
       (global-set-key (kbd "C-c M") #'my/hydra-apple-music/body)))
+
+  ;; Meow leader: <leader> m -> Apple Music hydra
+  (with-eval-after-load 'meow
+    (with-eval-after-load 'hydra
+      (when (fboundp 'meow-leader-define-key)
+        (meow-leader-define-key
+         '("M" . my/hydra-apple-music/body)))))
 
   (provide 'user)
   ;;; user.el ends here
