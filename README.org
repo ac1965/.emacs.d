@@ -176,34 +176,134 @@ build-emacs.sh --native-compilation
 *** Makefile
 
 #+begin_src text :tangle Makefile :comments no
-  # Makefile for Emacs config build (safe clean)
+  # Makefile for Emacs config build
+  # - Resolves EMACSD and STRAIGHT_BASE_DIR from early-init.el
+  # - Honors project-local definitions/ helpers provided by early-init
+  # ------------------------------------------------------------------------------
+  # Override via: make EMACS=/path/to/emacs EARLY=/path/to/early-init.el INIT=/path/to/init.el ORG=README.org
+  EMACS  ?= emacs
+  ORG    ?= README.org
+  EARLY  ?= early-init.el
+  INIT   ?= init.el
 
-  EMACS       ?= emacs
-  ORG         ?= README.org
-  LISPDIR     ?= lisp
-  PERSONALDIR ?= personal
-  ELFILES     = $(wildcard $(LISPDIR)/*.el) $(wildcard $(PERSONALDIR)/*.el)
-  ELCFILES    = $(ELFILES:.el=.elc)
+  # Project dirs (relative to repo)
+  LISPDIR      ?= lisp
+  PERSONALDIR  ?= personal
 
-  all: tangle
+  # ------------------------------------------------------------------------------
+  # Resolve EMACSD by loading EARLY and consulting helpers. Fallback to user-emacs-directory.
+  EMACSD := $(shell \
+    if [ -f "$(EARLY)" ]; then \
+      "$(EMACS)" --batch -Q -l "$(EARLY)" \
+        --eval "(princ (expand-file-name (cond ((fboundp 'my:d) (my:d)) (t user-emacs-directory))))"; \
+    else \
+      "$(EMACS)" --batch -Q --eval "(princ (expand-file-name user-emacs-directory))"; \
+    fi)
 
+  # Resolve STRAIGHT_BASE_DIR:
+  # 1) If EARLY defines the variable STRAIGHT_BASE_DIR, use it.
+  # 2) Else, if helper (my:straight-base-dir) exists, call it.
+  # 3) Else, if straight-base-dir is bound, use it.
+  # 4) Else, fallback to EMACSD/straight.
+  STRAIGHT_BASE_DIR := $(shell \
+    if [ -f "$(EARLY)" ]; then \
+      "$(EMACS)" --batch -Q -l "$(EARLY)" \
+        --eval "(princ (expand-file-name \"straight\" (cond ((boundp 'STRAIGHT_BASE_DIR) STRAIGHT_BASE_DIR) \
+                                               ((fboundp 'my:straight-base-dir) (my:straight-base-dir)) \
+                                               ((boundp 'straight-base-dir) straight-base-dir) \
+                                               (t (expand-file-name \"$(EMACSD)\")))))"; \
+    else \
+      printf "%s" "$(EMACSD)/straight"; \
+    fi)
+
+  LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf
+  LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords
+
+  # Discover files recursively
+  ELFILES  := $(shell find $(LISPDIR) $(PERSONALDIR) -type f -name '*.el' 2>/dev/null)
+  ELCFILES := $(patsubst %.el,%.elc,$(ELFILES))
+
+  # Common eval snippets
+  EVAL_REQ_ORG := --eval "(require 'org)" --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))"
+  EVAL_LEAF    := --eval "(add-to-list 'load-path (expand-file-name \"$(LEAF_DIR)\"))" \
+                  --eval "(add-to-list 'load-path (expand-file-name \"$(LEAFKW_DIR)\"))" \
+                  --eval "(require 'leaf)" \
+                  --eval "(require 'leaf-keywords)" \
+                  --eval "(leaf-keywords-init)"
+
+  # ------------------------------------------------------------------------------
+  .PHONY: all tangle compile compile-q compile-personal compile-lisp clean distclean \
+          check-init echo-paths echo-myd echo-sbd
+
+  all: tangle compile
+
+  # 1) Tangle README.org -> *.el (works with -Q; org only)
   tangle: $(ORG)
+  	@echo "[tangle] $(ORG)"
   	$(EMACS) --batch -Q \
-  		--eval "(require 'org)" \
-  		--eval "(org-babel-tangle-file \"$(ORG)\")"
+  	  $(EVAL_REQ_ORG) \
+  	  --eval "(org-babel-tangle-file \"$(ORG)\")"
 
-  compile: tangle $(ELCFILES)
+  # 2) Compile using full init (safest: leaf & straight initialized)
+  compile: check-init $(ELCFILES)
+  	@echo "[compile] done"
 
-  $(LISPDIR)/%.elc: $(LISPDIR)/%.el
-  	$(EMACS) --batch -Q --eval "(byte-compile-file \"$<\")"
+  # Pattern: .el -> .elc via init.el
+  %.elc: %.el
+  	@echo "[byte-compile:init] $<"
+  	$(EMACS) --batch -l "$(EARLY)" -l "$(INIT)" --eval "(byte-compile-file \"$<\")"
 
-  $(PERSONALDIR)/%.elc: $(PERSONALDIR)/%.el
-  	$(EMACS) --batch -Q --eval "(byte-compile-file \"$<\")"
+  # 3) Compile under -Q by injecting leaf paths derived from EARLY's STRAIGHT_BASE_DIR
+  compile-q:
+  	@echo "[compile-q] -Q with EMACSD=$(EMACSD)"
+  	@echo "[compile-q] -Q with STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"
+  	@for f in $(ELFILES); do \
+  	  echo "  [byte-compile:-Q] $$f"; \
+  	  $(EMACS) --batch -Q \
+  	    $(EVAL_LEAF) \
+  	    --eval "(byte-compile-file \"$$f\")"; \
+  	done
+  	@echo "[compile-q] done"
 
+  # Optional split targets (init-based)
+  compile-personal: check-init
+  	@echo "[compile:init] personal/"
+  	@find $(PERSONALDIR) -type f -name '*.el' -print0 | xargs -0 -I{} \
+  	  $(EMACS) --batch -l "$(EAERLY)" -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
+
+  compile-lisp: check-init
+  	@echo "[compile:init] lisp/"
+  	@find $(LISPDIR) -type f -name '*.el' -print0 | xargs -0 -I{} \
+  	  $(EMACS) --batch -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
+
+  # Sanity check before init-based compile
+  check-init:
+  	@test -f "$(INIT)" || (echo "[error] init.el not found at: $(INIT)"; echo "         -> set INIT=/path/to/init.el or use 'make compile-q'"; exit 1)
+
+  # Debug helpers
+  echo-paths:
+  	@echo "EMACSD=$(EMACSD)"; \
+  	echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
+  	echo "LEAF_DIR=$(LEAF_DIR)"; \
+  	echo "LEAFKW_DIR=$(LEAFKW_DIR)"; \
+  	echo "EARLY=$(EARLY)"; \
+  	echo "INIT=$(INIT)"
+
+  echo-myd:  ## print resolved my:d (EMACSD)
+  	@echo $(EMACSD)
+
+  echo-sbd:  ## print resolved STRAIGHT_BASE_DIR
+  	@echo $(STRAIGHT_BASE_DIR)
+
+  # Cleanup
   clean:
-  	find $(LISPDIR) $(PERSONALDIR) -name "*.elc" -delete
+  	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
+  	@find $(LISPDIR) -type f -name '*.elc' -delete
+  	@find $(PERSONALDIR) -type f -name '*.elc' -delete
 
-  .PHONY: all tangle compile clean
+  distclean: clean
+  	@echo "[distclean] remove stray *.eln under project tree (if any)"
+  	@find . -type f -name '*.eln' -delete
 #+end_src
 
 *** System Information
@@ -326,16 +426,16 @@ Establish a fast, predictable startup baseline for Emacs 30+ with a clean hidden
   (setq user-emacs-directory (file-name-as-directory my:d))
 
   ;; 3) Hidden sub-directories
-  (defconst my:d:var    (expand-file-name ".var/"    my:d))
-  (defconst my:d:etc    (expand-file-name ".etc/"    my:d))
-  (defconst my:d:cache  (expand-file-name ".cache/"  my:d))
-  (defconst my:d:lisp   (expand-file-name "lisp/"    my:d))
-  (defconst my:d:treesit        (expand-file-name "treesit/"        my:d:var))
-  (defconst my:d:treesit-build  (expand-file-name "treesit-build/"  my:d:cache))
+  (defconst my:d:var    (expand-file-name ".var"    my:d))
+  (defconst my:d:etc    (expand-file-name ".etc"    my:d))
+  (defconst my:d:cache  (expand-file-name ".cache"  my:d))
+  (defconst my:d:lisp   (expand-file-name "lisp"    my:d))
+  (defconst my:d:treesit        (expand-file-name "treesit"        my:d:var))
+  (defconst my:d:treesit-build  (expand-file-name "treesit-build"  my:d:cache))
 
   (dolist (dir (list my:d:var my:d:etc my:d:cache my:d:lisp
                      my:d:treesit my:d:treesit-build
-                     (expand-file-name "eln-cache/" my:d:cache)))
+                     (expand-file-name "eln-cache" my:d:cache)))
     (my/ensure-directory-exists dir))
 
   ;; 4) macOS: prepend Homebrew libgccjit to LIBRARY_PATH if present
@@ -372,7 +472,7 @@ Establish a fast, predictable startup baseline for Emacs 30+ with a clean hidden
 
   ;; 5) Native compilation: keep ELN under .cache/
   (when (featurep 'native-compile)
-    (setopt native-comp-eln-load-path (list (expand-file-name "eln-cache/" my:d:cache))
+    (setopt native-comp-eln-load-path (list (expand-file-name "eln-cache" my:d:cache))
             native-comp-async-report-warnings-errors 'silent))
 
   ;; 6) Pre-wire no-littering directories
@@ -397,10 +497,10 @@ Establish a fast, predictable startup baseline for Emacs 30+ with a clean hidden
                     gc-cons-percentage 0.1)))
 
   ;;  9) Backups/auto-save: do not create auto-save-list directory
-  (setq backup-directory-alist `(("." . ,(expand-file-name "backups/" my:d:var)))
+  (setq backup-directory-alist `(("." . ,(expand-file-name "backups" my:d:var)))
         auto-save-default nil
         auto-save-list-file-prefix nil)
-  (my/ensure-directory-exists (expand-file-name "backups/" my:d:var))
+  (my/ensure-directory-exists (expand-file-name "backups" my:d:var))
 
   ;; 10) UI bars off + maximize all frames
   (custom-set-variables
@@ -587,8 +687,8 @@ Serve as the primary entry point for Emacs 30+, bootstrapping **straight.el + le
   (leaf no-littering
     :straight t
     :init
-    (setq no-littering-etc-directory (file-name-as-directory (or (bound-and-true-p my:d:etc) (expand-file-name ".etc/" user-emacs-directory)))
-          no-littering-var-directory (file-name-as-directory (or (bound-and-true-p my:d:var) (expand-file-name ".var/" user-emacs-directory)))))
+    (setq no-littering-etc-directory (file-name-as-directory (or (bound-and-true-p my:d:etc) (expand-file-name ".etc" user-emacs-directory)))
+          no-littering-var-directory (file-name-as-directory (or (bound-and-true-p my:d:var) (expand-file-name ".var" user-emacs-directory)))))
 
   (leaf exec-path-from-shell
     :straight t
@@ -1851,99 +1951,99 @@ Route Customize output to `.etc/custom.el` and provide commands to view or snaps
 This does not auto-run at startup; snapshots are deliberate. `leaf :custom` runtime values are not implicitly persisted.
 
 #+begin_src emacs-lisp :tangle lisp/core/custom.el
-;;; core/custom.el --- custom-file helpers -*- lexical-binding: t; -*-
-;;
-;; Category: core
-;;
-;;; Commentary:
-;; - Route customize output to .etc/custom.el
-;; - Provide helpers to open and (optionally) dump current values/faces.
+  ;;; core/custom.el --- custom-file helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;; - Route customize output to .etc/custom.el
+  ;; - Provide helpers to open and (optionally) dump current values/faces.
 
-(eval-when-compile (require 'subr-x))
+  (eval-when-compile (require 'subr-x))
 
-(defconst my:f:custom
-  (or (bound-and-true-p my:f:custom)
-      (expand-file-name "custom.el" (or (bound-and-true-p my:d:etc)
-                                        (expand-file-name ".etc/" user-emacs-directory))))
-  "Path to the custom-file (Customize output).")
+  (defconst my:f:custom
+    (or (bound-and-true-p my:f:custom)
+        (expand-file-name "custom.el" (or (bound-and-true-p my:d:etc)
+  					(expand-file-name ".etc" user-emacs-directory))))
+    "Path to the custom-file (Customize output).")
 
-(defun my/custom--ensure-file ()
-  "Ensure `custom-file` exists and has a small header."
-  (let* ((dir (file-name-directory my:f:custom)))
-    (unless (file-directory-p dir)
-      (condition-case err
-          (make-directory dir t)
-        (error (warn "[custom] failed to create %s: %s" dir (error-message-string err)))))
-    (unless (file-exists-p my:f:custom)
-      (with-temp-file my:f:custom
-        (insert ";;; custom.el --- Customize output -*- lexical-binding: t; -*-\n"
-                ";; This file is generated by Customize. Edit with care.\n\n")))))
+  (defun my/custom--ensure-file ()
+    "Ensure `custom-file` exists and has a small header."
+    (let* ((dir (file-name-directory my:f:custom)))
+      (unless (file-directory-p dir)
+        (condition-case err
+            (make-directory dir t)
+          (error (warn "[custom] failed to create %s: %s" dir (error-message-string err)))))
+      (unless (file-exists-p my:f:custom)
+        (with-temp-file my:f:custom
+          (insert ";;; custom.el --- Customize output -*- lexical-binding: t; -*-\n"
+                  ";; This file is generated by Customize. Edit with care.\n\n")))))
 
-;; 1) Route Customize output to .etc/custom.el (idempotent)
-(setq custom-file my:f:custom)
-(my/custom--ensure-file)
-(when (file-readable-p custom-file)
-  (ignore-errors (load custom-file nil 'nomessage)))
-
-;;;###autoload
-(defun my/custom-open ()
-  "Open the `custom-file`."
-  (interactive)
+  ;; 1) Route Customize output to .etc/custom.el (idempotent)
+  (setq custom-file my:f:custom)
   (my/custom--ensure-file)
-  (find-file my:f:custom))
+  (when (file-readable-p custom-file)
+    (ignore-errors (load custom-file nil 'nomessage)))
 
-;;;###autoload
-(defun my/custom-dump-current ()
-  "Persist a curated set of current settings/faces into `custom-file`.
-This is a one-shot snapshot; it won't run automatically."
-  (interactive)
-  (my/custom--ensure-file)
+  ;;;###autoload
+  (defun my/custom-open ()
+    "Open the `custom-file`."
+    (interactive)
+    (my/custom--ensure-file)
+    (find-file my:f:custom))
 
-  ;; ---- Variables you want to persist (add/remove as you like) ----
-  (dolist (pair
-           `(
-             ;; Core UI
-             (inhibit-startup-screen             . ,inhibit-startup-screen)
-             (frame-resize-pixelwise             . ,(bound-and-true-p frame-resize-pixelwise))
-             (display-line-numbers-type          . ,(and (boundp 'display-line-numbers-type) display-line-numbers-type))
-             ;; Completion
-             (completion-styles                  . ,(and (boundp 'completion-styles) completion-styles))
-             (completion-category-overrides      . ,(and (boundp 'completion-category-overrides) completion-category-overrides))
-             ;; Org (selected)
-             (org-startup-indented               . ,(and (boundp 'org-startup-indented) org-startup-indented))
-             (org-hide-leading-stars             . ,(and (boundp 'org-hide-leading-stars) org-hide-leading-stars))
-             (org-tags-column                    . ,(and (boundp 'org-tags-column) org-tags-column))
-             (org-agenda-tags-column             . ,(and (boundp 'org-agenda-tags-column) org-agenda-tags-column))
-             ;; org-modern (selected)
-             (org-modern-list                    . ,(and (boundp 'org-modern-list) org-modern-list))
-             (org-modern-checkbox                . ,(and (boundp 'org-modern-checkbox) org-modern-checkbox))
-             (org-modern-priority                . ,(and (boundp 'org-modern-priority) org-modern-priority))
-             (org-modern-replace-stars           . ,(and (boundp 'org-modern-replace-stars) org-modern-replace-stars))
-             (org-modern-todo-faces              . ,(and (boundp 'org-modern-todo-faces) org-modern-todo-faces))
-             ))
-    ;; Only save bound values; skip nil/unbound
-    (when (car (last pair))
-      (customize-save-variable (car pair) (cdr pair))))
+  ;;;###autoload
+  (defun my/custom-dump-current ()
+    "Persist a curated set of current settings/faces into `custom-file`.
+  This is a one-shot snapshot; it won't run automatically."
+    (interactive)
+    (my/custom--ensure-file)
 
-  ;; ---- Faces you want to persist (add/remove as you like) ----
-  (let ((faces
-         '(
-           (org-modern-date-active   ((t (:background "#373844" :foreground "#f8f8f2" :height 0.75 :weight light :width condensed))))
-           (org-modern-time-active   ((t (:background "#44475a" :foreground "#f8f8f2" :height 0.75 :weight light :width condensed))))
-           (org-modern-date-inactive ((t (:background "#373844" :foreground "#b0b8d1" :height 0.75 :weight light :width condensed))))
-           (org-modern-time-inactive ((t (:background "#44475a" :foreground "#b0b8d1" :height 0.75 :weight light :width condensed))))
-           (org-modern-tag           ((t (:background "#44475a" :foreground "#b0b8d1" :height 0.75 :weight light :width condensed))))
-           (org-modern-statistics    ((t (:foreground "violet" :weight light))))
-           )))
-    (dolist (f faces)
-      (let ((face (nth 0 f)) (spec (nth 1 f)))
-        (custom-set-faces `(,face ,spec)))))
-  ;; Actually write
-  (custom-save-all)
-  (message "[custom] Wrote current snapshot to %s" my:f:custom))
+    ;; ---- Variables you want to persist (add/remove as you like) ----
+    (dolist (pair
+             `(
+               ;; Core UI
+               (inhibit-startup-screen             . ,inhibit-startup-screen)
+               (frame-resize-pixelwise             . ,(bound-and-true-p frame-resize-pixelwise))
+               (display-line-numbers-type          . ,(and (boundp 'display-line-numbers-type) display-line-numbers-type))
+               ;; Completion
+               (completion-styles                  . ,(and (boundp 'completion-styles) completion-styles))
+               (completion-category-overrides      . ,(and (boundp 'completion-category-overrides) completion-category-overrides))
+               ;; Org (selected)
+               (org-startup-indented               . ,(and (boundp 'org-startup-indented) org-startup-indented))
+               (org-hide-leading-stars             . ,(and (boundp 'org-hide-leading-stars) org-hide-leading-stars))
+               (org-tags-column                    . ,(and (boundp 'org-tags-column) org-tags-column))
+               (org-agenda-tags-column             . ,(and (boundp 'org-agenda-tags-column) org-agenda-tags-column))
+               ;; org-modern (selected)
+               (org-modern-list                    . ,(and (boundp 'org-modern-list) org-modern-list))
+               (org-modern-checkbox                . ,(and (boundp 'org-modern-checkbox) org-modern-checkbox))
+               (org-modern-priority                . ,(and (boundp 'org-modern-priority) org-modern-priority))
+               (org-modern-replace-stars           . ,(and (boundp 'org-modern-replace-stars) org-modern-replace-stars))
+               (org-modern-todo-faces              . ,(and (boundp 'org-modern-todo-faces) org-modern-todo-faces))
+               ))
+      ;; Only save bound values; skip nil/unbound
+      (when (car (last pair))
+        (customize-save-variable (car pair) (cdr pair))))
 
-(provide 'core/custom)
-;;; core/custom.el ends here
+    ;; ---- Faces you want to persist (add/remove as you like) ----
+    (let ((faces
+           '(
+             (org-modern-date-active   ((t (:background "#373844" :foreground "#f8f8f2" :height 0.75 :weight light :width condensed))))
+             (org-modern-time-active   ((t (:background "#44475a" :foreground "#f8f8f2" :height 0.75 :weight light :width condensed))))
+             (org-modern-date-inactive ((t (:background "#373844" :foreground "#b0b8d1" :height 0.75 :weight light :width condensed))))
+             (org-modern-time-inactive ((t (:background "#44475a" :foreground "#b0b8d1" :height 0.75 :weight light :width condensed))))
+             (org-modern-tag           ((t (:background "#44475a" :foreground "#b0b8d1" :height 0.75 :weight light :width condensed))))
+             (org-modern-statistics    ((t (:foreground "violet" :weight light))))
+             )))
+      (dolist (f faces)
+        (let ((face (nth 0 f)) (spec (nth 1 f)))
+          (custom-set-faces `(,face ,spec)))))
+    ;; Actually write
+    (custom-save-all)
+    (message "[custom] Wrote current snapshot to %s" my:f:custom))
+
+  (provide 'core/custom)
+  ;;; core/custom.el ends here
 #+end_src
 
 **** Wiring
@@ -2662,7 +2762,7 @@ Foundational Org configuration: directories, agenda, TODO workflow, refile targe
     (require 'leaf)
     (require 'cl-lib))
 
-  (defvar my:d:org (expand-file-name "org/" my:d:var))
+  (defvar my:d:org (expand-file-name "org" my:d:var))
   (defvar my:d:org-journal (expand-file-name "journal" my:d:org))
   (defvar my:d:org-roam (expand-file-name "org-roam" my:d:org))
   (defvar my:d:org-pictures (expand-file-name "pictures" my:d:org))
@@ -3920,13 +4020,13 @@ Per-user (macOS-first) layer: identity, font preferences (consumed by the UI fon
           my:use-lsp 'eglot)
 
     (defvar my:d:cloud
-      (expand-file-name "Documents/" (getenv "HOME"))
+      (expand-file-name "Documents" (getenv "HOME"))
       "Cloud storage base directory.")
     (defvar my:d:org
-      (expand-file-name "org/" my:d:cloud)
+      (expand-file-name "org" my:d:cloud)
       "Org directory.")
     (defvar my:d:blog
-      (expand-file-name "devel/repos/mysite/" my:d:cloud)
+      (expand-file-name "devel/repos/mysite" my:d:cloud)
       "Blog directory.")
     (defvar my:f:capture-blog-file
       (expand-file-name "all-posts.org" my:d:blog)
