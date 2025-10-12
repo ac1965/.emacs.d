@@ -1,3 +1,4 @@
+
 # -*- mode: org; coding: utf-8; -*-
 
 #+TITLE: Modern Emacs Configuration
@@ -338,17 +339,36 @@ Establish a fast, predictable startup baseline for Emacs 30+ with a clean hidden
     (my/ensure-directory-exists dir))
 
   ;; 4) macOS: prepend Homebrew libgccjit to LIBRARY_PATH if present
-  (when (and (eq system-type 'darwin) (executable-find "brew"))
-    (condition-case err
-        (let* ((prefix (string-trim (shell-command-to-string "brew --prefix")))
-               (brew-libgccjit (expand-file-name "lib/gcc/current" prefix)))
-          (when (file-directory-p brew-libgccjit)
-            (setenv "LIBRARY_PATH"
-                    (concat brew-libgccjit
-                            (when-let* ((orig (getenv "LIBRARY_PATH")))
-                              (concat ":" orig))))))
-      (error (message "[early-init] brew probe failed: %s"
-                      (error-message-string err)))))
+  (let* ((brew-prefix
+          (or (getenv "HOMEBREW_PREFIX")
+              (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
+              (and (file-directory-p "/usr/local") "/usr/local")))
+         (prefix-libgccjit (and brew-prefix (expand-file-name "opt/libgccjit" brew-prefix)))
+         (prefix-gcc       (and brew-prefix (expand-file-name "opt/gcc"       brew-prefix)))
+         ;; Homebrew exposes a stable "lib/gcc/current" symlink.
+         (candidates
+          (seq-filter
+           #'file-directory-p
+           (list
+            (and prefix-libgccjit (expand-file-name "lib/gcc/current" prefix-libgccjit))
+            (and prefix-libgccjit (expand-file-name "lib"             prefix-libgccjit))
+            (and prefix-gcc       (expand-file-name "lib/gcc/current" prefix-gcc))))) )
+    (when candidates
+      (setenv "LIBRARY_PATH"
+              (string-join (delete-dups
+                            (append candidates
+                                    (when-let ((old (getenv "LIBRARY_PATH")))
+                                      (split-string old ":" t))))
+                           ":")))
+    ;; Prefer Homebrew's gcc in PATH so the "gcc driver" is invocable.
+    (when brew-prefix
+      (let* ((bin (expand-file-name "bin" brew-prefix))
+             (path (concat bin ":" (or (getenv "PATH") ""))))
+        (setenv "PATH" path)))
+    ;; Optional: make sure Emacs uses Homebrew gcc (adjust version automatically).
+    (when-let* ((bin (and brew-prefix (expand-file-name "bin" brew-prefix))))
+      (when (file-exists-p (expand-file-name "gcc-14" bin)) (setenv "CC" (expand-file-name "gcc-14" bin)))
+      (when (file-exists-p (expand-file-name "gcc-13" bin)) (setenv "CC" (expand-file-name "gcc-13" bin)))))
 
   ;; 5) Native compilation: keep ELN under .cache/
   (when (featurep 'native-compile)
