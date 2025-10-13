@@ -2126,9 +2126,6 @@ GUI-only; harmless when run headless.
 #+begin_src emacs-lisp :tangle lisp/ui/ui-font.el
   ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-  ;;
   ;; Category: ui
   ;;
   ;;; Code:
@@ -2155,7 +2152,7 @@ GUI-only; harmless when run headless.
                           :height (* 10 (or my:font-size 16)))
       (message "[font] default: %s, %.1f pt"
                (face-attribute 'default :family)
-               (/ (float (face-attribute 'default :height)) 16))
+               (/ (float (face-attribute 'default :height)) 16.0))
 
       (set-face-attribute 'variable-pitch nil
                           :family (or my:font-alt (my/system-default-font)))
@@ -2175,13 +2172,17 @@ GUI-only; harmless when run headless.
            (pt (/ height 10.0)))
       (message "Current font: %s, %.1f pt" family pt)))
 
+  ;; Apply fonts on startup/daemon frame creation.
   (if (daemonp)
       (add-hook 'after-make-frame-functions
                 (lambda (frame) (with-selected-frame frame (my/font-setup))))
     (add-hook 'after-init-hook #'my/font-setup))
 
-  (leaf ligature :straight t
-    :config
+  ;; --- SAFE ligature setup (guarded) ------------------------------------------
+  ;; Avoids "void variable: ligature" by requiring the feature explicitly and only
+  ;; running when available. This works regardless of package manager/macro.
+  (when (require 'ligature nil t)
+    ;; Minimal, neutral defaults; extend as you like.
     (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
     (global-ligature-mode 1))
 
@@ -3849,32 +3850,38 @@ All hooks are local and non-intrusive.
 #+begin_src emacs-lisp :tangle lisp/utils/utils-scratch.el
   ;;; utils/utils-scratch.el --- Scratch buffer helpers -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-  ;;
   ;; Category: utils
   ;;
   ;;; Code:
 
-  (leaf *scratch-auto-recreate
-    :straight nil
-    :init
-    (defun my/create-scratch-buffer ()
-      "Create a new `*scratch*` buffer with `lisp-interaction-mode`."
-      (let ((buf (get-buffer-create "*scratch*")))
-        (with-current-buffer buf
-          (lisp-interaction-mode)
-          (insert ";; This is a new *scratch* buffer\n\n"))
-        buf))
+  (defgroup my-scratch nil
+    "Utilities for managing the *scratch* buffer."
+    :group 'convenience)
 
-    (defun my/kill-scratch-buffer-advice (buf)
-      "Recreate *scratch* if BUF is *scratch*."
-      (when (string= (buffer-name buf) "*scratch*")
-        (run-at-time 0 nil #'my/create-scratch-buffer)))
+  (defcustom my:scratch-auto-recreate t
+    "If non-nil, recreate *scratch* automatically when it is killed."
+    :type 'boolean
+    :group 'my-scratch)
 
-    (add-hook 'kill-buffer-hook
-              (lambda ()
-                (my/kill-scratch-buffer-advice (current-buffer)))))
+  (defun my/create-scratch-buffer ()
+    "Create a new `*scratch*` buffer with `lisp-interaction-mode`."
+    (let ((buf (get-buffer-create "*scratch*")))
+      (with-current-buffer buf
+        (lisp-interaction-mode)
+        (unless (> (buffer-size) 0)
+          (insert ";; This is a new *scratch* buffer\n\n")))
+      buf))
+
+  (defun my/kill-scratch-buffer-advice (buf)
+    "Recreate *scratch* if BUF is *scratch* and `my:scratch-auto-recreate` is non-nil."
+    (when (and my:scratch-auto-recreate
+               (string= (buffer-name buf) "*scratch*"))
+      (run-at-time 0 nil #'my/create-scratch-buffer)))
+
+  ;; Install the hook unconditionally; it is a cheap guard.
+  (add-hook 'kill-buffer-hook
+            (lambda ()
+              (my/kill-scratch-buffer-advice (current-buffer))))
 
   (provide 'utils/utils-scratch)
   ;;; utils/utils-scratch.el ends here
