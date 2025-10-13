@@ -33,7 +33,7 @@ STRAIGHT_BASE_DIR := $(shell \
       --eval "(princ (expand-file-name \"straight\" (cond ((boundp 'STRAIGHT_BASE_DIR) STRAIGHT_BASE_DIR) \
                                              ((fboundp 'my:straight-base-dir) (my:straight-base-dir)) \
                                              ((boundp 'straight-base-dir) straight-base-dir) \
-                                             (t (expand-file-name \"$(EMACSD)\")))))"; \
+                                             (t user-emacs-directory))))"; \
   else \
     printf "%s" "$(EMACSD)/straight"; \
   fi)
@@ -46,7 +46,9 @@ ELFILES  := $(shell find $(LISPDIR) $(PERSONALDIR) -type f -name '*.el' 2>/dev/n
 ELCFILES := $(patsubst %.el,%.elc,$(ELFILES))
 
 # Common eval snippets
-EVAL_REQ_ORG := --eval "(require 'org)" --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))"
+EVAL_REQ_ORG := --eval "(require 'org)" \
+                --eval "(require 'ob-core)" \
+                --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))"
 EVAL_LEAF    := --eval "(add-to-list 'load-path (expand-file-name \"$(LEAF_DIR)\"))" \
                 --eval "(add-to-list 'load-path (expand-file-name \"$(LEAFKW_DIR)\"))" \
                 --eval "(require 'leaf)" \
@@ -90,13 +92,13 @@ compile-q:
 # Optional split targets (init-based)
 compile-personal: check-init
 	@echo "[compile:init] personal/"
-	@find $(PERSONALDIR) -type f -name '*.el' -print0 | xargs -0 -I{} \
-	  $(EMACS) --batch -l "$(EAERLY)" -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
+	@find $(PERSONALDIR) -type f -name '*.el' -print0 | xargs -0 -r -I{} \
+	  $(EMACS) --batch -l "$(EARLY)" -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
 
 compile-lisp: check-init
 	@echo "[compile:init] lisp/"
-	@find $(LISPDIR) -type f -name '*.el' -print0 | xargs -0 -I{} \
-	  $(EMACS) --batch -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
+	@find $(LISPDIR) -type f -name '*.el' -print0 | xargs -0 -r -I{} \
+	  $(EMACS) --batch -l "$(EARLY)" -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
 
 # Sanity check before init-based compile
 check-init:
@@ -120,8 +122,8 @@ echo-sbd:  ## print resolved STRAIGHT_BASE_DIR
 # Cleanup
 clean:
 	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
-	@find $(LISPDIR) -type f -name '*.elc' -delete
-	@find $(PERSONALDIR) -type f -name '*.elc' -delete
+	@test -n "$(LISPDIR)" && find $(LISPDIR) -type f -name '*.elc' -delete || true
+	@test -n "$(PERSONALDIR)" && find $(PERSONALDIR) -type f -name '*.elc' -delete || true
 
 distclean: clean
 	@echo "[distclean] remove stray *.eln under project tree (if any)"
