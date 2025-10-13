@@ -1,19 +1,24 @@
 # Makefile for Emacs config build
-# - Resolves EMACSD and STRAIGHT_BASE_DIR from early-init.el
-# - Honors project-local definitions/ helpers provided by early-init
-# ------------------------------------------------------------------------------
-# Override via: make EMACS=/path/to/emacs EARLY=/path/to/early-init.el INIT=/path/to/init.el ORG=README.org
+# - One-shot `make all`: tangle -> byte-compile (sequential)
+# - Resolves EMACSD / STRAIGHT_BASE_DIR from early-init.el when available
+# - Does not require a build/ directory
+
+SHELL := /bin/sh
+
 EMACS  ?= emacs
 ORG    ?= README.org
 EARLY  ?= early-init.el
 INIT   ?= init.el
 
-# Project dirs (relative to repo)
-LISPDIR      ?= lisp
-PERSONALDIR  ?= personal
+# Project directories (relative to repo root)
+LISPDIR     ?= lisp
+PERSONALDIR ?= personal
 
-# ------------------------------------------------------------------------------
-# Resolve EMACSD by loading EARLY and consulting helpers. Fallback to user-emacs-directory.
+# Marker file indicating tangle completion
+TANGLE_STAMP := .tangle-stamp
+
+# ---------------------------------------------------------------------
+# Resolve EMACSD by loading EARLY; fallback to user-emacs-directory
 EMACSD := $(shell \
   if [ -f "$(EARLY)" ]; then \
     "$(EMACS)" --batch -Q -l "$(EARLY)" \
@@ -22,11 +27,7 @@ EMACSD := $(shell \
     "$(EMACS)" --batch -Q --eval "(princ (expand-file-name user-emacs-directory))"; \
   fi)
 
-# Resolve STRAIGHT_BASE_DIR:
-# 1) If EARLY defines the variable STRAIGHT_BASE_DIR, use it.
-# 2) Else, if helper (my:straight-base-dir) exists, call it.
-# 3) Else, if straight-base-dir is bound, use it.
-# 4) Else, fallback to EMACSD/straight.
+# Resolve STRAIGHT_BASE_DIR with several fallbacks
 STRAIGHT_BASE_DIR := $(shell \
   if [ -f "$(EARLY)" ]; then \
     "$(EMACS)" --batch -Q -l "$(EARLY)" \
@@ -41,70 +42,100 @@ STRAIGHT_BASE_DIR := $(shell \
 LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf
 LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords
 
-# Discover files recursively
-ELFILES  := $(shell find $(LISPDIR) $(PERSONALDIR) -type f -name '*.el' 2>/dev/null)
-ELCFILES := $(patsubst %.el,%.elc,$(ELFILES))
+# (Reference only; not used as dependencies to avoid stale lists)
+ELFILES  = $(shell find $(LISPDIR) $(PERSONALDIR) -type f -name '*.el' 2>/dev/null)
+ELCFILES = $(patsubst %.el,%.elc,$(ELFILES))
 
-# Common eval snippets
+# Minimal Org loading under -Q
 EVAL_REQ_ORG := --eval "(require 'org)" \
                 --eval "(require 'ob-core)" \
                 --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))"
-EVAL_LEAF    := --eval "(add-to-list 'load-path (expand-file-name \"$(LEAF_DIR)\"))" \
-                --eval "(add-to-list 'load-path (expand-file-name \"$(LEAFKW_DIR)\"))" \
-                --eval "(require 'leaf)" \
-                --eval "(require 'leaf-keywords)" \
-                --eval "(leaf-keywords-init)"
 
-# ------------------------------------------------------------------------------
-.PHONY: all tangle compile compile-q compile-personal compile-lisp clean distclean \
-        check-init echo-paths echo-myd echo-sbd
+# Optional: inject leaf paths under -Q (used by `compile-q`)
+EVAL_LEAF := --eval "(add-to-list 'load-path (expand-file-name \"$(LEAF_DIR)\"))" \
+             --eval "(add-to-list 'load-path (expand-file-name \"$(LEAFKW_DIR)\"))" \
+             --eval "(require 'leaf)" \
+             --eval "(require 'leaf-keywords)" \
+             --eval "(leaf-keywords-init)"
 
+# ---------------------------------------------------------------------
+.PHONY: all tangle compile compile-q compile-personal compile-lisp \
+        clean distclean show-files echo-paths echo-myd echo-sbd check-init
+
+# Top-level: always run tangle before compile
 all: tangle compile
 
-# 1) Tangle README.org -> *.el (works with -Q; org only)
-tangle: $(ORG)
+# 1) Tangle README.org -> *.el and drop a completion stamp
+$(TANGLE_STAMP): $(ORG)
 	@echo "[tangle] $(ORG)"
-	$(EMACS) --batch -Q \
+	@"$(EMACS)" --batch -Q \
 	  $(EVAL_REQ_ORG) \
 	  --eval "(org-babel-tangle-file \"$(ORG)\")"
+	@touch "$(TANGLE_STAMP)"
 
-# 2) Compile using full init (safest: leaf & straight initialized)
-compile: check-init $(ELCFILES)
-	@echo "[compile] done"
+tangle: $(TANGLE_STAMP)
 
-# Pattern: .el -> .elc via init.el
-%.elc: %.el
-	@echo "[byte-compile:init] $<"
-	$(EMACS) --batch -l "$(EARLY)" -l "$(INIT)" --eval "(byte-compile-file \"$<\")"
+# 2) Compile using full init; enumerate files after tangle to avoid stale lists
+compile: check-init $(TANGLE_STAMP)
+	@echo "Byte-compiling .el under '$(LISPDIR)' and '$(PERSONALDIR)'..."
+	@FILES=$$( { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } 2>/dev/null; \
+	            { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } 2>/dev/null ); \
+	if [ -z "$$FILES" ]; then \
+	  echo "[compile] no .el files found; did tangle write to '$(LISPDIR)' or '$(PERSONALDIR)'?"; \
+	  exit 2; \
+	else \
+	  for f in $$FILES; do \
+	    echo "[byte-compile:init] $$f"; \
+	    "$(EMACS)" --batch -l "$(EARLY)" -l "$(INIT)" \
+	      --eval "(setq byte-compile-verbose t debug-on-error t)" \
+	      --eval "(byte-compile-file \"$$f\")"; \
+	  done; \
+	  echo "[compile] done"; \
+	fi
 
-# 3) Compile under -Q by injecting leaf paths derived from EARLY's STRAIGHT_BASE_DIR
-compile-q:
-	@echo "[compile-q] -Q with EMACSD=$(EMACSD)"
+# Optional: compile under -Q by injecting leaf (does not load init.el)
+compile-q: $(TANGLE_STAMP)
 	@echo "[compile-q] -Q with STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"
-	@for f in $(ELFILES); do \
-	  echo "  [byte-compile:-Q] $$f"; \
-	  $(EMACS) --batch -Q \
-	    $(EVAL_LEAF) \
-	    --eval "(byte-compile-file \"$$f\")"; \
-	done
-	@echo "[compile-q] done"
+	@FILES=$$( { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } 2>/dev/null; \
+	            { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } 2>/dev/null ); \
+	if [ -z "$$FILES" ]; then \
+	  echo "[compile-q] no .el files found; did tangle write to '$(LISPDIR)' or '$(PERSONALDIR)'?"; \
+	  exit 2; \
+	else \
+	  for f in $$FILES; do \
+	    echo "  [byte-compile:-Q] $$f"; \
+	    "$(EMACS)" --batch -Q \
+	      $(EVAL_LEAF) \
+	      --eval "(setq byte-compile-verbose t debug-on-error t)" \
+	      --eval "(byte-compile-file \"$$f\")"; \
+	  done; \
+	  echo "[compile-q] done"; \
+	fi
 
-# Optional split targets (init-based)
-compile-personal: check-init
+# Optional: directory-scoped compile with init.el
+compile-personal: check-init $(TANGLE_STAMP)
 	@echo "[compile:init] personal/"
-	@find $(PERSONALDIR) -type f -name '*.el' -print0 | xargs -0 -r -I{} \
-	  $(EMACS) --batch -l "$(EARLY)" -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
+	@find "$(PERSONALDIR)" -type f -name '*.el' -print0 2>/dev/null | xargs -0 -r -I{} \
+	  "$(EMACS)" --batch -l "$(EARLY)" -l "$(INIT)" \
+	    --eval "(setq byte-compile-verbose t debug-on-error t)" \
+	    --eval "(byte-compile-file \"{}\")"
 
-compile-lisp: check-init
+compile-lisp: check-init $(TANGLE_STAMP)
 	@echo "[compile:init] lisp/"
-	@find $(LISPDIR) -type f -name '*.el' -print0 | xargs -0 -r -I{} \
-	  $(EMACS) --batch -l "$(EARLY)" -l "$(INIT)" --eval "(byte-compile-file \"{}\")"
+	@find "$(LISPDIR)" -type f -name '*.el' -print0 2>/dev/null | xargs -0 -r -I{} \
+	  "$(EMACS)" --batch -l "$(EARLY)" -l "$(INIT)" \
+	    --eval "(setq byte-compile-verbose t debug-on-error t)" \
+	    --eval "(byte-compile-file \"{}\")"
 
 # Sanity check before init-based compile
 check-init:
-	@test -f "$(INIT)" || (echo "[error] init.el not found at: $(INIT)"; echo "         -> set INIT=/path/to/init.el or use 'make compile-q'"; exit 1)
+	@test -f "$(INIT)" || (echo "[error] init.el not found at: $(INIT)"; echo "        -> set INIT=/path/to/init.el or use 'make compile-q'"; exit 1)
 
-# Debug helpers
+# Helpers
+show-files:
+	@echo "[list] $(LISPDIR)";    { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } || true
+	@echo "[list] $(PERSONALDIR)"; { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } || true
+
 echo-paths:
 	@echo "EMACSD=$(EMACSD)"; \
 	echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
@@ -113,18 +144,19 @@ echo-paths:
 	echo "EARLY=$(EARLY)"; \
 	echo "INIT=$(INIT)"
 
-echo-myd:  ## print resolved my:d (EMACSD)
+echo-myd:
 	@echo $(EMACSD)
 
-echo-sbd:  ## print resolved STRAIGHT_BASE_DIR
+echo-sbd:
 	@echo $(STRAIGHT_BASE_DIR)
 
 # Cleanup
 clean:
 	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
-	@test -n "$(LISPDIR)" && find $(LISPDIR) -type f -name '*.elc' -delete || true
-	@test -n "$(PERSONALDIR)" && find $(PERSONALDIR) -type f -name '*.elc' -delete || true
+	@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+	@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 
 distclean: clean
-	@echo "[distclean] remove stray *.eln under project tree (if any)"
+	@echo "[distclean] remove $(TANGLE_STAMP) and stray *.eln"
+	@rm -f "$(TANGLE_STAMP)"
 	@find . -type f -name '*.eln' -delete
