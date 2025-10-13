@@ -429,12 +429,18 @@ Establish a fast, predictable startup baseline for Emacs 30+ with a clean hidden
   (defconst my:d:etc    (expand-file-name ".etc"    my:d))
   (defconst my:d:cache  (expand-file-name ".cache"  my:d))
   (defconst my:d:lisp   (expand-file-name "lisp"    my:d))
+  (defconst my:d:eln-cache (expand-file-name "eln-cache" my:d:cache))
   (defconst my:d:treesit        (expand-file-name "treesit"        my:d:var))
   (defconst my:d:treesit-build  (expand-file-name "treesit-build"  my:d:cache))
+  (defconst my:d:url (expand-file-name "url/" my:d:var)
+    "Directory for url.* state (cookies, history, etc.) under my:d:var.")
+  (defconst my:d:eww (expand-file-name "eww/" my:d:var)
+    "Directory for EWW state (bookmarks, history) under my:d:var.")
 
   (dolist (dir (list my:d:var my:d:etc my:d:cache my:d:lisp
-                     my:d:treesit my:d:treesit-build
-                     (expand-file-name "eln-cache" my:d:cache)))
+  		   my:d:treesit my:d:treesit-build
+  		   my:d:url my:d:eww
+  		   my:d:eln-cache))
     (my/ensure-directory-exists dir))
 
   ;; 4) macOS: prepend Homebrew libgccjit to LIBRARY_PATH if present
@@ -595,8 +601,21 @@ Serve as the primary entry point for Emacs 30+, bootstrapping **straight.el + le
   ;;
   ;;; Code:
 
+  (eval-when-compile (require 'subr-x))
+
   ;;;; Bootstrap straight.el -----------------------------------------------------
+  ;; Must be set BEFORE url.el is loaded so defaults pick these locations.
+  (setopt
+   ;; url/ general config/root directory (Emacs uses this for several files)
+   url-configuration-directory my:d:url
+   ;; Explicit cookie/history file paths (safer across Emacs versions)
+   url-cookie-file  (expand-file-name "cookies" my:d:url)
+   url-history-file (expand-file-name "history" my:d:url)
+   url-cache-directory (expand-file-name "cache" my:d:url))
+  (dolist (d (list url-configuration-directory url-cache-directory))
+    (my/ensure-directory-exists d))
   (require 'url) ;; for url-retrieve-synchronously
+
   (defvar bootstrap-version 7)
   (let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
          (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
@@ -3242,9 +3261,54 @@ Warns when no API keys are found.
   ;; Commentary:
   ;; AI-assisted coding via Aidermacs.
   ;;
+  ;; Purpose: Centralize aider/Aidermacs runtime files into ~/.var/aideremacs
+  ;; Notes:
+  ;; - Uses official AIDER_* env vars so both CLI and Aidermacs obey.
+  ;; - Safe to load early (e.g. in personal/user.el or core/general.el).
+  ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf)
+  		   (require 'subr-x))
+
+  ;; 1) Decide base directory: ~/.var/aideremacs
+  (defvar my:d:aider
+    (expand-file-name "aideremacs/" (or (bound-and-true-p my:d:var)
+                                        (expand-file-name "~/.var/")))
+    "Base directory to store aider runtime files.")
+
+  ;; 2) Ensure directory exists
+  (my/ensure-directory-exists my:d:aider)
+
+  ;; 3) Point aider history files to this directory via env vars
+  ;;    (aider recognizes these officially)
+  (setenv "AIDER_INPUT_HISTORY_FILE" (expand-file-name "input.history" my:d:aider))
+  (setenv "AIDER_CHAT_HISTORY_FILE"  (expand-file-name "chat.history.md" my:d:aider))
+  (setenv "AIDER_LLM_HISTORY_FILE"   (expand-file-name "llm.history" my:d:aider))
+  ;; Optional: analytics log location if you enable analytics logging
+  (setenv "AIDER_ANALYTICS_LOG"      (expand-file-name "analytics.log" my:d:aider))
+
+  ;; 4) [Optional] Keep a per-user .env here and make aider load it.
+  ;;    You can create ~/.var/aideremacs/.env and put API keys / options there.
+  ;;    If you use Aidermacs, pass --env-file via its extra args.
+  (with-eval-after-load 'aidermacs
+    ;; Aidermacs exposes an extra-args variable in recent builds
+    ;; (see NonGNU ELPA diffs mentioning `aidermacs-extra-args`).
+    ;; If your installed version still uses `aidermacs-args`, switch the name.
+    (defvar aidermacs-extra-args nil)
+    (let ((env-file (expand-file-name ".env" my:d:aider)))
+      (when (file-exists-p env-file)
+        (setq aidermacs-extra-args
+              (append aidermacs-extra-args
+                      (list "--env-file" env-file)))))
+
+    ;; Redundancy is harmless: also force the same files via CLI flags,
+    ;; in case your shell environment overrides Emacs' setenv.
+    (setq aidermacs-extra-args
+          (append aidermacs-extra-args
+                  (list "--input-history-file" (getenv "AIDER_INPUT_HISTORY_FILE")
+                        "--chat-history-file"  (getenv "AIDER_CHAT_HISTORY_FILE")
+                        "--llm-history-file"   (getenv "AIDER_LLM_HISTORY_FILE")))))
 
   (leaf aidermacs :straight t
     :init
@@ -3892,7 +3956,9 @@ Project search & navigation.
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
 
   (leaf dumb-jump :straight t
     :hook (xref-backend-functions . dumb-jump-xref-activate)
@@ -3905,7 +3971,9 @@ Project search & navigation.
     :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
              (eww-download-directory . "~/Downloads"))
     :init
-    (setq eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:var))
+    (setopt eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:eww)
+  	  eww-cache-directory (expand-file-name "cache/" my:d:eww))
+    (my/ensure-directory-exists eww-cache-directory)
     (setq eww-history-limit 200)
     (defvar eww-hl-search-word nil "Word to highlight with isearch after EWW loads.")
     (defun my/eww-search (term)
