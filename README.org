@@ -929,6 +929,7 @@ Provide a single, deterministic loader for modular configuration under `lisp/`. 
       utils/utils-backup
       utils/utils-async
       utils/search-nav
+      utils/utils-meow-readonly
       )
     "Default set of modules to load in order.")
 
@@ -4034,6 +4035,80 @@ Project search & navigation.
 
   (provide 'utils/search-nav)
   ;;; utils-search-nav.el ends here
+#+end_src
+
+*** utils/utils-meow-readonly.el
+:PROPERTIES:
+:CUSTOM_ID: meow-readonly
+:END:
+
+**Purpose**
+
+**What it does**
+
+**Notes**
+`projectile` removed; rely on built-in `project.el`.
+
+#+begin_src emacs-lisp :tangle lisp/utils/utils-meow-readonly.el
+  ;;; utils/utils-meow-readonly.el --- Make SPC scroll in read-only/view buffers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+
+  (defgroup my-meow-readonly nil
+    "Context-aware Meow behavior for read-only buffers."
+    :group 'convenience)
+
+  (defcustom my:meow-readonly-derive-modes
+    '(view-mode help-mode special-mode)
+    "Major modes where we prefer motion state and SPC = scroll."
+    :type '(repeat symbol)
+    :group 'my-meow-readonly)
+
+  (defun my/meow--readonly-context-p ()
+    "Return non-nil when current buffer should use motion state for viewing."
+    (or buffer-read-only
+        (apply #'derived-mode-p my:meow-readonly-derive-modes)))
+
+  (defun my/meow-apply-state-for-readonly ()
+    "Enable motion state for read-only buffers; restore normal state otherwise."
+    (when (featurep 'meow)
+      (if (my/meow--readonly-context-p)
+          ;; In viewing contexts, use motion state (SPC should scroll).
+          (meow-motion-mode 1)
+        ;; Leave motion state if it is on; go back to normal.
+        (when (bound-and-true-p meow-motion-mode)
+          (meow-motion-mode -1)))))
+
+  ;; Re-evaluate whenever these contexts may change.
+  (add-hook 'find-file-hook                 #'my/meow-apply-state-for-readonly)
+  (add-hook 'after-change-major-mode-hook   #'my/meow-apply-state-for-readonly)
+  (add-hook 'read-only-mode-hook            #'my/meow-apply-state-for-readonly)
+  (add-hook 'view-mode-hook                 #'my/meow-apply-state-for-readonly)
+
+  (with-eval-after-load 'meow
+    ;; In motion state, make SPC scroll like a pager.
+    (meow-motion-overwrite-define-key
+     '("SPC"        . scroll-up-command)
+     '("S-SPC"      . scroll-down-command)
+     '("<backspace>". scroll-down-command)
+     ;; Give alternative access to leader/keypad while viewing:
+     '(","          . meow-keypad)
+     '("M-SPC"      . meow-keypad)
+     ;; Quality-of-life: q to quit-window in viewing contexts.
+     '("q"          . quit-window)))
+
+  (provide 'utils/utils-meow-readonly)
+  ;;; utils/utils-meow-readonly.el ends here
 #+end_src
 
 ** personal/user.el
