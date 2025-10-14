@@ -1,4 +1,4 @@
-# -*- mode: org; coding: utf-8; -*-
+utils-meow-readonly.# -*- mode: org; coding: utf-8; -*-
 
 #+TITLE: Modern Emacs Configuration
 #+AUTHOR: YAMASHITA, Takao
@@ -3821,6 +3821,9 @@ Window-aware and safe.
   ;;
   ;; Category: utils
   ;;
+  ;;; Commentary:
+  ;; Small, general-purpose helpers.
+  ;;
   ;;; Code:
 
   (defun my/kill-buffer-smart ()
@@ -3831,6 +3834,7 @@ Window-aware and safe.
       (kill-buffer-and-window)))
 
   (provide 'utils/utils-functions)
+  ;;; utils/utils-functions.el ends here
 #+end_src
 
 *** utils/utils-scratch.el
@@ -3853,6 +3857,9 @@ All hooks are local and non-intrusive.
   ;;
   ;; Category: utils
   ;;
+  ;;; Commentary:
+  ;; Auto-recreate *scratch* when killed; customizable switch.
+  ;;
   ;;; Code:
 
   (defgroup my-scratch nil
@@ -3864,6 +3871,10 @@ All hooks are local and non-intrusive.
     :type 'boolean
     :group 'my-scratch)
 
+  ;; Backward compatibility with older configs that used *scratch-auto-recreate.
+  ;; This avoids: Symbol’s value as variable is void: *scratch-auto-recreate
+  (defvaralias '*scratch-auto-recreate 'my:scratch-auto-recreate)
+
   (defun my/create-scratch-buffer ()
     "Create a new `*scratch*` buffer with `lisp-interaction-mode`."
     (let ((buf (get-buffer-create "*scratch*")))
@@ -3874,7 +3885,7 @@ All hooks are local and non-intrusive.
       buf))
 
   (defun my/kill-scratch-buffer-advice (buf)
-    "Recreate *scratch* if BUF is *scratch* and `my:scratch-auto-recreate` is non-nil."
+    "Recreate *scratch* if BUF is *scratch* and auto-recreate is enabled."
     (when (and my:scratch-auto-recreate
                (string= (buffer-name buf) "*scratch*"))
       (run-at-time 0 nil #'my/create-scratch-buffer)))
@@ -3910,20 +3921,37 @@ Quietly skips if the directory does not exist.
   ;;
   ;; Category: utils
   ;;
+  ;;; Commentary:
+  ;; Delete old backup files under var directory (no-littering aware).
+  ;;
   ;;; Code:
 
-  (defun my/delete-old-backups ()
-    "Delete backup files older than 7 days."
-    (interactive)
-    (let ((backup-dir (concat no-littering-var-directory "backup/"))
-          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
-      (when (file-directory-p backup-dir)
-        (dolist (file (directory-files backup-dir t))
-          (when (and (file-regular-p file)
-                     (< (float-time (file-attribute-modification-time
-                                     (file-attributes file)))
-                        threshold))
-            (delete-file file))))))
+  (defconst my--fallback-var-dir
+    (expand-file-name ".var/" user-emacs-directory)
+    "Fallback var directory when no-littering is unavailable.")
+
+  (defun my--backup-dir ()
+    "Return the backup directory path, creating it when necessary."
+    (let* ((var-dir (cond
+                     ((boundp 'no-littering-var-directory) no-littering-var-directory)
+                     (t my--fallback-var-dir)))
+           (dir (expand-file-name "backup/" var-dir)))
+      (unless (file-directory-p dir)
+        (make-directory dir t))
+      dir))
+
+  (defun my/delete-old-backups (&optional days)
+    "Delete backup files older than DAYS (default: 7)."
+    (interactive "P")
+    (let* ((ndays (or (and (numberp days) (max 1 days)) 7))
+           (threshold (- (float-time (current-time)) (* ndays 24 60 60)))
+           (backup-dir (my--backup-dir)))
+      (dolist (file (directory-files backup-dir t))
+        (when (and (file-regular-p file)
+                   (< (float-time (file-attribute-modification-time
+                                   (file-attributes file)))
+                      threshold))
+          (ignore-errors (delete-file file))))))
 
   (add-hook 'emacs-startup-hook #'my/delete-old-backups)
 
@@ -3952,6 +3980,9 @@ Good for non-critical deferred work.
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Safe async task runner that catches and logs errors.
   ;;
   ;;; Code:
 
@@ -4002,39 +4033,68 @@ Project search & navigation.
     (require 'leaf)
     (require 'subr-x))
 
+  ;;;; Xref backend: dumb-jump ---------------------------------------------------
   (leaf dumb-jump :straight t
     :hook (xref-backend-functions . dumb-jump-xref-activate)
     :custom ((dumb-jump-force-searcher  . 'rg)
              (dumb-jump-prefer-searcher . 'rg)))
 
+  ;;;; Multiple Cursors (optional helpers) ---------------------------------------
   (leaf multiple-cursors :straight t)
+  ;; Example (uncomment to use):
+  ;; (global-set-key (kbd "C-S-c C-S-c") #'mc/edit-lines)
+  ;; (global-set-key (kbd "C->") #'mc/mark-next-like-this)
+  ;; (global-set-key (kbd "C-<") #'mc/mark-previous-like-this)
 
+  ;;;; EWW search & image toggle -------------------------------------------------
   (leaf eww :straight nil
-    :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
+    :custom ((eww-search-prefix     . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
              (eww-download-directory . "~/Downloads"))
     :init
-    (setopt eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:eww)
-  	  eww-cache-directory (expand-file-name "cache/" my:d:eww))
-    (my/ensure-directory-exists eww-cache-directory)
+    ;; Resolve eww data dir base
+    (defvar my:d:eww
+      (or (and (boundp 'my:d:eww) my:d:eww)
+          ;; Prefer no-littering if available
+          (when (boundp 'no-littering-var-directory)
+            (expand-file-name "eww/" no-littering-var-directory))
+          (expand-file-name "eww/" user-emacs-directory))
+      "Base directory for EWW data (bookmarks, cache).")
+
+    (setopt eww-bookmarks-file  (expand-file-name "eww-bookmarks" my:d:eww)
+            eww-cache-directory (expand-file-name "cache/"        my:d:eww))
+
+    (when (and (boundp 'eww-cache-directory) eww-cache-directory)
+      (unless (file-directory-p eww-cache-directory)
+        (make-directory eww-cache-directory t)))
+
     (setq eww-history-limit 200)
-    (defvar eww-hl-search-word nil "Word to highlight with isearch after EWW loads.")
+
+    (defvar eww-hl-search-word nil
+      "Word to highlight with isearch after EWW loads.")
+
     (defun my/eww-search (term)
       "Search TERM with EWW and start isearch."
       (interactive "sSearch terms: ")
       (setq eww-hl-search-word term)
       (eww-browse-url (concat eww-search-prefix term)))
+
     (add-hook 'eww-after-render-hook
               (lambda ()
                 (when eww-hl-search-word
                   (isearch-mode t)
                   (isearch-yank-string eww-hl-search-word)
                   (setq eww-hl-search-word nil))))
-    (defun my/eww-toggle-images () (interactive)
-      (setq shr-inhibit-images (not shr-inhibit-images))
-      (eww-reload)))
+
+    ;; Use shr-inhibit-images safely (available after shr is loaded).
+    (with-eval-after-load 'shr
+      (defun my/eww-toggle-images ()
+        "Toggle image rendering in EWW and reload."
+        (interactive)
+        (setq shr-inhibit-images (not shr-inhibit-images))
+        (eww-reload))))
 
   (provide 'utils/search-nav)
-  ;;; utils-search-nav.el ends here
+  ;;; utils/search-nav.el ends here
 #+end_src
 
 *** utils/utils-meow-readonly.el
@@ -4059,6 +4119,7 @@ Project search & navigation.
   ;; Category: utils
   ;;
   ;;; Commentary:
+  ;; In read-only/derived view contexts, prefer meow-motion state and let SPC scroll.
   ;;
   ;;; Code:
 
@@ -4079,33 +4140,36 @@ Project search & navigation.
     (or buffer-read-only
         (apply #'derived-mode-p my:meow-readonly-derive-modes)))
 
+  ;; Silence byte-compiler when meow is not loaded at compile time.
+  (declare-function meow-motion-mode "ext:meow")
+  (declare-function meow-motion-overwrite-define-key "ext:meow")
+  (declare-function meow-keypad "ext:meow")
+
   (defun my/meow-apply-state-for-readonly ()
     "Enable motion state for read-only buffers; restore normal state otherwise."
     (when (featurep 'meow)
       (if (my/meow--readonly-context-p)
-          ;; In viewing contexts, use motion state (SPC should scroll).
           (meow-motion-mode 1)
-        ;; Leave motion state if it is on; go back to normal.
         (when (bound-and-true-p meow-motion-mode)
           (meow-motion-mode -1)))))
 
   ;; Re-evaluate whenever these contexts may change.
-  (add-hook 'find-file-hook                 #'my/meow-apply-state-for-readonly)
-  (add-hook 'after-change-major-mode-hook   #'my/meow-apply-state-for-readonly)
-  (add-hook 'read-only-mode-hook            #'my/meow-apply-state-for-readonly)
-  (add-hook 'view-mode-hook                 #'my/meow-apply-state-for-readonly)
+  (add-hook 'find-file-hook               #'my/meow-apply-state-for-readonly)
+  (add-hook 'after-change-major-mode-hook #'my/meow-apply-state-for-readonly)
+  (add-hook 'read-only-mode-hook          #'my/meow-apply-state-for-readonly)
+  (add-hook 'view-mode-hook               #'my/meow-apply-state-for-readonly)
 
   (with-eval-after-load 'meow
     ;; In motion state, make SPC scroll like a pager.
     (meow-motion-overwrite-define-key
-     '("SPC"        . scroll-up-command)
-     '("S-SPC"      . scroll-down-command)
-     '("<backspace>". scroll-down-command)
-     ;; Give alternative access to leader/keypad while viewing:
-     '(","          . meow-keypad)
-     '("M-SPC"      . meow-keypad)
-     ;; Quality-of-life: q to quit-window in viewing contexts.
-     '("q"          . quit-window)))
+     '("SPC"         . scroll-up-command)
+     '("S-SPC"       . scroll-down-command)
+     '("<backspace>" . scroll-down-command)
+     ;; Alternative access to leader/keypad while viewing:
+     '(","           . meow-keypad)
+     '("M-SPC"       . meow-keypad)
+     ;; QoL: q to quit-window in viewing contexts.
+     '("q"           . quit-window)))
 
   (provide 'utils/utils-meow-readonly)
   ;;; utils/utils-meow-readonly.el ends here
