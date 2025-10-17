@@ -542,38 +542,31 @@ Establish a fast, predictable startup baseline for Emacs 30+ with a clean hidden
   (my/ensure-directory-exists (expand-file-name "backups" my:d:var))
 
   ;; 10) UI bars off + maximize all frames
-  (custom-set-variables
-   '(inhibit-startup-screen t)
-   '(inhibit-startup-message t)
-   '(inhibit-startup-echo-area-message t)
-   '(initial-scratch-message nil)
-   '(frame-resize-pixelwise t)
-   '(initial-frame-alist
-     '((fullscreen . fullboth)
-       (undecorated . nil)
-       (left-fringe . 0)
-       (right-fringe . 0)
-       (internal-border-width . 8)
-       (tool-bar-lines . 0)))
-   '(default-frame-alist
-     '((fullscreen . fullboth)
-       (undecorated . nil)
-       (internal-border-width . 8)
-       (left-fringe . 0)
-       (right-fringe . 0)))
-   '(menu-bar-mode nil)
-   '(scroll-bar-mode nil)
-   '(tool-bar-mode nil)
-   '(initial-buffer-choice t)
-   '(initial-major-mode 'fundamental-mode)
-   '(frame-inhibit-implied-resize t)
-   '(frame-title-format t)
-   '(cursor-in-non-selected-windows nil)
-   '(font-lock-maximum-decoration nil)
-   '(font-lock-maximum-size nil)
-   '(x-underline-at-descent-line t)
-   '(window-divider-default-right-width 16)
-   '(window-divider-default-places 'right-only))
+  ;; Keep frame/GUI decisions here to avoid flicker and relayouts.
+  ;; a) Frame sizing & layout policy (must be set before first frame)
+  (setopt frame-resize-pixelwise t
+          frame-inhibit-implied-resize t
+          cursor-in-non-selected-windows nil
+          x-underline-at-descent-line t
+          window-divider-default-right-width 16
+          window-divider-default-places 'right-only)
+
+  ;; b) Default/initial frame parameters
+  ;;    - Put common shape into default-frame-alist
+  ;;    - Mirror for initial-frame-alist if you want the *very first* frame same.
+  (dolist (it '((fullscreen . fullboth)
+                (undecorated . nil)
+                (internal-border-width . 8)
+  	      (left-fringe . 0)
+                (right-fringe . 0)
+                (tool-bar-lines . 0)))
+    (add-to-list 'default-frame-alist it)
+    (add-to-list 'initial-frame-alist it))
+
+  ;; c) Disable GUI bars from the very beginning (avoid flicker)
+  (menu-bar-mode -1)
+  (tool-bar-mode -1)
+  (scroll-bar-mode -1)
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -697,7 +690,24 @@ Serve as the primary entry point for Emacs 30+, bootstrapping **straight.el + le
   ;;;; Basic UI and editing defaults ---------------------------------------------
   (leaf emacs
     :straight nil
+    :doc "Core Emacs built-ins: startup suppression, initial buffers, font-lock caps."
     :init
+    ;; Startup experience (safe to apply after early frame setup)
+    (setopt inhibit-startup-screen t
+            inhibit-startup-message t
+            initial-scratch-message nil
+            initial-buffer-choice t
+            initial-major-mode 'fundamental-mode)
+
+    (setq inhibit-startup-echo-area-message "")
+
+    ;; Font-lock caps; keep nil if you intentionally remove caps.
+    (setopt font-lock-maximum-decoration nil
+            font-lock-maximum-size nil)
+
+    ;; Frame title: t → use default (buffer name etc.). Set here, not in early-init.
+    (setopt frame-title-format t)
+
     (dolist (k '("C-z" "C-x C-z" "C-x C-c" "M-z" "M-m" "M-/"))
       (when (lookup-key (current-global-map) (kbd k))
         (keymap-global-unset k)))
@@ -705,7 +715,17 @@ Serve as the primary entry point for Emacs 30+, bootstrapping **straight.el + le
       (keymap-global-set "M-/" #'cape-dabbrev))
     (when (fboundp 'pixel-scroll-precision-mode)
       (pixel-scroll-precision-mode 1))
+
     :config
+    ;; Window divider: values were set in early-init; turn the mode on here.
+    (when (fboundp 'window-divider-mode)
+      (window-divider-mode 1))
+
+    ;; If you still want menu/scroll/tool bars off (double down, harmless):
+    (when (fboundp 'menu-bar-mode)  (menu-bar-mode -1))
+    (when (fboundp 'tool-bar-mode)  (tool-bar-mode -1))
+    (when (fboundp 'scroll-bar-mode)(scroll-bar-mode -1))
+
     (setopt inhibit-startup-screen        t
             initial-scratch-message       nil
             use-short-answers             t
