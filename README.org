@@ -2361,6 +2361,11 @@ Theme-agnostic; only the modeline is affected.
 #+begin_src emacs-lisp :tangle lisp/ui/ui-nano-modeline.el
   ;;; ui-nano-modeline.el --- Nano-like modeline/header-line (+LSP/Clock/Battery) -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;;; Commentary:
   ;; Purpose:
   ;;   A compact, nano-like modeline/header-line with:
   ;;     - Header-line or mode-line switch (runtime toggle)
@@ -2370,7 +2375,7 @@ Theme-agnostic; only the modeline is affected.
   ;;     - Icons (if all-the-icons present), Meow state, VC branch
   ;;     - Mutual exclusivity with upstream nano-modeline helpers
   ;;     - Safe enable/disable with full restoration & periodic refresh timer
-  ;;     - Compatibility aliases for legacy callers (my/ui-enable-nano, etc.)
+  ;;     - QUIET refresh every 60s (no echo-area or *Messages* output)
   ;;
   ;; Usage:
   ;;   (require 'ui-nano-modeline)
@@ -2378,16 +2383,16 @@ Theme-agnostic; only the modeline is affected.
   ;;   (my/ui-nano-modeline-toggle-placement)         ; header-line <-> mode-line
   ;;
   ;; Notes:
-  ;;   - Face settings avoid :custom to prevent face-defface-spec pitfalls.
+  ;;   - Faces are defined with defface; avoid setting faces via :custom.
   ;;   - LSP/Eglot detection degrades gracefully when packages are absent.
-  ;;   - Clock/Battery update every 60s via a lightweight timer (cancel on disable).
+  ;;   - The periodic timer refresh is noise-free (no message logging).
   ;;
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
+  ;;; Code:
 
-  ;;; Code
   (eval-when-compile
     (require 'subr-x))
+
+  ;;;; Customization group --------------------------------------------------------
 
   (defgroup my/ui-nano-modeline nil
     "Compact nano-like modeline/header-line."
@@ -2395,7 +2400,7 @@ Theme-agnostic; only the modeline is affected.
     :prefix "my/ui-nano-")
 
   (defcustom my/ui-nano-use-header-line t
-    "If non-nil, use `header-line-format`. If nil, use `mode-line-format`."
+    "If non-nil, use `header-line-format`.  If nil, use `mode-line-format`."
     :type 'boolean
     :group 'my/ui-nano-modeline)
 
@@ -2415,11 +2420,10 @@ Theme-agnostic; only the modeline is affected.
     :group 'my/ui-nano-modeline)
 
   (defcustom my/ui-nano-center-max 44
-    "Max length for the center segment; longer text is truncated with ellipsis."
+    "Maximum width for the center segment; longer text is truncated with an ellipsis."
     :type 'integer
     :group 'my/ui-nano-modeline)
 
-  ;; New toggles (LSP/clock/battery)
   (defcustom my/ui-nano-show-lsp t
     "If non-nil, show LSP/Eglot status in the center segment."
     :type 'boolean
@@ -2431,14 +2435,16 @@ Theme-agnostic; only the modeline is affected.
     :group 'my/ui-nano-modeline)
 
   (defcustom my/ui-nano-time-format "%H:%M"
-    "Clock format string for `format-time-string`."
+    "Clock format string passed to `format-time-string`."
     :type 'string
     :group 'my/ui-nano-modeline)
 
   (defcustom my/ui-nano-show-battery t
-    "If non-nil, show battery summary on the right (if supported)."
+    "If non-nil, show battery summary on the right (when supported)."
     :type 'boolean
     :group 'my/ui-nano-modeline)
+
+  ;;;; Faces ---------------------------------------------------------------------
 
   (defface my/ui-nano-face
     '((t :inherit mode-line))
@@ -2465,15 +2471,17 @@ Theme-agnostic; only the modeline is affected.
     "Face for OK/ready indicators."
     :group 'my/ui-nano-modeline)
 
-  ;;;; Feature gates --------------------------------------------------------------
+  ;;;; Capability flags ----------------------------------------------------------
 
   (defconst my/ui-nano--have-icons
     (and (require 'all-the-icons nil t)
-         (fboundp 'all-the-icons-material)))
+         (fboundp 'all-the-icons-material))
+    "Non-nil when all-the-icons is available.")
 
-  (defconst my/ui-nano--have-meow (featurep 'meow))
+  (defconst my/ui-nano--have-meow (featurep 'meow)
+    "Non-nil when Meow is available.")
 
-  ;;;; Utilities -----------------------------------------------------------------
+  ;;;; Helpers -------------------------------------------------------------------
 
   (defun my/ui-nano--pad (s &optional left right)
     "Pad string S with spaces on LEFT and RIGHT."
@@ -2488,17 +2496,17 @@ Theme-agnostic; only the modeline is affected.
       s))
 
   (defun my/ui-nano--pro (s face &optional pad-l pad-r)
-    "Propertize S with FACE and add padding."
+    "Propertize S with FACE and add padding PAD-L/PAD-R."
     (propertize (my/ui-nano--pad s pad-l pad-r) 'face face))
 
   (defun my/ui-nano--icon (name &optional fallback face)
-    "Return icon NAME if available, else FALLBACK text. Apply FACE."
+    "Return icon NAME if available, else FALLBACK text.  Apply FACE if non-nil."
     (let* ((txt (if my/ui-nano--have-icons
                     (all-the-icons-material name :height 0.95)
                   (or fallback ""))))
       (if face (propertize txt 'face face) txt)))
 
-  ;;;; Segments: basics ----------------------------------------------------------
+  ;;;; Segments: basic -----------------------------------------------------------
 
   (defun my/ui-nano--meow-state ()
     "Return short Meow state indicator (or empty)."
@@ -2514,10 +2522,9 @@ Theme-agnostic; only the modeline is affected.
           (_ "")))))
 
   (defun my/ui-nano--vc-branch ()
-    "Return current VC branch name or empty."
+    "Return current VC branch name (or empty)."
     (when (and my/ui-nano-show-vc (boundp 'vc-mode) vc-mode)
-      ;; vc-mode like " Git:master"
-      (let* ((s (substring-no-properties vc-mode))
+      (let* ((s (substring-no-properties vc-mode))           ; e.g., \" Git:master\"
              (branch (string-trim (replace-regexp-in-string "^ *[^:]+:" "" s))))
         (when (> (length branch) 0)
           (concat
@@ -2533,7 +2540,7 @@ Theme-agnostic; only the modeline is affected.
         (my/ui-nano--pro name 'my/ui-nano-face-strong 0 1))))
 
   (defun my/ui-nano--major-mode ()
-    "Return human readable major mode name."
+    "Return human-readable major mode name."
     (let* ((mm (format-mode-line mode-name)))
       (my/ui-nano--pro mm 'my/ui-nano-face 0 1)))
 
@@ -2554,11 +2561,11 @@ Theme-agnostic; only the modeline is affected.
             (e 0) (w 0) (n 0))
         (dolist (d diags)
           (pcase (flymake-diagnostic-type d)
-            (':error (setq e (1+ e)))
-            ('error  (setq e (1+ e)))
+            (':error   (setq e (1+ e)))
+            ('error    (setq e (1+ e)))
             (':warning (setq w (1+ w)))
             ('warning  (setq w (1+ w)))
-            (_ (setq n (1+ n)))))
+            (_         (setq n (1+ n)))))
         (when (> (+ e w n) 0)
           (concat
            (when (> e 0)
@@ -2573,26 +2580,23 @@ Theme-agnostic; only the modeline is affected.
   ;;;; Segments: LSP/Eglot -------------------------------------------------------
 
   (defun my/ui-nano--lsp-eglot-status ()
-    "Return a compact LSP/Eglot status string (OK when connected)."
+    "Return a compact LSP/Eglot status string (✓ when connected)."
     (when my/ui-nano-show-lsp
       (cond
        ;; Eglot
        ((featurep 'eglot)
-        (let* ((srv (and (fboundp 'eglot-current-server)
-                         (eglot-current-server))))
-          (cond
-           ((not srv) "")
-           (t
-            (concat
-             (my/ui-nano--icon "language" "LSP" 'my/ui-nano-ok)
-             (my/ui-nano--pro "✓" 'my/ui-nano-ok 0 1))))))
+        (let ((srv (and (fboundp 'eglot-current-server)
+                        (eglot-current-server))))
+          (if srv
+              (concat
+               (my/ui-nano--icon "language" "LSP" 'my/ui-nano-ok)
+               (my/ui-nano--pro "✓" 'my/ui-nano-ok 0 1))
+            "")))
        ;; lsp-mode
        ((featurep 'lsp-mode)
-        (let* ((ws (and (boundp 'lsp--workspace-status-string)
-                        (boundp 'lsp-mode)
-                        (bound-and-true-p lsp-mode)
-                        (ignore-errors (length (bound-and-true-p lsp--buffer-workspaces))))))
-          (if (and ws (> ws 0))
+        (let* ((active (and (bound-and-true-p lsp-mode)
+                            (ignore-errors (length (bound-and-true-p lsp--buffer-workspaces))))))
+          (if (and active (> active 0))
               (concat
                (my/ui-nano--icon "language" "LSP" 'my/ui-nano-ok)
                (my/ui-nano--pro "✓" 'my/ui-nano-ok 0 1))
@@ -2614,9 +2618,10 @@ Theme-agnostic; only the modeline is affected.
              (pct (and (listp al) (cdr (assoc 'percentage al))))
              (state (and (listp al) (cdr (assoc 'charging-state al))))
              (sym (cond
-                   ;; Normalize states across OSes
-                   ((member state '("charging" "AC" "AC Power")) (my/ui-nano--icon "battery_charging_full" "⚡" 'my/ui-nano-ok))
-                   ((member state '("discharging" "Battery"))    (my/ui-nano--icon "battery_std" "🔋" 'my/ui-nano-face))
+                   ((member state '("charging" "AC" "AC Power"))
+                    (my/ui-nano--icon "battery_charging_full" "⚡" 'my/ui-nano-ok))
+                   ((member state '("discharging" "Battery"))
+                    (my/ui-nano--icon "battery_std" "🔋" 'my/ui-nano-face))
                    (t (my/ui-nano--icon "battery_unknown" "?" 'my/ui-nano-face)))))
         (when pct
           (concat sym (my/ui-nano--pro (format "%s" pct) 'my/ui-nano-face 0 1))))))
@@ -2653,8 +2658,7 @@ Theme-agnostic; only the modeline is affected.
   ;;;; Composition (safe :eval scoping) ------------------------------------------
 
   (defun my/ui-nano--format ()
-    "Return a format list usable for `mode-line-format`/`header-line-format`."
-    ;; Each segment is computed inside its own :eval so that no free vars leak.
+    "Return a format list for `mode-line-format`/`header-line-format`."
     (list
      ;; Left
      '(:eval
@@ -2662,8 +2666,7 @@ Theme-agnostic; only the modeline is affected.
               (hpad (cdr my/ui-nano-padding)))
          (propertize (my/ui-nano--pad left 0 (floor (* 2 hpad)))
                      'face 'my/ui-nano-face)))
-
-     ;; Center (true centering using align-to + measured width)
+     ;; Center (true centering with align-to + measured width)
      '(:eval
        (let* ((center (or (my/ui-nano--seg-center) ""))
               (w (max 0 (string-width center)))
@@ -2673,10 +2676,7 @@ Theme-agnostic; only the modeline is affected.
            " " 'display `((space :align-to (+ center (- (/ ,w 2))))))
           (propertize (my/ui-nano--pad center 0 (floor (* 2 hpad)))
                       'face 'my/ui-nano-face))))
-
-     ;; Split filler to push the rest to the right margin
-     "%="
-
+     "%="                                          ; filler to right
      ;; Right
      '(:eval
        (let* ((right (or (my/ui-nano--seg-right) "")))
@@ -2703,7 +2703,7 @@ Theme-agnostic; only the modeline is affected.
     (when (fboundp 'nano-modeline-mu4e-message-mode)
       (remove-hook 'mu4e-view-mode-hook     #'nano-modeline-mu4e-message-mode)))
 
-  ;;;; Minor mode + periodic refresh timer ---------------------------------------
+  ;;;; Minor mode + periodic QUIET refresh timer ---------------------------------
 
   (defvar-local my/ui-nano--saved-mode-line nil
     "Buffer-local save of original `mode-line-format`.")
@@ -2713,10 +2713,16 @@ Theme-agnostic; only the modeline is affected.
   (defvar my/ui-nano--tick-timer nil
     "Timer object for periodic modeline refresh (clock/battery).")
 
+  (defun my/ui-nano--safe-update ()
+    "Quietly refresh the modeline without echo-area or log output."
+    (let ((inhibit-message t)      ;; suppress echo area
+          (message-log-max nil))   ;; suppress *Messages*
+      (force-mode-line-update t)))
+
   (defun my/ui-nano--start-timer ()
-    "Start a lightweight timer to refresh the modeline every 60 seconds."
+    "Start a 60s QUIET periodic refresh for the modeline/header-line."
     (setq my/ui-nano--tick-timer
-          (run-at-time t 60 (lambda () (force-mode-line-update t)))))
+          (run-at-time t 60 #'my/ui-nano--safe-update)))
 
   (defun my/ui-nano--stop-timer ()
     "Stop the periodic refresh timer if running."
@@ -2739,7 +2745,6 @@ Theme-agnostic; only the modeline is affected.
     "Restore original line formats."
     (setq mode-line-format   my/ui-nano--saved-mode-line
           header-line-format my/ui-nano--saved-header-line)
-    ;; Clear saved copies to avoid stale state
     (setq my/ui-nano--saved-mode-line nil
           my/ui-nano--saved-header-line nil))
 
@@ -2749,18 +2754,17 @@ Theme-agnostic; only the modeline is affected.
     :global t
     (if my/ui-nano-modeline-mode
         (progn
-          ;; Avoid double composition with upstream nano-modeline
           (when (featurep 'nano-modeline)
             (my/ui--nano-disable-stock-hooks))
           ;; Install for all existing buffers
           (dolist (buf (buffer-list))
             (with-current-buffer buf
               (my/ui-nano--install)))
-          ;; And future buffers
+          ;; Ensure it stays updated for layout/buffer changes
           (add-hook 'window-configuration-change-hook #'force-mode-line-update)
           (add-hook 'buffer-list-update-hook #'force-mode-line-update)
           (add-hook 'after-change-major-mode-hook #'my/ui-nano--install)
-          ;; Start periodic refresh for clock/battery
+          ;; Start QUIET periodic refresh
           (my/ui-nano--start-timer))
       ;; Disable
       (remove-hook 'window-configuration-change-hook #'force-mode-line-update)
@@ -2779,7 +2783,6 @@ Theme-agnostic; only the modeline is affected.
     (setq my/ui-nano-use-header-line (not my/ui-nano-use-header-line))
     (if my/ui-nano-modeline-mode
         (progn
-          ;; Re-install to reflect new placement
           (dolist (buf (buffer-list))
             (with-current-buffer buf
               (my/ui-nano--uninstall)
@@ -2787,12 +2790,7 @@ Theme-agnostic; only the modeline is affected.
           (force-mode-line-update t))
       (message "my/ui-nano-modeline-mode is currently disabled.")))
 
-  ;;; --- Compatibility aliases for legacy callers ------------------------------
-  ;;; Some older modules expect these entry points:
-  ;;; - my/ui-enable-nano
-  ;;; - my/ui-disable-nano
-  ;;; - my/ui-nano-modeline-mode-enable
-  ;;; - my/ui-nano-modeline-mode-disable
+  ;;; Compatibility aliases for legacy callers -----------------------------------
 
   ;;;###autoload
   (defun my/ui-enable-nano ()
@@ -2818,7 +2816,7 @@ Theme-agnostic; only the modeline is affected.
     (interactive)
     (my/ui-nano-modeline-mode -1))
 
-  (provide 'ui-nano-modeline)
+  (provide 'ui/ui-nano-modeline)
   ;;; ui-nano-modeline.el ends here
 #+end_src
 
