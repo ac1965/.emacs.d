@@ -4633,6 +4633,7 @@ Per-user (macOS-first) layer: identity, font preferences (consumed by the UI fon
     (require 'leaf)
     (require 'subr-x))
 
+  ;;;; Identity ------------------------------------------------------------------
   (leaf *personals
     :straight nil
     :init
@@ -4646,8 +4647,9 @@ Per-user (macOS-first) layer: identity, font preferences (consumed by the UI fon
           my:emoji-font   "Apple Color Emoji"
           my:font-size    18)
 
-    (setq my:use-ui 'nano
-          my:use-lsp 'eglot)
+    ;; Respect defcustoms from core/switches.el
+    (setopt my:use-ui 'nano)
+    (setopt my:use-lsp 'eglot)
 
     (defvar my:d:cloud
       (expand-file-name "Documents" (getenv "HOME"))
@@ -4665,9 +4667,13 @@ Per-user (macOS-first) layer: identity, font preferences (consumed by the UI fon
       (list (expand-file-name "Library/Accounts" (getenv "HOME")))
       "Directories excluded from `load-path` for safety.")
 
-    (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:org my:d:blog))
+    (dolist (d (list my:d:cloud my:d:org my:d:blog))
+      (my/ensure-directory-exists d))
 
-    (setq org-directory my:d:org)
+    ;; Keep org-directory in sync if org is loaded later
+    (with-eval-after-load 'org
+      (setq org-directory my:d:org))
+
     (setq org-agenda-files
           (seq-filter (lambda (file)
                         (and (string-match-p "\\.org\\'" file)
@@ -4679,46 +4685,23 @@ Per-user (macOS-first) layer: identity, font preferences (consumed by the UI fon
                         (member dir my:d:excluded-directories))
                       load-path)))
 
-  (leaf sis
-    :if (eq system-type 'darwin)
-    :straight t
-    :commands (sis-ism-lazyman-config
-               sis-global-cursor-color-mode
-               sis-global-respect-mode
-               sis-global-inline-mode)
-    :hook (emacs-startup .
-           (lambda ()
-             (when (fboundp 'sis-ism-lazyman-config)
-               (sis-ism-lazyman-config
-                "com.apple.keylayout.ABC"
-                "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
-                'macism))
-             (when (fboundp 'sis-global-cursor-color-mode)
-               (sis-global-cursor-color-mode t))
-             (when (fboundp 'sis-global-respect-mode)
-               (sis-global-respect-mode t))
-             (when (fboundp 'sis-global-inline-mode)
-               (sis-global-inline-mode t)))))
+  ;;;; macOS IME via sis + macism (optional) -------------------------------------
+  (when (eq system-type 'darwin)
+    (leaf sis :straight t
+      :when (executable-find "macism")
+      :init
+      (setq sis-default-cursor-color   "#41A1C0"
+            sis-other-cursor-color     "#E39C45"
+            sis-inline-tighten-head    t
+            sis-inline-tighten-tail    t)
+      :config
+      ;; macism: com.apple.keylayout.ABC <-> system IME
+      (sis-ism-lazyman-config nil "com.apple.keylayout.ABC" 'macism)
+      (sis-global-respect-mode t)
+      (sis-global-cursor-color-mode t)
+      (sis-global-inline-mode t)))
 
-  (add-hook 'after-load-theme-hook
-            (lambda ()
-              (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
-
-  (leaf *device/MX_ErgoS
-    :straight nil
-    :init
-    (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
-          mouse-wheel-progressive-speed nil
-          scroll-conservatively 10000
-          scroll-margin 2
-          scroll-preserve-screen-position t
-          mac-mouse-wheel-smooth-scroll t
-          mouse-wheel-tilt-scroll t
-          mouse-wheel-flip-direction nil)
-    (global-set-key [mouse-2] #'yank)
-    (global-set-key [mouse-4] #'previous-buffer)
-    (global-set-key [mouse-5] #'next-buffer))
-
+  ;;;; Apple Music control (macOS) -----------------------------------------------
   (when (eq system-type 'darwin)
     (defun my/apple-music-osascript-async (script &optional callback)
       "Run AppleScript SCRIPT asynchronously, invoking CALLBACK with its output."
