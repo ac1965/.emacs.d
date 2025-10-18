@@ -883,7 +883,8 @@ Provide a single, deterministic loader for modular configuration under `lisp/`. 
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'subr-x)) ;; string-join, etc.
+  (eval-when-compile (require 'subr-x)) ; string-trim, etc.
+  (require 'seq)                        ; seq-remove, seq-filter, etc.
 
   (defgroup my:modules nil
     "Loader options for modular Emacs configuration."
@@ -895,12 +896,13 @@ Provide a single, deterministic loader for modular configuration under `lisp/`. 
     :group 'my:modules)
 
   (defcustom my:modules-skip nil
-    "List of module features to skip during loading."
+    "List of module features to skip during loading.
+  Each element must be a feature symbol (e.g., 'core/general)."
     :type '(repeat symbol)
     :group 'my:modules)
 
   (defcustom my:modules-extra nil
-    "List of extra module features to append after `my:modules'."
+    "List of extra module features appended after `my:modules'."
     :type '(repeat symbol)
     :group 'my:modules)
 
@@ -968,31 +970,33 @@ Provide a single, deterministic loader for modular configuration under `lisp/`. 
     (not (memq feature my:modules-skip)))
 
   (defun my/modules--require-safe (feature)
-    "Require FEATURE with error trapping. Return non-nil on success."
+    "Require FEATURE with error trapping.
+  Return non-nil on success, nil on failure, logging the error."
     (condition-case err
         (progn (require feature) t)
-      (error (message "[modules] Failed to load %s: %s"
-                      feature (error-message-string err))
-             nil)))
+      (error
+       (message "[modules] Failed to load %s: %s"
+                feature (error-message-string err))
+       nil)))
 
-  ;; FIX: name uses ':' to match call sites
   (defun my:modules--format-seconds (sec)
-    "Format SEC (float seconds) compactly."
+    "Format SEC (float seconds) compactly for logging."
     (cond
      ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
      ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
      (t             (format "%.2fs"   sec))))
 
   (defun my/modules-load ()
-    "Load all modules defined by `my:modules', respecting options."
-    (let* ((final (seq-remove
-                   (lambda (m) (not (my/modules--should-load-p m)))
-                   (append my:modules my:modules-extra)))
+    "Load all modules defined by `my:modules', respecting user options."
+    (let* ((all (append my:modules my:modules-extra))
+           (final (seq-remove (lambda (m) (not (my/modules--should-load-p m))) all))
            (ok 0) (ng 0)
            (t0 (and my:modules-verbose (current-time))))
       (dolist (mod final)
         (let ((m0 (and my:modules-verbose (current-time))))
-          (if (my/modules--require-safe mod) (setq ok (1+ ok)) (setq ng (1+ ng)))
+          (if (my/modules--require-safe mod)
+              (setq ok (1+ ok))
+            (setq ng (1+ ng)))
           (when my:modules-verbose
             (message "[modules] %-24s %s"
                      mod (my:modules--format-seconds
@@ -1000,12 +1004,12 @@ Provide a single, deterministic loader for modular configuration under `lisp/`. 
       (when my:modules-verbose
         (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
                  ok
-                 (- (length (append my:modules my:modules-extra))
-                    (length final))
+                 (- (length all) (length final))
                  ng
                  (my:modules--format-seconds
                   (float-time (time-subtract (current-time) t0)))))))
 
+  ;; Execute immediately on load to bootstrap modules.
   (my/modules-load)
 
   (provide 'modules)
