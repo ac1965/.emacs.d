@@ -2046,13 +2046,9 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
 
 #+begin_src emacs-lisp :tangle lisp/ui/ui-font.el
   ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Code:
+
+  ;; Ensure the leaf macro is available at compile time here too.
+  (eval-when-compile (require 'leaf))
 
   (defun my/system-default-font ()
     "Return a default monospace font family depending on OS."
@@ -2077,20 +2073,17 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
       (message "[font] default: %s, %.1f pt"
                (face-attribute 'default :family)
                (/ (float (face-attribute 'default :height)) 16))
-
       (set-face-attribute 'variable-pitch nil
                           :family (or my:font-alt (my/system-default-font)))
       (message "[font] variable-pitch: %s"
                (face-attribute 'variable-pitch :family))
-
       (set-fontset-font t 'emoji
                         (font-spec :family (or my:emoji-font (my/system-emoji-font))))
       (message "[font] emoji: %s"
                (or my:emoji-font (my/system-emoji-font)))))
 
-  (defun my/show-current-font ()
+  (defun my/show-current-font () (interactive)
     "Echo the current default font family and point size."
-    (interactive)
     (let* ((family (face-attribute 'default :family))
            (height (face-attribute 'default :height))
            (pt (/ height 10.0)))
@@ -2101,10 +2094,15 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
                 (lambda (frame) (with-selected-frame frame (my/font-setup))))
     (add-hook 'after-init-hook #'my/font-setup))
 
-  (leaf ligature :straight t
+  ;; OPTIONAL ligatures — install & enable only when available/GUI.
+  (leaf ligature
+    :straight (ligature :type git :host github :repo "mickeynp/ligature.el")
+    :when (display-graphic-p)
+    :require t
     :config
-    (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
-    (global-ligature-mode 1))
+    (when (fboundp 'ligature-set-ligatures)
+      (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
+      (global-ligature-mode 1)))
 
   (provide 'ui/ui-font)
   ;;; ui/ui-font.el ends here
@@ -3014,6 +3012,17 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;;    You can create ~/.var/aideremacs/.env and put API keys / options there.
   ;;    If you use Aidermacs, pass --env-file via its extra args.
   (with-eval-after-load 'aidermacs
+    (let* ((bin (or (executable-find "aider-ce")
+                    (executable-find "aider")
+                    (executable-find "aider-chat"))))
+      (unless bin
+        (user-error "[aidermacs] No aider CLI found. Install via Homebrew/pipx, or add it to PATH."))
+      (dolist (sym '(aidermacs-executable aidermacs-command aidermacs-program))
+        (when (boundp sym)
+          (set sym bin)))
+      (setenv "AIDER_BIN" bin)))
+
+  (with-eval-after-load 'aidermacs
     ;; Aidermacs exposes an extra-args variable in recent builds
     ;; (see NonGNU ELPA diffs mentioning `aidermacs-extra-args`).
     ;; If your installed version still uses `aidermacs-args`, switch the name.
@@ -3288,8 +3297,16 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
 #+begin_src emacs-lisp :tangle lisp/dev/format.el
   ;;; format.el --- Prettier/ESLint via Apheleia -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
   ;; Category: dev
   ;;
+  ;; Commentary:
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (leaf apheleia
@@ -3321,6 +3338,7 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;;; infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: dev
@@ -3349,6 +3367,10 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
 
 #+begin_src emacs-lisp :tangle lisp/dev/sql.el
   ;;; lisp/dev/sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: dev
   ;;
@@ -3380,6 +3402,7 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;;; rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: dev
@@ -3408,6 +3431,7 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;;; utils/utils-functions.el --- General utility functions -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: utils
@@ -3433,28 +3457,38 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;;; utils/utils-scratch.el --- Scratch buffer helpers -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: utils
   ;;
+  ;;; Commentary:
+  ;; Automatically recreates *scratch* after it is killed.
+  ;; The recreated buffer uses `lisp-interaction-mode` and starts with a small header.
+  ;;
   ;;; Code:
 
-  (leaf *scratch-auto-recreate
+  (eval-when-compile (require 'leaf))
+
+  (leaf my:scratch-auto-recreate
     :straight nil
     :init
     (defun my/create-scratch-buffer ()
-      "Create a new `*scratch*` buffer with `lisp-interaction-mode`."
+      "Create or reset a `*scratch*` buffer with `lisp-interaction-mode` and a header."
       (let ((buf (get-buffer-create "*scratch*")))
         (with-current-buffer buf
           (lisp-interaction-mode)
+          (erase-buffer)
           (insert ";; This is a new *scratch* buffer\n\n"))
         buf))
 
     (defun my/kill-scratch-buffer-advice (buf)
-      "Recreate *scratch* if BUF is *scratch*."
+      "If BUF is *scratch*, recreate it shortly after kill."
       (when (string= (buffer-name buf) "*scratch*")
+        ;; Recreate asynchronously to avoid interfering with the kill flow.
         (run-at-time 0 nil #'my/create-scratch-buffer)))
 
+    ;; When any buffer is killed, if it's *scratch*, recreate it.
     (add-hook 'kill-buffer-hook
               (lambda ()
                 (my/kill-scratch-buffer-advice (current-buffer)))))
@@ -3472,6 +3506,7 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;;; utils/utils-backup.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: utils
@@ -3506,6 +3541,7 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: utils
