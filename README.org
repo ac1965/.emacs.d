@@ -1005,7 +1005,7 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
 :END:
 
 #+begin_src emacs-lisp :tangle lisp/core/general.el
-  ;;; core/general.el --- General settings, Meow modal & keybindings -*- lexical-binding: t; -*-
+  ;;; core/general.el --- General settings & keybindings (NO Meow) -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
@@ -1014,10 +1014,16 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
   ;; Category: core
   ;;
   ;;; Commentary:
-  ;; - Introduce Meow (modal editing) with a Space-leader hierarchy
-  ;; - Keep useful global bindings for macOS-like shortcuts and muscle memory
-  ;; - Provide LSP/Eglot-agnostic helpers (code actions, rename, format)
-  ;; - Authentication helpers (GPG + pass) remain as-is
+  ;; - Drop Meow: provide a non-modal, global leader-key layout.
+  ;; - Keep useful global bindings for macOS-like shortcuts and muscle memory.
+  ;; - Provide LSP-agnostic helpers (code actions, rename, format).
+  ;; - Authentication helpers (GPG + pass) remain as-is.
+  ;;
+  ;; Design notes:
+  ;; - We define a global leader key (default: s-SPC on macOS, C-c SPC on others).
+  ;; - Under the leader, we expose groups: b(buffers), w(windows), p(project), g(git),
+  ;;   c(code), e(errors), t(toggles), o(org/roam), m(misc/web), a(ai), q(session), h(help).
+  ;; - Which-Key labels are generated to match the chosen leader key at runtime.
   ;;
   ;;; Code:
 
@@ -1057,292 +1063,221 @@ It loads curated modules from `lisp/` in a **fixed order**, supports **skip/appe
           (restart-emacs)
         (save-buffers-kill-emacs)))
 
-    ;; Keep Windmove for arrow-based window motions (coexists with Meow hjkl).
+    ;; Arrow-based window motions (keeps default muscle memory).
     (windmove-default-keybindings))
 
-  ;;;; Meow (modal editing) -------------------------------------------------------
-  (leaf meow
-    :straight t
-    :init
-    ;; Backend-agnostic IDE helpers (Eglot or LSP-Mode).
-    (defun my/code-actions ()
-      "Run code actions for current point using Eglot or LSP-Mode."
-      (interactive)
-      (cond
-       ((fboundp 'eglot-code-actions) (eglot-code-actions))
-       ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
-       (t (user-error "No code action backend (Eglot/LSP) available"))))
+  ;;;; IDE-agnostic helpers (Eglot / lsp-mode) -----------------------------------
+  (defun my/code-actions ()
+    "Run code actions via Eglot or lsp-mode."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-code-actions) (eglot-code-actions))
+     ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
+     (t (user-error "No code action backend (Eglot/LSP) available"))))
 
-    (defun my/rename-symbol ()
-      "Rename symbol using Eglot/LSP."
-      (interactive)
-      (cond
-       ((fboundp 'eglot-rename) (eglot-rename))
-       ((fboundp 'lsp-rename) (lsp-rename))
-       (t (user-error "No rename backend (Eglot/LSP) available"))))
+  (defun my/rename-symbol ()
+    "Rename symbol via Eglot or lsp-mode."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-rename) (eglot-rename))
+     ((fboundp 'lsp-rename) (lsp-rename))
+     (t (user-error "No rename backend (Eglot/LSP) available"))))
 
-    (defun my/format-buffer ()
-      "Format current buffer using Eglot/LSP, or fallback to indent-region."
-      (interactive)
-      (cond
-       ((fboundp 'eglot-format-buffer) (eglot-format-buffer))
-       ((fboundp 'lsp-format-buffer) (lsp-format-buffer))
-       ((fboundp 'indent-region) (indent-region (point-min) (point-max)))
-       (t (user-error "No formatter available"))))
+  (defun my/format-buffer ()
+    "Format buffer via Eglot/LSP; fallback to `indent-region'."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-format-buffer) (eglot-format-buffer))
+     ((fboundp 'lsp-format-buffer) (lsp-format-buffer))
+     ((fboundp 'indent-region) (indent-region (point-min) (point-max)))
+     (t (user-error "No formatter available"))))
 
-    (defun my/consult-ripgrep-project ()
-      "Run ripgrep in current project, fallback to consulting user for root."
-      (interactive)
-      (let* ((pr (when (fboundp 'project-current) (project-current)))
-             (root (when pr (car (project-roots pr)))))
-        (if (and root (fboundp 'consult-ripgrep))
-            (consult-ripgrep root)
-          (call-interactively 'consult-ripgrep))))
+  (defun my/consult-ripgrep-project ()
+    "Run ripgrep in current project; fallback to prompting."
+    (interactive)
+    (let* ((pr (when (fboundp 'project-current) (project-current)))
+           (root (when pr (car (project-roots pr)))))
+      (if (and root (fboundp 'consult-ripgrep))
+          (consult-ripgrep root)
+        (call-interactively 'consult-ripgrep))))
 
-    (defun my/toggle-transient-line-numbers ()
-      "Toggle line numbers, preserving buffer-local overrides."
-      (interactive)
-      (if (bound-and-true-p display-line-numbers-mode)
-          (display-line-numbers-mode 0)
-        (display-line-numbers-mode 1)))
+  (defun my/toggle-transient-line-numbers ()
+    "Toggle line numbers, preserving buffer-local overrides."
+    (interactive)
+    (if (bound-and-true-p display-line-numbers-mode)
+        (display-line-numbers-mode 0)
+      (display-line-numbers-mode 1)))
 
-    (defun my/meow-setup ()
-      "Define Meow modal maps and a hierarchical Space-leader layout."
-      ;; -----------------------------------------------------------------------
-      ;; 0) Bootstrap: define leader prefix maps, then expose them under SPC.
-      ;; -----------------------------------------------------------------------
-      (define-prefix-command 'my/leader-b-map) ;; buffers
-      (define-prefix-command 'my/leader-w-map) ;; windows
-      (define-prefix-command 'my/leader-p-map) ;; project
-      (define-prefix-command 'my/leader-g-map) ;; git
-      (define-prefix-command 'my/leader-c-map) ;; code
-      (define-prefix-command 'my/leader-e-map) ;; errors/diagnostics
-      (define-prefix-command 'my/leader-t-map) ;; toggles
-      (define-prefix-command 'my/leader-o-map) ;; org/roam
-      (define-prefix-command 'my/leader-m-map) ;; misc/web/tools
-      (define-prefix-command 'my/leader-q-map) ;; session/quit
-      (define-prefix-command 'my/leader-h-map) ;; help
+  ;;;; Global LEADER (non-modal) --------------------------------------------------
+  ;; Choose a sane global leader key:
+  ;; - macOS (ns/mac): use Super-Space (s-SPC).
+  ;; - Others: use "C-c SPC" (reserved for users; safe with which-key).
+  (defconst my:leader-key
+    (if (memq system-type '(darwin)) "s-SPC" "C-c SPC")
+    "Key sequence used as global leader key.")
 
-      ;; Group heads under Space (SPC <group> ...).
-      (meow-leader-define-key
-       '("b" . my/leader-b-map)
-       '("w" . my/leader-w-map)
-       '("p" . my/leader-p-map)
-       '("g" . my/leader-g-map)
-       '("c" . my/leader-c-map)
-       '("e" . my/leader-e-map)
-       '("t" . my/leader-t-map)
-       '("o" . my/leader-o-map)
-       '("m" . my/leader-m-map)
-       '("q" . my/leader-q-map)
-       '("h" . my/leader-h-map))
+  ;; Which-Key prefix label visible in minibuffer (purely cosmetic).
+  (defconst my:leader-which-prefix
+    (if (memq system-type '(darwin)) "s-SPC" "C-c SPC")
+    "Human-readable leader prefix string for which-key labels.")
 
-      ;; 1) Top-level leader bindings (SPC ...)
-      (meow-leader-define-key
-       '("SPC" . execute-extended-command)  ;; M-x
-       '(","   . meow-keypad)               ;; keypad for temporary insert
-       '("/"   . consult-line)
-       '(";"   . comment-or-uncomment-region)
-       '("="   . er/expand-region)
-       '("`"   . eval-expression)
-       '("z"   . core-hydra-text-scale/body)
-       ;; files at top-level as shortcuts
-       '("."   . other-window)
-       '("f"   . find-file)
-       '("F"   . find-file-other-window)
-       '("O"   . find-file-other-frame)
-       '("r"   . consult-recent-file))
+  ;; Top-level leader map and grouped submaps.
+  (define-prefix-command 'my/leader-map)
+  (define-prefix-command 'my/leader-b-map) ;; buffers
+  (define-prefix-command 'my/leader-w-map) ;; windows
+  (define-prefix-command 'my/leader-p-map) ;; project
+  (define-prefix-command 'my/leader-g-map) ;; git
+  (define-prefix-command 'my/leader-c-map) ;; code
+  (define-prefix-command 'my/leader-e-map) ;; errors/diagnostics
+  (define-prefix-command 'my/leader-t-map) ;; toggles
+  (define-prefix-command 'my/leader-o-map) ;; org/roam
+  (define-prefix-command 'my/leader-m-map) ;; misc/web
+  (define-prefix-command 'my/leader-a-map) ;; ai
+  (define-prefix-command 'my/leader-q-map) ;; session/quit
+  (define-prefix-command 'my/leader-h-map) ;; help
 
-      ;; 2) Buffers (SPC b ...)
-      (meow-leader-define-key
-       '("b b" . consult-buffer)
-       '("b B" . consult-project-buffer)
-       '("b k" . my/kill-buffer-smart)
-       '("b n" . next-buffer)
-       '("b p" . previous-buffer)
-       '("b r" . revert-buffer))
+  ;; Bind leader globally.
+  (when (fboundp 'keymap-global-set)
+    (keymap-global-set my:leader-key 'my/leader-map))
 
-      ;; 3) Windows (SPC w ...)
-      (meow-leader-define-key
-       '("w w" . ace-window)
-       '("w s" . split-window-below)
-       '("w v" . split-window-right)
-       '("w d" . delete-window)
-       '("w o" . delete-other-windows)
-       '("w =" . balance-windows)
-       '("w 2" . my/toggle-window-split))
+  ;; Group heads under the leader.
+  (define-key my/leader-map (kbd "b") 'my/leader-b-map)
+  (define-key my/leader-map (kbd "w") 'my/leader-w-map)
+  (define-key my/leader-map (kbd "p") 'my/leader-p-map)
+  (define-key my/leader-map (kbd "g") 'my/leader-g-map)
+  (define-key my/leader-map (kbd "c") 'my/leader-c-map)
+  (define-key my/leader-map (kbd "e") 'my/leader-e-map)
+  (define-key my/leader-map (kbd "t") 'my/leader-t-map)
+  (define-key my/leader-map (kbd "o") 'my/leader-o-map)
+  (define-key my/leader-map (kbd "m") 'my/leader-m-map)
+  (define-key my/leader-map (kbd "a") 'my/leader-a-map)
+  (define-key my/leader-map (kbd "q") 'my/leader-q-map)
+  (define-key my/leader-map (kbd "h") 'my/leader-h-map)
 
-      ;; 4) Project (SPC p ...)
-      (meow-leader-define-key
-       '("p p" . project-switch-project)
-       '("p f" . project-find-file)
-       '("p s" . my/consult-ripgrep-project)
-       '("p b" . consult-project-buffer)
-       '("p r" . project-query-replace-regexp)
-       '("p d" . project-dired))
+  ;; 1) Top-level leader bindings (LEADER ...)
+  (define-key my/leader-map (kbd "SPC") #'execute-extended-command) ;; M-x
+  (define-key my/leader-map (kbd "/")   #'consult-line)
+  (define-key my/leader-map (kbd ";")   #'comment-or-uncomment-region)
+  (define-key my/leader-map (kbd "=")   #'er/expand-region)
+  (define-key my/leader-map (kbd "`")   #'eval-expression)
+  (define-key my/leader-map (kbd "z")   #'core-hydra-text-scale/body)
+  ;; frequent file/recents helpers
+  (define-key my/leader-map (kbd ".")   #'other-window)
+  (define-key my/leader-map (kbd "f")   #'find-file)
+  (define-key my/leader-map (kbd "F")   #'find-file-other-window)
+  (define-key my/leader-map (kbd "O")   #'find-file-other-frame)
+  (define-key my/leader-map (kbd "r")   #'consult-recent-file)
 
-      ;; 5) Search (SPC s ...)
-      (meow-leader-define-key
-       '("s s" . consult-line)
-       '("s r" . consult-ripgrep)
-       '("s g" . my/consult-ripgrep-project)
-       '("s m" . consult-imenu))
+  ;; 2) Buffers (LEADER b ...)
+  (define-key my/leader-b-map (kbd "b") #'consult-buffer)
+  (define-key my/leader-b-map (kbd "B") #'consult-project-buffer)
+  (define-key my/leader-b-map (kbd "k") #'my/kill-buffer-smart)
+  (define-key my/leader-b-map (kbd "n") #'next-buffer)
+  (define-key my/leader-b-map (kbd "p") #'previous-buffer)
+  (define-key my/leader-b-map (kbd "r") #'revert-buffer)
 
-      ;; 6) Git (SPC g ...)
-      (meow-leader-define-key
-       '("g s" . magit-status)
-       '("g b" . magit-blame-addition)
-       '("g l" . magit-log-current)
-       '("g d" . magit-diff-buffer-file)
-       '("g c" . magit-commit))
+  ;; 3) Windows (LEADER w ...)
+  (define-key my/leader-w-map (kbd "w") #'ace-window)
+  (define-key my/leader-w-map (kbd "s") #'split-window-below)
+  (define-key my/leader-w-map (kbd "v") #'split-window-right)
+  (define-key my/leader-w-map (kbd "d") #'delete-window)
+  (define-key my/leader-w-map (kbd "o") #'delete-other-windows)
+  (define-key my/leader-w-map (kbd "=") #'balance-windows)
+  (define-key my/leader-w-map (kbd "2") #'my/toggle-window-split)
 
-      ;; 7) Code (SPC c ...) — Eglot/LSP helpers
-      (meow-leader-define-key
-       '("c a" . my/code-actions)
-       '("c r" . my/rename-symbol)
-       '("c f" . my/format-buffer)
-       '("c d" . xref-find-definitions)
-       '("c D" . xref-find-definitions-other-window)
-       '("c R" . xref-find-references)
-       '("c i" . completion-at-point))
+  ;; 4) Project (LEADER p ...)
+  (define-key my/leader-p-map (kbd "p") #'project-switch-project)
+  (define-key my/leader-p-map (kbd "f") #'project-find-file)
+  (define-key my/leader-p-map (kbd "s") #'my/consult-ripgrep-project)
+  (define-key my/leader-p-map (kbd "b") #'consult-project-buffer)
+  (define-key my/leader-p-map (kbd "r") #'project-query-replace-regexp)
+  (define-key my/leader-p-map (kbd "d") #'project-dired)
 
-      ;; 8) Errors/diagnostics (SPC e ...)
-      (meow-leader-define-key
-       '("e n" . flymake-goto-next-error)
-       '("e p" . flymake-goto-prev-error)
-       '("e l" . flymake-show-buffer-diagnostics))
+  ;; 5) Search (LEADER s ...)  — expose under main map for convenience, too.
+  ;; (You can also keep these under "p" or top-level.)
+  (define-key my/leader-map (kbd "s s") #'consult-line)
+  (define-key my/leader-map (kbd "s r") #'consult-ripgrep)
+  (define-key my/leader-map (kbd "s g") #'my/consult-ripgrep-project)
+  (define-key my/leader-map (kbd "s m") #'consult-imenu)
 
-      ;; 9) Toggles (SPC t ...)
-      (meow-leader-define-key
-       '("t l" . my/toggle-transient-line-numbers)
-       '("t w" . whitespace-mode)
-       '("t r" . read-only-mode)
-       '("t z" . core-hydra-text-scale/body)
-       '("t i" . my/eww-toggle-images))
+  ;; 6) Git (LEADER g ...)
+  (define-key my/leader-g-map (kbd "s") #'magit-status)
+  (define-key my/leader-g-map (kbd "b") #'magit-blame-addition)
+  (define-key my/leader-g-map (kbd "l") #'magit-log-current)
+  (define-key my/leader-g-map (kbd "d") #'magit-diff-buffer-file)
+  (define-key my/leader-g-map (kbd "c") #'magit-commit)
 
-      ;; 10) Org & Roam (SPC o ...)
-      (meow-leader-define-key
-       '("o a" . org-agenda)
-       '("o c" . org-capture)
-       '("o i" . org-roam-node-insert)
-       '("o f" . org-roam-node-find))
+  ;; 7) Code (LEADER c ...) — LSP-agnostic helpers
+  (define-key my/leader-c-map (kbd "a") #'my/code-actions)
+  (define-key my/leader-c-map (kbd "r") #'my/rename-symbol)
+  (define-key my/leader-c-map (kbd "f") #'my/format-buffer)
+  (define-key my/leader-c-map (kbd "d") #'xref-find-definitions)
+  (define-key my/leader-c-map (kbd "D") #'xref-find-definitions-other-window)
+  (define-key my/leader-c-map (kbd "R") #'xref-find-references)
+  (define-key my/leader-c-map (kbd "i") #'completion-at-point)
 
-      ;; 11) Misc/Web (SPC m ...)
-      (meow-leader-define-key
-       '("m e" . eww)
-       '("m s" . my/eww-search)
-       '("m o" . eww-open-file)
-       '("m b" . eww-list-bookmarks)
-       '("m r" . eww-readable)
-       '("m u" . my/eww-toggle-images))
+  ;; 8) Errors/diagnostics (LEADER e ...)
+  (define-key my/leader-e-map (kbd "n") #'flymake-goto-next-error)
+  (define-key my/leader-e-map (kbd "p") #'flymake-goto-prev-error)
+  (define-key my/leader-e-map (kbd "l") #'flymake-show-buffer-diagnostics)
 
-      ;; 12) AI (SPC a ...)
-      (meow-leader-define-key
-       '("a a" . aidermacs-transient-menu))
+  ;; 9) Toggles (LEADER t ...)
+  (define-key my/leader-t-map (kbd "l") #'my/toggle-transient-line-numbers)
+  (define-key my/leader-t-map (kbd "w") #'whitespace-mode)
+  (define-key my/leader-t-map (kbd "r") #'read-only-mode)
+  (define-key my/leader-t-map (kbd "z") #'core-hydra-text-scale/body)
+  (define-key my/leader-t-map (kbd "i") #'my/eww-toggle-images)
 
-      ;; 13) Session/quit (SPC q ...)
-      (meow-leader-define-key
-       '("q n" . my/new-frame-with-scratch)
-       '("q r" . my/restart-or-exit)
-       '("q q" . save-buffers-kill-emacs))
+  ;; 10) Org & Roam (LEADER o ...)
+  (define-key my/leader-o-map (kbd "a") #'org-agenda)
+  (define-key my/leader-o-map (kbd "c") #'org-capture)
+  (define-key my/leader-o-map (kbd "i") #'org-roam-node-insert)
+  (define-key my/leader-o-map (kbd "f") #'org-roam-node-find)
 
-      ;; 14) Help (SPC h ...)
-      (meow-leader-define-key
-       '("h k" . describe-key)
-       '("h f" . describe-function)
-       '("h v" . describe-variable))
+  ;; 11) Misc/Web (LEADER m ...)
+  (define-key my/leader-m-map (kbd "e") #'eww)
+  (define-key my/leader-m-map (kbd "s") #'my/eww-search)
+  (define-key my/leader-m-map (kbd "o") #'eww-open-file)
+  (define-key my/leader-m-map (kbd "b") #'eww-list-bookmarks)
+  (define-key my/leader-m-map (kbd "r") #'eww-readable)
+  (define-key my/leader-m-map (kbd "u") #'my/eww-toggle-images)
 
-      ;; -------------------------
-      ;; Normal-state keybindings
-      ;; -------------------------
-      (meow-normal-define-key
-       ;; keypad/help
-       '("?" . meow-keypad-describe-key)
-       '("," . meow-keypad)
-       ;; insert/append/open
-       '("i" . meow-insert)
-       '("a" . meow-append)
-       '("o" . meow-open-below)
-       '("O" . meow-open-above)
-       ;; undo/redo & kill/copy
-       '("u" . undo-fu-only-undo)
-       '("U" . undo-fu-only-redo)
-       '("D" . meow-kill)
-       '("Y" . meow-save)
-       ;; movement (hjkl + line boundaries)
-       '("h" . meow-left)
-       '("j" . meow-next)
-       '("k" . meow-prev)
-       '("l" . meow-right)
-       '("^" . beginning-of-line)
-       '("$" . end-of-line)
-       ;; word-wise (lowercase for move, uppercase for your original habits)
-       '("w" . meow-next-word)
-       '("b" . meow-back-word)
-       '("e" . meow-end-of-thing)
-       '("W" . meow-mark-word)
-       '("E" . meow-next-word)
-       '("B" . meow-back-word)
-       ;; paragraph / page
-       '("{" . backward-paragraph)
-       '("}" . forward-paragraph)
-       '("[" . backward-page)
-       '("]" . forward-page)
-       ;; numeric arg
-       '("-" . negative-argument))
+  ;; 12) AI (LEADER a ...)
+  (define-key my/leader-a-map (kbd "a") #'aidermacs-transient-menu)
 
-      ;; ---------------------------------------
-      ;; Motion-state overwrite keybindings
-      ;; (effective in read-only/minor-mode-heavy buffers)
-      ;; ---------------------------------------
-      (meow-motion-overwrite-define-key
-       '("h" . meow-left)
-       '("j" . meow-next)
-       '("k" . meow-prev)
-       '("l" . meow-right)
-       '("^" . beginning-of-line)
-       '("$" . end-of-line)
-       '("n" . next-line)
-       '("p" . previous-line))
+  ;; 13) Session/quit (LEADER q ...)
+  (define-key my/leader-q-map (kbd "n") #'my/new-frame-with-scratch)
+  (define-key my/leader-q-map (kbd "r") #'my/restart-or-exit)
+  (define-key my/leader-q-map (kbd "q") #'save-buffers-kill-emacs)
 
-      (setq meow-use-clipboard t
-            meow-expand-exclude-mode-list
-            '(special-mode help-mode eshell-mode term-mode vterm-mode)))
+  ;; 14) Help (LEADER h ...)
+  (define-key my/leader-h-map (kbd "k") #'describe-key)
+  (define-key my/leader-h-map (kbd "f") #'describe-function)
+  (define-key my/leader-h-map (kbd "v") #'describe-variable)
 
-    :config
-    (require 'meow)
-    (my/meow-setup)
-
-    ;; Make sure ESC exits Insert state reliably.
-    (with-eval-after-load 'meow
-      (define-key meow-insert-state-keymap [escape] #'meow-insert-exit))
-
-    (meow-global-mode 1))
-
-  ;;;; Which-Key (discoverability for SPC groups) ---------------------------------
-  ;; Enable which-key and label Space-leader group heads like "SPC b" -> "buffers".
+  ;;;; Which-Key (discoverability for leader groups) ------------------------------
   (leaf which-key
     :straight t
     :hook (after-init-hook . which-key-mode)
     :custom ((which-key-idle-delay . 0.4))
     :config
-    ;; User-requested labels for leader groups.
-    (dolist (it '(("SPC b" . "buffers")
-                  ("SPC w" . "windows")
-                  ("SPC p" . "project")
-                  ("SPC s" . "search")
-                  ("SPC g" . "git")
-                  ("SPC c" . "code")
-                  ("SPC e" . "errors")
-                  ("SPC t" . "toggles")
-                  ("SPC o" . "org/roam")
-                  ("SPC m" . "misc/web")
-                  ("SPC a" . "ai")
-                  ("SPC q" . "session")
-                  ("SPC h" . "help")))
+    ;; Label leader groups dynamically according to `my:leader-which-prefix`.
+    (dolist (it `((,(concat my:leader-which-prefix " b") . "buffers")
+                  (,(concat my:leader-which-prefix " w") . "windows")
+                  (,(concat my:leader-which-prefix " p") . "project")
+                  (,(concat my:leader-which-prefix " s") . "search")
+                  (,(concat my:leader-which-prefix " g") . "git")
+                  (,(concat my:leader-which-prefix " c") . "code")
+                  (,(concat my:leader-which-prefix " e") . "errors")
+                  (,(concat my:leader-which-prefix " t") . "toggles")
+                  (,(concat my:leader-which-prefix " o") . "org/roam")
+                  (,(concat my:leader-which-prefix " m") . "misc/web")
+                  (,(concat my:leader-which-prefix " a") . "ai")
+                  (,(concat my:leader-which-prefix " q") . "session")
+                  (,(concat my:leader-which-prefix " h") . "help")))
       (which-key-add-key-based-replacements (car it) (cdr it))))
 
-  ;;;; Global bindings (outside modal states) ------------------------------------
+  ;;;; Global bindings (outside leader) -------------------------------------------
   (leaf my:key:global
     :straight nil
     :bind
