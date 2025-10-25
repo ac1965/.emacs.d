@@ -560,182 +560,182 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 *** init.el
 
 #+begin_src emacs-lisp :tangle init.el
-;;; init.el --- Main initialization (core) -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-;;
-;;; Commentary:
-;; Entry point for Emacs 30+ configuration.
-;; Category: core
-;;
-;; - URL state paths (before url.el)
-;; - straight.el bootstrap
-;; - Early import of shell environment (exec-path-from-shell)
-;; - Performance (GCMH / read-process-output-max)
-;; - Core built-ins via leaf (do not duplicate early-init responsibilities)
-;; - Backups OFF + auto-save-visited managed elsewhere (early-init / core)
-;;
-;;; Code:
+  ;;; init.el --- Main initialization (core) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;;; Commentary:
+  ;; Entry point for Emacs 30+ configuration.
+  ;; Category: core
+  ;;
+  ;; - URL state paths (before url.el)
+  ;; - straight.el bootstrap
+  ;; - Early import of shell environment (exec-path-from-shell)
+  ;; - Performance (GCMH / read-process-output-max)
+  ;; - Core built-ins via leaf (do not duplicate early-init responsibilities)
+  ;; - Backups OFF + auto-save-visited managed elsewhere (early-init / core)
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'subr-x))
+  (eval-when-compile (require 'subr-x))
 
-;;;; 0) URL state BEFORE url.el is loaded --------------------------------------
-(setopt url-configuration-directory (or (bound-and-true-p my:d:url)
-                                        (expand-file-name "url/" user-emacs-directory))
-        url-cookie-file  (expand-file-name "cookies" url-configuration-directory)
-        url-history-file (expand-file-name "history" url-configuration-directory)
-        url-cache-directory (expand-file-name "cache" url-configuration-directory))
-(dolist (d (list url-configuration-directory url-cache-directory))
-  (when d (make-directory d t)))
-(require 'url)  ;; used by straight bootstrap
+  ;;;; 0) URL state BEFORE url.el is loaded --------------------------------------
+  (setopt url-configuration-directory (or (bound-and-true-p my:d:url)
+                                          (expand-file-name "url/" user-emacs-directory))
+          url-cookie-file  (expand-file-name "cookies" url-configuration-directory)
+          url-history-file (expand-file-name "history" url-configuration-directory)
+          url-cache-directory (expand-file-name "cache" url-configuration-directory))
+  (dolist (d (list url-configuration-directory url-cache-directory))
+    (when d (make-directory d t)))
+  (require 'url)  ;; used by straight bootstrap
 
-;;;; 1) Bootstrap straight.el ---------------------------------------------------
-(defvar bootstrap-version 7)
-(let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
-       (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
-  (unless (file-exists-p bootstrap-file)
-    (condition-case err
-        (with-current-buffer
-            (url-retrieve-synchronously
-             "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-             'silent 'inhibit-cookies)
-          (goto-char (point-max))
-          (eval-print-last-sexp))
-      (error (user-error "[straight] bootstrap failed: %s"
-                         (error-message-string err)))))
-  (load bootstrap-file nil 'nomessage))
+  ;;;; 1) Bootstrap straight.el ---------------------------------------------------
+  (defvar bootstrap-version 7)
+  (let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
+         (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
+    (unless (file-exists-p bootstrap-file)
+      (condition-case err
+          (with-current-buffer
+              (url-retrieve-synchronously
+               "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+               'silent 'inhibit-cookies)
+            (goto-char (point-max))
+            (eval-print-last-sexp))
+        (error (user-error "[straight] bootstrap failed: %s"
+                           (error-message-string err)))))
+    (load bootstrap-file nil 'nomessage))
 
-;;;; 1.5) Import environment early (macOS GUI/daemon safe) ---------------------
-(straight-use-package 'exec-path-from-shell)
-(when (memq window-system '(mac ns))
-  (setq exec-path-from-shell-check-startup-files nil
-        exec-path-from-shell-arguments '("-l" "-i"))
-  (exec-path-from-shell-copy-envs
-   '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
-     "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
-  (exec-path-from-shell-initialize))
+  ;;;; 1.5) Import environment early (macOS GUI/daemon safe) ---------------------
+  (straight-use-package 'exec-path-from-shell)
+  (when (memq window-system '(mac ns))
+    (setq exec-path-from-shell-check-startup-files nil
+          exec-path-from-shell-arguments '("-l" "-i"))
+    (exec-path-from-shell-copy-envs
+     '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
+       "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
+    (exec-path-from-shell-initialize))
 
-;; Base packages
-(dolist (pkg '(leaf leaf-keywords leaf-convert blackout hydra org))
-  (ignore-errors (straight-use-package pkg)))
-(eval-when-compile
-  (require 'leaf)
-  (require 'leaf-keywords))
-(when (fboundp 'leaf-keywords-init)
-  (leaf-keywords-init))
-(require 'org)
+  ;; Base packages
+  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout hydra org))
+    (ignore-errors (straight-use-package pkg)))
+  (eval-when-compile
+    (require 'leaf)
+    (require 'leaf-keywords))
+  (when (fboundp 'leaf-keywords-init)
+    (leaf-keywords-init))
+  (require 'org)
 
-;;;; 2) Performance tweaks ------------------------------------------------------
-(defvar core--orig-read-process-output-max
-  (and (boundp 'read-process-output-max) read-process-output-max))
-(when (boundp 'read-process-output-max)
-  (setq read-process-output-max (* 4 1024 1024)))  ;; 4MB for LSP/IO
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (when (boundp 'read-process-output-max)
-              (setq read-process-output-max core--orig-read-process-output-max))))
+  ;;;; 2) Performance tweaks ------------------------------------------------------
+  (defvar core--orig-read-process-output-max
+    (and (boundp 'read-process-output-max) read-process-output-max))
+  (when (boundp 'read-process-output-max)
+    (setq read-process-output-max (* 4 1024 1024)))  ;; 4MB for LSP/IO
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (when (boundp 'read-process-output-max)
+                (setq read-process-output-max core--orig-read-process-output-max))))
 
-(leaf gcmh
-  :straight t
-  :custom ((gcmh-idle-delay . 5)
-           (gcmh-high-cons-threshold . 16777216)) ;; 16MB
-  :config
-  (gcmh-mode 1))
+  (leaf gcmh
+    :straight t
+    :custom ((gcmh-idle-delay . 5)
+             (gcmh-high-cons-threshold . 16777216)) ;; 16MB
+    :config
+    (gcmh-mode 1))
 
-;;;; 3) Core built-ins (do NOT duplicate early-init responsibilities) ----------
-(leaf emacs
-  :straight nil
-  :bind (("M-/" . cape-dabbrev))
-  :hook ((prog-mode . display-line-numbers-mode))
-  :custom ((inhibit-startup-screen . t)
-           (inhibit-startup-message . t)
-           (initial-scratch-message . nil)
-           (initial-major-mode . 'fundamental-mode)  ;; must be quoted
-           (use-short-answers . t)
-           (create-lockfiles . nil)
-           (idle-update-delay . 0.2)
-           (ring-bell-function . #'ignore)          ;; function value must be #'quoted
-           (display-line-numbers-type . 'relative)  ;; <-- quote the symbol
-           (frame-title-format . t))
-  :config
-  (when (fboundp 'window-divider-mode) (window-divider-mode 1))
-  (when (fboundp 'pixel-scroll-precision-mode) (pixel-scroll-precision-mode 1))
-  (when (fboundp 'electric-pair-mode) (electric-pair-mode 1))
-  (dolist (k '("C-z" "C-x C-z" "C-x C-c" "M-z" "M-m"))
-    (when (lookup-key (current-global-map) (kbd k))
-      (keymap-global-unset k)))
-  (setq confirm-kill-emacs #'y-or-n-p)
-  ;; backup/auto-save policy is handled in early-init and core/editing; do not duplicate here.
-  )
+  ;;;; 3) Core built-ins (do NOT duplicate early-init responsibilities) ----------
+  (leaf emacs
+    :straight nil
+    :bind (("M-/" . cape-dabbrev))
+    :hook ((prog-mode . display-line-numbers-mode))
+    :custom ((inhibit-startup-screen . t)
+             (inhibit-startup-message . t)
+             (initial-scratch-message . nil)
+             (initial-major-mode . 'fundamental-mode)  ;; must be quoted
+             (use-short-answers . t)
+             (create-lockfiles . nil)
+             (idle-update-delay . 0.2)
+             (ring-bell-function . #'ignore)          ;; function value must be #'quoted
+             (display-line-numbers-type . 'relative)  ;; <-- quote the symbol
+             (frame-title-format . t))
+    :config
+    (when (fboundp 'window-divider-mode) (window-divider-mode 1))
+    (when (fboundp 'pixel-scroll-precision-mode) (pixel-scroll-precision-mode 1))
+    (when (fboundp 'electric-pair-mode) (electric-pair-mode 1))
+    (dolist (k '("C-z" "C-x C-z" "C-x C-c" "M-z" "M-m"))
+      (when (lookup-key (current-global-map) (kbd k))
+        (keymap-global-unset k)))
+    (setq confirm-kill-emacs #'y-or-n-p)
+    ;; backup/auto-save policy is handled in early-init and core/editing; do not duplicate here.
+    )
 
-;;;; 4) Modifiers per OS --------------------------------------------------------
-(leaf my:modifier
-  :straight nil
-  :config
-  (pcase system-type
-    ('darwin
-     (setq mac-option-modifier 'meta
-           mac-command-modifier 'super
-           mac-control-modifier 'control
-           mac-function-modifier 'hyper))
-    ('windows-nt
-     (setq w32-lwindow-modifier 'super
-           w32-rwindow-modifier 'super
-           w32-apps-modifier   'hyper))
-    (_ nil)))
+  ;;;; 4) Modifiers per OS --------------------------------------------------------
+  (leaf my:modifier
+    :straight nil
+    :config
+    (pcase system-type
+      ('darwin
+       (setq mac-option-modifier 'meta
+             mac-command-modifier 'super
+             mac-control-modifier 'control
+             mac-function-modifier 'hyper))
+      ('windows-nt
+       (setq w32-lwindow-modifier 'super
+             w32-rwindow-modifier 'super
+             w32-apps-modifier   'hyper))
+      (_ nil)))
 
-;;;; 5) Files and environment ---------------------------------------------------
-;; ⛳ duplicate exec-path-from-shell block removed (initialized earlier).
-(leaf no-littering :straight t)
+  ;;;; 5) Files and environment ---------------------------------------------------
+  ;; ⛳ duplicate exec-path-from-shell block removed (initialized earlier).
+  (leaf no-littering :straight t)
 
-;; macOS: complement exec-path/PATH with Homebrew bin (just in case).
-(when (eq system-type 'darwin)
-  (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
-    (when (and (file-directory-p p) (not (member p exec-path)))
-      (add-to-list 'exec-path p)
-      (unless (and (getenv "PATH") (string-match-p (regexp-quote p) (getenv "PATH")))
-        (setenv "PATH" (concat p ":" (getenv "PATH")))))))
+  ;; macOS: complement exec-path/PATH with Homebrew bin (just in case).
+  (when (eq system-type 'darwin)
+    (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
+      (when (and (file-directory-p p) (not (member p exec-path)))
+        (add-to-list 'exec-path p)
+        (unless (and (getenv "PATH") (string-match-p (regexp-quote p) (getenv "PATH")))
+          (setenv "PATH" (concat p ":" (getenv "PATH")))))))
 
-;;;; 6) Dired display settings --------------------------------------------------
-;; ⛳ moved to core/editing.el to avoid split/duplication. (section removed)
+  ;;;; 6) Dired display settings --------------------------------------------------
+  ;; ⛳ moved to core/editing.el to avoid split/duplication. (section removed)
 
-;;;; 7) Personal file loader ----------------------------------------------------
-(defun utils--safe-load-file (file &optional noerror)
-  "Load FILE safely. If NOERROR is non-nil, log instead of raising."
-  (when (and file (file-exists-p file))
-    (condition-case err
-        (load file nil 'nomessage)
-      (error
-       (funcall (if noerror #'message #'user-error)
-                "[load] failed to load %s: %s"
-                file (error-message-string err))))))
-(defalias 'my/safe-load-file #'utils--safe-load-file)
+  ;;;; 7) Personal file loader ----------------------------------------------------
+  (defun utils--safe-load-file (file &optional noerror)
+    "Load FILE safely. If NOERROR is non-nil, log instead of raising."
+    (when (and file (file-exists-p file))
+      (condition-case err
+          (load file nil 'nomessage)
+        (error
+         (funcall (if noerror #'message #'user-error)
+                  "[load] failed to load %s: %s"
+                  file (error-message-string err))))))
+  (defalias 'my/safe-load-file #'utils--safe-load-file)
 
-(my/safe-load-file
- (expand-file-name (concat "personal/" user-login-name ".el")
-                   (or (bound-and-true-p my:d) user-emacs-directory))
- t)
+  (my/safe-load-file
+   (expand-file-name (concat "personal/" user-login-name ".el")
+                     (or (bound-and-true-p my:d) user-emacs-directory))
+   t)
 
-;;;; 8) Modules entrypoint ------------------------------------------------------
-(let* ((root (or (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d) my:d)
-                 user-emacs-directory))
-       (lisp-dir (expand-file-name "lisp" root)))
-  (add-to-list 'load-path lisp-dir)
-  (require 'modules nil t))
+  ;;;; 8) Modules entrypoint ------------------------------------------------------
+  (let* ((root (or (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d) my:d)
+                   user-emacs-directory))
+         (lisp-dir (expand-file-name "lisp" root)))
+    (add-to-list 'load-path lisp-dir)
+    (require 'modules nil t))
 
-;;;; 9) Startup message ---------------------------------------------------------
-(defun core--announce-startup ()
-  "Report startup time and GC count to *Messages*."
-  (message "Emacs ready in %.2f seconds with %d GCs."
-           (float-time (time-subtract after-init-time before-init-time))
-           gcs-done))
-(add-hook 'after-init-hook
-          (lambda () (run-with-idle-timer 0 nil #'core--announce-startup)))
+  ;;;; 9) Startup message ---------------------------------------------------------
+  (defun core--announce-startup ()
+    "Report startup time and GC count to *Messages*."
+    (message "Emacs ready in %.2f seconds with %d GCs."
+             (float-time (time-subtract after-init-time before-init-time))
+             gcs-done))
+  (add-hook 'after-init-hook
+            (lambda () (run-with-idle-timer 0 nil #'core--announce-startup)))
 
-(provide 'init)
-;;; init.el ends here
+  (provide 'init)
+  ;;; init.el ends here
 #+end_src
 
 ** Modular Loader & Core Module Suite — `modules.el` + core/ui/completion/orgx/dev/utils
@@ -2012,7 +2012,7 @@ Provide a **deterministic, modular Emacs 30+ configuration** that is:
 - `M-x my/custom-open` — open `.etc/custom.el`
 - `M-x my/custom-dump-current` — write a one-time snapshot of selected settings/faces to `.etc/custom.el` (it does **not** run at startup)
 
-*** ui/ui-font.el
+ *** ui/ui-font.el
 :PROPERTIES:
 :CUSTOM_ID: ui-font
 :END:
@@ -2126,16 +2126,7 @@ Provide a **deterministic, modular Emacs 30+ configuration** that is:
     (leaf nano-theme
       :straight (nano-theme :type git :host github :repo "rougier/nano-theme")
       :config
-      (let ((apply-nano-theme
-             (cond ((fboundp 'nano-theme-light) (lambda () (nano-theme-light)))
-  		 ((fboundp 'nano-theme-dark)  (lambda () (nano-theme-dark)))
-  		 ((fboundp 'nano-theme)       (lambda () (nano-theme)))
-  		 ((fboundp 'nano-light)       (lambda () (nano-light)))
-  		 ((fboundp 'nano-dark)        (lambda () (nano-dark)))
-  		 (t nil))))
-        (if apply-nano-theme
-            (funcall apply-nano-theme)
-  	(message "[nano-theme] No applicable theme function was found.")))
+      (load-theme 'nano t)
       (set-face-attribute 'bold nil :weight 'bold)
       (set-face-attribute 'italic nil :slant 'italic)))
 
