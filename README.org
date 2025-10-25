@@ -386,175 +386,175 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 *** early-init.el
 
 #+begin_src emacs-lisp :tangle early-init.el
-;;; early-init.el --- Early initialization (core) -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-;;
-;;; Commentary:
-;; Core bootstrap executed before regular init.
-;; Category: core
-;;
-;; - Disable package.el (we use straight.el + leaf)
-;; - Fast startup: widen GC/file-name-handlers and restore after startup
-;; - Keep artifacts under .cache/ .etc/ .var/ (native-compile, no-littering, straight)
-;; - macOS: prefer Homebrew gcc/libgccjit (PATH/LIBRARY_PATH/CC)
-;; - Backups OFF; classic auto-save OFF (use auto-save-visited in init)
-;; - Early UI: frame defaults & hide GUI bars to avoid flicker
-;;
-;;; Code:
+  ;;; early-init.el --- Early initialization (core) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;;; Commentary:
+  ;; Core bootstrap executed before regular init.
+  ;; Category: core
+  ;;
+  ;; - Disable package.el (we use straight.el + leaf)
+  ;; - Fast startup: widen GC/file-name-handlers and restore after startup
+  ;; - Keep artifacts under .cache/ .etc/ .var/ (native-compile, no-littering, straight)
+  ;; - macOS: prefer Homebrew gcc/libgccjit (PATH/LIBRARY_PATH/CC)
+  ;; - Backups OFF; classic auto-save OFF (use auto-save-visited in init)
+  ;; - Early UI: frame defaults & hide GUI bars to avoid flicker
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'subr-x))
-(require 'seq)
+  (eval-when-compile (require 'subr-x))
+  (require 'seq)
 
-;;;; Internal helpers (core namespace) -----------------------------------------
-(defun core--ensure-directory-exists (dir)
-  "Ensure DIR exists, creating it if necessary."
-  (unless (file-directory-p dir)
-    (condition-case err
-        (make-directory dir t)
-      (error (warn "Failed to create directory: %s (%s)"
-                   dir (error-message-string err))))))
+  ;;;; Internal helpers (core namespace) -----------------------------------------
+  (defun core--ensure-directory-exists (dir)
+    "Ensure DIR exists, creating it if necessary."
+    (unless (file-directory-p dir)
+      (condition-case err
+          (make-directory dir t)
+        (error (warn "Failed to create directory: %s (%s)"
+                     dir (error-message-string err))))))
 
-(defun core--system-username ()
-  "Return current login name as a string or nil."
-  (ignore-errors (user-login-name)))
+  (defun core--system-username ()
+    "Return current login name as a string or nil."
+    (ignore-errors (user-login-name)))
 
-(defun core--restore-startup-state ()
-  "Restore GC and file handler settings after startup."
-  (setq file-name-handler-alist core--orig-file-name-handler-alist
-        gc-cons-threshold 16777216     ;; 16MB
-        gc-cons-percentage 0.1))
+  (defun core--restore-startup-state ()
+    "Restore GC and file handler settings after startup."
+    (setq file-name-handler-alist core--orig-file-name-handler-alist
+          gc-cons-threshold 16777216     ;; 16MB
+          gc-cons-percentage 0.1))
 
-;; Backward-compat public alias for existing configs
-(defalias 'my/ensure-directory-exists #'core--ensure-directory-exists)
+  ;; Backward-compat public alias for existing configs
+  (defalias 'my/ensure-directory-exists #'core--ensure-directory-exists)
 
-;;;; 1) Disable package.el ------------------------------------------------------
-(setq package-enable-at-startup nil
-      package-quickstart nil)
+  ;;;; 1) Disable package.el ------------------------------------------------------
+  (setq package-enable-at-startup nil
+        package-quickstart nil)
 
-;;;; 2) Base directory ----------------------------------------------------------
-(defvar my:d
-  (or (and load-file-name (file-name-directory (file-chase-links load-file-name)))
-      user-emacs-directory)
-  "Base directory for this Emacs configuration.")
-(setq user-emacs-directory (file-name-as-directory my:d))
+  ;;;; 2) Base directory ----------------------------------------------------------
+  (defvar my:d
+    (or (and load-file-name (file-name-directory (file-chase-links load-file-name)))
+        user-emacs-directory)
+    "Base directory for this Emacs configuration.")
+  (setq user-emacs-directory (file-name-as-directory my:d))
 
-;;;; 3) Hidden sub-directories --------------------------------------------------
-(defconst my:d:var        (expand-file-name ".var"        my:d))
-(defconst my:d:etc        (expand-file-name ".etc"        my:d))
-(defconst my:d:cache      (expand-file-name ".cache"      my:d))
-(defconst my:d:lisp       (expand-file-name "lisp"        my:d))
-(defconst my:d:eln-cache  (expand-file-name "eln-cache"   my:d:cache))
-(defconst my:d:treesit    (expand-file-name "tree-sitter" my:d:var))
-(defconst my:d:url        (expand-file-name "url/"        my:d:var)
-  "Directory for url.* state (cookies, history, etc.) under my:d:var.")
-(defconst my:d:eww        (expand-file-name "eww/"        my:d:var)
-  "Directory for EWW state (bookmarks, history) under my:d:var.")
+  ;;;; 3) Hidden sub-directories --------------------------------------------------
+  (defconst my:d:var        (expand-file-name ".var"        my:d))
+  (defconst my:d:etc        (expand-file-name ".etc"        my:d))
+  (defconst my:d:cache      (expand-file-name ".cache"      my:d))
+  (defconst my:d:lisp       (expand-file-name "lisp"        my:d))
+  (defconst my:d:eln-cache  (expand-file-name "eln-cache"   my:d:cache))
+  (defconst my:d:treesit    (expand-file-name "tree-sitter" my:d:var))
+  (defconst my:d:url        (expand-file-name "url/"        my:d:var)
+    "Directory for url.* state (cookies, history, etc.) under my:d:var.")
+  (defconst my:d:eww        (expand-file-name "eww/"        my:d:var)
+    "Directory for EWW state (bookmarks, history) under my:d:var.")
 
-(dolist (dir (list my:d:var my:d:etc my:d:cache my:d:lisp
-                   my:d:treesit my:d:url my:d:eww
-                   my:d:eln-cache))
-  (core--ensure-directory-exists dir))
+  (dolist (dir (list my:d:var my:d:etc my:d:cache my:d:lisp
+                     my:d:treesit my:d:url my:d:eww
+                     my:d:eln-cache))
+    (core--ensure-directory-exists dir))
 
-;;;; 4) macOS: prefer Homebrew gcc/libgccjit -----------------------------------
-(when (eq system-type 'darwin)
-  (let* ((brew-prefix
-          (or (getenv "HOMEBREW_PREFIX")
-              (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
-              (and (file-directory-p "/usr/local")   "/usr/local")))
-         (bin  (and brew-prefix (expand-file-name "bin" brew-prefix)))
-         (prefix-libgccjit (and brew-prefix (expand-file-name "opt/libgccjit" brew-prefix)))
-         (prefix-gcc       (and brew-prefix (expand-file-name "opt/gcc"       brew-prefix)))
-         (candidates (seq-filter
-                      #'file-directory-p
-                      (list
-                       (and prefix-libgccjit (expand-file-name "lib/gcc/current" prefix-libgccjit))
-                       (and prefix-libgccjit (expand-file-name "lib"             prefix-libgccjit))
-                       (and prefix-gcc       (expand-file-name "lib/gcc/current" prefix-gcc))))))
-    ;; PATH: prepend brew bin once.
-    (when (and bin (file-directory-p bin))
-      (let* ((path (or (getenv "PATH") ""))
-             (parts (split-string path ":" t)))
-        (unless (member bin parts)
-          (setenv "PATH" (concat bin ":" path)))))
-    ;; LIBRARY_PATH: add & de-dup.
-    (when candidates
-      (setenv "LIBRARY_PATH"
-              (string-join
-               (delete-dups
-                (append candidates
-                        (when-let* ((old (getenv "LIBRARY_PATH")))
-                          (split-string old ":" t))))
-               ":")))
-    ;; CC: pick highest gcc-N available.
-    (when (and bin (file-directory-p bin))
-      (when-let* ((gcc
-                   (car (seq-filter
-                         #'file-exists-p
-                         (mapcar (lambda (n) (expand-file-name (format "gcc-%d" n) bin))
-                                 (number-sequence 20 10 -1))))))
-        (setenv "CC" gcc)))))
+  ;;;; 4) macOS: prefer Homebrew gcc/libgccjit -----------------------------------
+  (when (eq system-type 'darwin)
+    (let* ((brew-prefix
+            (or (getenv "HOMEBREW_PREFIX")
+                (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
+                (and (file-directory-p "/usr/local")   "/usr/local")))
+           (bin  (and brew-prefix (expand-file-name "bin" brew-prefix)))
+           (prefix-libgccjit (and brew-prefix (expand-file-name "opt/libgccjit" brew-prefix)))
+           (prefix-gcc       (and brew-prefix (expand-file-name "opt/gcc"       brew-prefix)))
+           (candidates (seq-filter
+                        #'file-directory-p
+                        (list
+                         (and prefix-libgccjit (expand-file-name "lib/gcc/current" prefix-libgccjit))
+                         (and prefix-libgccjit (expand-file-name "lib"             prefix-libgccjit))
+                         (and prefix-gcc       (expand-file-name "lib/gcc/current" prefix-gcc))))))
+      ;; PATH: prepend brew bin once.
+      (when (and bin (file-directory-p bin))
+        (let* ((path (or (getenv "PATH") ""))
+               (parts (split-string path ":" t)))
+          (unless (member bin parts)
+            (setenv "PATH" (concat bin ":" path)))))
+      ;; LIBRARY_PATH: add & de-dup.
+      (when candidates
+        (setenv "LIBRARY_PATH"
+                (string-join
+                 (delete-dups
+                  (append candidates
+                          (when-let* ((old (getenv "LIBRARY_PATH")))
+                            (split-string old ":" t))))
+                 ":")))
+      ;; CC: pick highest gcc-N available.
+      (when (and bin (file-directory-p bin))
+        (when-let* ((gcc
+                     (car (seq-filter
+                           #'file-exists-p
+                           (mapcar (lambda (n) (expand-file-name (format "gcc-%d" n) bin))
+                                   (number-sequence 20 10 -1))))))
+          (setenv "CC" gcc)))))
 
-;;;; 5) Native compilation path (.cache/eln-cache) ------------------------------
-(when (featurep 'native-compile)
-  (setopt native-comp-eln-load-path (list my:d:eln-cache)
-          native-comp-async-report-warnings-errors 'silent))
+  ;;;; 5) Native compilation path (.cache/eln-cache) ------------------------------
+  (when (featurep 'native-compile)
+    (setopt native-comp-eln-load-path (list my:d:eln-cache)
+            native-comp-async-report-warnings-errors 'silent))
 
-;;;; 6) Pre-wire no-littering dirs ----------------------------------------------
-(defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
-(defvar no-littering-var-directory (file-name-as-directory my:d:var))
+  ;;;; 6) Pre-wire no-littering dirs ----------------------------------------------
+  (defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
+  (defvar no-littering-var-directory (file-name-as-directory my:d:var))
 
-;;;; 7) straight.el base under .cache/ ------------------------------------------
-(setopt straight-base-dir my:d:cache
-        straight-use-package-by-default t
-        straight-profiles '((nil . "default.el")))
+  ;;;; 7) straight.el base under .cache/ ------------------------------------------
+  (setopt straight-base-dir my:d:cache
+          straight-use-package-by-default t
+          straight-profiles '((nil . "default.el")))
 
-;;;; 8) Startup speedups (restore after startup) --------------------------------
-(defvar core--orig-file-name-handler-alist file-name-handler-alist)
-(setq file-name-handler-alist nil
-      gc-cons-threshold most-positive-fixnum
-      gc-cons-percentage 0.6)
-(add-hook 'emacs-startup-hook #'core--restore-startup-state)
+  ;;;; 8) Startup speedups (restore after startup) --------------------------------
+  (defvar core--orig-file-name-handler-alist file-name-handler-alist)
+  (setq file-name-handler-alist nil
+        gc-cons-threshold most-positive-fixnum
+        gc-cons-percentage 0.6)
+  (add-hook 'emacs-startup-hook #'core--restore-startup-state)
 
-;;;; 9) Backups OFF / classic auto-save OFF -------------------------------------
-(setq make-backup-files nil
-      version-control nil
-      delete-old-versions nil
-      backup-by-copying nil
-      auto-save-default nil
-      auto-save-list-file-prefix nil)
-(core--ensure-directory-exists (expand-file-name "backups" my:d:var))
+  ;;;; 9) Backups OFF / classic auto-save OFF -------------------------------------
+  (setq make-backup-files nil
+        version-control nil
+        delete-old-versions nil
+        backup-by-copying nil
+        auto-save-default nil
+        auto-save-list-file-prefix nil)
+  (core--ensure-directory-exists (expand-file-name "backups" my:d:var))
 
-;;;; 10) Early UI (avoid flicker) ----------------------------------------------
-(setopt frame-resize-pixelwise t
-        frame-inhibit-implied-resize t
-        cursor-in-non-selected-windows nil
-        x-underline-at-descent-line t
-        window-divider-default-right-width 16
-        window-divider-default-places 'right-only)
+  ;;;; 10) Early UI (avoid flicker) ----------------------------------------------
+  (setopt frame-resize-pixelwise t
+          frame-inhibit-implied-resize t
+          cursor-in-non-selected-windows nil
+          x-underline-at-descent-line t
+          window-divider-default-right-width 16
+          window-divider-default-places 'right-only)
 
-(dolist (it '((fullscreen . fullboth)
-              (undecorated . nil)
-              (internal-border-width . 8)
-              (left-fringe . 0)
-              (right-fringe . 0)
-              (tool-bar-lines . 0)))
-  (add-to-list 'default-frame-alist it)
-  (add-to-list 'initial-frame-alist it))
+  (dolist (it '((fullscreen . fullboth)
+                (undecorated . nil)
+                (internal-border-width . 8)
+                (left-fringe . 0)
+                (right-fringe . 0)
+                (tool-bar-lines . 0)))
+    (add-to-list 'default-frame-alist it)
+    (add-to-list 'initial-frame-alist it))
 
-(when (fboundp 'menu-bar-mode)  (menu-bar-mode -1))
-(when (fboundp 'tool-bar-mode)  (tool-bar-mode -1))
-(when (fboundp 'scroll-bar-mode)(scroll-bar-mode -1))
+  (when (fboundp 'menu-bar-mode)  (menu-bar-mode -1))
+  (when (fboundp 'tool-bar-mode)  (tool-bar-mode -1))
+  (when (fboundp 'scroll-bar-mode)(scroll-bar-mode -1))
 
-;; Correct type: must be user name string.
-(let ((u (core--system-username)))
-  (when (stringp u)
-    (setq inhibit-startup-echo-area-message u)))
+  ;; Correct type: must be user name string.
+  (let ((u (core--system-username)))
+    (when (stringp u)
+      (setq inhibit-startup-echo-area-message u)))
 
-(provide 'early-init)
-;;; early-init.el ends here
+  (provide 'early-init)
+  ;;; early-init.el ends here
 #+end_src
 
 *** init.el
@@ -618,7 +618,7 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
     (exec-path-from-shell-initialize))
 
   ;; Base packages
-  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout hydra org))
+  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout imenu-list hydra org))
     (ignore-errors (straight-use-package pkg)))
   (eval-when-compile
     (require 'leaf)
@@ -3425,6 +3425,103 @@ Provide a **deterministic, modular Emacs 30+ configuration** that is:
     (if (one-window-p)
         (kill-buffer)
       (kill-buffer-and-window)))
+
+  ;;; Sidebar
+  ;; This defines an org sidebar using imenu-list.
+  (require 'imenu) ;; OK: built-in library
+
+  ;; Do NOT require imenu-list at top-level; keep it lazy-loaded.
+  (declare-function imenu-list-minor-mode "imenu-list")
+  (declare-function imenu-list-stop-timer "imenu-list")
+  (declare-function imenu-list-display-dwim "imenu-list")
+  (defvar imenu-list--displayed-buffer nil) ;; Define to avoid unbound-variable errors in eval
+
+  (defun my/nano-headerline (buf subtitle)
+    "Return a header-line string. Prefer nano-modeline if available.
+  BUF is the buffer to display the name of. SUBTITLE is an extra label."
+    (let* ((name (cond
+                  ((and buf (buffer-live-p buf)) (buffer-name buf))
+                  (t (buffer-name))))
+           (extra ""))
+      (cond
+       ;; Use nano-modeline when present
+       ((fboundp 'nano-modeline-render)
+        (nano-modeline-render nil name subtitle extra))
+       ;; Fallback: a simple textual header-line
+       (t
+        (concat "  "
+                (propertize name 'face 'mode-line-buffer-id)
+                "  " subtitle)))))
+
+  (defun my/org-tree-to-indirect-buffer ()
+    "Create an indirect buffer for the current subtree, reveal code blocks, and mark blocks as visible."
+    (org-tree-to-indirect-buffer)
+    (org-show-block-all)
+    (setq-local my/org-blocks-hidden nil))
+
+  (defun my/org-sidebar ()
+    "Open an imenu-list sidebar on the left for navigation, with safe fallbacks."
+    (interactive)
+    ;; Hard fail early if imenu-list is not installed, with guidance.
+    (unless (locate-library "imenu-list")
+      (user-error
+       (concat "imenu-list is not installed. "
+               "Install it or use `consult-imenu' / `imenu' instead.")))
+
+    ;; Establish autoloads for the necessary imenu-list entry points.
+    (autoload 'imenu-list-minor-mode "imenu-list" nil t)
+    (autoload 'imenu-list-stop-timer  "imenu-list" nil t)
+    (autoload 'imenu-list-display-dwim "imenu-list" nil t)
+
+    (setq imenu-list-after-jump-hook #'my/org-tree-to-indirect-buffer
+          imenu-list-position 'left
+          imenu-list-size 36
+          imenu-list-focus-after-activation t)
+
+    (let ((heading (substring-no-properties (or (and (fboundp 'org-get-heading)
+                                                     (org-get-heading t t t t))
+                                                ""))))
+      ;; If called from an indirect buffer, switch back to the base buffer.
+      (when (buffer-base-buffer)
+        (switch-to-buffer (buffer-base-buffer)))
+
+      ;; Start the sidebar.
+      (imenu-list-minor-mode 1)
+      (when (fboundp 'imenu-list-stop-timer) (imenu-list-stop-timer))
+      (hl-line-mode 1)
+
+      ;; Only apply nano face when it exists.
+      (when (facep 'nano-subtle)
+        (face-remap-add-relative 'hl-line :inherit 'nano-subtle))
+
+      ;; Main crash fix: do NOT call nano-modeline-render directly in header-line-format.
+      ;; Route through a safe wrapper that checks availability.
+      (setq header-line-format
+            `(:eval
+              (my/nano-headerline
+               ,(when (boundp 'imenu-list--displayed-buffer)
+                  'imenu-list--displayed-buffer)
+               "(outline)")))
+
+      (setq-local cursor-type nil)
+
+      ;; If we captured a heading, try to jump to it and display items.
+      (when (> (length heading) 0)
+        (goto-char (point-min))
+        (when (search-forward heading nil t)
+          (when (fboundp 'imenu-list-display-dwim)
+            (imenu-list-display-dwim))))))
+
+  ;; This toggles the org-sidebar.
+  (defun my/org-sidebar-toggle ()
+    "Toggle the org-sidebar"
+
+    (interactive)
+    (if (get-buffer-window "*Ilist*")
+        (progn
+          (quit-window nil (get-buffer-window "*Ilist*"))
+          (switch-to-buffer (buffer-base-buffer)))
+      (my/org-sidebar)))
 
   (provide 'utils/utils-functions)
 #+end_src
