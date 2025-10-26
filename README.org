@@ -618,7 +618,7 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
     (exec-path-from-shell-initialize))
 
   ;; Base packages
-  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout imenu-list hydra org))
+  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout helpful imenu-list hydra org))
     (ignore-errors (straight-use-package pkg)))
   (eval-when-compile
     (require 'leaf)
@@ -1078,6 +1078,7 @@ Provide a **deterministic, modular Emacs 30+ configuration** that is:
                               (menu-bar-lines . 0)))
 
   (setq initial-frame-alist default-frame-alist)
+
   ;;;; Text scaling hydra ---------------------------------------------------------
   (leaf hydra
     :straight t
@@ -1157,15 +1158,15 @@ Provide a **deterministic, modular Emacs 30+ configuration** that is:
 
   ;;;; Global LEADER (non-modal) --------------------------------------------------
   ;; Choose a sane global leader key:
-  ;; - macOS (ns/mac): use Super-Space (s-SPC).
+  ;; - macOS (ns/mac): use "C-c SPC".
   ;; - Others: use "C-c SPC" (reserved for users; safe with which-key).
   (defconst my:leader-key
-    (if (memq system-type '(darwin)) "s-SPC" "C-c SPC")
+    (if (memq system-type '(darwin)) "C-c SPC" "C-c SPC")
     "Key sequence used as global leader key.")
 
   ;; Which-Key prefix label visible in minibuffer (purely cosmetic).
   (defconst my:leader-which-prefix
-    (if (memq system-type '(darwin)) "s-SPC" "C-c SPC")
+    (if (memq system-type '(darwin)) "C-c SPC" "C-c SPC")
     "Human-readable leader prefix string for which-key labels.")
 
   ;; Top-level leader map and grouped submaps.
@@ -2767,6 +2768,43 @@ Provide a **deterministic, modular Emacs 30+ configuration** that is:
     :after ox
     :custom ((org-hugo-front-matter-format . "toml")))
 
+  (leaf *ox-hugo--capture
+    :require (org-capture org-id)   ;; ensure both are available
+    :preface
+    ;; Pure Emacs Lisp, newline-free, portable
+    (defun my/ox-hugo-generate-safe-filename ()
+      "Return a safe Hugo filename like \"YYYYMMDD-xxxxxxxx\".
+  It uses `org-id-uuid' and trims to 8 hex chars for stability."
+      (let ((date (format-time-string "%Y%m%d"))
+            (short (substring (org-id-uuid) 0 8))) ; no newline, pure Elisp
+        (format "%s-%s" date short)))
+
+    ;; Optional: where to capture (declare your path elsewhere if you prefer)
+    ;; (defvar my:f:capture-blog-file "~/notes/blog.org")
+
+    :config
+    (defvar org-capture-templates) ; silence byte-compiler if needed
+
+    ;; Insert (or replace) the "b" template
+    (add-to-list
+     'org-capture-templates
+     `("b" "Blog (Hugo) - new post" entry
+       (file+olp ,(or (bound-and-true-p my:f:capture-blog-file)
+                      (user-error "Set `my:f:capture-blog-file' to your blog Org file"))
+                 "blog")
+       ,(concat
+         "** TODO %^{Title}\n"
+         ":PROPERTIES:\n"
+         "  :EXPORT_FILE_NAME: %(my/ox-hugo-generate-safe-filename)\n"
+         "  :EXPORT_DATE: %(format-time-string \"%Y-%m-%dT%T%z\")\n"
+         "  :EXPORT_HUGO_TAGS: %^{Tags|emacs}\n"
+         "  :EXPORT_HUGO_CATEGORIES: %^{Category|blog}\n"
+         "  :EXPORT_HUGO_LASTMOD: %(format-time-string \"%Y-%m-%dT%T%z\")\n"
+         "  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :pin false\n"
+         "  :END:\n\n"
+         "%?\n")
+       :empty-lines 1 :prepend t)))
+
   (leaf markdown-mode :straight t)
   (leaf markdown-preview-mode :straight t)
   (leaf edit-indirect :straight t)
@@ -3808,6 +3846,7 @@ Provide **personal, device-specific overlays** on top of the core configuration:
     (require 'leaf)
     (require 'subr-x))
 
+  ;;; Personal Information
   (leaf *personals
     :straight nil
     :init
@@ -3854,6 +3893,7 @@ Provide **personal, device-specific overlays** on top of the core configuration:
                         (member dir my:d:excluded-directories))
                       load-path)))
 
+  ;;; SIS
   (leaf sis
     :if (eq system-type 'darwin)
     :straight t
@@ -3879,6 +3919,7 @@ Provide **personal, device-specific overlays** on top of the core configuration:
             (lambda ()
               (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
 
+  ;;; Device: MX_ErgoS
   (leaf *device/MX_ErgoS
     :straight nil
     :init
@@ -3894,6 +3935,7 @@ Provide **personal, device-specific overlays** on top of the core configuration:
     (global-set-key [mouse-4] #'previous-buffer)
     (global-set-key [mouse-5] #'next-buffer))
 
+  ;;; Apple Music
   (when (eq system-type 'darwin)
     (defun my/apple-music-osascript-async (script &optional callback)
       "Run AppleScript SCRIPT asynchronously, invoking CALLBACK with its output."
