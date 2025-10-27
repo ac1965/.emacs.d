@@ -390,7 +390,24 @@ Use the provided build script:
    :CUSTOM_ID: tools
 :END:
 
-*** Ex. Boot
+*** Ex
+- *Boot Sequence Overview*
+
+  early-init.el prepares GC/UI and paths → init.el bootstraps packages and globals → modules.el loads feature modules in a deterministic order → core/switches.el resolves active stacks (UI/LSP) → selected UI/LSP bundles are enabled.
+
+#+begin_src mermaid
+  flowchart TD
+    A[early-init.el] --> B[init.el]
+    B --> C[modules.el]
+    C --> D[core/switches.el]
+    D --> E{UI stack?}
+    E -->|nano| E1[palette → theme → modeline → padding]
+    E -->|doom| E2[preset → theme → modeline → padding]
+    D --> F{LSP stack?}
+    F -->|eglot| F1[eglot setup]
+    F -->|lsp-mode| F2[lsp-mode + lsp-ui setup]
+#+end_src
+
 #+begin_src mermaid
   sequenceDiagram
       autonumber
@@ -413,6 +430,115 @@ Use the provided build script:
       Switch->>LSP: enable eglot or lsp-mode
       Mods-->>Init: modules loaded (ok/ng/skip/total)
       Init-->>Emacs: startup message (time, GCs)
+#+end_src
+
+- *Loader & Dependency Shape*
+
+  modules.el enumerates lisp/** modules and (require ...) each feature, respecting my:modules-skip/my:modules-extra. Inside each module, leaf/require pulls package features. The require graph you capture (graph.el) mirrors this.
+
+#+begin_src mermaid
+  flowchart TD
+    A[early-init.el] --> B[init.el]
+    B --> C[modules.el]
+    C --> D[core/switches.el]
+    D --> E{UI stack?}
+    E -->|nano| E1[palette → theme → modeline → padding]
+    E -->|doom| E2[preset → theme → modeline → padding]
+    D --> F{LSP stack?}
+    F -->|eglot| F1[eglot setup]
+    F -->|lsp-mode| F2[lsp-mode + lsp-ui setup]
+#+end_src
+
+- *UI Stack* (ex. nano)
+
+#+begin_src mermaid
+  flowchart LR
+    subgraph Palette["ui/ui-nano-palette.el (palette)"]
+      P1[nano-color-* defcustoms]
+      P2[my/nano-apply-faces]
+    end
+
+    subgraph Theme["ui/ui-theme.el"]
+      T1[nano-emacs]
+      T2[nano-theme]
+      T3[spacious-padding]
+      T4[re-apply after theme]
+    end
+
+    subgraph Modeline["ui/ui-nano-modeline.el"]
+      N1[nano-modeline hooks]
+      N2[my/ui-enable-nano]
+    end
+
+    Palette --> Theme
+    Theme --> Modeline
+    Modeline -->|"core/switches.el"| Switch[UI switch]
+#+end_src
+
+- *Completion Stack*
+
+#+begin_src mermaid
+  flowchart LR
+    Orderless["orderless"] --> Mini[Minibuffer]
+    Vertico["vertico(+posframe)"] --> Mini
+    Marginalia["marginalia"] --> Mini
+    Consult["consult (xref glue)"] --> Search[Search/Navigation]
+    Embark["embark(+embark-consult)"] --> Actions[Context actions]
+
+    Corfu["corfu"] --> InBuf[In-buffer CAPF UI]
+    KindIcon["kind-icon"] --> Corfu
+    CAPE["cape (file,dabbrev,keyword)"] --> CAPF[completion-at-point-functions]
+
+    CAPF --> Corfu
+    Mini --> Consult
+    Mini --> Embark
+#+end_src
+
+- *LSP Stack*
+
+#+begin_src mermaid
+  flowchart LR
+    Switch["core/switches.el"] -->|my:use-lsp 'eglot| Eglot[eglot (auto-enable when contact guessable)]
+    Switch -->|my:use-lsp 'lsp| LSP[lsp-mode]
+    LSP --> LspUI[lsp-ui]
+#+end_src
+
+- *ORG Stack*
+
+#+begin_src mermaid
+  flowchart LR
+    Core["orgx/org-core"] --> Visual["orgx/org-visual (org-modern)"]
+    Core --> Ext["orgx/org-extensions (journal/roam/download/toc/cliplink)"]
+    Core --> Export["orgx/org-export (ox-hugo, md, preview, edit-indirect)"]
+#+end_src
+
+- *Dev/VCS Stack*
+
+#+begin_src mermaid
+  flowchart LR
+    DevCore["core/tools (treesit helpers)"] --> Web["dev/web-core (TS remaps, project, editorconfig)"]
+    DevCore --> Format["dev/format (Apheleia/Prettier)"]
+    DevCore --> Term["dev/dev-term (vterm palette)"]
+    DevCore --> Build["dev/dev-build"]
+    DevCore --> Rest["dev/rest"]
+    DevCore --> SQL["dev/sql"]
+    DevCore --> Docker["dev/dev-docker"]
+    DevAI["dev/dev-ai (Aidermacs)"]
+
+    Magit["vcs/vcs-magit"] --> DiffHL["vcs/vcs-gutter (diff-hl)"]
+    Magit --> Forge["vcs/vcs-forge"]
+#+end_src
+
+- *Makefile Pipeline*
+
+#+begin_src mermaid
+  flowchart LR
+    T[Tangle README.org -> *.el (.tangle-stamp)] --> C[compile (init.el load)]
+    T --> CQ[compile-q (-Q + leaf inject)]
+    C --> CP[compile-personal]
+    C --> CL[compile-lisp]
+    C -->|strict/nc knobs| Opt[STRICT_BYTE_WARN / NATIVE_COMPILE]
+    Clean[clean/distclean] -->|remove .elc/.eln/.stamp| T
 #+end_src
 
 *** Graph capture (copy & tangle to lisp/tools/graph.el)
