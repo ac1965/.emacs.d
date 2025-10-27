@@ -385,6 +385,178 @@ Use the provided build script:
 |Features|ACL DBUS GIF GLIB GMP GNUTLS JPEG LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TIFF TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB|
 |Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-xwidgets --with-librsvg CFLAGS=-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include CPPFLAGS=-I/usr/local/opt/llvm/include 'LDFLAGS=-L/usr/local/opt/llvm/lib -L/usr/local/opt/llvm/lib/c++)|
 
+** Tools
+:PROPERTIES:
+   :CUSTOM_ID: tools
+:END:
+
+*** Ex. Boot
+#+begin_src mermaid
+  sequenceDiagram
+      autonumber
+      participant Emacs
+      participant Early as early-init.el
+      participant Init as init.el
+      participant Mods as lisp/modules.el
+      participant Switch as core/switches.el
+      participant UI as UI bundle (doom|nano)
+      participant LSP as LSP backend (eglot|lsp-mode)
+
+      Emacs->>Early: pre-init (dirs, GC, paths, UI off, native-comp path)
+      Early-->>Emacs: provide 'early-init
+      Emacs->>Init: main init (URL dirs → straight bootstrap → leaf init)
+      Init->>Init: perf knobs (GCMH, read-process-output-max)
+      Init->>Mods: (add-to-list 'load-path "lisp") → require 'modules
+      Mods->>Mods: my/modules-load (verbose timing, skip/extra)
+      Mods->>Switch: require 'core/switches
+      Switch->>UI: enable doom or nano (if present)
+      Switch->>LSP: enable eglot or lsp-mode
+      Mods-->>Init: modules loaded (ok/ng/skip/total)
+      Init-->>Emacs: startup message (time, GCs)
+#+end_src
+
+*** Graph capture (copy & tangle to lisp/tools/graph.el)
+
+#+begin_src emacs-lisp :tangle lisp/tools/graph.el
+  ;;; tools/graph.el -*- lexical-binding: t; -*-
+
+  (defvar graph/require-edges (make-hash-table :test 'equal))
+  (defvar graph/require-seen (make-hash-table :test 'equal))
+
+  (defun graph--record (from to)
+    (when (and (symbolp from) (symbolp to))
+      (let* ((k (format "%s->%s" from to)))
+        (puthash k t graph/require-edges))))
+
+  ;; Advice require to record edges
+  (defun graph/require-advice (orig feature &optional filename noerror)
+    (let* ((from (or load-file-name (buffer-file-name)))
+           (from-sym (if from (intern (file-name-sans-extension (file-name-nondirectory from))) 'init))
+           (to-sym (if (symbolp feature) feature (intern (format "%s" feature)))))
+      (graph--record from-sym to-sym)
+      (funcall orig feature filename noerror)))
+
+  (defun graph/edge-list ()
+    (sort (hash-table-keys graph/require-edges) #'string<))
+
+  (defun graph/export-dot ()
+    "Render recorded require edges as Graphviz DOT in *Require Graph (DOT)*."
+    (interactive)
+    (let ((buf (get-buffer-create "*Require Graph (DOT)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "digraph G {\n  rankdir=LR;\n  node [shape=box, fontsize=10];\n")
+        (dolist (e (graph/edge-list))
+          (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+          (insert (format "  \"%s\" -> \"%s\";\n" (match-string 1 e) (match-string 2 e))))
+        (insert "}\n"))
+      (pop-to-buffer buf)))
+
+  (defun graph/export-mermaid ()
+    "Render recorded require edges as Mermaid in *Require Graph (Mermaid)*."
+    (interactive)
+    (let ((buf (get-buffer-create "*Require Graph (Mermaid)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "```mermaid\nflowchart LR\n")
+        (dolist (e (graph/edge-list))
+          (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+          (insert (format "  %s --> %s\n" (replace-regexp-in-string "[./-]" "_" (match-string 1 e))
+                          (replace-regexp-in-string "[./-]" "_" (match-string 2 e)))))
+        (insert "```\n"))
+      (pop-to-buffer buf)))
+
+  ;;; Enable/disable capture
+  (defun graph/enable-require-capture ()
+    (interactive)
+    (advice-add 'require :around #'graph/require-advice)
+    (clrhash graph/require-edges)
+    (message "[graph] require capture enabled"))
+
+  (defun graph/disable-require-capture ()
+    (interactive)
+    (advice-remove 'require #'graph/require-advice)
+    (message "[graph] require capture disabled"))
+
+  (provide 'tools/graph)
+  ;;; tools/graph.el ends here
+#+end_src
+
+
+#+begin_src emacs-lisp
+(defun my/modules-summary-line ()
+  "Display a concise summary of module loading and captured `require' edges.
+
+The summary includes:
+- Number of `require' edges captured by tools/graph (if available),
+- Current value of `my:modules-verbose',
+- Counts of `my:modules-skip' and `my:modules-extra'.
+
+Safe even if those variables are unbound."
+  (interactive)
+  (let* ((edges-count
+          ;; Handle both hash-table (preferred) and list fallbacks; otherwise N/A.
+          (cond ((and (boundp 'graph/require-edges)
+                      (hash-table-p graph/require-edges))
+                 (hash-table-count graph/require-edges))
+                ((and (boundp 'graph/require-edges)
+                      (listp graph/require-edges))
+                 (length graph/require-edges))
+                (t "N/A")))
+         (skip-count  (if (boundp 'my:modules-skip)
+                          (length (or my:modules-skip '()))
+                        0))
+         (extra-count (if (boundp 'my:modules-extra)
+                          (length (or my:modules-extra '()))
+                        0))
+         (msg (format "[modules] summary: edges=%s (require), verbose=%s, skip=%d, extra=%d"
+                      edges-count
+                      (if (boundp 'my:modules-verbose) my:modules-verbose nil)
+                      skip-count
+                      extra-count)))
+    (message "%s" msg)
+    msg))
+#+end_src
+
+#+begin_src emacs-lisp
+  ;; Usage (run after init):
+  (require 'tools/graph)
+  (graph/enable-require-capture)
+  ;; ;; Re-run the loader here via (require 'modules) or `M-x eval-buffer`
+  ;; ;; After loading completes:
+  (graph/export-mermaid) ;; or (graph/export-dot)
+#+end_src
+
+1) Tangle the Graph capture code into: lisp/tools/graph.el
+
+2) Restart Emacs, then evaluate:
+   M-: (require 'tools/graph)
+   M-: (graph/enable-require-capture)
+
+3) Run your loader:
+   - Either: M-: (load "lisp/modules.el")
+   - Or start Emacs normally so the loader runs as usual.
+
+4) Export the graph:
+   M-: (graph/export-mermaid)   ;; or M-: (graph/export-dot)
+
+5) Paste the output into your Org/Markdown document.
+
+6) (Optional) Get a numeric summary:
+   M-: (my/modules-summary-line)
+
+- Ready-to-paste examples
+
+#+begin_src mermaid :file ./graphs/require-graph.svg :results file
+%% Paste the Mermaid text generated by (graph/export-mermaid) below:
+graph TD
+  A[modules.el] --> B[core/general.el]
+  %% ...
+#+end_src
+
+#+RESULTS:
+[[file:./graphs/require-graph.svg]]
+
 * Configuration Files
 :PROPERTIES:
 :CUSTOM_ID: structure
@@ -3025,6 +3197,29 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   (leaf markdown-mode :straight t)
   (leaf markdown-preview-mode :straight t)
   (leaf edit-indirect :straight t)
+
+  ;; Mermaid
+  (leaf ob-mermaid
+    :straight t
+    :after org
+    :config
+    ;; Explicitly set the mmdc path (unnecessary if it's already on PATH).
+    (when (executable-find "mmdc")
+      (setq ob-mermaid-cli-path (executable-find "mmdc")))
+    ;; Register Mermaid with Org Babel.
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     (append org-babel-load-languages '((mermaid . t)))))
+
+  ;; Graphviz (dot) is built into Org.
+  (leaf ob-dot
+    :straight nil
+    :after org
+    :config
+    ;; Register Graphviz (dot) with Org Babel.
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     (append org-babel-load-languages '((dot . t)))))
 
   (provide 'orgx/org-export)
   ;;; org-export.el ends here
