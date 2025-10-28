@@ -979,9 +979,26 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
        "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
     (exec-path-from-shell-initialize))
 
+  (defun my/straight-install (pkgs)
+    "Install PKGS via straight-use-package with simple timing/log."
+    (let ((t0 (float-time)))
+      (dolist (p pkgs)
+        (let ((s (float-time)))
+          (condition-case e
+              (progn
+                (straight-use-package p)
+                (message "OK  %-18s  %4.2fs" p (- (float-time) s)))
+            (error
+             (message "ERR %-18s  %4.2fs  %s" p (- (float-time) s) (error-message-string e))))))
+      (message "Total %4.2fs" (- (float-time) t0))))
+
   ;; Base packages
-  (dolist (pkg '(leaf leaf-keywords leaf-convert blackout helpful imenu-list hydra org))
-    (ignore-errors (straight-use-package pkg)))
+  (defvar my:bootstrap-packages-base
+    '(leaf leaf-keywords leaf-convert blackout helpful imenu-list hydra org)
+    "Base packages you’ll want to install in any environment.")
+
+  (my/straight-install my:bootstrap-packages-base)
+
   (eval-when-compile
     (require 'leaf)
     (require 'leaf-keywords))
@@ -1473,7 +1490,7 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
        ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
        (t (user-error "No code action backend (Eglot/LSP) available"))))
 
-    (defun my/rename-symbol ()
+    (defun my/rename-symbol ()r
       "Rename symbol via Eglot or lsp-mode."
       (interactive)
       (cond
@@ -1991,6 +2008,17 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;; Category: core
   ;;
   ;;; Code:
+
+  ;; Insert timestamp on save
+  (defun my/save-buffer-wrapper ()
+    "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
+    (interactive)
+    (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
+          (replace-match timestamp t nil)))))
+  (add-hook 'before-save-hook #'my:save-buffer-wrapper)
 
   (defun my/auto-tangle-updated-src-blocks ()
     "Automatically tangle updated Org source blocks when saving `README.org`."
