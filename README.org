@@ -1490,7 +1490,7 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
        ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
        (t (user-error "No code action backend (Eglot/LSP) available"))))
 
-    (defun my/rename-symbol ()r
+    (defun my/rename-symbol ()
       "Rename symbol via Eglot or lsp-mode."
       (interactive)
       (cond
@@ -2018,7 +2018,7 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
         (goto-char (point-min))
         (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
           (replace-match timestamp t nil)))))
-  (add-hook 'before-save-hook #'my:save-buffer-wrapper)
+  (add-hook 'before-save-hook #'my/save-buffer-wrapper)
 
   (defun my/auto-tangle-updated-src-blocks ()
     "Automatically tangle updated Org source blocks when saving `README.org`."
@@ -2614,8 +2614,6 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;
   ;; Copyright (c) 2021-2025
   ;; License: GNU GPL v3 or later
-  ;;
-  ;; Categoryn: ui
   ;;
   ;; Commentary:
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
@@ -3459,43 +3457,50 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 :END:
 
 #+begin_src emacs-lisp :tangle lisp/dev/dev-lsp-eglot.el
-;;; dev-lsp-eglot.el --- Eglot setup -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-;;
-;; Category: dev
-;;
-;;; Commentary:
-;; Eglot baseline with safe auto-enable only when a server is detectable.
-;;
-;;; Code:
+  ;;; dev-lsp-eglot.el --- Eglot setup -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: dev
+  ;;
+  ;;; Commentary:
+  ;; Eglot baseline with safe auto-enable. Tries to detect a contact *if the
+  ;; installed Eglot exposes the helper*, but does not hard-depend on
+  ;; private/internal symbols.
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf eglot
-  :straight t
-  :commands (eglot eglot-ensure)
-  :custom ((eglot-autoreconnect . t))
-  :hook ((prog-mode . (lambda ()
-                        (when (fboundp 'eglot--guess-contact)
-                          (when (eglot--guess-contact)
-                            (eglot-ensure)))))))
+  (defun my/eglot-guessable-p ()
+    "Return non-nil if current buffer seems to have an LSP server we can start.
+  This does **not** error even if Eglot changed its private API."
+    (cond
+     ;; When the current/older Eglot exposes the internal helper.
+     ((fboundp 'eglot--guess-contact)
+      (ignore-errors (eglot--guess-contact)))
+     ;; When a future Eglot exposes a public \"guess\" helper.
+     ((fboundp 'eglot-guess-contact)
+      (ignore-errors (eglot-guess-contact)))
+     ;; Otherwise, let the caller decide whether to start Eglot anyway.
+     (t nil)))
 
-;;;###autoload
-(defun my/lsp-enable-eglot ()
-  "Enable Eglot-based LSP setup."
-  (interactive)
-  (add-hook 'prog-mode-hook
-            (lambda ()
-              (when (fboundp 'eglot--guess-contact)
-                (when (eglot--guess-contact)
-                  (eglot-ensure)))))
-  (message "[lsp] Eglot enabled."))
+  (leaf eglot
+    :straight t
+    :commands (eglot eglot-ensure)
+    :custom ((eglot-autoreconnect . t))
+    :hook ((prog-mode . (lambda ()
+                          (when (my/eglot-guessable-p)
+                            (eglot-ensure))))))
 
-(provide 'dev/dev-lsp-eglot)
-;;; dev-lsp-eglot.el ends here
+  ;;;###autoload
+  (defun my/lsp-enable-eglot ()
+    "Enable Eglot-based LSP setup."
+    (interactive)
+    (add-hook 'prog-mode-hook
+              (lambda ()
+                (when (my/eglot-guessable-p)
+                  (eglot-ensure))))
+    (message "[lsp] Eglot enabled."))
+
+  (provide 'dev/dev-lsp-eglot)
+  ;;; dev-lsp-eglot.el ends here
 #+end_src
 
 *** dev/dev-lsp-mode.el
@@ -3654,7 +3659,9 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf)
+    (require 'cl-lib))
 
   ;; Palette is provided by the caller's load-path setup.
   (require 'ui/ui-nano-palette)
@@ -4539,7 +4546,8 @@ Provide *personal, device-specific overlays* on top of the core configuration:
   ;;; Apple Music
   (when (eq system-type 'darwin)
     (defun my/apple-music-osascript-async (script &optional callback)
-      "Run AppleScript SCRIPT asynchronously, invoking CALLBACK with its output."
+      "Run AppleScript SCRIPT asynchronously.
+  If CALLBACK is non-nil, call it with the trimmed output."
       (let* ((proc-name "apple-music-async")
              (buffer-name "*Apple Music Async*")
              (osascript-cmd (list "osascript" "-e" script))
@@ -4561,26 +4569,35 @@ Provide *personal, device-specific overlays* on top of the core configuration:
         (format "osascript -e '%s'" script))))
 
     ;;;###autoload
-    (defun my/apple-music-play-pause () (interactive)
+    (defun my/apple-music-play-pause ()
       "Toggle play/pause in Apple Music."
-      (my/apple-music-osascript-async "tell application \"Music\" to playpause"))
+      (interactive)
+      (my/apple-music-osascript-async
+       "tell application \"Music\" to playpause"))
 
     ;;;###autoload
-    (defun my/apple-music-next-track () (interactive)
+    (defun my/apple-music-next-track ()
       "Skip to the next track in Apple Music."
-      (my/apple-music-osascript-async "tell application \"Music\" to next track"))
+      (interactive)
+      (my/apple-music-osascript-async
+       "tell application \"Music\" to next track"))
 
     ;;;###autoload
-    (defun my/apple-music-previous-track () (interactive)
+    (defun my/apple-music-previous-track ()
       "Return to the previous track in Apple Music."
-      (my/apple-music-osascript-async "tell application \"Music\" to previous track"))
+      (interactive)
+      (my/apple-music-osascript-async
+       "tell application \"Music\" to previous track"))
 
     ;;;###autoload
-    (defun my/apple-music-current-track-info () (interactive)
-      "Echo current track info: Title — Artist [Album]."
-      (let ((info (my/apple-music-osascript-sync
-                   "tell application \"Music\" \
-  to (get name of current track) & \" — \" & (get artist of current track) & \" [\" & (get album of current track) & \"]\"")))
+    (defun my/apple-music-current-track-info ()
+      "Show current track info as: Title — Artist [Album]."
+      (interactive)
+      (let ((info
+             (my/apple-music-osascript-sync
+              "tell application \"Music\" \
+  to (get name of current track) & \" — \" & (get artist of current track) \
+  & \" [\" & (get album of current track) & \"]\"")))
         (message "%s" info)
         info))
 
@@ -4602,8 +4619,10 @@ Provide *personal, device-specific overlays* on top of the core configuration:
     (with-eval-after-load 'hydra
       (defhydra my/hydra-apple-music (:hint nil)
         "
-  Apple Music:
-  _p_: Play/Pause  _n_: Next  _b_: Back  _l_: Playlist  _i_: Info  _q_: Quit
+  Apple Music
+  -----------
+  _p_: Play/Pause   _n_: Next   _b_: Back
+  _l_: Playlist     _i_: Info   _q_: Quit
   "
         ("p" my/apple-music-play-pause)
         ("n" my/apple-music-next-track)
