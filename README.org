@@ -1102,6 +1102,8 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
                    user-emacs-directory))
          (lisp-dir (expand-file-name "lisp" root)))
     (add-to-list 'load-path lisp-dir)
+    (defvar my:modules-extra nil)
+    (require 'core/custom-ui-extras) ;; Initialize the extras prior to loading the modules.
     (require 'modules nil t))
 
   ;;;; 9) Startup message ---------------------------------------------------------
@@ -2409,6 +2411,22 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 - `M-x my/custom-open` — open `.etc/custom.el`
 - `M-x my/custom-dump-current` — write a one-time snapshot of selected settings/faces to `.etc/custom.el` (it does *not* run at startup)
 
+*** core/custom-ui-extras.el (Enable new UI extras via my:modules-extra)
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle lisp/core/custom-ui-extras.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/custom-ui-extras.el --- user extras -*- lexical-binding: t; -*-
+  ;; Append without touching your default module list.
+  (setq my:modules-extra
+        (delete-dups
+         (append my:modules-extra
+                 '(ui/ui-visual-aids
+                   orgx/org-typography
+                   ui/ui-macos))))
+  (provide 'core/custom-ui-extras)
+#+end_src
+
 *** ui/ui-font.el
 :PROPERTIES:
 :CUSTOM_ID: ui-font
@@ -2939,6 +2957,70 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;; ui/ui-utils.el ends here
 #+end_src
 
+*** ui/ui-visual-aids.el
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle lisp/ui/ui-visual-aids.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-visual-aids.el --- Subtle visual helpers -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Add gentle, non-overlapping visual aids. Avoids features already present in your config.
+
+  (eval-when-compile (require 'leaf))
+
+  ;; 1) Cursor/Movement trail
+  (leaf pulsar
+    :straight t
+    :init (setq pulsar-delay 0.04
+                pulsar-pulse t
+                pulsar-face 'pulsar-generic)
+    :config
+    (pulsar-global-mode 1)
+    ;; add some common jumps without touching your existing keymaps
+    (dolist (cmd '(recenter-top-bottom other-window next-buffer previous-buffer))
+      (add-to-list 'pulsar-pulse-functions cmd)))
+
+  ;; 2) TODO highlighting in code/text
+  (leaf hl-todo
+    :straight t
+    :hook ((prog-mode-hook text-mode-hook) . hl-todo-mode)
+    :init (setq hl-todo-keyword-faces
+                '(("TODO" . "#d97706") ("FIXME" . "#dc2626")
+                  ("NOTE" . "#2563eb") ("HACK" . "#9333ea"))))
+
+  ;; 3) Rainbow delimiters (programming only)
+  (leaf rainbow-delimiters
+    :straight t
+    :hook (prog-mode-hook . rainbow-delimiters-mode))
+
+  ;; 4) Lightweight indent guides (no tree sitter dependency)
+  (leaf indent-bars
+    :straight t
+    :hook (prog-mode-hook . indent-bars-mode)
+    :init (setq indent-bars-prefer-character t
+                indent-bars-spacing-override 2))
+
+  (provide 'ui/ui-visual-aids)
+  ;;; ui/ui-visual-aids.el ends here
+#+end_src
+
+*** ui/ui-macos.el
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle lisp/ui/ui-macos.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-macos.el --- macOS niceties -*- lexical-binding: t; -*-
+  (eval-when-compile (require 'leaf))
+
+  (when (eq system-type 'darwin)
+    ;; transparent titlebar & light/dark follows theme (your ef-themes will override ns-appearance)
+    (add-to-list 'default-frame-alist '(ns-transparent-titlebar . t))
+    (add-to-list 'default-frame-alist '(use-title-bar . t)))
+
+  (provide 'ui/ui-macos)
+  ;;; ui/ui-macos.el ends here
+#+end_src
+
 *** completion/completion-core.el
 :PROPERTIES:
 :CUSTOM_ID: completion-core
@@ -3372,6 +3454,38 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (provide 'orgx/org-export)
   ;;; org-export.el ends here
+#+end_src
+
+*** orgx/org-typography.el
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle lisp/orgx/org-typography.el
+:END:
+#+begin_src emacs-lisp
+  ;;; orgx/org-typography.el --- Org modern typography extras -*- lexical-binding: t; -*-
+  ;;; Commentary:
+  ;; Complements your existing orgx/org-visual.el (org-modern) without overlap.
+
+  (eval-when-compile (require 'leaf))
+
+  ;; Use variable-pitch for prose buffers (keeps code blocks monospaced)
+  (leaf org :straight nil
+    :hook (org-mode-hook . variable-pitch-mode))
+
+  ;; Align tables & inline images nicely
+  (leaf valign
+    :straight t
+    :hook (org-mode-hook . valign-mode))
+
+  ;; Smoothly reveal emphasis markers, links, etc.
+  (leaf org-appear
+    :straight t
+    :hook (org-mode-hook . org-appear-mode)
+    :init (setq org-appear-autoemphasis t
+                org-appear-autolinks t
+                org-appear-autosubmarkers t))
+
+  (provide 'orgx/org-typography)
+  ;;; orgx/org-typography.el ends here
 #+end_src
 
 *** vcs/vcs-magit.el
