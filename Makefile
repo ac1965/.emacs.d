@@ -55,7 +55,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- Default target (no args) ------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle
 all: onepass-init
 
 # ---- One-pass (early+init env) : tangle -> incremental compile ---------------
@@ -111,3 +111,12 @@ clean:
 distclean: clean
 	@echo "[distclean] remove stray *.eln"
 	@find "$(ROOT)" -type f -name '*.eln' -delete
+
+tangle:
+	@echo "[tangle] $(ORG)"
+	@$(EMACS_Q) \
+	  --eval "(require 'org)" \
+	  --eval "(require 'ob-core)" \
+	  --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
+	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+	  --eval "(org-babel-tangle-file \"$(ORG)\")"
