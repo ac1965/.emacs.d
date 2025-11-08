@@ -3541,8 +3541,19 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf magit :straight t
-    :bind (("C-x g" . magit-status)))
+  (leaf magit
+    :straight t
+    ;; Lazy-load: bind entry points only
+    :commands (magit-status magit-dispatch)
+    :bind (("C-x g"   . magit-status)
+           ("C-x M-g" . magit-dispatch))
+    :init
+    ;; Keep Magit's auto-revert behavior opt-in; avoid eager side effects at load time
+    (setq magit-auto-revert-mode nil)
+    :config
+    ;; Small quality-of-life tweaks (safe defaults)
+    (setq magit-refresh-status-buffer nil     ; avoid extra refresh churn
+          magit-diff-refine-hunk 'all))      ; inline word-diff for clarity
 
   (provide 'vcs/vcs-magit)
   ;;; vcs/vcs-magit.el ends here
@@ -3572,14 +3583,20 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (leaf diff-hl
     :straight t
-    :hook ((prog-mode . diff-hl-mode)
-           (text-mode . diff-hl-mode)
-           (dired-mode . diff-hl-dired-mode)
-           (magit-post-refresh . diff-hl-magit-post-refresh))
-    :custom ((diff-hl-draw-borders . nil)))
+    :commands (diff-hl-mode diff-hl-dired-mode diff-hl-magit-post-refresh)
+    :hook
+    ;; Enable indicators only when entering relevant modes
+    ((prog-mode . diff-hl-mode)
+     (text-mode . diff-hl-mode)
+     (dired-mode . diff-hl-dired-mode))
+    :config
+    ;; Integrate with Magit after it's available (no hard require)
+    (with-eval-after-load 'magit
+      (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
+    (customize-set-variable 'diff-hl-draw-borders nil))
 
   (provide 'vcs/vcs-gutter)
-  ;;; vcs-gutter.el ends here
+  ;;; vcs/vcs-gutter.el ends here
 #+end_src
 
 *** vcs/vcs-forge.el
@@ -3600,13 +3617,32 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (eval-when-compile (require 'leaf))
 
+  ;; Fallbacks when no-littering/utility helpers are not present
+  (defvar no-littering-var-directory
+    (expand-file-name ".var/" user-emacs-directory)
+    "Fallback var directory used when no-littering is not loaded.")
+  (unless (file-directory-p no-littering-var-directory)
+    (make-directory no-littering-var-directory t))
+
+  (unless (fboundp 'my/ensure-directory-exists)
+    (defun my/ensure-directory-exists (dir)
+      "Create DIR recursively if it does not exist."
+      (unless (file-directory-p dir) (make-directory dir t))))
+
   (leaf forge
     :straight t
     :after magit
+    :init
+    ;; Prefer built-in SQLite in Emacs 29+ to avoid external deps
+    (with-eval-after-load 'emacsql
+      (when (boundp 'emacsql-sqlite3-executable)
+        (setq emacsql-sqlite3-executable nil))) ; force builtin backend when available
     :config
-    (setq forge-database-file
-          (expand-file-name "forge/forge-database.sqlite" no-littering-var-directory))
-    (my/ensure-directory-exists (expand-file-name "forge" no-littering-var-directory)))
+    ;; Place Forge DB under var dir; ensure parent exists
+    (let* ((db-dir (expand-file-name "forge" no-littering-var-directory))
+           (db     (expand-file-name "forge-database.sqlite" db-dir)))
+      (my/ensure-directory-exists db-dir)
+      (setq forge-database-file db)))
 
   (provide 'vcs/vcs-forge)
   ;;; vcs/vcs-forge.el ends here
