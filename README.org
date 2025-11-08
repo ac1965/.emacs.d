@@ -198,7 +198,7 @@ Use the provided build script:
               (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
   # ---- Default target (no args) ------------------------------------------------
-  .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths
+  .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle
   all: onepass-init
 
   # ---- One-pass (early+init env) : tangle -> incremental compile ---------------
@@ -254,6 +254,15 @@ Use the provided build script:
   distclean: clean
   	@echo "[distclean] remove stray *.eln"
   	@find "$(ROOT)" -type f -name '*.eln' -delete
+
+  tangle:
+  	@echo "[tangle] $(ORG)"
+  	@$(EMACS_Q) \
+  	  --eval "(require 'org)" \
+  	  --eval "(require 'ob-core)" \
+  	  --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
+  	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+  	  --eval "(org-babel-tangle-file \"$(ORG)\")"
 #+end_src
 
 *** System Information
@@ -774,7 +783,9 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 
   ;;;; 7) straight.el base under .cache/ ------------------------------------------
   (setopt straight-base-dir my:d:cache
+  	straight-vc-git-default-clone-depth 1
           straight-use-package-by-default t
+  	straight-build-dir (format "build-%s" emacs-version)
           straight-profiles '((nil . "default.el")))
 
   ;;;; 8) Startup speedups (restore after startup) --------------------------------
@@ -1200,6 +1211,8 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;; Code:
 
   (eval-when-compile (require 'subr-x)) ;; string-join, etc.
+  ;; If your build complains about seq at byte-compile time, uncomment:
+  ;; (eval-when-compile (require 'seq))
 
   (defgroup my:modules nil
     "Loader options for modular Emacs configuration."
@@ -1252,7 +1265,7 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
       orgx/org-extensions
       orgx/org-export
 
-      ;; ;; VCS
+      ;; ;; VCS (uncomment when needed)
       ;; vcs/vcs-magit
       ;; vcs/vcs-gutter
       ;; vcs/vcs-forge
@@ -1280,47 +1293,64 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
     "Default set of modules to load in order.")
 
   (defun my/modules--should-load-p (feature)
-    "Return non-nil if FEATURE should be loaded."
+    "Return non-nil if FEATURE should be loaded (i.e., not in skip list)."
     (not (memq feature my:modules-skip)))
 
   (defun my/modules--require-safe (feature)
-    "Require FEATURE with error trapping. Return non-nil on success."
+    "Require FEATURE with error trapping. Return non-nil on success.
+  Errors are reported via `message' but do not abort the whole loader."
     (condition-case err
         (progn (require feature) t)
-      (error (message "[modules] Failed to load %s: %s"
-                      feature (error-message-string err))
-             nil)))
+      (error
+       (message "[modules] Failed to load %s: %s"
+                feature (error-message-string err))
+       nil)))
 
-  ;; FIX: name uses ':' to match call sites
   (defun my:modules--format-seconds (sec)
-    "Format SEC (float seconds) compactly."
+    "Format SEC (float seconds) in a compact human-readable form."
     (cond
      ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
      ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
      (t             (format "%.2fs"   sec))))
 
   (defun my/modules-load ()
-    "Load all modules defined by `my:modules', respecting options."
-    (let* ((final (seq-remove
-                   (lambda (m) (not (my/modules--should-load-p m)))
-                   (append my:modules my:modules-extra)))
+    "Load all modules defined by `my:modules', respecting options.
+  - Honors `my:modules-skip' and `my:modules-extra'.
+  - Prints per-module timing when `my:modules-verbose' is non-nil.
+  - Prints a final summary including counts *and* the lists of skipped/failed."
+    (let* ((all (append my:modules my:modules-extra))
+           (final (seq-remove (lambda (m) (not (my/modules--should-load-p m))) all))
+           (skipped (seq-remove (lambda (m) (memq m final)) all))
            (ok 0) (ng 0)
+           (failed '())
+           (loaded '())
            (t0 (and my:modules-verbose (current-time))))
       (dolist (mod final)
         (let ((m0 (and my:modules-verbose (current-time))))
-          (if (my/modules--require-safe mod) (setq ok (1+ ok)) (setq ng (1+ ng)))
+          (if (my/modules--require-safe mod)
+              (progn (setq ok (1+ ok)) (push mod loaded))
+            (setq ng (1+ ng)) (push mod failed))
           (when my:modules-verbose
             (message "[modules] %-24s %s"
                      mod (my:modules--format-seconds
                           (float-time (time-subtract (current-time) m0)))))))
       (when my:modules-verbose
+        ;; Main summary (backward-compatible)
         (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
-                 ok
-                 (- (length (append my:modules my:modules-extra))
-                    (length final))
-                 ng
+                 ok (length skipped) ng
                  (my:modules--format-seconds
-                  (float-time (time-subtract (current-time) t0)))))))
+                  (float-time (time-subtract (current-time) t0))))
+        ;; Detail: skipped targets
+        (when skipped
+          (message "[modules] skipped (%d): %s"
+                   (length skipped)
+                   (mapconcat #'symbol-name (nreverse skipped) " ")))
+        ;; Detail: failed targets
+        (when failed
+          (message "[modules] failed  (%d): %s"
+                   (length failed)
+                   (mapconcat #'symbol-name (nreverse failed) " "))))
+      ok))
 
   (my/modules-load)
 
@@ -4206,113 +4236,135 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;
   ;; Category: utils
   ;;
+  ;;; Commentary:
+  ;; Small, safe utilities loaded across the configuration.
+  ;; - Org helpers: indirect subtree view, quick sidebar (imenu-list)
+  ;; - Editing helpers: smart buffer/window killing
+  ;; Notes:
+  ;; - Avoid compile warnings by declaring optional deps and vars.
+  ;; - Prefer modern Org APIs when available.
+  ;;
   ;;; Code:
 
+  ;;;; Built-ins ------------------------------------------------------------------
+
+  (require 'imenu) ;; built-in
+
+  ;;;; Optional deps & vars (for byte-compiler) -----------------------------------
+
+  (eval-when-compile
+    (declare-function imenu-list-minor-mode  "imenu-list")
+    (declare-function imenu-list-stop-timer  "imenu-list")
+    (declare-function imenu-list-display-dwim "imenu-list")
+    (declare-function nano-modeline-render   "nano-modeline"))
+
+  ;; Define imenu-list variables to avoid "free variable" warnings when the
+  ;; package is not loaded at compile time.
+  (defvar imenu-list-after-jump-hook nil
+    "Hook run in the source buffer after a jump from imenu-list.")
+  (defvar imenu-list-position 'left
+    "Window side for imenu-list. Either 'left or 'right.")
+  (defvar imenu-list-size 30
+    "Width of the imenu-list window.")
+  (defvar imenu-list-focus-after-activation t
+    "If non-nil, focus imenu-list window after it appears.")
+  (defvar imenu-list--displayed-buffer nil
+    "The buffer currently displayed by imenu-list.")
+
+  ;;;; Editing helpers -------------------------------------------------------------
+
   (defun my/kill-buffer-smart ()
-    "Kill buffer and window, or just buffer if only one window."
+    "Kill buffer and window when there are multiple windows; otherwise kill buffer."
     (interactive)
     (if (one-window-p)
         (kill-buffer)
       (kill-buffer-and-window)))
 
-  ;;; Sidebar
-  ;; This defines an org sidebar using imenu-list.
-  (require 'imenu) ;; OK: built-in library
+  ;; Backward-compatible alias used elsewhere in the config.
+  (defalias 'my/smart-kill-buffer #'my/kill-buffer-smart)
 
-  ;; Do NOT require imenu-list at top-level; keep it lazy-loaded.
-  (declare-function imenu-list-minor-mode "imenu-list")
-  (declare-function imenu-list-stop-timer "imenu-list")
-  (declare-function imenu-list-display-dwim "imenu-list")
-  (defvar imenu-list--displayed-buffer nil) ;; Define to avoid unbound-variable errors in eval
+  ;;;; Nano/Modeline helper --------------------------------------------------------
 
   (defun my/nano-headerline (buf subtitle)
-    "Return a header-line string. Prefer nano-modeline if available.
-  BUF is the buffer to display the name of. SUBTITLE is an extra label."
-    (let* ((name (cond
-                  ((and buf (buffer-live-p buf)) (buffer-name buf))
-                  (t (buffer-name))))
+    "Return a header-line string; prefer nano-modeline when available.
+  BUF is the buffer whose name to show. SUBTITLE is a short label."
+    (let* ((name (if (and buf (buffer-live-p buf))
+                     (buffer-name buf)
+                   (buffer-name)))
            (extra ""))
-      (cond
-       ;; Use nano-modeline when present
-       ((fboundp 'nano-modeline-render)
-        (nano-modeline-render nil name subtitle extra))
-       ;; Fallback: a simple textual header-line
-       (t
+      (if (fboundp 'nano-modeline-render)
+          (nano-modeline-render nil name subtitle extra)
         (concat "  "
                 (propertize name 'face 'mode-line-buffer-id)
-                "  " subtitle)))))
+                "  " subtitle))))
+
+  ;;;; Org helpers ----------------------------------------------------------------
 
   (defun my/org-tree-to-indirect-buffer ()
-    "Create an indirect buffer for the current subtree, reveal code blocks, and mark blocks as visible."
-    (org-tree-to-indirect-buffer)
-    (org-show-block-all)
-    (setq-local my/org-blocks-hidden nil))
+    "Show current Org subtree in an indirect buffer and reveal its content."
+    (interactive)
+    (when (derived-mode-p 'org-mode)
+      (cond
+       ((fboundp 'org-fold-show-all) (org-fold-show-all)) ;; Org ≥ 9.6
+       ((fboundp 'org-show-all)      (org-show-all))))    ;; older Org (obsolete)
+    (org-tree-to-indirect-buffer))
 
   (defun my/org-sidebar ()
-    "Open an imenu-list sidebar on the left for navigation, with safe fallbacks."
+    "Open an imenu-list sidebar with safe fallbacks and a minimal header-line."
     (interactive)
-    ;; Hard fail early if imenu-list is not installed, with guidance.
     (unless (locate-library "imenu-list")
       (user-error
-       (concat "imenu-list is not installed. "
-               "Install it or use `consult-imenu' / `imenu' instead.")))
-
-    ;; Establish autoloads for the necessary imenu-list entry points.
-    (autoload 'imenu-list-minor-mode "imenu-list" nil t)
+       "imenu-list is not installed. Use M-x package-install RET imenu-list RET"))
+    ;; Autoload key entry points to keep startup light.
+    (autoload 'imenu-list-minor-mode  "imenu-list" nil t)
     (autoload 'imenu-list-stop-timer  "imenu-list" nil t)
     (autoload 'imenu-list-display-dwim "imenu-list" nil t)
 
-    (setq imenu-list-after-jump-hook #'my/org-tree-to-indirect-buffer
+    ;; Reasonable defaults; set the jump hook to something useful.
+    (setq imenu-list-after-jump-hook #'recenter
           imenu-list-position 'left
           imenu-list-size 36
           imenu-list-focus-after-activation t)
 
-    (let ((heading (substring-no-properties (or (and (fboundp 'org-get-heading)
-                                                     (org-get-heading t t t t))
-                                                ""))))
-      ;; If called from an indirect buffer, switch back to the base buffer.
-      (when (buffer-base-buffer)
-        (switch-to-buffer (buffer-base-buffer)))
+    ;; If called from an indirect buffer, go back to the base buffer.
+    (when (buffer-base-buffer)
+      (switch-to-buffer (buffer-base-buffer)))
 
-      ;; Start the sidebar.
-      (imenu-list-minor-mode 1)
-      (when (fboundp 'imenu-list-stop-timer) (imenu-list-stop-timer))
-      (hl-line-mode 1)
+    ;; Start sidebar and tame timers to avoid unnecessary refresh churn.
+    (imenu-list-minor-mode 1)
+    (when (fboundp 'imenu-list-stop-timer) (imenu-list-stop-timer))
 
-      ;; Only apply nano face when it exists.
-      (when (facep 'nano-subtle)
-        (face-remap-add-relative 'hl-line :inherit 'nano-subtle))
+    ;; Subtle highlight line if a nano face exists.
+    (hl-line-mode 1)
+    (when (facep 'nano-subtle)
+      (face-remap-add-relative 'hl-line :inherit 'nano-subtle))
 
-      ;; Main crash fix: do NOT call nano-modeline-render directly in header-line-format.
-      ;; Route through a safe wrapper that checks availability.
-      (setq header-line-format
-            `(:eval
-              (my/nano-headerline
-               ,(when (boundp 'imenu-list--displayed-buffer)
-                  'imenu-list--displayed-buffer)
-               "(outline)")))
+    ;; Render a safe header-line; avoid calling nano function directly in hl format.
+    (setq header-line-format
+          `(:eval
+            (my/nano-headerline
+             ,(when (boundp 'imenu-list--displayed-buffer)
+                'imenu-list--displayed-buffer)
+             "(outline)")))
+    (setq-local cursor-type nil)
 
-      (setq-local cursor-type nil)
+    ;; Best-effort display of items.
+    (when (fboundp 'imenu-list-display-dwim)
+      (imenu-list-display-dwim)))
 
-      ;; If we captured a heading, try to jump to it and display items.
-      (when (> (length heading) 0)
-        (goto-char (point-min))
-        (when (search-forward heading nil t)
-          (when (fboundp 'imenu-list-display-dwim)
-            (imenu-list-display-dwim))))))
-
-  ;; This toggles the org-sidebar.
   (defun my/org-sidebar-toggle ()
-    "Toggle the org-sidebar"
-
+    "Toggle the imenu-list sidebar."
     (interactive)
-    (if (get-buffer-window "*Ilist*")
-        (progn
-          (quit-window nil (get-buffer-window "*Ilist*"))
-          (switch-to-buffer (buffer-base-buffer)))
-      (my/org-sidebar)))
+    (let ((win (get-buffer-window "*Ilist*")))
+      (if win
+          (progn
+            (quit-window nil win)
+            (when (buffer-base-buffer)
+              (switch-to-buffer (buffer-base-buffer))))
+        (my/org-sidebar))))
 
   (provide 'utils/utils-functions)
+  ;;; utils/utils-functions.el ends here
 #+end_src
 
 *** utils/utils-scratch.el
