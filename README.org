@@ -1440,389 +1440,420 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 :END:
 
 #+begin_src emacs-lisp
-    ;;; core/general.el --- General settings & keybindings (NO Meow) -*- lexical-binding: t; -*-
-    ;;
-    ;; Copyright (c) 2021-2025
-    ;; Author: YAMASHITA, Takao
-    ;; License: GNU GPL v3 or later
-    ;;
-    ;; Category: core
-    ;;
-    ;;; Commentary:
-    ;; - Drop Meow: provide a non-modal, global leader-key layout.
-    ;; - Keep useful global bindings for macOS-like shortcuts and muscle memory.
-    ;; - Provide LSP-agnostic helpers (code actions, rename, format).
-    ;; - Authentication helpers (GPG + pass) remain as-is.
-    ;;
-    ;; Design notes:
-    ;; - We define a global leader key (C-c SPC).
-    ;; - Under the leader, we expose groups: b(buffers), w(windows), p(project), g(git),
-    ;;   c(code), e(errors), t(toggles), o(org/roam), m(misc/web), a(ai), q(session), h(help).
-    ;; - Which-Key labels are generated to match the chosen leader key at runtime.
-    ;;
-    ;;; Code:
+  ;;; core/general.el --- General settings & keybindings (NO Meow) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;; - Drop Meow: provide a non-modal, global leader-key layout.
+  ;; - Keep useful global bindings for macOS-like shortcuts and muscle memory.
+  ;; - Provide LSP-agnostic helpers (code actions, rename, format).
+  ;; - Authentication helpers (GPG + pass) remain as-is.
+  ;;
+  ;; Design notes:
+  ;; - We define a global leader key (C-c SPC).
+  ;; - Under the leader, we expose groups: b(buffers), w(windows), p(project), g(git),
+  ;; c(code), e(errors), t(toggles), o(org/roam), m(mode-specific), a(ai), q(session), h(help).
+  ;; - "m" is reserved as a local leader prefix for major-mode specific commands.
+  ;; - Which-Key labels reflect the chosen leader key at runtime.
+  ;;
+  ;;; Code:
 
-    (eval-when-compile
-      (require 'leaf)
-      (require 'subr-x))
+  (eval-when-compile
+  (require 'leaf)
+  (require 'subr-x))
 
-    ;;;; Text scaling hydra ---------------------------------------------------------
-    (leaf hydra
-      :straight t
-      :config
-      (defhydra core-hydra-text-scale (:hint nil :color red)
-        "
-    ^Text Scaling^
-    [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
-    "
-        ("+" text-scale-increase)
-        ("-" text-scale-decrease)
-        ("0" (text-scale-set 0) :color blue)
-        ("q" nil "quit" :color blue)))
+  (defvar plstore-secret-keys)
+  (defvar plstore-encrypt-to)
 
-    ;;;; Small utilities ------------------------------------------------------------
-    (leaf my:utils
+  (autoload 'magit-status "magit")
+  (autoload 'magit-blame-addition "magit")
+  (autoload 'magit-log-current "magit")
+  (autoload 'magit-diff-buffer-file "magit")
+  (autoload 'magit-commit "magit")
+
+  (autoload 'flymake-goto-next-error "flymake")
+  (autoload 'flymake-goto-prev-error "flymake")
+  (autoload 'flymake-show-buffer-diagnostics "flymake")
+
+  (autoload 'project-roots "project")
+
+  ;;;; Text scaling hydra --------------------------------------------------------
+  (leaf hydra
+    :straight t
+    :config
+    (defhydra core-hydra-text-scale (:hint nil :color red)
+      "
+  ^Text Scaling^
+  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
+  "
+      ("+" text-scale-increase)
+      ("-" text-scale-decrease)
+      ("0" (text-scale-set 0) :color blue)
+      ("q" nil "quit" :color blue)))
+
+  ;;;; Small utilities -----------------------------------------------------------
+  (leaf my:utils
+    :straight nil
+    :init
+    (defun my/new-frame-with-scratch ()
+      "Create a new frame and switch to a fresh buffer."
+      (interactive)
+      (let ((frame (make-frame)))
+        (with-selected-frame frame
+          (switch-to-buffer (generate-new-buffer "untitled")))))
+
+    (defun my/restart-or-exit ()
+      "Restart Emacs if `restart-emacs' exists; otherwise save & exit."
+      (interactive)
+      (if (fboundp 'restart-emacs)
+          (restart-emacs)
+        (save-buffers-kill-emacs)))
+
+    ;; Arrow-based window motions (keeps default muscle memory).
+    (windmove-default-keybindings))
+
+  ;;;; IDE-agnostic helpers (Eglot / lsp-mode) -----------------------------------
+  (defun my/code-actions ()
+    "Run code actions via Eglot or lsp-mode."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-code-actions) (eglot-code-actions))
+     ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
+     (t (user-error "No code action backend (Eglot/LSP) available"))))
+
+  (defun my/rename-symbol ()
+    "Rename symbol via Eglot or lsp-mode."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-rename) (eglot-rename))
+     ((fboundp 'lsp-rename) (lsp-rename))
+     (t (user-error "No rename backend (Eglot/LSP) available"))))
+
+  (defun my/format-buffer ()
+    "Format buffer via Eglot/LSP; fallback to `indent-region'."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-format-buffer) (eglot-format-buffer))
+     ((fboundp 'lsp-format-buffer) (lsp-format-buffer))
+     ((fboundp 'indent-region) (indent-region (point-min) (point-max)))
+     (t (user-error "No formatter available"))))
+
+  (defun my/consult-ripgrep-project ()
+    "Run ripgrep in current project; fallback to prompting."
+    (interactive)
+    (let* ((pr (when (fboundp 'project-current) (project-current)))
+           (root (when pr (car (project-roots pr)))))
+      (if (and root (fboundp 'consult-ripgrep))
+          (consult-ripgrep root)
+        (call-interactively 'consult-ripgrep))))
+
+  (defun my/toggle-transient-line-numbers ()
+    "Toggle line numbers, preserving buffer-local overrides."
+    (interactive)
+    (if (bound-and-true-p display-line-numbers-mode)
+        (display-line-numbers-mode 0)
+      (display-line-numbers-mode 1)))
+
+  ;;;; Global LEADER (non-modal) -------------------------------------------------
+  ;; Define leader keys and prefix maps:
+  (defconst my:leader-key "C-c SPC"
+    "Key sequence used as the global leader key.")
+
+  (defconst my:leader-which-prefix "C-c SPC"
+    "Human-readable leader prefix string for which-key labels.")
+
+  ;; Define a local leader key sequence for major mode commands (contextual).
+  (defconst my:local-leader-key (concat my:leader-key " m")
+    "Key sequence used as the local (major-mode) leader key.")
+
+  ;; Top-level leader prefix map and subgroup prefix maps.
+  (define-prefix-command 'my/leader-map)
+  (define-prefix-command 'my/leader-b-map) ;; buffers
+  (define-prefix-command 'my/leader-w-map) ;; windows
+  (define-prefix-command 'my/leader-p-map) ;; project
+  (define-prefix-command 'my/leader-g-map) ;; git
+  (define-prefix-command 'my/leader-c-map) ;; code
+  (define-prefix-command 'my/leader-e-map) ;; errors/diagnostics
+  (define-prefix-command 'my/leader-t-map) ;; toggles
+  (define-prefix-command 'my/leader-o-map) ;; org/roam
+  (define-prefix-command 'my/leader-m-map) ;; mode-specific (local leader)
+  (define-prefix-command 'my/leader-a-map) ;; ai
+  (define-prefix-command 'my/leader-q-map) ;; session/quit
+  (define-prefix-command 'my/leader-h-map) ;; help
+
+  ;; Bind the global leader key to its prefix map.
+  (when (fboundp 'keymap-global-set)
+    (keymap-global-set my:leader-key 'my/leader-map)
+    ;; In older Emacs, use (global-set-key (kbd my:leader-key) 'my/leader-map)
+    )
+
+  ;; Bind group prefixes under the leader map.
+  (define-key my/leader-map (kbd "b") 'my/leader-b-map)
+  (define-key my/leader-map (kbd "w") 'my/leader-w-map)
+  (define-key my/leader-map (kbd "p") 'my/leader-p-map)
+  (define-key my/leader-map (kbd "g") 'my/leader-g-map)
+  (define-key my/leader-map (kbd "c") 'my/leader-c-map)
+  (define-key my/leader-map (kbd "e") 'my/leader-e-map)
+  (define-key my/leader-map (kbd "t") 'my/leader-t-map)
+  (define-key my/leader-map (kbd "o") 'my/leader-o-map)
+  (define-key my/leader-map (kbd "m") 'my/leader-m-map)  ;; "m" for major-mode leader
+  (define-key my/leader-map (kbd "a") 'my/leader-a-map)
+  (define-key my/leader-map (kbd "q") 'my/leader-q-map)
+  (define-key my/leader-map (kbd "h") 'my/leader-h-map)
+
+  ;; 1) Top-level leader bindings (LEADER <key>)
+  (define-key my/leader-map (kbd "SPC") #'execute-extended-command) ;; M-x
+  (define-key my/leader-map (kbd "/")   #'consult-line)
+  (define-key my/leader-map (kbd ";")   #'comment-or-uncomment-region)
+  (define-key my/leader-map (kbd "=")   #'er/expand-region)
+  (define-key my/leader-map (kbd "`")   #'eval-expression)
+  (define-key my/leader-map (kbd "z")   #'core-hydra-text-scale/body)
+  ;; frequent file and buffer helpers
+  (define-key my/leader-map (kbd ".")   #'other-window)
+  (define-key my/leader-map (kbd "f")   #'find-file)
+  (define-key my/leader-map (kbd "F")   #'find-file-other-window)
+  (define-key my/leader-map (kbd "O")   #'find-file-other-frame)
+  (define-key my/leader-map (kbd "r")   #'consult-recent-file)
+
+  ;; 2) Buffers (LEADER b ...)
+  (define-key my/leader-b-map (kbd "b") #'consult-buffer)
+  (define-key my/leader-b-map (kbd "B") #'consult-project-buffer)
+  (define-key my/leader-b-map (kbd "k") #'my/kill-buffer-smart)
+  (define-key my/leader-b-map (kbd "n") #'next-buffer)
+  (define-key my/leader-b-map (kbd "p") #'previous-buffer)
+  (define-key my/leader-b-map (kbd "r") #'revert-buffer)
+
+  ;; 3) Windows (LEADER w ...)
+  (define-key my/leader-w-map (kbd "w") #'ace-window)
+  (define-key my/leader-w-map (kbd "s") #'split-window-below)
+  (define-key my/leader-w-map (kbd "v") #'split-window-right)
+  (define-key my/leader-w-map (kbd "d") #'delete-window)
+  (define-key my/leader-w-map (kbd "o") #'delete-other-windows)
+  (define-key my/leader-w-map (kbd "=") #'balance-windows)
+  (define-key my/leader-w-map (kbd "2") #'my/toggle-window-split)
+
+  ;; 4) Project (LEADER p ...)
+  (define-key my/leader-p-map (kbd "p") #'project-switch-project)
+  (define-key my/leader-p-map (kbd "f") #'project-find-file)
+  (define-key my/leader-p-map (kbd "s") #'my/consult-ripgrep-project)
+  (define-key my/leader-p-map (kbd "b") #'consult-project-buffer)
+  (define-key my/leader-p-map (kbd "r") #'project-query-replace-regexp)
+  (define-key my/leader-p-map (kbd "d") #'project-dired)
+
+  ;; 5) Search (LEADER s ...) – (placed under main map for convenience)
+  (define-key my/leader-map (kbd "s s") #'consult-line)
+  (define-key my/leader-map (kbd "s r") #'consult-ripgrep)
+  (define-key my/leader-map (kbd "s g") #'my/consult-ripgrep-project)
+  (define-key my/leader-map (kbd "s m") #'consult-imenu)
+
+  ;; 6) Git (LEADER g ...)
+  (define-key my/leader-g-map (kbd "s") #'magit-status)
+  (define-key my/leader-g-map (kbd "b") #'magit-blame-addition)
+  (define-key my/leader-g-map (kbd "l") #'magit-log-current)
+  (define-key my/leader-g-map (kbd "d") #'magit-diff-buffer-file)
+  (define-key my/leader-g-map (kbd "c") #'magit-commit)
+
+  ;; 7) Code (LEADER c ...) – LSP-agnostic helpers
+  (define-key my/leader-c-map (kbd "a") #'my/code-actions)
+  (define-key my/leader-c-map (kbd "r") #'my/rename-symbol)
+  (define-key my/leader-c-map (kbd "f") #'my/format-buffer)
+  (define-key my/leader-c-map (kbd "d") #'xref-find-definitions)
+  (define-key my/leader-c-map (kbd "D") #'xref-find-definitions-other-window)
+  (define-key my/leader-c-map (kbd "R") #'xref-find-references)
+  (define-key my/leader-c-map (kbd "i") #'completion-at-point)
+
+  ;; 8) Errors/diagnostics (LEADER e ...)
+  (define-key my/leader-e-map (kbd "n") #'flymake-goto-next-error)
+  (define-key my/leader-e-map (kbd "p") #'flymake-goto-prev-error)
+  (define-key my/leader-e-map (kbd "l") #'flymake-show-buffer-diagnostics)
+
+  ;; 9) Toggles (LEADER t ...)
+  (define-key my/leader-t-map (kbd "l") #'my/toggle-transient-line-numbers)
+  (define-key my/leader-t-map (kbd "w") #'whitespace-mode)
+  (define-key my/leader-t-map (kbd "r") #'read-only-mode)
+  (define-key my/leader-t-map (kbd "z") #'core-hydra-text-scale/body)
+  ;; Removed toggle for images here, as it's specific to EWW (now local leader in eww-mode).
+
+  ;; 10) Org & Roam (LEADER o ...)
+  (define-key my/leader-o-map (kbd "a") #'org-agenda)
+  (define-key my/leader-o-map (kbd "c") #'org-capture)
+  (define-key my/leader-o-map (kbd "i") #'org-roam-node-insert)
+  (define-key my/leader-o-map (kbd "f") #'org-roam-node-find)
+  (define-key my/leader-o-map (kbd "s") #'my/org-sidebar)
+  (define-key my/leader-o-map (kbd "t") #'my/org-sidebar-toggle)
+
+  ;; 11) Misc/Web – **(Moved to local leader or global C-c w)**
+  ;; (LEADER m ...) previously held EWW (web) commands.
+  ;; We leave my/leader-m-map defined for local leader usage, but no global bindings here now.
+  ;; EWW commands are accessible via global "C-c w" prefix or when in eww-mode via local leader.
+
+  ;; 12) AI (LEADER a ...)
+  (define-key my/leader-a-map (kbd "a") #'aidermacs-transient-menu)
+
+  ;; 13) Session/quit (LEADER q ...)
+  (define-key my/leader-q-map (kbd "n") #'my/new-frame-with-scratch)
+  (define-key my/leader-q-map (kbd "r") #'my/restart-or-exit)
+  (define-key my/leader-q-map (kbd "q") #'save-buffers-kill-emacs)
+
+  ;; 14) Help (LEADER h ...)
+  (define-key my/leader-h-map (kbd "k") #'describe-key)
+  (define-key my/leader-h-map (kbd "f") #'describe-function)
+  (define-key my/leader-h-map (kbd "v") #'describe-variable)
+
+  ;;;; Which-Key integration for leader groups -----------------------------------
+  (leaf which-key
+    :straight t
+    :hook (after-init-hook . which-key-mode)
+    :custom ((which-key-idle-delay . 0.4))
+    :config
+    ;; Label leader groups dynamically according to `my:leader-which-prefix`.
+    (dolist (it `((,(concat my:leader-which-prefix " b") . "buffers")
+                  (,(concat my:leader-which-prefix " w") . "windows")
+                  (,(concat my:leader-which-prefix " p") . "project")
+                  (,(concat my:leader-which-prefix " s") . "search")
+                  (,(concat my:leader-which-prefix " g") . "git")
+                  (,(concat my:leader-which-prefix " c") . "code")
+                  (,(concat my:leader-which-prefix " e") . "errors")
+                  (,(concat my:leader-which-prefix " t") . "toggles")
+                  (,(concat my:leader-which-prefix " o") . "org/roam")
+                  (,(concat my:leader-which-prefix " m") . "mode")   ;; updated label
+                  (,(concat my:leader-which-prefix " a") . "ai")
+                  (,(concat my:leader-which-prefix " q") . "session")
+                  (,(concat my:leader-which-prefix " h") . "help")))
+      (which-key-add-key-based-replacements (car it) (cdr it))))
+
+  ;;;; Major-mode specific (local leader) bindings -------------------------------
+  ;; Use hooks or after-load to bind keys under `my:local-leader-key` for specific modes.
+
+  ;; Example: EWW (web browsing) mode local leader keys
+  (with-eval-after-load 'eww
+    (define-key eww-mode-map (kbd "q") 'quit-window)  ;; for reference, not under leader
+    ;; Local leader bindings in eww-mode:
+    (define-key eww-mode-map (kbd "C-c SPC m s") #'my/eww-search)       ;; search query
+    (define-key eww-mode-map (kbd "C-c SPC m o") #'eww-open-file)       ;; open local file in EWW
+    (define-key eww-mode-map (kbd "C-c SPC m b") #'eww-list-bookmarks)  ;; list bookmarks
+    (define-key eww-mode-map (kbd "C-c SPC m r") #'eww-readable)        ;; toggle readability view
+    (define-key eww-mode-map (kbd "C-c SPC m u") #'my/eww-toggle-images) ;; toggle images on/off
+    ;; (Note: `eww` (open URL) is generally a global action, so we don't bind it as local-only.)
+  )
+
+  ;; (Additional mode-specific bindings can be added similarly, e.g., for org-mode or programming modes.)
+
+  ;;;; Global keybindings (outside leader) ---------------------------------------
+  ;; Define global keys (macOS-like shortcuts, function keys, etc.)
+  (global-set-key (kbd "<f1>") #'help-command)
+  (global-set-key (kbd "<f5>") #'my/revert-buffer-quick)   ;; quick revert buffer (if defined elsewhere)
+  (global-set-key (kbd "<f8>") #'treemacs)
+  (global-set-key (kbd "C-.") #'other-window)
+  (global-set-key (kbd "C-/") #'undo-fu-only-undo)
+  (global-set-key (kbd "C-=") #'er/expand-region)
+  (global-set-key (kbd "C-?") #'undo-fu-only-redo)
+  (global-set-key (kbd "C-c 0") #'delete-window)
+  (global-set-key (kbd "C-c 1") #'delete-other-windows)
+  (global-set-key (kbd "C-c 2") #'my/toggle-window-split)
+  (global-set-key (kbd "C-c ;") #'comment-or-uncomment-region)
+  (global-set-key (kbd "C-c M-a") #'align-regexp)
+  (global-set-key (kbd "C-c V") #'view-file-other-window)
+  (global-set-key (kbd "C-c a a") #'aidermacs-transient-menu)   ;; global AI menu (duplicate of LEADER a a)
+  (global-set-key (kbd "C-c b") #'consult-buffer)
+  ;; "C-c d ..." org/roam bindings (these may be redundant with leader o):
+  (global-set-key (kbd "C-c d a") #'org-agenda)
+  (global-set-key (kbd "C-c d c") #'org-capture)
+  (global-set-key (kbd "C-c d f") #'org-roam-node-find)
+  (global-set-key (kbd "C-c d i") #'org-roam-node-insert)
+  (global-set-key (kbd "C-c d s") #'my/org-sidebar)
+  (global-set-key (kbd "C-c d t") #'my/org-sidebar-toggle)
+  (global-set-key (kbd "C-c k") #'my/kill-buffer-smart)
+  (global-set-key (kbd "C-c l") #'display-line-numbers-mode)    ;; quick toggle line numbers
+  (global-set-key (kbd "C-c o") #'find-file)
+  (global-set-key (kbd "C-c r") #'consult-ripgrep)
+  (global-set-key (kbd "C-c v") #'find-file-read-only)
+  ;; Web/EWW global prefix keys:
+  (global-set-key (kbd "C-c w b") #'eww-list-bookmarks)
+  (global-set-key (kbd "C-c w o") #'eww-open-file)
+  (global-set-key (kbd "C-c w r") #'eww-readable)
+  (global-set-key (kbd "C-c w s") #'my/eww-search)
+  (global-set-key (kbd "C-c w u") #'my/eww-toggle-images)
+  (global-set-key (kbd "C-c w w") #'eww)
+  (global-set-key (kbd "C-c z") #'core-hydra-text-scale/body)
+  ;; macOS-like Super (s-) keys:
+  (global-set-key (kbd "C-h") #'backward-delete-char)   ;; Make C-h backspace (like in terminals/mac)
+  (global-set-key (kbd "C-s") #'consult-line)           ;; Search in buffer (override isearch)
+  (global-set-key (kbd "s-.") #'ace-window)
+  (global-set-key (kbd "s-<down>") #'end-of-buffer)
+  (global-set-key (kbd "s-<left>") #'previous-buffer)
+  (global-set-key (kbd "s-<right>") #'next-buffer)
+  (global-set-key (kbd "s-<up>") #'beginning-of-buffer)
+  (global-set-key (kbd "s-b") #'consult-buffer)
+  (global-set-key (kbd "s-j") #'find-file-other-window)
+  (global-set-key (kbd "s-m") #'my/new-frame-with-scratch)
+  (global-set-key (kbd "s-o") #'find-file-other-frame)
+  (global-set-key (kbd "s-r") #'my/restart-or-exit)
+  (global-set-key (kbd "s-w") #'ace-swap-window)
+  (global-set-key (kbd "M-x") #'execute-extended-command)
+
+  ;;;; Auth / secrets ------------------------------------------------------------
+  (defvar my:d:password-store
+    (or (getenv "PASSWORD_STORE_DIR")
+        (concat no-littering-var-directory "password-store/"))
+    "Path to the password store.")
+
+  (defun my/auth-check-env ()
+    "Validate authentication environment and warn if misconfigured."
+    (unless (getenv "GPG_KEY_ID")
+      (display-warning 'auth "GPG_KEY_ID is not set." :level 'debug))
+    (unless (file-directory-p my:d:password-store)
+      (display-warning 'auth
+                       (format "Password store directory does not exist: %s"
+                               my:d:password-store)
+                       :level 'warning)))
+
+  (leaf *authentication
+    :straight nil
+    :init
+    (my/auth-check-env)
+
+    (leaf epa-file
+      :straight nil
+      :commands (epa-file-enable)
+      :init
+      (setq epa-pinentry-mode
+            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
+      (add-hook 'emacs-startup-hook #'epa-file-enable))
+
+    (leaf auth-source
       :straight nil
       :init
-      (defun my/new-frame-with-scratch ()
-        "Create a new frame and switch to a fresh buffer."
-        (interactive)
-        (let ((frame (make-frame)))
-          (with-selected-frame frame
-            (switch-to-buffer (generate-new-buffer "untitled")))))
+      (with-eval-after-load 'auth-source
+        (let ((key (getenv "GPG_KEY_ID")))
+          (if key
+              (setq auth-source-gpg-encrypt-to key)
+            (display-warning 'auth-source
+                             "GPG_KEY_ID is not set. Authentication backends may be limited.")))))
 
-      (defun my/restart-or-exit ()
-        "Restart Emacs if `restart-emacs' exists; otherwise save & exit."
-        (interactive)
-        (if (fboundp 'restart-emacs)
-            (restart-emacs)
-          (save-buffers-kill-emacs)))
+    (leaf password-store :straight t)
 
-      ;; Arrow-based window motions (keeps default muscle memory).
-      (windmove-default-keybindings))
-
-    ;;;; IDE-agnostic helpers (Eglot / lsp-mode) -----------------------------------
-    (defun my/code-actions ()
-      "Run code actions via Eglot or lsp-mode."
-      (interactive)
-      (cond
-       ((fboundp 'eglot-code-actions) (eglot-code-actions))
-       ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
-       (t (user-error "No code action backend (Eglot/LSP) available"))))
-
-    (defun my/rename-symbol ()
-      "Rename symbol via Eglot or lsp-mode."
-      (interactive)
-      (cond
-       ((fboundp 'eglot-rename) (eglot-rename))
-       ((fboundp 'lsp-rename) (lsp-rename))
-       (t (user-error "No rename backend (Eglot/LSP) available"))))
-
-    (defun my/format-buffer ()
-      "Format buffer via Eglot/LSP; fallback to `indent-region'."
-      (interactive)
-      (cond
-       ((fboundp 'eglot-format-buffer) (eglot-format-buffer))
-       ((fboundp 'lsp-format-buffer) (lsp-format-buffer))
-       ((fboundp 'indent-region) (indent-region (point-min) (point-max)))
-       (t (user-error "No formatter available"))))
-
-    (defun my/consult-ripgrep-project ()
-      "Run ripgrep in current project; fallback to prompting."
-      (interactive)
-      (let* ((pr (when (fboundp 'project-current) (project-current)))
-             (root (when pr (car (project-roots pr)))))
-        (if (and root (fboundp 'consult-ripgrep))
-            (consult-ripgrep root)
-          (call-interactively 'consult-ripgrep))))
-
-    (defun my/toggle-transient-line-numbers ()
-      "Toggle line numbers, preserving buffer-local overrides."
-      (interactive)
-      (if (bound-and-true-p display-line-numbers-mode)
-          (display-line-numbers-mode 0)
-        (display-line-numbers-mode 1)))
-
-    ;;;; Global LEADER (non-modal) --------------------------------------------------
-    ;; Choose a sane global leader key:
-    ;; - macOS (ns/mac): use "C-c SPC".
-    ;; - Others: use "C-c SPC" (reserved for users; safe with which-key).
-    (defconst my:leader-key
-      "C-c SPC"
-      "Key sequence used as global leader key.")
-
-    ;; Which-Key prefix label visible in minibuffer (purely cosmetic).
-    (defconst my:leader-which-prefix
-      "C-c SPC"
-      "Human-readable leader prefix string for which-key labels.")
-
-    ;; Top-level leader map and grouped submaps.
-    (define-prefix-command 'my/leader-map)
-    (define-prefix-command 'my/leader-b-map) ;; buffers
-    (define-prefix-command 'my/leader-w-map) ;; windows
-    (define-prefix-command 'my/leader-p-map) ;; project
-    (define-prefix-command 'my/leader-g-map) ;; git
-    (define-prefix-command 'my/leader-c-map) ;; code
-    (define-prefix-command 'my/leader-e-map) ;; errors/diagnostics
-    (define-prefix-command 'my/leader-t-map) ;; toggles
-    (define-prefix-command 'my/leader-o-map) ;; org/roam
-    (define-prefix-command 'my/leader-m-map) ;; misc/web
-    (define-prefix-command 'my/leader-a-map) ;; ai
-    (define-prefix-command 'my/leader-q-map) ;; session/quit
-    (define-prefix-command 'my/leader-h-map) ;; help
-
-    ;; Bind leader globally.
-    (when (fboundp 'keymap-global-set)
-      (keymap-global-set my:leader-key 'my/leader-map))
-
-    ;; Group heads under the leader.
-    (define-key my/leader-map (kbd "b") 'my/leader-b-map)
-    (define-key my/leader-map (kbd "w") 'my/leader-w-map)
-    (define-key my/leader-map (kbd "p") 'my/leader-p-map)
-    (define-key my/leader-map (kbd "g") 'my/leader-g-map)
-    (define-key my/leader-map (kbd "c") 'my/leader-c-map)
-    (define-key my/leader-map (kbd "e") 'my/leader-e-map)
-    (define-key my/leader-map (kbd "t") 'my/leader-t-map)
-    (define-key my/leader-map (kbd "o") 'my/leader-o-map)
-    (define-key my/leader-map (kbd "m") 'my/leader-m-map)
-    (define-key my/leader-map (kbd "a") 'my/leader-a-map)
-    (define-key my/leader-map (kbd "q") 'my/leader-q-map)
-    (define-key my/leader-map (kbd "h") 'my/leader-h-map)
-
-    ;; 1) Top-level leader bindings (LEADER ...)
-    (define-key my/leader-map (kbd "SPC") #'execute-extended-command) ;; M-x
-    (define-key my/leader-map (kbd "/")   #'consult-line)
-    (define-key my/leader-map (kbd ";")   #'comment-or-uncomment-region)
-    (define-key my/leader-map (kbd "=")   #'er/expand-region)
-    (define-key my/leader-map (kbd "`")   #'eval-expression)
-    (define-key my/leader-map (kbd "z")   #'core-hydra-text-scale/body)
-    ;; frequent file/recents helpers
-    (define-key my/leader-map (kbd ".")   #'other-window)
-    (define-key my/leader-map (kbd "f")   #'find-file)
-    (define-key my/leader-map (kbd "F")   #'find-file-other-window)
-    (define-key my/leader-map (kbd "O")   #'find-file-other-frame)
-    (define-key my/leader-map (kbd "r")   #'consult-recent-file)
-
-    ;; 2) Buffers (LEADER b ...)
-    (define-key my/leader-b-map (kbd "b") #'consult-buffer)
-    (define-key my/leader-b-map (kbd "B") #'consult-project-buffer)
-    (define-key my/leader-b-map (kbd "k") #'my/kill-buffer-smart)
-    (define-key my/leader-b-map (kbd "n") #'next-buffer)
-    (define-key my/leader-b-map (kbd "p") #'previous-buffer)
-    (define-key my/leader-b-map (kbd "r") #'revert-buffer)
-
-    ;; 3) Windows (LEADER w ...)
-    (define-key my/leader-w-map (kbd "w") #'ace-window)
-    (define-key my/leader-w-map (kbd "s") #'split-window-below)
-    (define-key my/leader-w-map (kbd "v") #'split-window-right)
-    (define-key my/leader-w-map (kbd "d") #'delete-window)
-    (define-key my/leader-w-map (kbd "o") #'delete-other-windows)
-    (define-key my/leader-w-map (kbd "=") #'balance-windows)
-    (define-key my/leader-w-map (kbd "2") #'my/toggle-window-split)
-
-    ;; 4) Project (LEADER p ...)
-    (define-key my/leader-p-map (kbd "p") #'project-switch-project)
-    (define-key my/leader-p-map (kbd "f") #'project-find-file)
-    (define-key my/leader-p-map (kbd "s") #'my/consult-ripgrep-project)
-    (define-key my/leader-p-map (kbd "b") #'consult-project-buffer)
-    (define-key my/leader-p-map (kbd "r") #'project-query-replace-regexp)
-    (define-key my/leader-p-map (kbd "d") #'project-dired)
-
-    ;; 5) Search (LEADER s ...)  — expose under main map for convenience, too.
-    ;; (You can also keep these under "p" or top-level.)
-    (define-key my/leader-map (kbd "s s") #'consult-line)
-    (define-key my/leader-map (kbd "s r") #'consult-ripgrep)
-    (define-key my/leader-map (kbd "s g") #'my/consult-ripgrep-project)
-    (define-key my/leader-map (kbd "s m") #'consult-imenu)
-
-    ;; 6) Git (LEADER g ...)
-    (define-key my/leader-g-map (kbd "s") #'magit-status)
-    (define-key my/leader-g-map (kbd "b") #'magit-blame-addition)
-    (define-key my/leader-g-map (kbd "l") #'magit-log-current)
-    (define-key my/leader-g-map (kbd "d") #'magit-diff-buffer-file)
-    (define-key my/leader-g-map (kbd "c") #'magit-commit)
-
-    ;; 7) Code (LEADER c ...) — LSP-agnostic helpers
-    (define-key my/leader-c-map (kbd "a") #'my/code-actions)
-    (define-key my/leader-c-map (kbd "r") #'my/rename-symbol)
-    (define-key my/leader-c-map (kbd "f") #'my/format-buffer)
-    (define-key my/leader-c-map (kbd "d") #'xref-find-definitions)
-    (define-key my/leader-c-map (kbd "D") #'xref-find-definitions-other-window)
-    (define-key my/leader-c-map (kbd "R") #'xref-find-references)
-    (define-key my/leader-c-map (kbd "i") #'completion-at-point)
-
-    ;; 8) Errors/diagnostics (LEADER e ...)
-    (define-key my/leader-e-map (kbd "n") #'flymake-goto-next-error)
-    (define-key my/leader-e-map (kbd "p") #'flymake-goto-prev-error)
-    (define-key my/leader-e-map (kbd "l") #'flymake-show-buffer-diagnostics)
-
-    ;; 9) Toggles (LEADER t ...)
-    (define-key my/leader-t-map (kbd "l") #'my/toggle-transient-line-numbers)
-    (define-key my/leader-t-map (kbd "w") #'whitespace-mode)
-    (define-key my/leader-t-map (kbd "r") #'read-only-mode)
-    (define-key my/leader-t-map (kbd "z") #'core-hydra-text-scale/body)
-    (define-key my/leader-t-map (kbd "i") #'my/eww-toggle-images)
-
-    ;; 10) Org & Roam (LEADER o ...)
-    (define-key my/leader-o-map (kbd "a") #'org-agenda)
-    (define-key my/leader-o-map (kbd "c") #'org-capture)
-    (define-key my/leader-o-map (kbd "i") #'org-roam-node-insert)
-    (define-key my/leader-o-map (kbd "f") #'org-roam-node-find)
-    (define-key my/leader-o-map (kbd "s") #'my/org-sidebar)
-    (define-key my/leader-o-map (kbd "t") #'my/org-sidebar-toggle)
-
-    ;; 11) Misc/Web (LEADER m ...)
-    (define-key my/leader-m-map (kbd "e") #'eww)
-    (define-key my/leader-m-map (kbd "s") #'my/eww-search)
-    (define-key my/leader-m-map (kbd "o") #'eww-open-file)
-    (define-key my/leader-m-map (kbd "b") #'eww-list-bookmarks)
-    (define-key my/leader-m-map (kbd "r") #'eww-readable)
-    (define-key my/leader-m-map (kbd "u") #'my/eww-toggle-images)
-
-    ;; 12) AI (LEADER a ...)
-    (define-key my/leader-a-map (kbd "a") #'aidermacs-transient-menu)
-
-    ;; 13) Session/quit (LEADER q ...)
-    (define-key my/leader-q-map (kbd "n") #'my/new-frame-with-scratch)
-    (define-key my/leader-q-map (kbd "r") #'my/restart-or-exit)
-    (define-key my/leader-q-map (kbd "q") #'save-buffers-kill-emacs)
-
-    ;; 14) Help (LEADER h ...)
-    (define-key my/leader-h-map (kbd "k") #'describe-key)
-    (define-key my/leader-h-map (kbd "f") #'describe-function)
-    (define-key my/leader-h-map (kbd "v") #'describe-variable)
-
-    ;;;; Which-Key (discoverability for leader groups) ------------------------------
-    (leaf which-key
+    (leaf auth-source-pass
       :straight t
-      :hook (after-init-hook . which-key-mode)
-      :custom ((which-key-idle-delay . 0.4))
-      :config
-      ;; Label leader groups dynamically according to `my:leader-which-prefix`.
-      (dolist (it `((,(concat my:leader-which-prefix " b") . "buffers")
-                    (,(concat my:leader-which-prefix " w") . "windows")
-                    (,(concat my:leader-which-prefix " p") . "project")
-                    (,(concat my:leader-which-prefix " s") . "search")
-                    (,(concat my:leader-which-prefix " g") . "git")
-                    (,(concat my:leader-which-prefix " c") . "code")
-                    (,(concat my:leader-which-prefix " e") . "errors")
-                    (,(concat my:leader-which-prefix " t") . "toggles")
-                    (,(concat my:leader-which-prefix " o") . "org/roam")
-                    (,(concat my:leader-which-prefix " m") . "misc/web")
-                    (,(concat my:leader-which-prefix " a") . "ai")
-                    (,(concat my:leader-which-prefix " q") . "session")
-                    (,(concat my:leader-which-prefix " h") . "help")))
-        (which-key-add-key-based-replacements (car it) (cdr it))))
+      :commands (auth-source-pass-enable)
+      :hook (emacs-startup-hook . (lambda ()
+                                    (when (executable-find "pass")
+                                      (auth-source-pass-enable)))))
 
-    ;;;; Global bindings (outside leader) -------------------------------------------
-    (leaf my:key:global
-      :straight nil
-      :bind
-      (("<f1>"      . help-command)
-       ("<f5>"      . my/revert-buffer-quick)
-       ("<f8>"      . treemacs)
-       ("C-."       . other-window)
-       ("C-/"       . undo-fu-only-undo)
-       ("C-="       . er/expand-region)
-       ("C-?"       . undo-fu-only-redo)
-       ("C-c 0"     . delete-window)
-       ("C-c 1"     . delete-other-window)
-       ("C-c 2"     . my/toggle-window-split)
-       ("C-c ;"     . comment-or-uncomment-region)
-       ("C-c M-a"   . align-regexp)
-       ("C-c V"     . view-file-other-window)
-       ("C-c a a"   . aidermacs-transient-menu)
-       ("C-c b"     . consult-buffer)
-       ("C-c d a"   . org-agenda)
-       ("C-c d c"   . org-capture)
-       ("C-c d f"   . org-roam-node-find)
-       ("C-c d i"   . org-roam-node-insert)
-       ("C-c d s"   . my/org-sidebar)
-       ("C-c d t"   . my/org-sidebar-toggle)
-       ("C-c k"     . my/kill-buffer-smart)
-       ("C-c l"     . display-line-numbers-mode)
-       ("C-c o"     . find-file)
-       ("C-c r"     . consult-ripgrep)
-       ("C-c v"     . find-file-read-only)
-       ("C-c w b"   . eww-list-bookmarks)
-       ("C-c w o"   . eww-open-file)
-       ("C-c w r"   . eww-readable)
-       ("C-c w s"   . my/eww-search)
-       ("C-c w u"   . my/eww-toggle-images)
-       ("C-c w w"   . eww)
-       ("C-c z"     . core-hydra-text-scale/body)
-       ("C-h"       . backward-delete-char)
-       ("C-s"       . consult-line)
-       ("s-."       . ace-window)
-       ("s-<down>"  . end-of-buffer)
-       ("s-<left>"  . previous-buffer)
-       ("s-<right>" . next-buffer)
-       ("s-<up>"    . beginning-of-buffer)
-       ("s-b"       . consult-buffer)
-       ("s-j"       . find-file-other-window)
-       ("s-m"       . my/new-frame-with-scratch)
-       ("s-o"       . find-file-other-frame)
-       ("s-r"       . my/restart-or-exit)
-       ("s-w"       . ace-swap-window)
-       ("M-x"       . execute-extended-command)))
-
-    ;;;; Auth / secrets -------------------------------------------------------------
-    (defvar my:d:password-store
-      (or (getenv "PASSWORD_STORE_DIR")
-          (concat no-littering-var-directory "password-store/"))
-      "Path to the password store.")
-
-    (defun my/auth-check-env ()
-      "Validate authentication environment and warn if misconfigured."
-      (unless (getenv "GPG_KEY_ID")
-        (display-warning 'auth "GPG_KEY_ID is not set." :level 'debug))
-      (unless (file-directory-p my:d:password-store)
-        (display-warning 'auth
-                         (format "Password store directory does not exist: %s"
-                                 my:d:password-store)
-                         :level 'warning)))
-
-    (leaf *authentication
+    (leaf plstore
       :straight nil
       :init
-      (my/auth-check-env)
+      (with-eval-after-load 'plstore
+        (setq plstore-secret-keys 'silent
+              plstore-encrypt-to (getenv "GPG_KEY_ID")))))
 
-      (leaf epa-file
-        :straight nil
-        :commands (epa-file-enable)
-        :init
-        (setq epa-pinentry-mode
-              (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
-        (add-hook 'emacs-startup-hook #'epa-file-enable))
-
-      (leaf auth-source
-        :straight nil
-        :init
-        (with-eval-after-load 'auth-source
-          (let ((key (getenv "GPG_KEY_ID")))
-            (if key
-                (setq auth-source-gpg-encrypt-to key)
-              (display-warning 'auth-source
-                               "GPG_KEY_ID is not set. Authentication backends may be limited.")))))
-
-      (leaf password-store :straight t)
-
-      (leaf auth-source-pass
-        :straight t
-        :commands (auth-source-pass-enable)
-        :hook (emacs-startup-hook . (lambda ()
-                                      (when (executable-find "pass")
-                                        (auth-source-pass-enable)))))
-
-      (leaf plstore
-        :straight nil
-        :init
-        (with-eval-after-load 'plstore
-          (setq plstore-secret-keys 'silent
-                plstore-encrypt-to (getenv "GPG_KEY_ID")))))
-
-    (provide 'core/general)
-    ;;; core/general.el ends here
+  (provide 'core/general)
+  ;;; core/general.el ends here
 #+end_src
 
 *** core/tools.el
