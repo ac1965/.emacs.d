@@ -1373,55 +1373,60 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
+  ;; Prevents "void-variable thisfile" and ensures safe `after-load` evaluation.
   ;;
   ;;; Code:
 
-  (leaf core-fixes
-    :straight nil
-    :require t
-    :init
-    ;; 1) Define `thisfile` as a global dynamic variable.
-    ;;    This permanently prevents "void-variable thisfile" errors in Emacs 30.1.
-    (defvar thisfile nil
-      "Dynamically bound to the file currently being loaded.
+  (eval-when-compile (require 'leaf))
+
+  ;; ------------------------------------------------------------
+  ;; Core safeguard functions
+  ;; ------------------------------------------------------------
+
+  (defvar thisfile nil
+    "Dynamically bound to the file currently being loaded.
   Hard-defined to avoid `void-variable` errors on Emacs 30.1.")
 
-    ;; 2) Ensure `thisfile` is always locally bound during `load`.
-    ;;    This wraps `load` so that any file being loaded has a valid `thisfile`.
-    (defun my:with-thisfile--load (orig file &rest args)
-      (let* ((fname (cond
-                     ((stringp file) (ignore-errors (expand-file-name file)))
-                     (t file)))
-             (thisfile (or (and (boundp 'thisfile) thisfile) fname)))
-        (apply orig file args)))
+  (defun my:with-thisfile--load (orig file &rest args)
+    "Ensure `thisfile` is bound when FILE is being loaded."
+    (let* ((fname (cond
+                   ((stringp file) (ignore-errors (expand-file-name file)))
+                   (t file)))
+           (thisfile (or (and (boundp 'thisfile) thisfile) fname)))
+      (apply orig file args)))
+
+  (defun my:with-thisfile--require (orig feature &optional filename noerror)
+    "Ensure `thisfile` is bound when FEATURE is required."
+    (let* ((lib (or (and filename (locate-library filename))
+                    (locate-library (symbol-name feature))
+                    filename
+                    (symbol-name feature)))
+           (thisfile (or (and (boundp 'thisfile) thisfile) lib)))
+      (funcall orig feature filename noerror)))
+
+  (defun my:guard-after-load (orig-fn file)
+    "Ensure `thisfile` is safely bound during `do-after-load-evaluation`."
+    (let ((thisfile (or (and (boundp 'thisfile) thisfile) file)))
+      (condition-case _
+          (funcall orig-fn file)
+        (void-variable
+         (let ((thisfile file))
+           (ignore-errors (funcall orig-fn file)))))))
+
+  ;; ------------------------------------------------------------
+  ;; Activate patch
+  ;; ------------------------------------------------------------
+
+  (leaf core-fixes
+    :straight nil
+    :init
     (advice-add 'load :around #'my:with-thisfile--load)
-
-    ;; 3) Also bind `thisfile` during `require`.
-    ;;    When the file name is not explicitly given, it falls back to `locate-library`.
-    (defun my:with-thisfile--require (orig feature &optional filename noerror)
-      (let* ((lib (or (and filename (locate-library filename))
-                      (locate-library (symbol-name feature))
-                      filename
-                      (symbol-name feature)))
-             (thisfile (or (and (boundp 'thisfile) thisfile) lib)))
-        (funcall orig feature filename noerror)))
     (advice-add 'require :around #'my:with-thisfile--require)
-
-    ;; 4) Final safeguard: even if `do-after-load-evaluation` misbehaves,
-    ;;    make sure `thisfile` is always locally bound when it runs.
-    (ignore-errors
-      (advice-remove 'do-after-load-evaluation #'my:guard-after-load))
-    (defun my:guard-after-load (orig-fn file)
-      (let ((thisfile (or (and (boundp 'thisfile) thisfile) file)))
-        (condition-case _
-            (funcall orig-fn file)
-          (void-variable
-           ;; Last-resort recovery: rebind `thisfile` and retry safely.
-           (let ((thisfile file)) (ignore-errors (funcall orig-fn file)))))))
     (when (fboundp 'do-after-load-evaluation)
+      (ignore-errors
+        (advice-remove 'do-after-load-evaluation #'my:guard-after-load))
       (advice-add 'do-after-load-evaluation :around #'my:guard-after-load))
-
     (message "[core/fixes] Hardening active: global thisfile + load/require guards."))
 
   (provide 'core/fixes)
@@ -2083,6 +2088,8 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;
   ;;; Code:
 
+  (eval-when-compile (require 'leaf))
+
   (leaf saveplace :straight nil
     :init
     (setq save-place-file (concat no-littering-var-directory "saveplace"))
@@ -2096,7 +2103,6 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (leaf savehist
     :straight nil
-    :require t
     :global-minor-mode savehist-mode
     :config
     (setq savehist-file (concat no-littering-var-directory "history"))
