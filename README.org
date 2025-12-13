@@ -272,10 +272,10 @@ Use the provided build script:
 
 |Property|Value|
 |--------|-----|
-|Commit|cc9ec87e537f890d8fb91c84578c3963c5d92f62|
+|Commit|251c070dfde8996189bfb808a0b6f6f5925091b8|
 |Branch|master|
 |System|aarch64-apple-darwin25.1.0|
-|Date|2025-11-16 15:39:23 (JST)|
+|Date|2025-12-12 23:16:16 (JST)|
 |Patch|N/A ns-inline.patch|
 |Features|ACL DBUS GLIB GNUTLS LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM ZLIB|
 |Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-librsvg --with-mailutils --with-native-image-api --with-ns CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
@@ -669,28 +669,31 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
   ;;
   ;;; Commentary:
   ;; Core bootstrap executed before regular init.
-  ;; Category: core
   ;;
   ;; - Disable package.el (we use straight.el + leaf)
   ;; - Fast startup: widen GC/file-name-handlers and restore after startup
   ;; - Keep artifacts under .cache/ .etc/ .var/ (native-compile, no-littering, straight)
   ;; - macOS: prefer Homebrew gcc/libgccjit (PATH/LIBRARY_PATH/CC)
-  ;; - Backups OFF; classic auto-save OFF (use auto-save-visited in init)
-  ;; - Early UI: frame defaults & hide GUI bars to avoid flicker
+  ;; - Backups OFF; classic auto-save OFF (use auto-save-visited later)
+  ;; - Early UI defaults to avoid flicker
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'subr-x))
+  (eval-when-compile
+    (require 'subr-x))
+
   (require 'seq)
 
-  ;;;; Internal helpers (core namespace) -----------------------------------------
+  ;;; Internal helpers -----------------------------------------------------------
+
   (defun core--ensure-directory-exists (dir)
     "Ensure DIR exists, creating it if necessary."
     (unless (file-directory-p dir)
       (condition-case err
           (make-directory dir t)
-        (error (warn "Failed to create directory: %s (%s)"
-                     dir (error-message-string err))))))
+        (error
+         (warn "Failed to create directory: %s (%s)"
+               dir (error-message-string err))))))
 
   (defun core--system-username ()
     "Return current login name as a string or nil."
@@ -699,62 +702,72 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
   (defun core--restore-startup-state ()
     "Restore GC and file handler settings after startup."
     (setq file-name-handler-alist core--orig-file-name-handler-alist
-          gc-cons-threshold 16777216     ;; 16MB
+          gc-cons-threshold 16777216
           gc-cons-percentage 0.1))
 
-  ;; Backward-compat public alias for existing configs
   (defalias 'my/ensure-directory-exists #'core--ensure-directory-exists)
 
-  ;;;; 1) Disable package.el ------------------------------------------------------
-  (setq package-enable-at-startup nil
-       package-quickstart nil)
+  ;;; Disable package.el ---------------------------------------------------------
 
-  ;;;; 2) Base directory ----------------------------------------------------------
+  (setq package-enable-at-startup nil
+        package-quickstart nil)
+
+  ;;; Base directory -------------------------------------------------------------
+
   (defvar my:d
-    (or (and load-file-name (file-name-directory (file-chase-links load-file-name)))
+    (or (and load-file-name
+             (file-name-directory (file-chase-links load-file-name)))
         user-emacs-directory)
     "Base directory for this Emacs configuration.")
+
   (setq user-emacs-directory (file-name-as-directory my:d))
 
-  ;;;; 3) Hidden sub-directories --------------------------------------------------
-  (defconst my:d:var        (expand-file-name ".var"        my:d))
-  (defconst my:d:etc        (expand-file-name ".etc"        my:d))
-  (defconst my:d:cache      (expand-file-name ".cache"      my:d))
-  (defconst my:d:lisp       (expand-file-name "lisp"        my:d))
-  (defconst my:d:eln-cache  (expand-file-name "eln-cache"   my:d:cache))
-  (defconst my:d:treesit    (expand-file-name "tree-sitter" my:d:var))
-  (defconst my:d:url        (expand-file-name "url/"        my:d:var)
-    "Directory for url.* state (cookies, history, etc.) under my:d:var.")
-  (defconst my:d:eww        (expand-file-name "eww/"        my:d:var)
-    "Directory for EWW state (bookmarks, history) under my:d:var.")
+  ;;; Hidden directories ---------------------------------------------------------
+
+  (defconst my:d:var       (expand-file-name ".var"        my:d))
+  (defconst my:d:etc       (expand-file-name ".etc"        my:d))
+  (defconst my:d:cache     (expand-file-name ".cache"      my:d))
+  (defconst my:d:lisp      (expand-file-name "lisp"        my:d))
+  (defconst my:d:eln-cache (expand-file-name "eln-cache"   my:d:cache))
+  (defconst my:d:treesit   (expand-file-name "tree-sitter" my:d:var))
+  (defconst my:d:url       (expand-file-name "url/"        my:d:var))
+  (defconst my:d:eww       (expand-file-name "eww/"        my:d:var))
 
   (dolist (dir (list my:d:var my:d:etc my:d:cache my:d:lisp
-                     my:d:treesit my:d:url my:d:eww
-                     my:d:eln-cache))
+                     my:d:treesit my:d:url my:d:eww my:d:eln-cache))
     (core--ensure-directory-exists dir))
 
-  ;;;; 4) macOS: prefer Homebrew gcc/libgccjit -----------------------------------
+  ;;; macOS Homebrew toolchain ---------------------------------------------------
+
   (when (eq system-type 'darwin)
     (let* ((brew-prefix
             (or (getenv "HOMEBREW_PREFIX")
                 (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
                 (and (file-directory-p "/usr/local")   "/usr/local")))
-           (bin  (and brew-prefix (expand-file-name "bin" brew-prefix)))
-           (prefix-libgccjit (and brew-prefix (expand-file-name "opt/libgccjit" brew-prefix)))
-           (prefix-gcc       (and brew-prefix (expand-file-name "opt/gcc"       brew-prefix)))
-           (candidates (seq-filter
-                        #'file-directory-p
-                        (list
-                         (and prefix-libgccjit (expand-file-name "lib/gcc/current" prefix-libgccjit))
-                         (and prefix-libgccjit (expand-file-name "lib"             prefix-libgccjit))
-                         (and prefix-gcc       (expand-file-name "lib/gcc/current" prefix-gcc))))))
-      ;; PATH: prepend brew bin once.
+           (bin (and brew-prefix (expand-file-name "bin" brew-prefix)))
+           (prefix-libgccjit
+            (and brew-prefix (expand-file-name "opt/libgccjit" brew-prefix)))
+           (prefix-gcc
+            (and brew-prefix (expand-file-name "opt/gcc" brew-prefix)))
+           (candidates
+            (seq-filter
+             #'file-directory-p
+             (list
+              (and prefix-libgccjit
+                   (expand-file-name "lib/gcc/current" prefix-libgccjit))
+              (and prefix-libgccjit
+                   (expand-file-name "lib" prefix-libgccjit))
+              (and prefix-gcc
+                   (expand-file-name "lib/gcc/current" prefix-gcc))))))
+
+      ;; PATH
       (when (and bin (file-directory-p bin))
         (let* ((path (or (getenv "PATH") ""))
                (parts (split-string path ":" t)))
           (unless (member bin parts)
             (setenv "PATH" (concat bin ":" path)))))
-      ;; LIBRARY_PATH: add & de-dup.
+
+      ;; LIBRARY_PATH
       (when candidates
         (setenv "LIBRARY_PATH"
                 (string-join
@@ -763,48 +776,71 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
                           (when-let* ((old (getenv "LIBRARY_PATH")))
                             (split-string old ":" t))))
                  ":")))
-      ;; CC: pick highest gcc-N available.
+
+      ;; CC
       (when (and bin (file-directory-p bin))
         (when-let* ((gcc
-                     (car (seq-filter
-                           #'file-exists-p
-                           (mapcar (lambda (n) (expand-file-name (format "gcc-%d" n) bin))
-                                   (number-sequence 20 10 -1))))))
+                     (car
+                      (seq-filter
+                       #'file-exists-p
+                       (mapcar
+                        (lambda (n)
+                          (expand-file-name (format "gcc-%d" n) bin))
+                        (number-sequence 20 10 -1))))))
           (setenv "CC" gcc)))))
 
-  ;;;; 5) Native compilation path (.cache/eln-cache) ------------------------------
-  (when (featurep 'native-compile)
-    (setopt native-comp-eln-load-path (list my:d:eln-cache)
+  ;;; Native compilation ---------------------------------------------------------
+
+  (when (and (boundp 'native-comp-eln-load-path)
+             (listp native-comp-eln-load-path))
+    (setopt native-comp-eln-load-path
+            (cons my:d:eln-cache
+                  (delq my:d:eln-cache native-comp-eln-load-path))
             native-comp-async-report-warnings-errors 'silent))
 
-  ;;;; 6) Pre-wire no-littering dirs ----------------------------------------------
+  ;;; no-littering ---------------------------------------------------------------
+
   (defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
   (defvar no-littering-var-directory (file-name-as-directory my:d:var))
 
-  ;;;; 7) straight.el base under .cache/ ------------------------------------------
+  ;;; straight.el base -----------------------------------------------------------
+
   (setopt straight-base-dir my:d:cache
-  	straight-vc-git-default-clone-depth 1
+          straight-vc-git-default-clone-depth 1
           straight-use-package-by-default t
-  	straight-build-dir (format "build-%s" emacs-version)
+          straight-build-dir
+          (format "build-%d.%d" emacs-major-version emacs-minor-version)
           straight-profiles '((nil . "default.el")))
 
-  ;;;; 8) Startup speedups (restore after startup) --------------------------------
+  ;;; Startup speedups -----------------------------------------------------------
+
   (defvar core--orig-file-name-handler-alist file-name-handler-alist)
-  (setq file-name-handler-alist nil
-        gc-cons-threshold most-positive-fixnum
+
+  (setq file-name-handler-alist
+        (seq-remove
+         (lambda (h)
+           (let ((fn (cdr h)))
+             (and (symbolp fn)
+                  (string-match-p "\\`\\(tramp\\|jka-compr\\)"
+                                  (symbol-name fn)))))
+         file-name-handler-alist))
+
+  (setq gc-cons-threshold most-positive-fixnum
         gc-cons-percentage 0.6)
+
   (add-hook 'emacs-startup-hook #'core--restore-startup-state)
 
-  ;;;; 9) Backups OFF / classic auto-save OFF -------------------------------------
+  ;;; Backups / auto-save --------------------------------------------------------
+
   (setq make-backup-files nil
         version-control nil
         delete-old-versions nil
         backup-by-copying nil
         auto-save-default nil
         auto-save-list-file-prefix nil)
-  (core--ensure-directory-exists (expand-file-name "backups" my:d:var))
 
-  ;;;; 10) Early UI (avoid flicker) ----------------------------------------------
+  ;;; Early UI -------------------------------------------------------------------
+
   (setopt frame-resize-pixelwise t
           frame-inhibit-implied-resize t
           cursor-in-non-selected-windows nil
@@ -813,19 +849,17 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
           window-divider-default-places 'right-only)
 
   (dolist (it '((fullscreen . fullboth)
-                (undecorated . nil)
                 (internal-border-width . 8)
-                (left-fringe . 0)
-                (right-fringe . 0)
                 (tool-bar-lines . 0)))
     (add-to-list 'default-frame-alist it)
     (add-to-list 'initial-frame-alist it))
 
-  (when (fboundp 'menu-bar-mode)  (menu-bar-mode -1))
-  (when (fboundp 'tool-bar-mode)  (tool-bar-mode -1))
-  (when (fboundp 'scroll-bar-mode)(scroll-bar-mode -1))
+  (when (fboundp 'menu-bar-mode)   (menu-bar-mode -1))
+  (when (fboundp 'tool-bar-mode)   (tool-bar-mode -1))
+  (when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))
 
-  ;; Correct type: must be user name string.
+  ;;; Startup echo ---------------------------------------------------------------
+
   (let ((u (core--system-username)))
     (when (stringp u)
       (setq inhibit-startup-echo-area-message u)))
@@ -847,160 +881,237 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
   ;; License: GNU GPL v3 or later
   ;;
   ;;; Commentary:
-  ;; Entry point for Emacs 30+ configuration.
-  ;; Category: core
+  ;; Entry point for Emacs 30.1+ configuration.
   ;;
   ;; - URL state paths (before url.el)
   ;; - straight.el bootstrap
-  ;; - Early import of shell environment (exec-path-from-shell)
+  ;; - Early import of shell environment (macOS)
   ;; - Performance (GCMH / read-process-output-max)
-  ;; - Core built-ins via leaf (do not duplicate early-init responsibilities)
-  ;; - Backups OFF + auto-save-visited managed elsewhere (early-init / core)
+  ;; - Core built-ins via leaf
+  ;; - Personal overlay loader
+  ;; - Deterministic module entrypoint
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'subr-x))
+  ;; ---------------------------------------------------------------------------
+  ;; Runtime requirements (do NOT rely on byte-compile)
+  ;; ---------------------------------------------------------------------------
+  (require 'subr-x)
+  (require 'seq)
+  (require 'cl-lib)
 
-  ;;;; 0) URL state BEFORE url.el is loaded --------------------------------------
-  (setopt url-configuration-directory (or (bound-and-true-p my:d:url)
-                                          (expand-file-name "url/" user-emacs-directory))
-          url-cookie-file  (expand-file-name "cookies" url-configuration-directory)
-          url-history-file (expand-file-name "history" url-configuration-directory)
-          url-cache-directory (expand-file-name "cache" url-configuration-directory))
-  (dolist (d (list url-configuration-directory url-cache-directory))
-    (when d (make-directory d t)))
-  (require 'url)  ;; used by straight bootstrap
 
-  ;;;; 1) Bootstrap straight.el ---------------------------------------------------
+  ;;; 0) URL state BEFORE url.el is loaded --------------------------------------
+
+  (setopt url-configuration-directory
+          (or (bound-and-true-p my:d:url)
+              (expand-file-name "url/" user-emacs-directory))
+          url-cookie-file
+          (expand-file-name "cookies" url-configuration-directory)
+          url-history-file
+          (expand-file-name "history" url-configuration-directory)
+          url-cache-directory
+          (expand-file-name "cache" url-configuration-directory))
+
+  (dolist (dir (list url-configuration-directory url-cache-directory))
+    (when dir
+      (make-directory dir t)))
+
+  (require 'url) ;; straight bootstrap depends on url.el
+
+
+  ;;; 1) Bootstrap straight.el -------------------------------------------------
+
   (defvar bootstrap-version 7)
-  (let* ((base (or (bound-and-true-p straight-base-dir) user-emacs-directory))
-         (bootstrap-file (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
+
+  (let* ((base (or (bound-and-true-p straight-base-dir)
+                   user-emacs-directory))
+         (bootstrap-file
+          (expand-file-name
+           "straight/repos/straight.el/bootstrap.el"
+           base)))
     (unless (file-exists-p bootstrap-file)
       (condition-case err
-          (with-current-buffer
-              (url-retrieve-synchronously
-               "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-               'silent 'inhibit-cookies)
-            (goto-char (point-max))
-            (eval-print-last-sexp))
-        (error (user-error "[straight] bootstrap failed: %s"
-                           (error-message-string err)))))
+          (let ((url-request-extra-headers
+                 '(("User-Agent" . "Emacs straight.el bootstrap")))
+                (buf nil))
+            (setq buf
+                  (url-retrieve-synchronously
+                   "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+                   'silent
+                   'inhibit-cookies))
+            (unless (buffer-live-p buf)
+              (user-error "[straight] failed to retrieve install.el"))
+            (with-current-buffer buf
+              (goto-char (point-max))
+              (eval-print-last-sexp)))
+        (error
+         (user-error
+          "[straight] bootstrap failed: %s"
+          (error-message-string err)))))
     (load bootstrap-file nil 'nomessage))
 
-  ;;;; 1.5) Import environment early (macOS GUI/daemon safe) ---------------------
+
+  ;;; 1.5) Import environment early (macOS GUI / daemon safe) ------------------
+
   (straight-use-package 'exec-path-from-shell)
+
   (when (memq window-system '(mac ns))
     (setq exec-path-from-shell-check-startup-files nil
           exec-path-from-shell-arguments '("-l" "-i"))
     (exec-path-from-shell-copy-envs
-     '("PATH" "LANG" "PASSWORD_STORE_DIR" "GPG_KEY_ID"
-       "OPENROUTER_API_KEY" "OPENAI_API_KEY"))
+     '("PATH"
+       "LANG"
+       "PASSWORD_STORE_DIR"
+       "GPG_KEY_ID"
+       "OPENROUTER_API_KEY"
+       "OPENAI_API_KEY"))
     (exec-path-from-shell-initialize))
 
-  (defun my/straight-install (pkgs)
-    "Install PKGS via straight-use-package with simple timing/log."
+
+  ;;; 1.6) Base package installer helper ---------------------------------------
+
+  (defun my/straight-install (packages)
+    "Install PACKAGES via straight-use-package with simple timing/log."
     (let ((t0 (float-time)))
-      (dolist (p pkgs)
+      (dolist (pkg packages)
         (let ((s (float-time)))
-          (condition-case e
+          (condition-case err
               (progn
-                (straight-use-package p)
-                (message "OK  %-18s  %4.2fs" p (- (float-time) s)))
+                (straight-use-package pkg)
+                (message "OK  %-18s %4.2fs"
+                         pkg (- (float-time) s)))
             (error
-             (message "ERR %-18s  %4.2fs  %s" p (- (float-time) s) (error-message-string e))))))
+             (message "ERR %-18s %4.2fs %s"
+                      pkg (- (float-time) s)
+                      (error-message-string err))))))
       (message "Total %4.2fs" (- (float-time) t0))))
 
-  ;; Base packages
+
+  ;;; 1.7) Base packages -------------------------------------------------------
+
   (defvar my:bootstrap-packages-base
-    '(leaf leaf-keywords leaf-convert blackout helpful imenu-list hydra org)
-    "Base packages you’ll want to install in any environment.")
+    '(leaf
+      leaf-keywords
+      leaf-convert
+      blackout
+      helpful
+      imenu-list
+      hydra)
+    "Base packages required for core configuration.")
 
   (my/straight-install my:bootstrap-packages-base)
 
+
+  ;;; 1.8) Initialize leaf ----------------------------------------------------
+
+  (require 'leaf)
+
   (eval-when-compile
-    (require 'leaf)
     (require 'leaf-keywords))
+
   (when (fboundp 'leaf-keywords-init)
     (leaf-keywords-init))
+
+  (straight-use-package 'org)
   (require 'org)
 
-  ;;;; 2) Performance tweaks ------------------------------------------------------
+
+  ;;; 2) Performance tweaks ---------------------------------------------------
+
   (defvar core--orig-read-process-output-max
-    (and (boundp 'read-process-output-max) read-process-output-max))
+    (and (boundp 'read-process-output-max)
+         read-process-output-max))
+
   (when (boundp 'read-process-output-max)
-    (setq read-process-output-max (* 4 1024 1024)))  ;; 4MB for LSP/IO
+    (setq read-process-output-max (* 4 1024 1024))) ;; 4 MiB
+
   (add-hook 'emacs-startup-hook
             (lambda ()
               (when (boundp 'read-process-output-max)
-                (setq read-process-output-max core--orig-read-process-output-max))))
+                (setq read-process-output-max
+                      core--orig-read-process-output-max))))
 
   (leaf gcmh
     :straight t
-    :custom ((gcmh-idle-delay . 5)
-             (gcmh-high-cons-threshold . 16777216)) ;; 16MB
+    :custom
+    ((gcmh-idle-delay . 5)
+     (gcmh-high-cons-threshold . 16777216)) ;; 16 MiB
     :config
     (gcmh-mode 1))
 
-  ;;;; 3) Core built-ins (do NOT duplicate early-init responsibilities) ----------
+
+  ;;; 3) Core built-ins (do NOT duplicate early-init) --------------------------
+
   (leaf emacs
     :straight nil
-    :bind (("M-/" . cape-dabbrev))
-    :hook ((prog-mode . display-line-numbers-mode))
-    :custom ((inhibit-startup-screen . t)
-             (inhibit-startup-message . t)
-             (initial-scratch-message . nil)
-             (initial-major-mode . 'fundamental-mode)  ;; must be quoted
-             (use-short-answers . t)
-             (create-lockfiles . nil)
-             (idle-update-delay . 0.2)
-             (ring-bell-function . #'ignore)          ;; function value must be #'quoted
-             (display-line-numbers-type . 'relative)  ;; <-- quote the symbol
-             (frame-title-format . t))
+    :bind
+    (("M-/" . cape-dabbrev))
+    :hook
+    ((prog-mode . display-line-numbers-mode))
+    :custom
+    ((inhibit-startup-screen . t)
+     (inhibit-startup-message . t)
+     (initial-scratch-message . nil)
+     (initial-major-mode . 'fundamental-mode)
+     (use-short-answers . t)
+     (create-lockfiles . nil)
+     (idle-update-delay . 0.2)
+     (ring-bell-function . #'ignore)
+     (display-line-numbers-type . 'relative)
+     (frame-title-format . t))
     :config
-    (when (fboundp 'window-divider-mode) (window-divider-mode 1))
-    (when (fboundp 'pixel-scroll-precision-mode) (pixel-scroll-precision-mode 1))
-    (when (fboundp 'electric-pair-mode) (electric-pair-mode 1))
-    (dolist (k '("C-z" "C-x C-z" "C-x C-c" "M-z" "M-m"))
-      (when (lookup-key (current-global-map) (kbd k))
-        (keymap-global-unset k)))
-    (setq confirm-kill-emacs #'y-or-n-p)
-    ;; backup/auto-save policy is handled in early-init and core/editing; do not duplicate here.
-    )
+    (when (fboundp 'window-divider-mode)
+      (window-divider-mode 1))
+    (when (fboundp 'pixel-scroll-precision-mode)
+      (pixel-scroll-precision-mode 1))
+    (when (fboundp 'electric-pair-mode)
+      (electric-pair-mode 1))
+    (dolist (key '("C-z" "C-x C-z" "C-x C-c" "M-z" "M-m"))
+      (when (lookup-key (current-global-map) (kbd key))
+        (keymap-global-unset key)))
+    (setq confirm-kill-emacs #'y-or-n-p))
 
-  ;;;; 4) Modifiers per OS --------------------------------------------------------
+
+  ;;; 4) Modifier keys per OS --------------------------------------------------
+
   (leaf my:modifier
     :straight nil
     :config
     (pcase system-type
       ('darwin
-       (setq mac-option-modifier 'meta
+       (setq mac-option-modifier  'meta
              mac-command-modifier 'super
              mac-control-modifier 'control
              mac-function-modifier 'hyper))
       ('windows-nt
        (setq w32-lwindow-modifier 'super
              w32-rwindow-modifier 'super
-             w32-apps-modifier   'hyper))
+             w32-apps-modifier    'hyper))
       (_ nil)))
 
-  ;;;; 5) Files and environment ---------------------------------------------------
-  ;; ⛳ duplicate exec-path-from-shell block removed (initialized earlier).
-  (leaf no-littering :straight t)
 
-  ;; macOS: complement exec-path/PATH with Homebrew bin (just in case).
+  ;;; 5) Files and environment ------------------------------------------------
+
+  (leaf no-littering
+    :straight t)
+
   (when (eq system-type 'darwin)
-    (dolist (p '("/opt/homebrew/bin" "/usr/local/bin"))
-      (when (and (file-directory-p p) (not (member p exec-path)))
-        (add-to-list 'exec-path p)
-        (unless (and (getenv "PATH") (string-match-p (regexp-quote p) (getenv "PATH")))
-          (setenv "PATH" (concat p ":" (getenv "PATH")))))))
+    (dolist (path '("/opt/homebrew/bin" "/usr/local/bin"))
+      (when (and (file-directory-p path)
+                 (not (member path exec-path)))
+        (add-to-list 'exec-path path)
+        (unless (and (getenv "PATH")
+                     (string-match-p (regexp-quote path)
+                                     (getenv "PATH")))
+          (setenv "PATH" (concat path ":" (getenv "PATH")))))))
 
-  ;;;; 6) Dired display settings --------------------------------------------------
-  ;; ⛳ moved to core/editing.el to avoid split/duplication. (section removed)
 
-  ;;;; 7) Personal file loader ----------------------------------------------------
+  ;;; 6) Personal file loader -------------------------------------------------
+
   (defun utils--safe-load-file (file &optional noerror)
-    "Load FILE safely. If NOERROR is non-nil, log instead of raising."
+    "Load FILE safely.
+  If NOERROR is non-nil, log instead of raising."
     (when (and file (file-exists-p file))
       (condition-case err
           (load file nil 'nomessage)
@@ -1008,32 +1119,48 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
          (funcall (if noerror #'message #'user-error)
                   "[load] failed to load %s: %s"
                   file (error-message-string err))))))
+
   (defalias 'my/safe-load-file #'utils--safe-load-file)
 
   (my/safe-load-file
-   (expand-file-name (concat "personal/" user-login-name ".el")
-                     (or (bound-and-true-p my:d) user-emacs-directory))
+   (expand-file-name
+    (concat "personal/" user-login-name ".el")
+    (or (bound-and-true-p my:d)
+        user-emacs-directory))
    t)
 
-  ;;;; 8) Modules entrypoint ------------------------------------------------------
-  (let* ((root (or (and (boundp 'my:d) (stringp my:d) (file-directory-p my:d) my:d)
+
+  ;;; 7) Modules entrypoint ---------------------------------------------------
+
+  (let* ((root (or (and (boundp 'my:d)
+                        (stringp my:d)
+                        (file-directory-p my:d)
+                        my:d)
                    user-emacs-directory))
          (lisp-dir (expand-file-name "lisp" root)))
     (add-to-list 'load-path lisp-dir)
     (defvar my:modules-extra nil)
-    (require 'core/custom-ui-extras) ;; Initialize the extras prior to loading the modules.
+    (require 'core/custom-ui-extras)
     (require 'modules nil t))
 
-  ;;;; 9) Startup message ---------------------------------------------------------
+
+  ;;; 8) Startup message ------------------------------------------------------
+
   (defun core--announce-startup ()
-    "Report startup time and GC count to *Messages*."
+    "Report startup time and GC count."
     (message "Emacs ready in %.2f seconds with %d GCs."
-             (float-time (time-subtract after-init-time before-init-time))
+             (float-time
+              (time-subtract after-init-time before-init-time))
              gcs-done))
+
   (add-hook 'after-init-hook
-            (lambda () (run-with-idle-timer 0 nil #'core--announce-startup)))
+            (lambda ()
+              (run-with-idle-timer
+               0 nil #'core--announce-startup)))
+
 
   (provide 'init)
+
   ;;; init.el ends here
 #+end_src
 
@@ -1205,10 +1332,8 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'subr-x)) ;; string-join, etc.
-  ;; If your build complains about seq at byte-compile time, uncomment:
-  ;; (eval-when-compile (require 'seq))
-
+  (eval-when-compile (require 'subr-x))
+  (require 'seq)
   (defgroup my:modules nil
     "Loader options for modular Emacs configuration."
     :group 'convenience)
@@ -1283,6 +1408,7 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
       utils/utils-scratch
       utils/utils-backup
       utils/utils-async
+      utils/utils-notes-markdown
       utils/search-nav
       )
     "Default set of modules to load in order.")
@@ -1360,75 +1486,85 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 :END:
 
 #+begin_src emacs-lisp
-  ;;; core/fixes.el --- Final patch for Emacs 30.1 after-load bug -*- lexical-binding: t; -*-
-  ;;
+  ;;; core/fixes.el --- Compatibility & hotfix layer -*- lexical-binding: t; -*-
+
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
+
   ;;; Commentary:
-  ;; Prevents "void-variable thisfile" and ensures safe `after-load` evaluation.
+  ;;
+  ;; This file contains *minimal and conditional fixes* to keep the
+  ;; existing configuration stable across Emacs versions.
+  ;;
+  ;; Design principles:
+  ;; - Do NOT change architecture or module structure
+  ;; - Do NOT refactor existing code
+  ;; - Add guards ONLY where real breakage is observed or expected
+  ;; - Keep fixes version-scoped and explicit
+  ;;
+  ;; This is NOT a dumping ground for tweaks.
+  ;; Everything here must have a concrete reason to exist.
+  ;;
+  ;; Current scope:
+  ;; - Emacs 30.1+ compatibility guards
+  ;; - Advice safety fences (load / require)
+  ;; - Loader stability fixes
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
 
-  ;; ------------------------------------------------------------
-  ;; Core safeguard functions
-  ;; ------------------------------------------------------------
+  ;;;; Utilities -------------------------------------------------------------
 
-  (defvar thisfile nil
-    "Dynamically bound to the file currently being loaded.
-  Hard-defined to avoid `void-variable` errors on Emacs 30.1.")
+  (defun core/fixes--emacs>= (major minor)
+    "Return non-nil if running Emacs version is >= MAJOR.MINOR."
+    (or (> emacs-major-version major)
+        (and (= emacs-major-version major)
+             (>= emacs-minor-version minor))))
 
-  (defun my:with-thisfile--load (orig file &rest args)
-    "Ensure `thisfile` is bound when FILE is being loaded."
-    (let* ((fname (cond
-                   ((stringp file) (ignore-errors (expand-file-name file)))
-                   (t file)))
-           (thisfile (or (and (boundp 'thisfile) thisfile) fname)))
-      (apply orig file args)))
 
-  (defun my:with-thisfile--require (orig feature &optional filename noerror)
-    "Ensure `thisfile` is bound when FEATURE is required."
-    (let* ((lib (or (and filename (locate-library filename))
-                    (locate-library (symbol-name feature))
-                    filename
-                    (symbol-name feature)))
-           (thisfile (or (and (boundp 'thisfile) thisfile) lib)))
-      (funcall orig feature filename noerror)))
+  ;;;; thisfile advice guard (Emacs 30.1+) ----------------------------------
 
-  (defun my:guard-after-load (orig-fn file)
-    "Ensure `thisfile` is safely bound during `do-after-load-evaluation`."
-    (let ((thisfile (or (and (boundp 'thisfile) thisfile) file)))
-      (condition-case _
-          (funcall orig-fn file)
-        (void-variable
-         (let ((thisfile file))
-           (ignore-errors (funcall orig-fn file)))))))
+  ;; Background:
+  ;; In Emacs 30.1, internal load/require behavior changed subtly,
+  ;; and always-on advice around `load' / `require' may cause
+  ;; unintended side effects (double evaluation, wrong file context).
+  ;;
+  ;; We intentionally scope the advice ONLY to versions where it is needed.
+  ;; This keeps future Emacs versions clean by default.
 
-  ;; ------------------------------------------------------------
-  ;; Activate patch
-  ;; ------------------------------------------------------------
+  (when (core/fixes--emacs>= 30 1)
 
-  (leaf core-fixes
-    :straight nil
-    :init
-    (advice-add 'load :around #'my:with-thisfile--load)
-    (advice-add 'require :around #'my:with-thisfile--require)
-    (when (fboundp 'do-after-load-evaluation)
-      (ignore-errors
-        (advice-remove 'do-after-load-evaluation #'my:guard-after-load))
-      (advice-add 'do-after-load-evaluation :around #'my:guard-after-load))
-    (message "[core/fixes] Hardening active: global thisfile + load/require guards."))
+    ;; Defensive check: do not add advice unless the functions exist.
+    (when (and (fboundp 'my:with-thisfile--load)
+               (fboundp 'my:with-thisfile--require))
+
+      ;; Avoid duplicate advice application (reload-safe).
+      (unless (advice-member-p #'my:with-thisfile--load 'load)
+        (advice-add 'load :around #'my:with-thisfile--load))
+
+      (unless (advice-member-p #'my:with-thisfile--require 'require)
+        (advice-add 'require :around #'my:with-thisfile--require))))
+
+
+  ;;;; Forward-compatibility notes ------------------------------------------
+  ;;
+  ;; - If Emacs 30.2+ resolves the underlying issue, this block can be
+  ;;   narrowed or removed by adjusting the version guard above.
+  ;; - Do NOT expand the version range casually.
+  ;; - Any new fix must justify:
+  ;;     * Why here?
+  ;;     * Why version-scoped?
+  ;;     * Why advice (and not local change)?
+  ;;
+
 
   (provide 'core/fixes)
+
   ;;; core/fixes.el ends here
 #+end_src
 
-*** core/genral.el
+*** core/general.el
 :PROPERTIES:
 :CUSTOM_ID: core-general
 :header-args:emacs-lisp: :tangle lisp/core/general.el
@@ -2112,6 +2248,12 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;; Category: core
   ;;
   ;;; Code:
+
+  (unless (fboundp 'my/ensure-directory-exists)
+    (defun my/ensure-directory-exists (dir)
+      "Create DIR if it does not exist."
+      (unless (file-directory-p dir)
+        (make-directory dir t))))
 
   ;; Insert timestamp on save
   (defun my/save-buffer-wrapper ()
@@ -4610,8 +4752,10 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
     :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
              (eww-download-directory . "~/Downloads"))
     :init
-    (setopt eww-bookmarks-file (expand-file-name "eww-bookmarks" my:d:eww)
-  	  eww-cache-directory (expand-file-name "cache/" my:d:eww))
+    (defvar my:d:eww
+      (expand-file-name "eww/" my:d:var)
+      "Directory for EWW runtime data.")
+    (setopt eww-cache-directory (expand-file-name "cache/" my:d:eww))
     (my/ensure-directory-exists eww-cache-directory)
     (setq eww-history-limit 200)
     (defvar eww-hl-search-word nil "Word to highlight with isearch after EWW loads.")
@@ -4632,6 +4776,213 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (provide 'utils/search-nav)
   ;;; utils-search-nav.el ends here
+#+end_src
+
+*** utils/utils-notes-markdown.el
+:PROPERTIES:
+:CUSTOM_ID: utils-notes-markdown
+:header-args:emacs-lisp: :tangle lisp/utils/utils-notes-markdown.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-notes-markdown.el --- Prose-oriented Markdown notes under Org -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; This module provides a prose-oriented Markdown notes system,
+  ;; implemented as a *sibling domain* under `my:d:org`.
+  ;;
+  ;; Design assumptions (documented in README.org):
+  ;;
+  ;; - `my:d:org` is already defined and points to the Org root directory.
+  ;; - Markdown notes are *not* part of Org agenda or task management.
+  ;; - Org and Markdown coexist under the same logical knowledge base.
+  ;; - Search/navigation is handled by consult + ripgrep.
+  ;;
+  ;; Directory layout:
+  ;;
+  ;;   my:d:org/
+  ;;     ├─ agenda/        (Org tasks, schedules)
+  ;;     ├─ projects/      (Org project files)
+  ;;     └─ notes/         (Markdown prose notes)  ← this module
+  ;;
+  ;; Non-goals:
+  ;; - No agenda integration
+  ;; - No Org capture integration
+  ;; - No Zettelkasten semantics
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
+
+
+  ;;; Customization ------------------------------------------------------------
+
+  (defgroup my:notes nil
+    "Prose-oriented Markdown notes under Org directory."
+    :group 'convenience)
+
+  (defcustom my:notes-directory-name
+    "notes"
+    "Directory name for Markdown notes under `my:d:org`."
+    :type 'string)
+
+  (defcustom my:notes-default-notebooks
+    '("inbox" "work" "life" "ideas" "archive")
+    "Default notebook subdirectories under the notes directory."
+    :type '(repeat string))
+
+
+  ;;; Derived paths ------------------------------------------------------------
+
+  (defvar my:d:notes
+    (expand-file-name my:notes-directory-name my:d:org)
+    "Root directory for Markdown notes.
+
+  This directory is a sibling of Org files, not part of agenda scope.")
+
+
+  ;;; Internal helpers ---------------------------------------------------------
+
+  (defun my/notes--ensure-root ()
+    "Ensure `my:d:notes` and default notebooks exist."
+    (unless (file-directory-p my:d:notes)
+      (make-directory my:d:notes t))
+    (dolist (name my:notes-default-notebooks)
+      (let ((dir (expand-file-name name my:d:notes)))
+        (unless (file-directory-p dir)
+          (make-directory dir t)))))
+
+  (defun my/notes--slugify (title)
+    "Return a filesystem-safe slug derived from TITLE."
+    (let* ((lower (downcase title))
+           (repl  (replace-regexp-in-string "[^[:alnum:]]+" "-" lower)))
+      (string-trim repl "-+" "-+")))
+
+
+  ;;; Note creation & navigation ----------------------------------------------
+
+  (defun my/notes-new-note (notebook title)
+    "Create a new Markdown note in NOTEBOOK with TITLE.
+
+  NOTEBOOK is a subdirectory under `my:d:notes`."
+    (interactive
+     (progn
+       (my/notes--ensure-root)
+       (let* ((choices (directory-files my:d:notes nil "^[^.]"))
+              (notebook (completing-read "Notebook: " choices nil nil "inbox"))
+              (title (read-string "Title: ")))
+         (list notebook title))))
+    (my/notes--ensure-root)
+    (let* ((dir (expand-file-name notebook my:d:notes))
+           (slug (my/notes--slugify title))
+           (timestamp (format-time-string "%Y%m%d-%H%M%S"))
+           (filename (format "%s-%s.md" timestamp slug))
+           (path (expand-file-name filename dir)))
+      (unless (file-directory-p dir)
+        (make-directory dir t))
+      (find-file path)
+      (when (= (buffer-size) 0)
+        (insert
+         (format
+          "---\n\
+  title: %s\n\
+  notebook: %s\n\
+  tags: []\n\
+  created: %s\n\
+  updated: %s\n\
+  ---\n\n"
+          title
+          notebook
+          (format-time-string "%Y-%m-%d")
+          (format-time-string "%Y-%m-%d")))
+        (save-buffer))))
+
+  (defun my/notes-open-root ()
+    "Open the Markdown notes root under Org in Dired."
+    (interactive)
+    (my/notes--ensure-root)
+    (dired my:d:notes))
+
+
+  ;;; Markdown UX --------------------------------------------------------------
+
+  (leaf markdown-mode
+    :straight t
+    :mode (("\\.md\\'" . gfm-mode)
+           ("README\\.md\\'" . gfm-mode))
+    :hook
+    ((markdown-mode . visual-line-mode)
+     (markdown-mode . variable-pitch-mode)
+     (markdown-mode . my/notes-markdown-visual-fill))
+    :custom
+    ((markdown-command . "pandoc")
+     (markdown-fontify-code-blocks-natively . t))
+    :config
+    (defun my/markdown-toggle-live-preview ()
+      "Toggle `markdown-live-preview-mode` in the current buffer."
+      (interactive)
+      (if (bound-and-true-p markdown-live-preview-mode)
+          (markdown-live-preview-mode -1)
+        (markdown-live-preview-mode 1)))
+    (define-key markdown-mode-map (kbd "C-c C-p")
+                #'my/markdown-toggle-live-preview))
+
+  (leaf visual-fill-column
+    :straight t
+    :commands (visual-fill-column-mode)
+    :init
+    (defun my/notes-markdown-visual-fill ()
+      "Configure `visual-fill-column` for prose Markdown buffers."
+      (setq-local visual-fill-column-width 100)
+      (setq-local visual-fill-column-center-text t)
+      (visual-fill-column-mode 1)))
+
+
+  ;;; Search & navigation ------------------------------------------------------
+
+  (leaf consult-notes
+    :straight t
+    :after consult
+    :init
+    (defun my/notes-consult-ripgrep ()
+      "Run `consult-ripgrep` scoped to Markdown notes under Org."
+      (interactive)
+      (my/notes--ensure-root)
+      (let ((default-directory my:d:notes))
+        (consult-ripgrep)))
+    :custom
+    ((consult-notes-file-dir-sources
+      . (("Org Notes (MD)" ?m my:d:notes))))
+    :config
+    (define-key global-map (kbd "C-c n f") #'consult-notes)
+    (define-key global-map (kbd "C-c n r") #'my/notes-consult-ripgrep)
+    (define-key global-map (kbd "C-c n n") #'my/notes-new-note)
+    (define-key global-map (kbd "C-c n d") #'my/notes-open-root))
+
+
+  ;;; Image handling -----------------------------------------------------------
+
+  (with-eval-after-load 'org-download
+    (defun my/notes-markdown-org-download-setup ()
+      "Enable `org-download` for Markdown notes under Org."
+      (setq-local org-download-link-format "![](%s)")
+      (setq-local org-download-image-dir "./images")
+      (org-download-enable))
+    (add-hook 'markdown-mode-hook
+              #'my/notes-markdown-org-download-setup))
+
+
+  (provide 'utils/utils-notes-markdown)
+  ;;; utils/utils-notes-markdown.el ends here
 #+end_src
 
 ** Personal Profile & Device Integrations — `user.el`
@@ -4746,20 +5097,27 @@ Provide *personal, device-specific overlays* on top of the core configuration:
   ;;
   ;;; Code:
 
-  (eval-when-compile
-    (require 'leaf)
-    (require 'subr-x))
+  ;; ---------------------------------------------------------------------------
+  ;; Runtime requirements (do NOT rely on byte-compile)
+  ;; ---------------------------------------------------------------------------
+  (require 'leaf)
+  (require 'subr-x)
+  (require 'seq)
 
-  ;;; Personal Information
+
+  ;;; Personal Information -----------------------------------------------------
+
   (leaf *personals
     :straight nil
     :init
+    ;; Identity & safety
     (setq user-full-name "YAMASHITA, Takao"
           user-mail-address "tjy1965@gmail.com"
           inhibit-compacting-font-caches t
           plstore-cache-passphrase-for-symmetric-encryption t)
 
-    (setq my:font-default "JetBrains Mono" ;; "JetBrainsMono Nerd Font"
+    ;; Fonts / UI / LSP switches
+    (setq my:font-default "JetBrains Mono"
           my:font-alt     "Noto Sans JP"
           my:emoji-font   "Apple Color Emoji"
           my:font-size    18)
@@ -4767,6 +5125,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
     (setq my:use-ui 'nano
           my:use-lsp 'eglot)
 
+    ;; Cloud / Org / Blog directories
     (defvar my:d:cloud
       (expand-file-name "Documents" (getenv "HOME"))
       "Cloud storage base directory.")
@@ -4779,25 +5138,37 @@ Provide *personal, device-specific overlays* on top of the core configuration:
     (defvar my:f:capture-blog-file
       (expand-file-name "all-posts.org" my:d:blog)
       "Default Org file for blog captures.")
+
+    ;; Safety: excluded paths
     (defvar my:d:excluded-directories
       (list (expand-file-name "Library/Accounts" (getenv "HOME")))
       "Directories excluded from `load-path` for safety.")
 
-    (mapc #'my/ensure-directory-exists (list my:d:cloud my:d:org my:d:blog))
+    ;; Ensure directories exist
+    (mapc #'my/ensure-directory-exists
+          (list my:d:cloud my:d:org my:d:blog))
 
+    ;; Org wiring
     (setq org-directory my:d:org)
     (setq org-agenda-files
-          (seq-filter (lambda (file)
-                        (and (string-match-p "\\.org\\'" file)
-                             (not (string-match-p "archives" file))))
-                      (directory-files-recursively org-directory "\\.org\\'")))
+          (condition-case nil
+              (seq-filter
+               (lambda (file)
+                 (and (string-match-p "\\.org\\'" file)
+                      (not (string-match-p "archives" file))))
+               (directory-files-recursively org-directory "\\.org\\'"))
+            (error nil)))
 
+    ;; load-path hygiene
     (setq load-path
-          (seq-remove (lambda (dir)
-                        (member dir my:d:excluded-directories))
-                      load-path)))
+          (seq-remove
+           (lambda (dir)
+             (member dir my:d:excluded-directories))
+           load-path)))
 
-  ;;; SIS
+
+  ;;; SIS (macOS input method auto-switch) -------------------------------------
+
   (leaf sis
     :if (eq system-type 'darwin)
     :straight t
@@ -4805,25 +5176,34 @@ Provide *personal, device-specific overlays* on top of the core configuration:
                sis-global-cursor-color-mode
                sis-global-respect-mode
                sis-global-inline-mode)
-    :hook (emacs-startup .
-           (lambda ()
-             (when (fboundp 'sis-ism-lazyman-config)
-               (sis-ism-lazyman-config
-                "com.apple.keylayout.ABC"
-                "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
-                'macism))
-             (when (fboundp 'sis-global-cursor-color-mode)
-               (sis-global-cursor-color-mode t))
-             (when (fboundp 'sis-global-respect-mode)
-               (sis-global-respect-mode t))
-             (when (fboundp 'sis-global-inline-mode)
-               (sis-global-inline-mode t)))))
+    :hook
+    (emacs-startup .
+                   (lambda ()
+                     (when (fboundp 'sis-ism-lazyman-config)
+                       (sis-ism-lazyman-config
+                        "com.apple.keylayout.ABC"
+                        "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+                        'macism))
+                     (when (fboundp 'sis-global-cursor-color-mode)
+                       (sis-global-cursor-color-mode t))
+                     (when (fboundp 'sis-global-respect-mode)
+                       (sis-global-respect-mode t))
+                     (when (fboundp 'sis-global-inline-mode)
+                       (sis-global-inline-mode t)))))
+
+
+  ;;; Cursor color keep-alive after theme load ---------------------------------
 
   (add-hook 'after-load-theme-hook
             (lambda ()
-              (set-face-background 'cursor (frame-parameter nil 'cursor-color))))
+              (when (facep 'cursor)
+                (let ((c (frame-parameter nil 'cursor-color)))
+                  (when (stringp c)
+                    (set-face-background 'cursor c))))))
 
-  ;;; Device: MX_ErgoS
+
+  ;;; Device profile: MX Ergo S -----------------------------------------------
+
   (leaf *device/MX_ErgoS
     :straight nil
     :init
@@ -4839,8 +5219,12 @@ Provide *personal, device-specific overlays* on top of the core configuration:
     (global-set-key [mouse-4] #'previous-buffer)
     (global-set-key [mouse-5] #'next-buffer))
 
-  ;;; Apple Music
+
+  ;;; Apple Music integration (macOS) ------------------------------------------
+
   (when (eq system-type 'darwin)
+
+    ;; Async osascript runner
     (defun my/apple-music-osascript-async (script &optional callback)
       "Run AppleScript SCRIPT asynchronously.
   If CALLBACK is non-nil, call it with the trimmed output."
@@ -4858,6 +5242,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
                    (funcall callback output)))
                (kill-buffer (process-buffer process))))))))
 
+    ;; Sync osascript runner
     (defun my/apple-music-osascript-sync (script)
       "Run AppleScript SCRIPT synchronously and return trimmed output."
       (string-trim
@@ -4912,6 +5297,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
       (my/apple-music-osascript-async
        (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
 
+    ;; Hydra
     (with-eval-after-load 'hydra
       (defhydra my/hydra-apple-music (:hint nil)
         "
@@ -4928,13 +5314,17 @@ Provide *personal, device-specific overlays* on top of the core configuration:
         ("q" nil "quit"))
       (global-set-key (kbd "C-c M") #'my/hydra-apple-music/body)))
 
-  ;; Meow leader: <leader> m -> Apple Music hydra
+
+  ;;; Meow leader integration --------------------------------------------------
+
   (with-eval-after-load 'meow
     (with-eval-after-load 'hydra
       (when (fboundp 'meow-leader-define-key)
         (meow-leader-define-key
          '("M" . my/hydra-apple-music/body)))))
 
+
   (provide 'user)
+
   ;;; user.el ends here
 #+end_src
