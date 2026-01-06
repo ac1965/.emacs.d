@@ -49,7 +49,7 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 #+begin_src emacs-lisp
   ;;; module.el --- description -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -663,19 +663,19 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 #+begin_src emacs-lisp
   ;;; early-init.el --- Early initialization (core) -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;;; Commentary:
-  ;; Core bootstrap executed before regular init.
+  ;; Early bootstrap executed before regular init.el.
   ;;
-  ;; - Disable package.el (we use straight.el + leaf)
-  ;; - Fast startup: widen GC/file-name-handlers and restore after startup
-  ;; - Keep artifacts under .cache/ .etc/ .var/ (native-compile, no-littering, straight)
-  ;; - macOS: prefer Homebrew gcc/libgccjit (PATH/LIBRARY_PATH/CC)
-  ;; - Backups OFF; classic auto-save OFF (use auto-save-visited later)
-  ;; - Early UI defaults to avoid flicker
+  ;; - Disable package.el
+  ;; - Startup optimization (GC / file-name-handlers)
+  ;; - Define base directories (.cache / .etc / .var)
+  ;; - Native compilation cache setup
+  ;; - macOS Homebrew toolchain environment
+  ;; - Early UI defaults
   ;;
   ;;; Code:
 
@@ -684,20 +684,24 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 
   (require 'seq)
 
-  ;;; Internal helpers -----------------------------------------------------------
+  
+  ;;; Internal utilities ----------------------------------------------------------
 
-  (defun core--ensure-directory-exists (dir)
-    "Ensure DIR exists, creating it if necessary."
+  (defun core--ensure-directory (dir)
+    "Ensure DIR exists, creating it recursively if needed."
     (unless (file-directory-p dir)
       (condition-case err
           (make-directory dir t)
         (error
-         (warn "Failed to create directory: %s (%s)"
+         (warn "early-init: failed to create %s (%s)"
                dir (error-message-string err))))))
 
-  (defun core--system-username ()
-    "Return current login name as a string or nil."
+  (defun core--login-username ()
+    "Return login username or nil."
     (ignore-errors (user-login-name)))
+
+  (defvar core--orig-file-name-handler-alist nil
+    "Original `file-name-handler-alist' saved for restoration.")
 
   (defun core--restore-startup-state ()
     "Restore GC and file handler settings after startup."
@@ -705,93 +709,88 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
           gc-cons-threshold 16777216
           gc-cons-percentage 0.1))
 
-  (defalias 'my/ensure-directory-exists #'core--ensure-directory-exists)
+  (defalias 'my/ensure-directory-exists #'core--ensure-directory)
 
-  ;;; Disable package.el ---------------------------------------------------------
+  
+  ;;; Disable package.el ----------------------------------------------------------
 
   (setq package-enable-at-startup nil
         package-quickstart nil)
 
-  ;;; Base directory -------------------------------------------------------------
+  
+  ;;; Base directories ------------------------------------------------------------
 
   (defvar my:d
-    (or (and load-file-name
-             (file-name-directory (file-chase-links load-file-name)))
-        user-emacs-directory)
-    "Base directory for this Emacs configuration.")
+    (file-name-as-directory
+     (or (and load-file-name
+              (file-name-directory (file-chase-links load-file-name)))
+         user-emacs-directory))
+    "Root directory of this Emacs configuration.")
 
-  (setq user-emacs-directory (file-name-as-directory my:d))
+  (setq user-emacs-directory my:d)
 
-  ;;; Hidden directories ---------------------------------------------------------
-
-  (defconst my:d:var       (expand-file-name ".var/"        my:d))
-  (defconst my:d:etc       (expand-file-name ".etc/"        my:d))
-  (defconst my:d:cache     (expand-file-name "emacs/"
-  					   (or (getenv "XDG_CACHE_HOME")
-  					       (expand-file-name ".cache/" my:d))))
-  (defconst my:d:eln-cache (expand-file-name "eln-cache/"   my:d:cache))
-  (defconst my:d:lisp      (expand-file-name "lisp/"        my:d))
+  (defconst my:d:var       (expand-file-name ".var/" my:d))
+  (defconst my:d:etc       (expand-file-name ".etc/" my:d))
+  (defconst my:d:lisp      (expand-file-name "lisp/" my:d))
+  (defconst my:d:cache
+    (expand-file-name
+     "emacs/"
+     (or (getenv "XDG_CACHE_HOME")
+         (expand-file-name ".cache/" my:d))))
+  (defconst my:d:eln-cache (expand-file-name "eln-cache/" my:d:cache))
   (defconst my:d:treesit   (expand-file-name "tree-sitter/" my:d:var))
-  (defconst my:d:url       (expand-file-name "url/"         my:d:var))
-  (defconst my:d:eww       (expand-file-name "eww/"         my:d:var))
+  (defconst my:d:url       (expand-file-name "url/" my:d:var))
+  (defconst my:d:eww       (expand-file-name "eww/" my:d:var))
 
-  (dolist (dir (list my:d:var my:d:etc my:d:cache my:d:lisp
-                     my:d:treesit my:d:url my:d:eww my:d:eln-cache))
-    (core--ensure-directory-exists dir))
+  (dolist (dir (list my:d:var my:d:etc my:d:lisp my:d:cache
+                     my:d:eln-cache my:d:treesit my:d:url my:d:eww))
+    (core--ensure-directory dir))
 
-  ;;; macOS Homebrew toolchain ---------------------------------------------------
+  
+  ;;; macOS Homebrew toolchain ----------------------------------------------------
 
   (when (eq system-type 'darwin)
-    (let* ((brew-prefix
-            (or (getenv "HOMEBREW_PREFIX")
-                (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
-                (and (file-directory-p "/usr/local")   "/usr/local")))
-           (bin (and brew-prefix (expand-file-name "bin" brew-prefix)))
-           (prefix-libgccjit
-            (and brew-prefix (expand-file-name "opt/libgccjit" brew-prefix)))
-           (prefix-gcc
-            (and brew-prefix (expand-file-name "opt/gcc" brew-prefix)))
-           (candidates
-            (seq-filter
-             #'file-directory-p
-             (list
-              (and prefix-libgccjit
-                   (expand-file-name "lib/gcc/current" prefix-libgccjit))
-              (and prefix-libgccjit
-                   (expand-file-name "lib" prefix-libgccjit))
-              (and prefix-gcc
-                   (expand-file-name "lib/gcc/current" prefix-gcc))))))
-
+    (when-let* ((brew (or (getenv "HOMEBREW_PREFIX")
+                          (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
+                          (and (file-directory-p "/usr/local")   "/usr/local")))
+                (bin  (expand-file-name "bin" brew)))
       ;; PATH
-      (when (and bin (file-directory-p bin))
-        (let* ((path (or (getenv "PATH") ""))
+      (when (file-directory-p bin)
+        (let* ((path  (or (getenv "PATH") ""))
                (parts (split-string path ":" t)))
           (unless (member bin parts)
             (setenv "PATH" (concat bin ":" path)))))
 
-      ;; LIBRARY_PATH
-      (when candidates
-        (setenv "LIBRARY_PATH"
-                (string-join
-                 (delete-dups
-                  (append candidates
-                          (when-let* ((old (getenv "LIBRARY_PATH")))
-                            (split-string old ":" t))))
-                 ":")))
+      ;; LIBRARY_PATH (libgccjit)
+      (let* ((libgccjit (expand-file-name "opt/libgccjit" brew))
+             (gcc       (expand-file-name "opt/gcc" brew))
+             (candidates
+              (seq-filter
+               #'file-directory-p
+               (list (expand-file-name "lib/gcc/current" libgccjit)
+                     (expand-file-name "lib" libgccjit)
+                     (expand-file-name "lib/gcc/current" gcc)))))
+        (when candidates
+          (setenv "LIBRARY_PATH"
+                  (string-join
+                   (delete-dups
+                    (append candidates
+                            (when-let* ((old (getenv "LIBRARY_PATH")))
+                              (split-string old ":" t))))
+                   ":"))))
 
       ;; CC
-      (when (and bin (file-directory-p bin))
-        (when-let* ((gcc
-                     (car
-                      (seq-filter
-                       #'file-exists-p
-                       (mapcar
-                        (lambda (n)
-                          (expand-file-name (format "gcc-%d" n) bin))
-                        (number-sequence 20 10 -1))))))
-          (setenv "CC" gcc)))))
+      (when-let* ((gcc-bin
+                   (seq-find
+                    #'file-exists-p
+                    (mapcar
+                     (lambda (n)
+                       (expand-file-name (format "gcc-%d" n) bin))
+                     (number-sequence 20 10 -1)))))
+        (setenv "CC" gcc-bin))))
 
-  ;;; Native compilation ---------------------------------------------------------
+  
+  ;;; Native compilation ----------------------------------------------------------
 
   (when (and (boundp 'native-comp-eln-load-path)
              (listp native-comp-eln-load-path))
@@ -800,23 +799,26 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
                   (delq my:d:eln-cache native-comp-eln-load-path))
             native-comp-async-report-warnings-errors 'silent))
 
-  ;;; no-littering ---------------------------------------------------------------
+  
+  ;;; no-littering compatibility -------------------------------------------------
 
   (defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
   (defvar no-littering-var-directory (file-name-as-directory my:d:var))
 
-  ;;; straight.el base -----------------------------------------------------------
+  
+  ;;; straight.el base ------------------------------------------------------------
 
   (setopt straight-base-dir my:d:cache
-          straight-vc-git-default-clone-depth 1
           straight-use-package-by-default t
+          straight-vc-git-default-clone-depth 1
           straight-build-dir
           (format "build-%d.%d" emacs-major-version emacs-minor-version)
           straight-profiles '((nil . "default.el")))
 
-  ;;; Startup speedups -----------------------------------------------------------
+  
+  ;;; Startup performance --------------------------------------------------------
 
-  (defvar core--orig-file-name-handler-alist file-name-handler-alist)
+  (setq core--orig-file-name-handler-alist file-name-handler-alist)
 
   (setq file-name-handler-alist
         (seq-remove
@@ -832,6 +834,7 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 
   (add-hook 'emacs-startup-hook #'core--restore-startup-state)
 
+  
   ;;; Backups / auto-save --------------------------------------------------------
 
   (setq make-backup-files nil
@@ -841,7 +844,8 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
         auto-save-default nil
         auto-save-list-file-prefix nil)
 
-  ;;; Early UI -------------------------------------------------------------------
+  
+  ;;; Early UI defaults ----------------------------------------------------------
 
   (setopt frame-resize-pixelwise t
           frame-inhibit-implied-resize t
@@ -860,11 +864,11 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
   (when (fboundp 'tool-bar-mode)   (tool-bar-mode -1))
   (when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))
 
+  
   ;;; Startup echo ---------------------------------------------------------------
 
-  (let ((u (core--system-username)))
-    (when (stringp u)
-      (setq inhibit-startup-echo-area-message u)))
+  (when-let* ((u (core--login-username)))
+    (setq inhibit-startup-echo-area-message u))
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -878,134 +882,79 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 #+begin_src emacs-lisp
   ;;; init.el --- Main initialization (core) -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;;; Commentary:
-  ;; Entry point for Emacs 30.1+ configuration.
-  ;;
-  ;; - URL state paths (before url.el)
-  ;; - straight.el bootstrap
-  ;; - Early import of shell environment (macOS)
-  ;; - Performance (GCMH / read-process-output-max)
-  ;; - Core built-ins via leaf
-  ;; - Personal overlay loader
-  ;; - Deterministic module entrypoint
+  ;; Entry point for Emacs 30+ configuration.
   ;;
   ;;; Code:
 
-  ;; ---------------------------------------------------------------------------
-  ;; Runtime requirements (do NOT rely on byte-compile)
-  ;; ---------------------------------------------------------------------------
   (require 'subr-x)
   (require 'seq)
   (require 'cl-lib)
 
+  
+  ;;; Internal helpers -----------------------------------------------------------
 
-  ;;; 0) URL state BEFORE url.el is loaded --------------------------------------
+  (defun utils--safe-load-file (file &optional noerror)
+    "Load FILE safely.
+  If NOERROR is non-nil, log instead of raising."
+    (when (and (stringp file) (file-exists-p file))
+      (condition-case err
+          (load file nil 'nomessage)
+        (error
+         (funcall (if noerror #'message #'user-error)
+                  "[load] failed: %s (%s)"
+                  file (error-message-string err))))))
 
-  (setopt url-configuration-directory
-          (or (bound-and-true-p my:d:url)
-              (expand-file-name "url/" user-emacs-directory))
-          url-cookie-file
-          (expand-file-name "cookies" url-configuration-directory)
-          url-history-file
-          (expand-file-name "history" url-configuration-directory)
-          url-cache-directory
-          (expand-file-name "cache" url-configuration-directory))
+  (defalias 'my/safe-load-file #'utils--safe-load-file)
 
-  (dolist (dir (list url-configuration-directory url-cache-directory))
-    (when dir
-      (make-directory dir t)))
+  
+  ;;; 0) URL state BEFORE url.el -------------------------------------------------
 
-  (require 'url) ;; straight bootstrap depends on url.el
+  (defvar core--url-state-dir
+    (file-name-as-directory
+     (or (bound-and-true-p my:d:url)
+         (expand-file-name "url/" user-emacs-directory))))
 
+  (setopt url-configuration-directory core--url-state-dir
+          url-cookie-file (expand-file-name "cookies" core--url-state-dir)
+          url-history-file (expand-file-name "history" core--url-state-dir)
+          url-cache-directory (expand-file-name "cache/" core--url-state-dir))
 
-  ;;; 1) Bootstrap straight.el -------------------------------------------------
+  (dolist (d (list url-configuration-directory url-cache-directory))
+    (make-directory d t))
+
+  (require 'url)
+
+  
+  ;;; 1) Bootstrap straight.el ---------------------------------------------------
 
   (defvar bootstrap-version 7)
 
   (let* ((base (or (bound-and-true-p straight-base-dir)
                    user-emacs-directory))
          (bootstrap-file
-          (expand-file-name
-           "straight/repos/straight.el/bootstrap.el"
-           base)))
+          (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
     (unless (file-exists-p bootstrap-file)
-      (condition-case err
-          (let ((url-request-extra-headers
-                 '(("User-Agent" . "Emacs straight.el bootstrap")))
-                (buf nil))
-            (setq buf
-                  (url-retrieve-synchronously
-                   "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-                   'silent
-                   'inhibit-cookies))
-            (unless (buffer-live-p buf)
-              (user-error "[straight] failed to retrieve install.el"))
-            (with-current-buffer buf
-              (goto-char (point-max))
-              (eval-print-last-sexp)))
-        (error
-         (user-error
-          "[straight] bootstrap failed: %s"
-          (error-message-string err)))))
+      (let ((buf
+             (url-retrieve-synchronously
+              "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+              'silent 'inhibit-cookies)))
+        (unless (buffer-live-p buf)
+          (user-error "[straight] failed to retrieve install.el"))
+        (with-current-buffer buf
+          (goto-char (point-max))
+          (eval-print-last-sexp))))
     (load bootstrap-file nil 'nomessage))
 
+  
+  ;;; 1.1) leaf / org ------------------------------------------------------------
 
-  ;;; 1.5) Import environment early (macOS GUI / daemon safe) ------------------
-
-  (straight-use-package 'exec-path-from-shell)
-
-  (when (memq window-system '(mac ns))
-    (setq exec-path-from-shell-check-startup-files nil
-          exec-path-from-shell-arguments '("-l" "-i"))
-    (exec-path-from-shell-copy-envs
-     '("PATH"
-       "LANG"
-       "PASSWORD_STORE_DIR"
-       "GPG_KEY_ID"
-       "OPENROUTER_API_KEY"
-       "OPENAI_API_KEY"))
-    (exec-path-from-shell-initialize))
-
-
-  ;;; 1.6) Base package installer helper ---------------------------------------
-
-  (defun my/straight-install (packages)
-    "Install PACKAGES via straight-use-package with simple timing/log."
-    (let ((t0 (float-time)))
-      (dolist (pkg packages)
-        (let ((s (float-time)))
-          (condition-case err
-              (progn
-                (straight-use-package pkg)
-                (message "OK  %-18s %4.2fs"
-                         pkg (- (float-time) s)))
-            (error
-             (message "ERR %-18s %4.2fs %s"
-                      pkg (- (float-time) s)
-                      (error-message-string err))))))
-      (message "Total %4.2fs" (- (float-time) t0))))
-
-
-  ;;; 1.7) Base packages -------------------------------------------------------
-
-  (defvar my:bootstrap-packages-base
-    '(leaf
-      leaf-keywords
-      leaf-convert
-      blackout
-      helpful
-      imenu-list
-      hydra)
-    "Base packages required for core configuration.")
-
-  (my/straight-install my:bootstrap-packages-base)
-
-
-  ;;; 1.8) Initialize leaf ----------------------------------------------------
+  (dolist (pkg '(leaf leaf-keywords))
+    (straight-use-package pkg))
 
   (require 'leaf)
 
@@ -1018,17 +967,35 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
   (straight-use-package 'org)
   (require 'org)
 
+  
+  ;;; 1.2) macOS environment -----------------------------------------------------
 
-  ;;; 2) Performance tweaks ---------------------------------------------------
+  (leaf exec-path-from-shell
+    :straight t
+    :when (and (eq system-type 'darwin)
+               (or (daemonp) (memq window-system '(mac ns))))
+    :config
+    (setq exec-path-from-shell-check-startup-files nil
+          exec-path-from-shell-arguments '("-l" "-i"))
+    (exec-path-from-shell-copy-envs
+     '("PATH" "LANG"
+       "PASSWORD_STORE_DIR"
+       "GPG_KEY_ID"
+       "OPENROUTER_API_KEY"
+       "OPENAI_API_KEY"))
+    (exec-path-from-shell-initialize))
+
+  
+  ;;; 2) Performance -------------------------------------------------------------
 
   (defvar core--orig-read-process-output-max
     (and (boundp 'read-process-output-max)
          read-process-output-max))
 
   (when (boundp 'read-process-output-max)
-    (setq read-process-output-max (* 4 1024 1024))) ;; 4 MiB
+    (setq read-process-output-max (* 4 1024 1024)))
 
-  (add-hook 'emacs-startup-hook
+  (add-hook 'after-init-hook
             (lambda ()
               (when (boundp 'read-process-output-max)
                 (setq read-process-output-max
@@ -1038,17 +1005,15 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
     :straight t
     :custom
     ((gcmh-idle-delay . 5)
-     (gcmh-high-cons-threshold . 16777216)) ;; 16 MiB
+     (gcmh-high-cons-threshold . 16777216))
     :config
     (gcmh-mode 1))
 
-
-  ;;; 3) Core built-ins (do NOT duplicate early-init) --------------------------
+  
+  ;;; 3) Core built-ins ----------------------------------------------------------
 
   (leaf emacs
     :straight nil
-    :bind
-    (("M-/" . cape-dabbrev))
     :hook
     ((prog-mode . display-line-numbers-mode))
     :custom
@@ -1061,7 +1026,8 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
      (idle-update-delay . 0.2)
      (ring-bell-function . #'ignore)
      (display-line-numbers-type . 'relative)
-     (frame-title-format . t))
+     (frame-title-format . t)
+     (confirm-kill-emacs . #'y-or-n-p))
     :config
     (when (fboundp 'window-divider-mode)
       (window-divider-mode 1))
@@ -1069,84 +1035,56 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
       (pixel-scroll-precision-mode 1))
     (when (fboundp 'electric-pair-mode)
       (electric-pair-mode 1))
-    (dolist (key '("C-z" "C-x C-z" "C-x C-c" "M-z" "M-m"))
-      (when (lookup-key (current-global-map) (kbd key))
-        (keymap-global-unset key)))
-    (setq confirm-kill-emacs #'y-or-n-p))
+    (dolist (k '("C-z" "C-x C-z" "C-x C-c"))
+      (keymap-global-unset k)))
 
+  
+  ;;; 4) Completion glue ---------------------------------------------------------
 
-  ;;; 4) Modifier keys per OS --------------------------------------------------
+  (leaf cape
+    :straight t
+    :bind (("M-/" . cape-dabbrev)))
+
+  
+  ;;; 5) Modifier keys -----------------------------------------------------------
 
   (leaf my:modifier
     :straight nil
     :config
     (pcase system-type
       ('darwin
-       (setq mac-option-modifier  'meta
+       (setq mac-option-modifier 'meta
              mac-command-modifier 'super
-             mac-control-modifier 'control
-             mac-function-modifier 'hyper))
+             mac-control-modifier 'control))
       ('windows-nt
        (setq w32-lwindow-modifier 'super
-             w32-rwindow-modifier 'super
-             w32-apps-modifier    'hyper))
-      (_ nil)))
+             w32-rwindow-modifier 'super))))
 
+  
+  ;;; 6) Personal overlay --------------------------------------------------------
 
-  ;;; 5) Files and environment ------------------------------------------------
+  (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
+         (personal (expand-file-name "personal/" root))
+         (user (ignore-errors (user-login-name))))
+    (my/safe-load-file (expand-file-name "user.el" personal) t)
+    (when user
+      (my/safe-load-file
+       (expand-file-name (concat user ".el") personal) t)))
 
-  (leaf no-littering
-    :straight t)
+  
+  ;;; 7) Modules entrypoint ------------------------------------------------------
 
-  (when (eq system-type 'darwin)
-    (dolist (path '("/opt/homebrew/bin" "/usr/local/bin"))
-      (when (and (file-directory-p path)
-                 (not (member path exec-path)))
-        (add-to-list 'exec-path path)
-        (unless (and (getenv "PATH")
-                     (string-match-p (regexp-quote path)
-                                     (getenv "PATH")))
-          (setenv "PATH" (concat path ":" (getenv "PATH")))))))
+  (defvar my:modules-extra nil
+    "Extra module list appended by optional layers.")
 
-
-  ;;; 6) Personal file loader -------------------------------------------------
-
-  (defun utils--safe-load-file (file &optional noerror)
-    "Load FILE safely.
-  If NOERROR is non-nil, log instead of raising."
-    (when (and file (file-exists-p file))
-      (condition-case err
-          (load file nil 'nomessage)
-        (error
-         (funcall (if noerror #'message #'user-error)
-                  "[load] failed to load %s: %s"
-                  file (error-message-string err))))))
-
-  (defalias 'my/safe-load-file #'utils--safe-load-file)
-
-  (my/safe-load-file
-   (expand-file-name
-    (concat "personal/" user-login-name ".el")
-    (or (bound-and-true-p my:d)
-        user-emacs-directory))
-   t)
-
-
-  ;;; 7) Modules entrypoint ---------------------------------------------------
-
-  (let* ((root (or (and (boundp 'my:d)
-                        (stringp my:d)
-                        (file-directory-p my:d)
-                        my:d)
-                   user-emacs-directory))
-         (lisp-dir (expand-file-name "lisp" root)))
+  (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
+         (lisp-dir (expand-file-name "lisp/" root)))
     (add-to-list 'load-path lisp-dir)
-    (defvar my:modules-extra nil)
-    (require 'core/custom-ui-extras)
+    (require 'core/custom-ui-extras nil t)
     (require 'modules nil t))
 
-
-  ;;; 8) Startup message ------------------------------------------------------
+  
+  ;;; 8) Startup message ---------------------------------------------------------
 
   (defun core--announce-startup ()
     "Report startup time and GC count."
@@ -1157,12 +1095,9 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 
   (add-hook 'after-init-hook
             (lambda ()
-              (run-with-idle-timer
-               0 nil #'core--announce-startup)))
-
+              (run-with-idle-timer 0 nil #'core--announce-startup)))
 
   (provide 'init)
-
   ;;; init.el ends here
 #+end_src
 
@@ -1348,7 +1283,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; modules.el --- Modular config loader -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -1514,7 +1449,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; core/fixes.el --- Compatibility & hotfix layer -*- lexical-binding: t; -*-
 
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
 
@@ -1599,7 +1534,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; core/general.el --- General settings & keybindings (NO Meow) -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -2110,7 +2045,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; core/tools.el --- Developer & UI helper tools -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -2313,7 +2248,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; core/utils.el --- Core utility helpers -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -2377,7 +2312,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; core/history.el --- Session persistence & autorevert -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: core
@@ -2418,7 +2353,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; core/editing.el --- Editing helpers & UX aids -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: core
@@ -2513,7 +2448,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; core/switches.el --- Unified feature switches (UI/LSP) -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -2823,7 +2758,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; ui-nano-palette.el --- Nano-style palette -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
@@ -2950,7 +2885,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Commentary:
@@ -3037,7 +2972,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; ui-doom-modeline.el --- Doom UI bundle entry -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -3187,7 +3122,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
@@ -3243,7 +3178,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; ui/ui-utils.el --- Treemacs configuration & UI utils -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
@@ -3450,7 +3385,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; completion/completion-corfu.el --- Corfu popup completion module -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -3522,7 +3457,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; orgx/org-core.el --- Org Mode core configuration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: org
@@ -3602,7 +3537,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; orgx/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: org
@@ -3659,7 +3594,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; orgx/org-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: org
@@ -3703,7 +3638,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; orgx/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -3829,7 +3764,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: vcs
@@ -3863,7 +3798,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -3903,7 +3838,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; vcs/vcs-forge.el --- GitHub/GitLab integration via Forge -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: vcs
@@ -4005,7 +3940,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
 ;;; dev-lsp-mode.el --- lsp-mode setup -*- lexical-binding: t; -*-
 ;;
-;; Copyright (c) 2021-2025
+;; Copyright (c) 2021-2026
 ;; Author: YAMASHITA, Takao
 ;; License: GNU GPL v3 or later
 ;;
@@ -4056,7 +3991,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; dev/dev-ai.el --- AI-assisted development -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: dev
@@ -4144,7 +4079,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; dev/dev-term.el --- Terminal integration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: dev
@@ -4250,7 +4185,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: dev
@@ -4300,7 +4235,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: dev
@@ -4354,7 +4289,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; web-core.el --- Treesit & project core -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4405,7 +4340,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; format.el --- Prettier/ESLint via Apheleia -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4446,7 +4381,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4478,7 +4413,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; lisp/dev/sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4512,7 +4447,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4542,7 +4477,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; utils/utils-functions.el --- General utility functions -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4688,7 +4623,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; utils/utils-scratch.el --- Scratch buffer helpers -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4738,7 +4673,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; utils/utils-backup.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4774,7 +4709,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4803,7 +4738,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; utils/search-nav.el --- Project search & navigation -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -4864,7 +4799,7 @@ and is managed by =utils/utils-notes-markdown.el=.
 #+begin_src emacs-lisp
   ;;; utils/utils-notes-markdown.el --- Prose-oriented Markdown notes under Org -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
@@ -5159,7 +5094,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
 #+begin_src emacs-lisp
   ;;; user.el --- Personal configuration -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: personal
