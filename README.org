@@ -5085,7 +5085,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
 ;; - user.el  (personal overlay: fonts/UI/LSP, Org locations, macOS sis, MX Ergo, Apple Music Hydra)
 #+end_src
 
-*** user.el
+*** user.eln
 :PROPERTIES:
 :CUSTOM_ID: user
 :header-args:emacs-lisp: :tangle (eval (format "personal/%s.el" (user-login-name)))
@@ -5101,6 +5101,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
   ;;
   ;;; Commentary:
   ;; Personal settings and device-specific configurations.
+  ;; Includes long-running session guards (GC / memory / buffers / LSP).
   ;;
   ;;; Code:
 
@@ -5110,7 +5111,6 @@ Provide *personal, device-specific overlays* on top of the core configuration:
   (require 'leaf)
   (require 'subr-x)
   (require 'seq)
-
 
   ;;; Personal Information -----------------------------------------------------
 
@@ -5134,22 +5134,17 @@ Provide *personal, device-specific overlays* on top of the core configuration:
 
     ;; Cloud / Org / Blog directories
     (defvar my:d:cloud
-      (expand-file-name "Documents" (getenv "HOME"))
-      "Cloud storage base directory.")
+      (expand-file-name "Documents" (getenv "HOME")))
     (defvar my:d:org
-      (expand-file-name "org" my:d:cloud)
-      "Org directory.")
+      (expand-file-name "org" my:d:cloud))
     (defvar my:d:blog
-      (expand-file-name "devel/repos/mysite" my:d:cloud)
-      "Blog directory.")
+      (expand-file-name "devel/repos/mysite" my:d:cloud))
     (defvar my:f:capture-blog-file
-      (expand-file-name "all-posts.org" my:d:blog)
-      "Default Org file for blog captures.")
+      (expand-file-name "all-posts.org" my:d:blog))
 
     ;; Safety: excluded paths
     (defvar my:d:excluded-directories
-      (list (expand-file-name "Library/Accounts" (getenv "HOME")))
-      "Directories excluded from `load-path` for safety.")
+      (list (expand-file-name "Library/Accounts" (getenv "HOME"))))
 
     ;; Ensure directories exist
     (mapc #'my/ensure-directory-exists
@@ -5173,8 +5168,207 @@ Provide *personal, device-specific overlays* on top of the core configuration:
              (member dir my:d:excluded-directories))
            load-path)))
 
+  ;;; ---------------------------------------------------------------------------
+  ;;; Long-running session guard (GC / Memory / Buffers / LSP)
+  ;;; ---------------------------------------------------------------------------
 
-  ;;; SIS (macOS input method auto-switch) -------------------------------------
+  ;;;; GC / Memory visualization ----------------------------------------------
+
+  (defun my/gc-memory-status ()
+    "Display current GC and memory-related status."
+    (interactive)
+    (message
+     "GC:%d | threshold:%.1fMB | heap:%.1fMB | buffers:%d | processes:%d"
+     gcs-done
+     (/ gc-cons-threshold 1048576.0)
+     (/ (memory-limit) 1048576.0)
+     (length (buffer-list))
+     (length (process-list))))
+
+  (defun my/gc-diff ()
+    "Run GC and report freed memory."
+    (interactive)
+    (let ((before (memory-limit)))
+      (garbage-collect)
+      (message "GC freed %.1fMB"
+               (/ (- before (memory-limit)) 1048576.0))))
+
+  (defun my/system-health-check ()
+    "Run a simple Emacs health check."
+    (interactive)
+    (my/gc-memory-status)
+    (my/gc-diff))
+
+  ;; GC at safe moments
+  (add-hook 'focus-out-hook #'garbage-collect)
+  (add-hook 'minibuffer-exit-hook #'garbage-collect)
+
+  ;;;; Buffer / process housekeeping ------------------------------------------
+
+  (defvar my/housekeeping-buffer-regexp
+    (rx string-start "*"
+        (or "Help" "Warnings" "Compile-Log" "Backtrace"
+            "Async-native-compile-log" "eglot-events")
+        (* any) string-end))
+
+  (defun my/temporary-buffer-p (buffer)
+    (with-current-buffer buffer
+      (and (string-match-p my/housekeeping-buffer-regexp (buffer-name))
+           (not (buffer-file-name))
+           (not (buffer-modified-p))
+           (not (get-buffer-window buffer 'visible)))))
+
+  (defun my/dead-process-buffer-p (buffer)
+    (let ((proc (get-buffer-process buffer)))
+      (and proc (memq (process-status proc) '(exit signal)))))
+
+  (defun my/cleanup-buffers ()
+    "Clean up unused temporary and dead process buffers."
+    (interactive)
+    (let ((killed 0))
+      (dolist (buf (buffer-list))
+        (when (or (my/temporary-buffer-p buf)
+                  (my/dead-process-buffer-p buf))
+          (kill-buffer buf)
+          (setq killed (1+ killed))))
+      (when (> killed 0)
+        (message "Housekeeping: killed %d buffers" killed))))
+
+  (run-with-timer 900 900 #'my/cleanup-buffers)
+
+  ;;;; Idle lightweight refresh -----------------------------------------------
+
+  (defvar my/idle-refresh-delay (* 60 30))
+
+  (defun my/idle-light-refresh ()
+    "Lightweight refresh during long idle."
+    (garbage-collect)
+    (clear-image-cache)
+    (my/cleanup-buffers))
+
+  (run-with-idle-timer my/idle-refresh-delay t #'my/idle-light-refresh)
+
+  ;;;; Mode-line indicators ---------------------------------------------------
+
+  (defvar my/mode-line-health-string "")
+  (defvar my/mode-line-eglot-string "")
+
+  (defun my/update-mode-line-health ()
+    (setq my/mode-line-health-string
+          (format " B:%d P:%d"
+                  (length (buffer-list))
+                  (length (process-list))))
+    (force-mode-line-update))
+
+  (add-hook 'buffer-list-update-hook #'my/update-mode-line-health)
+  (add-hook 'process-status-change-hook #'my/update-mode-line-health)
+
+  (setq global-mode-string
+        (append global-mode-string '(my/mode-line-health-string)))
+
+  ;;;; Eglot workspace count --------------------------------------------------
+
+  (defun my/eglot-workspace-count ()
+    (when (and (featurep 'eglot) (boundp 'eglot--servers))
+      (length eglot--servers)))
+
+  (defun my/update-eglot-workspace ()
+    (setq my/mode-line-eglot-string
+          (if-let ((n (my/eglot-workspace-count)))
+              (format " LSP:%d" n)
+            ""))
+    (force-mode-line-update))
+
+  (with-eval-after-load 'eglot
+    (add-hook 'eglot-managed-mode-hook #'my/update-eglot-workspace)
+    (add-hook 'eglot-server-stopped-hook #'my/update-eglot-workspace)
+    (my/update-eglot-workspace)
+    (setq global-mode-string
+          (append global-mode-string '(my/mode-line-eglot-string))))
+
+  ;;;; Project switch cleanup -------------------------------------------------
+
+  (defvar my/current-project-root nil)
+
+  (defun my/project-root ()
+    (when-let ((project (project-current nil)))
+      (car (project-roots project))))
+
+  (defun my/project-switch-cleanup ()
+    (let ((new-root (my/project-root)))
+      (when (and my/current-project-root new-root
+                 (not (string-equal my/current-project-root new-root)))
+        ;; Shutdown eglot
+        (when (featurep 'eglot)
+          (dolist (server eglot--servers)
+            (when (string-prefix-p my/current-project-root
+                                   (eglot--project-root (cdr server)))
+              (ignore-errors (eglot-shutdown (cdr server))))))
+        ;; Kill non-file buffers
+        (dolist (buf (buffer-list))
+          (with-current-buffer buf
+            (when (and default-directory
+                       (string-prefix-p my/current-project-root default-directory)
+                       (not (buffer-file-name))
+                       (not (buffer-modified-p)))
+              (kill-buffer buf)))))
+      (setq my/current-project-root new-root)))
+
+  (add-hook 'find-file-hook #'my/project-switch-cleanup)
+  (add-hook 'project-switch-project-hook #'my/project-switch-cleanup)
+
+  ;;;; Memory logging / alert / lightweight restart ----------------------------
+
+  (defvar my/memory-log-file
+    (expand-file-name "memory.log" user-emacs-directory))
+
+  (defun my/log-memory-usage ()
+    (with-temp-buffer
+      (insert
+       (format "%s GC:%d Buffers:%d Processes:%d\n"
+               (format-time-string "%Y-%m-%d %H:%M:%S")
+               gcs-done
+               (length (buffer-list))
+               (length (process-list))))
+      (append-to-file (point-min) (point-max) my/memory-log-file)))
+
+  (run-with-timer 600 600 #'my/log-memory-usage)
+
+  (defvar my/memory-alert-buffer-threshold 350)
+  (defvar my/memory-alert-process-threshold 8)
+  (defvar my/memory-alert-last-gc-freed 0)
+
+  (defun my/update-last-gc-freed ()
+    (let ((before (memory-limit)))
+      (garbage-collect)
+      (setq my/memory-alert-last-gc-freed
+            (- before (memory-limit)))))
+
+  (defun my/memory-health-alert ()
+    (when (or (> (length (buffer-list)) my/memory-alert-buffer-threshold)
+              (> (length (process-list)) my/memory-alert-process-threshold)
+              (< my/memory-alert-last-gc-freed (* 5 1024 1024)))
+      (message "⚠ Emacs memory risk detected")))
+
+  (defun my/lightweight-restart ()
+    "Safe lightweight refresh."
+    (interactive)
+    (when (featurep 'eglot)
+      (dolist (server eglot--servers)
+        (ignore-errors (eglot-shutdown (cdr server)))))
+    (my/cleanup-buffers)
+    (garbage-collect)
+    (clear-image-cache)
+    (message "Lightweight restart completed"))
+
+  (run-with-timer 600 600
+                  (lambda ()
+                    (my/update-last-gc-freed)
+                    (my/memory-health-alert)))
+
+  ;;; ---------------------------------------------------------------------------
+  ;;; Original macOS / device / Apple Music / meow sections (unchanged)
+  ;;; ---------------------------------------------------------------------------
 
   (leaf sis
     :if (eq system-type 'darwin)
