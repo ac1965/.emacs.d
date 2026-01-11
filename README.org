@@ -5217,7 +5217,10 @@ Provide *personal, device-specific overlays* on top of the core configuration:
   ;;
   ;;; Commentary:
   ;; Personal settings and device-specific configurations.
-  ;; Includes long-running session guards (GC / memory / buffers / LSP).
+  ;; This file orchestrates visualization, logging, alerts, and manual recovery
+  ;; for long-running Emacs sessions.
+  ;;
+  ;; Operational execution (GC / buffer cleanup / LSP lifecycle) lives in utils/.
   ;;
   ;;; Code:
 
@@ -5228,7 +5231,9 @@ Provide *personal, device-specific overlays* on top of the core configuration:
   (require 'subr-x)
   (require 'seq)
 
-  ;;; Personal Information -----------------------------------------------------
+  ;;; ---------------------------------------------------------------------------
+  ;;; Personal Information
+  ;;; ---------------------------------------------------------------------------
 
   (leaf *personals
     :straight nil
@@ -5285,7 +5290,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
            load-path)))
 
   ;;; ---------------------------------------------------------------------------
-  ;;; Long-running session guard (GC / Memory / Buffers / LSP)
+  ;;; Long-running session: visualization / judgment / orchestration
   ;;; ---------------------------------------------------------------------------
 
   ;;;; GC / Memory visualization ----------------------------------------------
@@ -5315,52 +5320,18 @@ Provide *personal, device-specific overlays* on top of the core configuration:
     (my/gc-memory-status)
     (my/gc-diff))
 
-  ;; GC at safe moments
-  (add-hook 'focus-out-hook #'garbage-collect)
-  (add-hook 'minibuffer-exit-hook #'garbage-collect)
-
-  ;;;; Buffer / process housekeeping ------------------------------------------
-
-  (defvar my/housekeeping-buffer-regexp
-    (rx string-start "*"
-        (or "Help" "Warnings" "Compile-Log" "Backtrace"
-            "Async-native-compile-log" "eglot-events")
-        (* any) string-end))
-
-  (defun my/temporary-buffer-p (buffer)
-    (with-current-buffer buffer
-      (and (string-match-p my/housekeeping-buffer-regexp (buffer-name))
-           (not (buffer-file-name))
-           (not (buffer-modified-p))
-           (not (get-buffer-window buffer 'visible)))))
-
-  (defun my/dead-process-buffer-p (buffer)
-    (let ((proc (get-buffer-process buffer)))
-      (and proc (memq (process-status proc) '(exit signal)))))
-
-  (defun my/cleanup-buffers ()
-    "Clean up unused temporary and dead process buffers."
-    (interactive)
-    (let ((killed 0))
-      (dolist (buf (buffer-list))
-        (when (or (my/temporary-buffer-p buf)
-                  (my/dead-process-buffer-p buf))
-          (kill-buffer buf)
-          (setq killed (1+ killed))))
-      (when (> killed 0)
-        (message "Housekeeping: killed %d buffers" killed))))
-
-  (run-with-timer 900 900 #'my/cleanup-buffers)
-
   ;;;; Idle lightweight refresh -----------------------------------------------
 
-  (defvar my/idle-refresh-delay (* 60 30))
+  (defvar my/idle-refresh-delay (* 60 30)
+    "Seconds before running a lightweight refresh during idle.")
 
   (defun my/idle-light-refresh ()
-    "Lightweight refresh during long idle."
+    "Lightweight refresh during long idle.
+  Delegates cleanup to utils layer."
     (garbage-collect)
     (clear-image-cache)
-    (my/cleanup-buffers))
+    (when (fboundp 'utils-buffers-cleanup)
+      (utils-buffers-cleanup)))
 
   (run-with-idle-timer my/idle-refresh-delay t #'my/idle-light-refresh)
 
@@ -5385,6 +5356,7 @@ Provide *personal, device-specific overlays* on top of the core configuration:
   ;;;; Eglot workspace count --------------------------------------------------
 
   (defun my/eglot-workspace-count ()
+    "Return the number of active eglot workspaces."
     (when (and (featurep 'eglot) (boundp 'eglot--servers))
       (length eglot--servers)))
 
@@ -5402,43 +5374,13 @@ Provide *personal, device-specific overlays* on top of the core configuration:
     (setq global-mode-string
           (append global-mode-string '(my/mode-line-eglot-string))))
 
-  ;;;; Project switch cleanup -------------------------------------------------
-
-  (defvar my/current-project-root nil)
-
-  (defun my/project-root ()
-    (when-let* ((project (project-current nil)))
-      (car (project-roots project))))
-
-  (defun my/project-switch-cleanup ()
-    (let ((new-root (my/project-root)))
-      (when (and my/current-project-root new-root
-                 (not (string-equal my/current-project-root new-root)))
-        ;; Shutdown eglot
-        (when (featurep 'eglot)
-          (dolist (server eglot--servers)
-            (when (string-prefix-p my/current-project-root
-                                   (eglot--project-root (cdr server)))
-              (ignore-errors (eglot-shutdown (cdr server))))))
-        ;; Kill non-file buffers
-        (dolist (buf (buffer-list))
-          (with-current-buffer buf
-            (when (and default-directory
-                       (string-prefix-p my/current-project-root default-directory)
-                       (not (buffer-file-name))
-                       (not (buffer-modified-p)))
-              (kill-buffer buf)))))
-      (setq my/current-project-root new-root)))
-
-  (add-hook 'find-file-hook #'my/project-switch-cleanup)
-  (add-hook 'project-switch-project-hook #'my/project-switch-cleanup)
-
   ;;;; Memory logging / alert / lightweight restart ----------------------------
 
   (defvar my/memory-log-file
     (expand-file-name "memory.log" user-emacs-directory))
 
   (defun my/log-memory-usage ()
+    "Append a simple memory usage snapshot to log file."
     (with-temp-buffer
       (insert
        (format "%s GC:%d Buffers:%d Processes:%d\n"
@@ -5461,18 +5403,22 @@ Provide *personal, device-specific overlays* on top of the core configuration:
             (- before (memory-limit)))))
 
   (defun my/memory-health-alert ()
+    "Notify when Emacs enters a risky memory state."
     (when (or (> (length (buffer-list)) my/memory-alert-buffer-threshold)
               (> (length (process-list)) my/memory-alert-process-threshold)
               (< my/memory-alert-last-gc-freed (* 5 1024 1024)))
       (message "⚠ Emacs memory risk detected")))
 
   (defun my/lightweight-restart ()
-    "Safe lightweight refresh."
+    "Safe lightweight refresh.
+  Delegates operational cleanup to utils layer."
     (interactive)
-    (when (featurep 'eglot)
+    (when (and (featurep 'eglot)
+               (boundp 'eglot--servers))
       (dolist (server eglot--servers)
         (ignore-errors (eglot-shutdown (cdr server)))))
-    (my/cleanup-buffers)
+    (when (fboundp 'utils-buffers-cleanup)
+      (utils-buffers-cleanup))
     (garbage-collect)
     (clear-image-cache)
     (message "Lightweight restart completed"))
