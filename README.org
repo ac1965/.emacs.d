@@ -904,6 +904,8 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
   (require 'seq)
   (require 'cl-lib)
 
+  ;; ;; Enable debugger on error (temporary)
+  ;; (setq debug-on-error t)
 
   ;;; Internal helpers -----------------------------------------------------------
 
@@ -3532,18 +3534,43 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf sql
-    :straight nil)
-
   (leaf org-journal :straight t
     :custom ((org-journal-dir . my:d:org-journal)))
 
   (leaf org-roam :straight t
     :custom ((org-roam-directory . my:d:org-roam))
-    :hook (after-init-hook . org-roam-db-autosync-mode)
+    ;; NOTE: do NOT start autosync immediately at after-init; it can race with
+    ;; iCloud/network FS and cause read timeouts on large/remote files.
     :config
     (setq org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
-    (org-roam-db-autosync-mode))
+
+    ;; 1) Guard: never crash on file read timeout during hashing
+    (defun orgx--org-roam-file-hash-guard (orig file)
+      "Guard `org-roam-db--file-hash' against file read timeouts.
+  Return nil on failure to skip the problematic file."
+      (condition-case err
+          (funcall orig file)
+        (file-error
+         (message "[org-roam] skip hash (file-error): %s (%s)"
+                  file (error-message-string err))
+         nil)
+        (error
+         (message "[org-roam] skip hash (error): %s (%s)"
+                  file (error-message-string err))
+         nil)))
+
+    (with-eval-after-load 'org-roam
+      ;; internal function, but advice is narrow and defensive
+      (when (fboundp 'org-roam-db--file-hash)
+        (advice-add 'org-roam-db--file-hash :around #'orgx--org-roam-file-hash-guard)))
+
+    ;; 2) Delay autosync: start after Emacs becomes idle
+    (run-with-idle-timer
+     5 nil
+     (lambda ()
+       (when (fboundp 'org-roam-db-autosync-mode)
+         (org-roam-db-autosync-mode 1)
+         (message "[org-roam] autosync enabled (delayed)")))))
 
   (leaf org-download :straight t
     :custom ((org-download-image-dir . my:d:org-pictures)))
