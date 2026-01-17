@@ -1107,6 +1107,7 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
             (lambda ()
               (run-with-idle-timer 0 nil #'core--announce-startup)))
 
+
   (provide 'init)
   ;;; init.el ends here
 #+end_src
@@ -1577,8 +1578,8 @@ Notes:
   This function delegates actual work to utils modules and must remain safe."
     (when core-session-enable-p
       ;; GC helpers
-      (when (fboundp 'utils-gc--safe-collect)
-        (utils-gc--safe-collect))
+      (when (fboundp 'utils-gc--collect)
+        (utils-gc--collect))
 
       ;; Buffer housekeeping
       (when (fboundp 'utils-buffers-cleanup)
@@ -5319,7 +5320,7 @@ Notes:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf utils-gc
+  (leaf nil
     :straight nil
     :init
     (defcustom utils-gc-enable-p t
@@ -5327,14 +5328,18 @@ Notes:
       :type 'boolean
       :group 'utils)
 
-    (defun utils-gc--safe-collect ()
-      "Run garbage collection safely."
-      (when utils-gc-enable-p
-        (garbage-collect)))
+
+(defun utils-gc--collect ()
+  "Run garbage collection (best-effort).
+This function never signals errors."
+  (when utils-gc-enable-p
+    (condition-case _err
+        (garbage-collect)
+      (error nil))))
 
     ;; Run GC at safe moments
-    (add-hook 'focus-out-hook #'utils-gc--safe-collect)
-    (add-hook 'minibuffer-exit-hook #'utils-gc--safe-collect))
+    (add-hook 'focus-out-hook #'utils-gc--collect)
+    (add-hook 'minibuffer-exit-hook #'utils-gc--collect))
 
   (provide 'utils/utils-gc)
   ;;; utils/utils-gc.el ends here
@@ -5367,7 +5372,7 @@ Notes:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf utils-buffers
+  (leaf nil
     :straight nil
     :init
     (defcustom utils-buffers-enable-p t
@@ -5438,7 +5443,7 @@ Notes:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf utils-lsp
+  (leaf nil
     :straight nil
     :init
     (defcustom utils-lsp-enable-p t
@@ -5866,7 +5871,7 @@ Notes:
     ;; AppleScript helpers
     ;; -------------------------------------------------------------------------
 
-    (defun my/apple-music-osascript-async (script &optional callback)
+    (defun my/apple-music--osascript-async (script &optional callback)
       "Run AppleScript SCRIPT asynchronously.
   If CALLBACK is non-nil, call it with the trimmed output."
       (let* ((proc-name "apple-music-async")
@@ -5884,7 +5889,7 @@ Notes:
                           (string-trim (buffer-string))))
                (kill-buffer (process-buffer process))))))))
 
-    (defun my/apple-music-osascript-sync (script)
+    (defun my/apple-music--osascript-sync (script)
       "Run AppleScript SCRIPT synchronously and return trimmed output."
       (string-trim
        (shell-command-to-string
@@ -5898,21 +5903,21 @@ Notes:
     (defun my/apple-music-play-pause ()
       "Toggle play/pause in Apple Music."
       (interactive)
-      (my/apple-music-osascript-async
+      (my/apple-music--osascript-async
        "tell application \"Music\" to playpause"))
 
     ;;;###autoload
     (defun my/apple-music-next-track ()
       "Skip to the next track in Apple Music."
       (interactive)
-      (my/apple-music-osascript-async
+      (my/apple-music--osascript-async
        "tell application \"Music\" to next track"))
 
     ;;;###autoload
     (defun my/apple-music-previous-track ()
       "Return to the previous track in Apple Music."
       (interactive)
-      (my/apple-music-osascript-async
+      (my/apple-music--osascript-async
        "tell application \"Music\" to previous track"))
 
     ;;;###autoload
@@ -5920,7 +5925,7 @@ Notes:
       "Display current track information."
       (interactive)
       (message "%s"
-               (my/apple-music-osascript-sync
+               (my/apple-music--osascript-sync
                 "tell application \"Music\" \
   to (get name of current track) & \" — \" & (get artist of current track) \
   & \" [\" & (get album of current track) & \"]\"")))
@@ -5928,7 +5933,7 @@ Notes:
     (defun my/apple-music-get-playlists ()
       "Return a list of playlist names."
       (split-string
-       (my/apple-music-osascript-sync
+       (my/apple-music--osascript-sync
         "tell application \"Music\" to get name of playlists")
        ", "))
 
@@ -5939,7 +5944,7 @@ Notes:
        (list (completing-read
               "Playlist: "
               (my/apple-music-get-playlists))))
-      (my/apple-music-osascript-async
+      (my/apple-music--osascript-async
        (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
 
     ;; -------------------------------------------------------------------------
