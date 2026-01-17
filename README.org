@@ -1,4 +1,3 @@
-
 # -*- mode: org; coding: utf-8; -*-
 #+TITLE: Modern Emacs Configuration
 #+AUTHOR: YAMASHITA, Takao
@@ -34,76 +33,25 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 :CUSTOM_ID: conventions
 :END:
 
-- ✅ `lexical-binding: t` is *mandatory*. The `(provide 'FEATURE)` *must match the file name* (e.g., `lisp/core.el` → `(provide 'core)`).
-- 📚 Rely *only on official documentation*. Do *not* use private/undocumented APIs or speculative future behavior.
-- 🌿 In every `leaf` form, group settings under *`:straight` / `:bind` / `:hook` / `:custom`* (in this order).
-- 📦 For built-in packages, *always* specify *`:straight nil`*.
-- 🧠 *Emacs 31+ Compatibility Policy*
-  - This configuration targets *Emacs 30+* and proactively follows
-    compatibility guidance for *Emacs 31 and later*.
-  - Obsolete macros and APIs are avoided even if they still work.
-    In particular:
-    - Use `if-let*`, `when-let*`, or `and-let*` instead of deprecated `if-let` / `when-let`.
-  - Warnings emitted by newer Emacs versions are treated as *actionable signals*, not ignored noise.
-  - Code is written to remain warning-free under `byte-compile-warnings` on the latest stable Emacs.
-  - See also: [[#modular-loader-and-core-suite][Modular Loader & Core/Utils design]] for how this policy is applied in practice.
+- ✅ `lexical-binding: t` is *mandatory* for all files.
+- ✅ The `(provide 'FEATURE)` symbol *must match the file’s logical feature name*
+  (usually derived from the file path).
+- 📦 Built-in packages MUST explicitly declare `:straight nil`.
+- 🌿 Each `leaf` form follows a stable, readable structure:
+  `:straight` → `:bind` → `:hook` → `:custom` → `:config`
+- 📚 Only documented, public APIs are used.
+  - Private, internal, or speculative APIs are intentionally avoided.
+- 🧠 *Compatibility & Forward-Safety Policy*
+  - This configuration targets **Emacs 30+**.
+  - Code is written with **Emacs 31 and later** in mind.
+  - Obsolete APIs are avoided even if still functional.
+    - Prefer `if-let*`, `when-let*`, `and-let*` over deprecated forms.
+  - New compiler or runtime warnings are treated as *actionable signals*.
+  - The codebase aims to remain warning-free under the latest stable Emacs
+    with default `byte-compile-warnings`.
 
-*** ✅ Per-module Checklist
-- [ ] File header includes `-*- lexical-binding: t; -*-`
-- [ ] `(provide '…)` matches the file’s feature name
-- [ ] `leaf` keywords ordered: `:straight` → `:bind` → `:hook` → `:custom`
-- [ ] Built-ins use `:straight nil`
-- [ ] `;;;###autoload` only for public commands (never for internal `--` helpers)
-
-*** 🧱 Header Template
-#+begin_src emacs-lisp
-  ;;; module.el --- description -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;;; Commentary:
-  ;; What it does: <short summary>
-  ;; Category: <core|ui|completion|orgx|dev|vcs|utils>
-  ;;
-  ;;; Code:
-
-  ;; ... code ...
-
-  (provide 'module)
-  ;;; module.el ends here
-#+end_src
-
-*** 🌿 Minimal `leaf` Skeleton
-#+begin_src emacs-lisp
-  (leaf some-package
-    :straight t                           ;; Use :straight nil for built-in packages
-    :bind (("C-c x" . some-package-do))   ;; Keybindings
-    :hook ((prog-mode . some-package-mode)) ;; Hooks
-    :custom ((some-package-option . t)))  ;; Custom options
-#+end_src
-
-*** 🧪 Naming Mini-Examples
-#+begin_src emacs-lisp
-  (defvar ui-modeline-map (make-sparse-keymap)
-    "Keymap for the modeline.")                      ;; -map suffix for keymaps
-
-  (defun ui--on-window-config-changed ()
-    "Internal hook handler for window configuration changes.")  ;; -- for internal helpers
-
-  (defun utils-temp-file-p (path)
-    "Return non-nil if PATH looks like a temporary file.")      ;; -p suffix for predicates
-#+end_src
-
-*** 🧭 Do / Don’t Quick Reference
-| ✅ Do                                         | ❌ Don’t                                  |
-|----------------------------------------------+-------------------------------------------|
-| Match `provide` name to file name            | Mismatch `provide` and file name          |
-| Keep `leaf` sections in fixed order          | Scatter `:bind` / `:hook` randomly        |
-| Use `:straight nil` for built-ins            | Set `:straight t` for built-ins           |
-| Add `;;;###autoload` only to public commands | Add autoloads to internal `--` functions  |
-| Verify against official docs                 | Depend on private/unstable APIs           |
+See also: [[#modular-loader-and-core-suite][Modular Loader & Core/Utils design]]
+for how these rules are enforced structurally.
 
 ** Installation
 :PROPERTIES:
@@ -597,12 +545,14 @@ graph TD
 :CUSTOM_ID: structure
 :END:
 
-This Emacs configuration is modular and organized for *Emacs 30+*.
+This Emacs configuration is *modular by design* and targets **Emacs 30+**.
+Each layer has a clearly defined responsibility to keep behavior predictable,
+UI replaceable, and personal customizations isolated.
 
-- `early-init.el` → startup optimizations & directories
-- `init.el` → package bootstrap & base settings
-- `lisp/` → modular configs (core, ui, completion, org, dev, vcs, utils)
-- `personal/` → user-specific settings
+- =early-init.el= → earliest bootstrap (performance, paths, UI defaults)
+- =init.el=       → package bootstrap, global defaults, module entrypoint
+- =lisp/=         → shared, versioned modules (core, ui, completion, orgx, dev, vcs, utils)
+- =personal/=     → user- and device-specific overlays (not shared policy)
 
 ** Core Bootstrap — early-init.el & init.el
 :PROPERTIES:
@@ -610,60 +560,122 @@ This Emacs configuration is modular and organized for *Emacs 30+*.
 :END:
 
 *** Overview
+
 **** Purpose
-Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular initialization and sets safe defaults for directories, performance, package management (*straight.el + leaf*), and UI. The second stage (`init.el`) finishes bootstrapping (*straight.el*), imports the login environment on macOS, applies performance knobs, and exposes a deterministic module entrypoint.
+Provide a *clean, fast, and conservative* bootstrap sequence that prepares
+Emacs before regular initialization.
+
+The bootstrap is split into two explicit stages:
+
+- =early-init.el= runs **before package initialization** and establishes
+  directories, performance guards, and flicker-free UI defaults.
+- =init.el= completes package bootstrapping (*straight.el + leaf*), imports
+  the login environment on macOS, applies runtime performance knobs, and
+  exposes a deterministic module loader entrypoint.
+
+This separation keeps early startup minimal and infrastructure-focused,
+while deferring all feature logic to later stages.
 
 **** What this configuration does
-- Disables `package.el` early (we use *straight.el* and *leaf* exclusively).
-- Speeds up startup (temporarily widen GC and clear `file-name-handler-alist`, then restore).
-- Normalizes state locations under `.cache/`, `.etc/`, `.var/` (incl. *native-compile*).
-- Prefers *Homebrew* toolchain on macOS (PATH, `LIBRARY_PATH`, and `CC` → `gcc-N`).
-- Turns *backupsd* and classic *auto-save* off early (you can use `auto-save-visited-mode` later).
-- Applies early UI defaults to avoid flicker (no tool/menu/scroll bars, predictable frames).
-- Bootstraps *straight.el* robustly (network download guarded with helpful error messages).
-- Loads a minimal base of packages, initializes *leaf* keywords, and enables core performance tweaks (GCMH, `read-process-output-max`).
-- Sets URL state paths *before* `url.el` loads (so *straight* inherits them).
-- Provides a safe “personal override” loader (`personal/<user>.el`) and a `modules.el` entrypoint.
+
+- Disables =package.el= early; *straight.el* and *leaf* are the only package managers.
+- Speeds up startup by temporarily widening GC limits and clearing
+  =file-name-handler-alist=, then restoring sane runtime values.
+- Normalizes all state under predictable directories:
+  =.cache/=, =.etc/=, and =.var/= (including native-comp artifacts).
+- On macOS, prefers the Homebrew toolchain by preparing PATH-related variables
+  (e.g. =PATH=, =LIBRARY_PATH=, =CC=) *before* native compilation is triggered.
+- Disables classic backups and auto-save early; higher-level modules may enable
+  =auto-save-visited-mode= later in a controlled way.
+- Applies early UI defaults (no menu/tool/scroll bars, stable frame parameters)
+  to avoid startup flicker.
+- Bootstraps *straight.el* robustly, with guarded network access and explicit
+  error reporting.
+- Initializes *leaf* and its keywords, and enables conservative performance
+  helpers (e.g. GCMH, =read-process-output-max=).
+- Sets URL-related state paths *before* =url.el= loads, so downstream consumers
+  (including *straight*) inherit them.
+- Provides two stable entrypoints:
+  - a per-user personal override file (=personal/<login-name>.el=)
+  - a shared module loader (=lisp/modules.el=)
+
+**** Reproducibility Note (Personal Tangling)
+
+This configuration prioritizes reproducibility for all *shared* layers:
+
+- =early-init.el=
+- =init.el=
+- =lisp/=
+
+Personal files are intentionally tangled to user-specific paths:
+
+: personal/<login-name>.el
+
+This design explicitly trades strict reproducibility for:
+- Per-user isolation
+- Safe multi-user sharing of the same repository
+- Zero-conflict personal overrides
+
+This behavior is intentional and by design.
 
 **** Module map (where things live)
-|File|Role|
-|----+----|
-| =early-init.el= |Pre-init bootstrap (dirs, performance, `package.el` off, macOS toolchain, early UI)|
-| =init.el=      |Main init (URL state, straight bootstrap, env import, performance knobs, module loader)|
+
+| File            | Role |
+|-----------------+------|
+| =early-init.el= | Pre-init bootstrap (dirs, performance guards, package.el off, macOS toolchain, early UI) |
+| =init.el=       | Main init (URL state, straight bootstrap, env import, runtime knobs, module loader) |
 
 **** How it works (boot flow)
-1. Emacs loads *early-init.el*:
-   - Paths/dirs are established, `package.el` is disabled, GC/file-handlers are relaxed,
-     UI is quieted, and macOS toolchain variables are prepared.
-2. Emacs loads *init.el*:
-   - URL state directories are set *before* `url.el`, then *straight.el* is bootstrapped.
-   - On macOS GUI/daemon, the login environment is imported via *exec-path-from-shell*.
-   - *leaf* is initialized and a few base packages are ensured.
-   - Performance knobs (GCMH, `read-process-output-max`) are applied and later restored.
-   - A per-user personal file is safely loaded, and `modules.el` acts as the entrypoint.
-3. After init, a concise startup message is printed (time + GC count).
+
+1. Emacs loads =early-init.el=:
+   - Directory paths are established.
+   - =package.el= is disabled.
+   - GC and file-handler pressure is relaxed.
+   - Early UI defaults are applied.
+   - macOS toolchain variables are prepared when applicable.
+
+2. Emacs loads =init.el=:
+   - URL state directories are set *before* =url.el=.
+   - *straight.el* is bootstrapped.
+   - On macOS GUI/daemon sessions, the login environment is imported.
+   - *leaf* is initialized and a minimal base of packages is ensured.
+   - Runtime performance knobs (GCMH, IO buffers) are applied.
+   - A per-user personal file is loaded safely.
+   - =modules.el= is required as the canonical feature entrypoint.
+
+3. After initialization completes, a concise startup summary
+   (elapsed time and GC count) is printed.
 
 **** Key settings (reference)
-- =package-enable-at-startup= :: =nil= — rely on *straight.el*.
-- =straight-base-dir= :: =.cache/= under your config base.
-- =native-comp-eln-load-path= :: Uses =.cache/eln-cache= to keep artifacts tidy.
-- =read-process-output-max= :: Temporarily raised to 4 MiB for better LSP/IO throughput.
-- =gcmh-high-cons-threshold= :: 16 MiB; =gcmh-mode= on for smoother GC behavior.
+
+- =package-enable-at-startup= :: =nil= — rely exclusively on *straight.el*.
+- =straight-base-dir= :: Located under =.cache/= to keep the config root clean.
+- =native-comp-eln-load-path= :: Centralized under =.cache/eln-cache=.
+- =read-process-output-max= :: Temporarily raised (4 MiB) for better LSP/IO throughput.
+- =gcmh-high-cons-threshold= :: 16 MiB; =gcmh-mode= enabled for smoother long sessions.
 
 **** Usage tips
-- Keep customization out of `early-init.el`—treat it as infrastructure. Put user-level
-  behaviors into modules loaded from `init.el` (via `modules.el`) or `personal/<user>.el`.
-- If you install `gcc`/`libgccjit` via Homebrew after Emacs is running, restart Emacs to
-  pick up `LIBRARY_PATH`/`CC` changes for native compilation.
-- To rehome all artifacts, move the config directory and Emacs will regenerate `.cache/`, `.etc/`, and `.var/`.
+
+- Treat =early-init.el= as infrastructure only; avoid user behavior or feature logic.
+- Put shared behavior in modules loaded via =modules.el=.
+- Put identity, device-specific glue, and workflow integrations in
+  =personal/<login-name>.el= or related personal modules.
+- After installing or upgrading Homebrew toolchains, restart Emacs so native
+  compilation sees updated paths.
+- To relocate the entire setup, move the config directory; Emacs will regenerate
+  =.cache/=, =.etc/=, and =.var/= automatically.
 
 **** Troubleshooting
-- *“Native compilation can’t find libgccjit on macOS”* → Ensure Homebrew’s
-  `opt/libgccjit` exists and Emacs sees `LIBRARY_PATH`. Thais early-init sets it if present.
-- *“Straight bootstrap failed”* → Network hiccup during `url-retrieve-synchronously`.
-  Re-run; the code surfaces a clear `[straight] bootstrap failed: ...` message.
-- *“Inhibit startup echo warning”* → We set `inhibit-startup-echo-area-message` to your
-  real user name string to satisfy Emacs’ type constraint.
+
+- *“Native compilation can’t find libgccjit on macOS”* →
+  Ensure Homebrew’s =libgccjit= is installed and visible. The early bootstrap
+  prepares =LIBRARY_PATH= when possible.
+- *“Straight bootstrap failed”* →
+  A transient network issue during =url-retrieve-synchronously=.
+  Re-run; failures are reported with a clear =[straight] bootstrap failed= message.
+- *“Inhibit startup echo warning”* →
+  =inhibit-startup-echo-area-message= is set to the actual user name string
+  to satisfy Emacs’ type requirements.
 
 *** early-init.el
 :PROPERTIES:
@@ -1116,91 +1128,119 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
 :PROPERTIES:
 :CUSTOM_ID: modular-loader-and-core-suite
 :END:
+
 *** Overview
+
 **** Purpose
-Provide a *deterministic, modular Emacs 30+ configuration* that is:
-- *Composable*: modules live under =lisp/= and load in a fixed order.
-- *Selectable*: enable/skip modules and switch *UI* and *LSP* backends at runtime.
-- *Low-noise*: route Customize output to =.etc/custom.el=; keep writable state under =.var/=.
-- *Forward-compatible*: proactively follows *Emacs 31+ compatibility guidance*
-  (see [[#conventions][Coding Rules]]), avoiding obsolete macros/APIs even when
-  they are still functional.
+Provide a *deterministic and maintainable Emacs 30+ configuration* with a strict
+separation of concerns:
+
+- *Composable*: all shared modules live under =lisp/= and are loaded in a fixed,
+  explicit order.
+- *Selectable*: UI and LSP backends are resolved centrally and can be switched
+  without cross-module edits.
+- *Low-noise*: Customize output is isolated under =.etc/=; writable runtime state
+  lives under =.var/=.
+- *Forward-compatible*: the codebase proactively follows **Emacs 31+ compatibility
+  guidance** (see [[#conventions][Coding Rules]]), avoiding obsolete or transitional
+  APIs even when still functional.
+
+The loader and core suite together define *policy and orchestration*, while
+keeping execution, presentation, and personal overlays clearly separated.
 
 **** What this configuration does
-- *Bootstraps modules* via =modules.el=, honoring:
-  - =my:modules-verbose= for per-module timings + summary logs,
-  - =my:modules-skip= to omit features,
-  - =my:modules-extra= to append features at the end.
-- *Switches UI/LSP stack* centrally (=core/switches.el=):
-  - UI: =none | doom | nano=
-  - LSP: =eglot | lsp=
-- *Hardens daily UX* with focused cores and utilities:
-  - Editing & Dired defaults; undo stack (=undo-fu= / =vundo=); window ops (=ace-window=),
-  - Session (saveplace/recentf/savehist/desktop/winner); autosave policy,
-  - **Operational utilities** for long-running sessions:
-    GC strategy, buffer/process housekeeping, and LSP lifecycle cleanup.
-- *UI surface*:
-  - Fonts/ligatures, theme (nano-theme + spacious-padding), Treemacs, Minions, time/battery,
-  - Optional *nano-modeline* or *doom-modeline* bundles.
-- *Development surface*:
-  - Tree-sitter grammars + language remaps; project/editorconfig,
-  - Eglot or lsp-mode (+ lsp-ui); Apheleia formatting; Docker/REST/SQL helpers,
-  - Aidermacs integration under =~/.var/aideremacs/=.
-- *Completion surface (stacked)*:
-  - Orderless + Vertico (+ Marginalia),
-  - Corfu (+ kind-icon, CAPE) for in-buffer CAPF completion,
-  - Consult (+ Embark / embark-consult) for search/actions.
 
-**** Utilities layer design principles
-- *Operational helpers*: the =utils/= layer provides cross-cutting helpers for
-  long-running sessions (GC strategy, buffer/process cleanup, LSP lifecycle).
-- *Opt-in and non-intrusive*: utilities must be safe to disable and never impose
-  UI, logging, or personal preferences.
-- *Future-proof*: implementations proactively follow *Emacs 31+ compatibility
-  guidance* and avoid obsolete macros/APIs.
+- *Bootstraps modules deterministically* via =lisp/modules.el=, honoring:
+  - =my:modules-verbose= for per-module timing and summary logs,
+  - =my:modules-skip= to omit selected features,
+  - =my:modules-extra= to append additional modules at the end.
+- *Resolves UI and LSP stacks centrally* via =core/switches.el=:
+  - UI backends: =none | doom | nano=
+  - LSP backends: =eglot | lsp=
+- *Defines core policy layers* for daily use:
+  - Editing and Dired defaults; undo stacks (=undo-fu= / =vundo=); window operations
+    (=ace-window=).
+  - Session policy (saveplace, recentf, savehist, desktop, winner) and autosave
+    strategy.
+- *Delegates execution to utilities* for long-running sessions:
+  - Garbage collection strategy,
+  - Buffer and dead-process housekeeping,
+  - LSP lifecycle cleanup on project switches.
+- *Exposes UI surfaces as replaceable bundles*:
+  - Fonts and ligatures; theming (nano-theme + spacious-padding),
+  - Optional modeline bundles (*nano-modeline* or *doom-modeline*),
+  - Ancillary UI elements (icons, time/battery, minimization helpers).
+- *Defines development surfaces*:
+  - Tree-sitter grammars and major-mode remaps; project and editorconfig support,
+  - Eglot or lsp-mode (+ lsp-ui); formatting via Apheleia,
+  - Docker, REST, SQL, and terminal helpers,
+  - AI assistance via Aidermacs, with state isolated under =.var/=.
+- *Builds a stacked completion surface*:
+  - Minibuffer: Orderless + Vertico (+ Marginalia),
+  - In-buffer: Corfu (+ kind-icon, CAPE) using CAPF,
+  - Navigation/actions: Consult with Embark and embark-consult.
 
-**** Module map (where things live)
-| Module file                      | Role / Notes                                                                                       |
-|----------------------------------+----------------------------------------------------------------------------------------------------|
-| =modules.el=                     | Central loader; honors =my:modules-verbose/skip/extra=; prints per-module timings.                 |
-| =core/custom.el=                 | Route Customize to =.etc/custom.el=; helpers to open/dump curated vars/faces.                      |
-| =core/editing.el=                | Paredit/Puni, paren/visuals, Dired + GNU ls on macOS, undo-fu/vundo, aggressive-indent, etc.       |
-| =core/general.el=                | Non-modal global *leader* (s-SPC on macOS / C-c SPC otherwise), helpers, which-key labels.          |
-| =core/history.el=                | saveplace/recentf/savehist setup (in =.var/=), adds safe directories & variables.                  |
-| =core/switches.el=               | =my:use-ui= (none/doom/nano) and =my:use-lsp= (eglot/lsp) enablement with presence checks.         |
-| =core/tools.el=                  | Win split toggle, keybinding conflict scanner, Tree-sitter install/ensure, Org fold helpers.      |
-| =core/utils.el=                  | Auto-tangle updated Org, insert lexical-binding headers, view-mode on read-only buffers.          |
-| =ui/ui-font.el=                  | Default/emoji font selection, daemon-safe apply, optional ligatures.                               |
-| =ui/ui-theme.el=                 | nano-theme colors + spacious-padding; face normalization on theme enable.                         |
-| =ui/ui-window.el=                | Zoom focus layout, desktop save/restore, winner, quick layout save/restore.                       |
-| =ui/ui-utils.el=                 | Minions, display-time/battery, Treemacs & nerd-icons-dired, pbcopy on macOS.                      |
-| =completion/completion-core.el=  | Orderless + category overrides (partial-completion for files).                                    |
-| =completion/completion-vertico.el= | Vertico (+ posframe on GUI) and Marginalia.                                                       |
-| =completion/completion-consult.el= | Consult (xref glue).                                                                              |
-| =completion/completion-embark.el=  | Embark + embark-consult integration.                                                              |
-| =completion/completion-corfu.el= | Corfu (+ kind-icon) + CAPE sources; TAB navigation.                                               |
-| =orgx/org-core.el=               | Org core; agenda refs, capture, refile targets, directories under =.var/org=.                     |
-| =orgx/org-visual.el=             | org-modern visuals, agenda layout/icons.                                                          |
-| =orgx/org-extensions.el=         | org-journal, org-roam, org-download, toc-org, org-cliplink.                                       |
-| =orgx/org-export.el=             | ox-hugo, markdown-mode/preview, edit-indirect.                                                    |
-| =dev/web-core.el=                | Treesit remaps; project/files/editorconfig; TS/TSX/YAML/JSON associations.                        |
-| =dev/dev-lsp-eglot.el=           | Eglot baseline; safe auto-enable when server contact is guessable.                                |
-| =dev/dev-lsp-mode.el=            | lsp-mode (+ lsp-ui); LSP completion delegated to Corfu.                                          |
-| =dev/format.el=                  | Apheleia global mode; Prettier(d) wiring for web stacks.                                          |
-| =dev/dev-build.el=               | Make/compile integration; ANSI color in compile buffer.                                          |
-| =dev/dev-docker.el=              | Dockerfile/YAML modes, =docker= commands, tramp-container.                                        |
-| =dev/dev-term.el=                | vterm + vterm-toggle keybindings and display rules.                                              |
-| =dev/rest.el=                    | restclient (+ jq).                                                                                |
-| =dev/sql.el=                     | SQL defaults (PostgreSQL), sql-indent, sqlformat (pgformatter).                                   |
-| =utils/utils-functions.el=       | General helpers (smart kill-buffer).                                                              |
-| =utils/utils-backup.el=          | GC old backups in =.var/backup/= at startup.                                                     |
-| =utils/utils-async.el=           | Safe async runner with error trapping.                                                            |
-| =utils/utils-scratch.el=         | Scratch buffer auto-recreation.                                                                   |
-| =utils/search-nav.el=            | ripgrep via Consult; dumb-jump Xref backend; EWW helpers + image toggle.                          |
-| =utils/utils-gc.el=              | **Long-running GC strategy** (focus-out/minibuffer GC; no UI/logging).                            |
-| =utils/utils-buffers.el=         | **Buffer & process housekeeping** for long-lived sessions.                                       |
-| =utils/utils-lsp.el=             | **Eglot lifecycle helpers** (project switch cleanup).                                             |
-| =utils/utils-notes-markdown.el=  | Prose-oriented Markdown notes; consult-notes, rg, org-download glue.                              |
+**** Utilities Layer Philosophy
+
+The =utils/= layer provides *operational executors* used by higher-level policy
+layers defined in =core/=.
+
+Characteristics:
+- May install guarded hooks or timers.
+- May perform GC, buffer/process cleanup, or LSP lifecycle actions.
+- Must remain safe to disable entirely for debugging or bisection.
+- Must never impose UI, logging, notifications, or user preferences.
+
+The =utils/= layer contains **no policy**.
+All decisions about *when* or *why* an action occurs belong to =core/=.
+
+**** Utilities Layer Design Principles
+
+- *Operational helpers*:
+  =utils/= implements cross-cutting executors for long-running sessions
+  (GC strategy, housekeeping, lifecycle cleanup).
+- *Opt-in and non-intrusive*:
+  utilities must degrade to no-ops when disabled and never affect global policy.
+- *Future-proof*:
+  implementations follow Emacs 31+ compatibility guidance and avoid obsolete APIs.
+
+**** Module map (where things live) — Final
+
+This table shows *where each responsibility lives* and *what must not live there*.
+The goal is to keep **core behavior stable**, **UI replaceable**, and
+**personal code isolated**.
+
+| Path / Module | Responsibility | Must NOT contain |
+|---------------+----------------+------------------|
+| early-init.el | Earliest startup tuning (GC, handlers, frame defaults) | Package setup, hooks, timers |
+| init.el | Bootstrap (straight.el, leaf) and load orchestration | Feature logic, UI, personal settings |
+| lisp/modules.el | Canonical module load order | Configuration logic |
+| lisp/core/ | *Foundation & policy* (paths, startup, sessions, switches) | UI rendering, personal preferences |
+| lisp/core/startup.el | Startup/restore GC & handlers | Package-specific behavior |
+| lisp/core/session*.el | Session health, thresholds, timers | UI, notifications |
+| lisp/core/general.el | Global keybinding foundation | Mode-specific bindings |
+| lisp/ui/ | *Presentation only* (theme, fonts, modeline) | Timers, GC, cleanup logic |
+| lisp/completion/ | Completion stack (vertico, corfu, consult, etc.) | Session policy |
+| lisp/orgx/ | Org extensions & workflows (stable, practical) | Experimental Org features |
+| lisp/dev/ | Developer tooling (eglot, treesit helpers) | UI or personal identity |
+| lisp/vcs/ | Version control (Magit entry points) | Project policies |
+| lisp/utils/ | *Operational executors* (GC, housekeeping, LSP hygiene) | Core policy or startup logic |
+| personal/user.el | *Personal overlays* (identity, switches, paths) | Shared policy decisions |
+| personal/device-darwin.el | macOS-only devices & IME glue | Cross-platform code |
+| personal/apple-music.el | Apple Music integration (AppleScript, Hydra) | Core or utils dependencies |
+
+Design rules enforced by this map:
+
+- *Core is policy, not appearance*
+  No UI, no personal taste, no platform specifics.
+- *UI is replaceable*
+  nano / doom / none can be switched without touching core.
+- *Utils are executors, not decision-makers*
+  Safe to disable and never authoritative.
+- *Personal code is isolated*
+  User- and device-specific glue only; no shared policy.
+- *Platform-specific code never leaks upward*
+  OS-dependent logic stays under =personal/=.
 
 *** modules.el
 :PROPERTIES:
@@ -5488,90 +5528,176 @@ This function never signals errors."
 
 *** Overview
 
+**** Personal Layer Philosophy
+
+The =personal/= layer provides *user- and device-specific overlays* on top of the
+shared, version-controlled configuration.
+
+It exists to express *identity, environment, and workflow glue* without
+influencing global policy or shared behavior.
+
+This layer MAY contain:
+- Identity information (name, email)
+- Feature flags and personal thresholds (UI/LSP selection, timing knobs)
+- Device- and OS-specific glue (input methods, mouse/scroll tuning)
+- Personal keybindings and workflow integrations
+
+This layer MUST NOT contain:
+- Core architectural or cross-user decisions
+- Shared defaults or policy
+- Modules that other layers depend on
+
+Hooks and timers are permitted **only when they are strictly local to the user’s
+device or workflow**, degrade safely to no-ops when unavailable, and do not
+affect global behavior.
+
 **** Purpose
-Provide *personal, device-specific overlays* on top of the core configuration:
-- Identity (name/email) and safe editor defaults.
-- Preferred *fonts/size*, and *global switches* for UI (`nano`) and LSP (`eglot`).
-- A portable *Org directory layout* under your cloud path, plus agenda discovery.
-- macOS conveniences: *input-method auto-switching* (English⇄Japanese) with `sis`, and *Apple Music* control (Hydra).
-- Pointer/scroll tuning for the *Logitech MX Ergo* profile.
-- Small QoL touches (cursor color normalization after theme changes, load-path exclusions).
+
+Provide *personal overlays* that adapt the configuration to a specific user and
+machine, without compromising modularity or reproducibility of shared layers.
+
+Concretely, this layer covers:
+- Identity and safe editor defaults.
+- Preferred fonts and sizes, and *global switches* for UI (=nano=) and LSP (=eglot=).
+- A portable Org directory layout rooted in the user’s cloud path.
+- macOS conveniences:
+  - Input-method auto-switching (English ⇄ Japanese) via =sis=,
+  - Apple Music control via AppleScript and Hydra.
+- Device-specific pointer and scroll tuning (Logitech MX Ergo profile).
+- Small QoL glue (cursor color normalization after theme changes, load-path hygiene).
 
 **** What this configuration does
+
 - *Identity & safety*
-  - Sets `user-full-name`, `user-mail-address`.
-  - Disables compacting font caches on macOS; enables passphrase caching for `plstore`.
-- *Look & feel*
-  - Declares personal font choices (`my:font-*`) and default size.
-  - Chooses UI bundle and LSP backend via `my:use-ui` / `my:use-lsp`.
-- *Directories / Org*
-  - Defines cloud base at `~/Documents` and derives `my:d:org`, `my:d:blog`.
-  - Ensures directories exist; points `org-directory` there.
-  - Builds `org-agenda-files` by recursively scanning `.org` files (skips “archives”).
-  - Excludes sensitive paths from `load-path`.
-- *macOS input method (`sis`)*
-  - On startup, configures ABC ⇄ Kotoeri (Romaji) via `macism`.
-  - Enables cursor-color, respect, and inline modes globally (when available).
-- *Cursor color*
-  - After any theme load, re-applies frame cursor color to the `cursor` face.
-- *MX Ergo S profile*
-  - Smooth wheel, conservative scrolling, margin preservation, tilt scrolling; binds:
-    - `mouse-2` → `yank`, `mouse-4/5` → previous/next buffer.
+  - Sets =user-full-name= and =user-mail-address=.
+  - Disables font cache compaction on macOS and enables passphrase caching for
+    =plstore=.
+
+- *Look & feel switches*
+  - Declares personal font preferences (=my:font-*=) and default size.
+  - Selects UI and LSP stacks via =my:use-ui= and =my:use-lsp=.
+
+- *Directories & Org wiring*
+  - Defines a cloud root at =~/Documents= and derives =my:d:org= and =my:d:blog=.
+  - Ensures required directories exist.
+  - Sets =org-directory= and computes =org-agenda-files= by scanning non-archive
+    =.org= files.
+  - Removes sensitive paths from =load-path=.
+
+- *macOS input method (=sis=)*
+  - Configures ABC ⇄ Kotoeri (Romaji) via =macism= at startup.
+  - Enables cursor-color, respect, and inline modes when available.
+
+- *Cursor color keep-alive*
+  - Re-applies the frame cursor color to the =cursor= face after theme reloads.
+
+- *Device profile (MX Ergo S)*
+  - Smooth scrolling, conservative movement, margin preservation, tilt scrolling.
+  - Mouse bindings:
+    - =mouse-2= → =yank=
+    - =mouse-4/5= → previous/next buffer
+
 - *Apple Music integration (macOS)*
-  - Async/sync `osascript` helpers; commands for play/pause/next/prev.
-  - Query current track info; list & play playlists.
-  - A *Hydra* with quick keys; wired into *Meow* leader (`SPC M`).
+  - Async and sync AppleScript helpers.
+  - Interactive commands for play/pause, next/previous track, playlist playback,
+    and current track info.
+  - A Hydra bound to =C-c M=, with optional Meow leader integration.
 
 **** Module map (where things live)
+
 | Module file | Role |
 |-------------+------|
-| =user.el=   | Personal overlay: identity, fonts/UI/LSP switches, Org locations, macOS `sis`, device scroll/mouse, Apple Music Hydra |
+| =personal/user.el= | Personal overlays: identity, fonts, UI/LSP switches, Org paths |
+| =personal/device-darwin.el= | macOS-only device and IME glue |
+| =personal/apple-music.el= | Apple Music integration (AppleScript + Hydra) |
 
 **** How it works (flow)
-1. *Bootstrap personals*: set identity, fonts, UI/LSP switches; define cloud/Org/blog paths; ensure dirs exist.
-2. *Org wiring*: set `org-directory`; compute `org-agenda-files` by filtering non-archive `.org` files.
-3. *Hygiene*: remove `my:d:excluded-directories` from `load-path`.
-4. *macOS only*:
-   - Configure `sis` (ABC ↔ Kotoeri) and enable global modes if functions exist.
-   - Hook `after-load-theme` to keep the `cursor` face background in sync with the frame cursor color.
-5. *Device profile*: apply scroll & mouse bindings tailored for MX Ergo S.
-6. *Apple Music*:
-   - Define async/sync `osascript` runners.
-   - Provide commands (`play-pause`, `next`, `previous`, `current-track-info`, `play-playlist`).
-   - Define `my/hydra-apple-music` and bind it to `C-c M`
+
+1. *Personal bootstrap*:
+   - Identity, fonts, and UI/LSP switches are set.
+   - Cloud, Org, and blog paths are defined and ensured.
+
+2. *Org wiring*:
+   - =org-directory= is set.
+   - =org-agenda-files= is computed by filtering non-archive Org files.
+
+3. *Hygiene*:
+   - Sensitive directories are removed from =load-path=.
+
+4. *macOS-only glue*:
+   - =sis= is configured defensively (only if functions exist).
+   - An =after-load-theme= hook keeps the cursor face in sync.
+
+5. *Device profile*:
+   - Mouse and scroll tuning is applied for the MX Ergo S.
+
+6. *Apple Music integration*:
+   - AppleScript runners are defined.
+   - Interactive commands and =my/hydra-apple-music= are exposed.
 
 **** Key settings (reference)
-- =my:font-default= :: `"JetBrains Mono NL"`
-- =my:font-alt= :: `"Noto Sans JP"`
-- =my:emoji-font= :: `"Apple Color Emoji"`
-- =my:font-size= :: `18`
-- =my:use-ui= :: `'nano`
-- =my:use-lsp= :: `'eglot`
-- =org-directory= :: `~/Documents/org` (derived from `my:d:cloud`)
-- =org-agenda-files= :: All `*.org` under `org-directory`, excluding paths matching `archives`.
-- =MX Ergo wheel/scroll= :: `mouse-wheel-scroll-amount='(1 ((shift) . 5) ((control) . 10))`, `scroll-conservatively=10000`, `scroll-margin=2`, `scroll-preserve-screen-position=t`, tilt scroll on.
-- =Cursor color keep-alive= :: Re-sets `(set-face-background 'cursor (frame-parameter nil 'cursor-color))` on `after-load-theme`.
+
+- =my:font-default= :: ="JetBrains Mono NL"=
+- =my:font-alt= :: ="Noto Sans JP"=
+- =my:emoji-font= :: ="Apple Color Emoji"=
+- =my:font-size= :: =18=
+- =my:use-ui= :: ='nano=
+- =my:use-lsp= :: ='eglot=
+- =org-directory= :: =~/Documents/org=
+- =org-agenda-files= :: All =*.org= under =org-directory=, excluding =archives=
+- =MX Ergo scroll profile= ::
+  =mouse-wheel-scroll-amount='(1 ((shift) . 5) ((control) . 10))=,
+  =scroll-conservatively=10000=,
+  =scroll-margin=2=,
+  =scroll-preserve-screen-position=t=
+- =Cursor color keep-alive= ::
+  Re-apply =(set-face-background 'cursor (frame-parameter nil 'cursor-color))=
+  on =after-load-theme=
 
 **** Usage tips
-- *Switch UI or LSP quickly*: set `my:use-ui` to `'nano`/`'doom`/`'none`, `my:use-lsp` to `'eglot`/`'lsp`.
-- *Change fonts*: adjust `my:font-*` and `my:font-size` here; your existing `ui/ui-font.el` will pick them up.
+
+- *Switch UI or LSP quickly*:
+  - Set =my:use-ui= to ='nano=, ='doom=, or ='none=.
+  - Set =my:use-lsp= to ='eglot= or ='lsp=.
+
+- *Change fonts*:
+  - Adjust =my:font-*= and =my:font-size= here.
+  - The UI font module picks them up automatically.
+
 - *Apple Music control*:
-  - `C-c M` opens the Hydra
-  - Keys: `p` (play/pause), `n` (next), `b` (back), `l` (choose playlist), `i` (track info).
-- *Agenda scope*: drop an `archives/` folder or use “archives” in filenames to exclude from `org-agenda-files`.
+  - =C-c M= opens the Hydra.
+  - Keys: =p= (play/pause), =n= (next), =b= (back),
+    =l= (playlist), =i= (track info).
+
+- *Agenda scope*:
+  - Use an =archives/= directory or include “archives” in filenames to exclude
+    files from =org-agenda-files=.
 
 **** Troubleshooting
-- *`sis` not switching on macOS* → Ensure the bundle is installed and input source IDs match:
-  `"com.apple.keylayout.ABC"` and `"com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"`. The code guards with `(fboundp ...)`, so missing functions won’t error.
-- *Cursor color looks wrong after theme change* → The `after-load-theme` hook reapplies it; ensure your theme sets the frame’s `'cursor-color` parameter.
-- *Hydra key not found* → Confirm `hydra` is installed/loaded; the Hydra is wrapped in `with-eval-after-load 'hydra`.
-- *Meow leader binding missing* → Requires both `meow` and `hydra` loaded; binding occurs inside nested `with-eval-after-load`.
 
-**** Related source blocks (already provided as =.el= file)
+- *sis does not switch input methods on macOS* →
+  Ensure the input source IDs match:
+  ="com.apple.keylayout.ABC"= and
+  ="com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"=.
+  Missing functions are guarded with =fboundp=.
+
+- *Cursor color looks wrong after a theme change* →
+  Verify the theme sets the frame’s =cursor-color= parameter; the hook reapplies it.
+
+- *Hydra key not found* →
+  Confirm =hydra= is installed and loaded; the binding is added inside
+  =with-eval-after-load=.
+
+- *Meow leader binding missing* →
+  Requires both =meow= and =hydra= to be loaded; the binding is added defensively.
+
+**** Related source blocks
 
 #+begin_src emacs-lisp :tangle no
 ;; See:
-;; - user.el  (personal overlay: fonts/UI/LSP, Org locations, macOS sis, MX Ergo, Apple Music Hydra)
+;; - personal/user.el
+;; - personal/device-darwin.el
+;; - personal/apple-music.el
 #+end_src
 
 *** user.el
