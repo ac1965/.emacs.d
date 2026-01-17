@@ -1,3 +1,4 @@
+
 # -*- mode: org; coding: utf-8; -*-
 #+TITLE: Modern Emacs Configuration
 #+AUTHOR: YAMASHITA, Takao
@@ -1050,14 +1051,7 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
       (keymap-global-unset k)))
 
 
-  ;;; 4) Completion glue ---------------------------------------------------------
-
-  (leaf cape
-    :straight t
-    :bind (("M-/" . cape-dabbrev)))
-
-
-  ;;; 5) Modifier keys -----------------------------------------------------------
+  ;;; 4) Modifier keys -----------------------------------------------------------
 
   (leaf my:modifier
     :straight nil
@@ -1072,30 +1066,35 @@ Provide a clean, fast, and macOS-friendly bootstrap that runs *before* regular i
              w32-rwindow-modifier 'super))))
 
 
-  ;;; 6) Personal overlay --------------------------------------------------------
+  ;;; 5) Personal overlay --------------------------------------------------------
 
   (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
          (personal (expand-file-name "personal/" root))
          (user (ignore-errors (user-login-name))))
+    ;; Add personal directory to load-path
+    (when (file-directory-p personal)
+      (add-to-list 'load-path personal))
+    ;; Load personal files
     (my/safe-load-file (expand-file-name "user.el" personal) t)
     (when user
       (my/safe-load-file
        (expand-file-name (concat user ".el") personal) t)))
 
 
-  ;;; 7) Modules entrypoint ------------------------------------------------------
+  ;;; 6) Modules entrypoint ------------------------------------------------------
 
   (defvar my:modules-extra nil
     "Extra module list appended by optional layers.")
 
   (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
          (lisp-dir (expand-file-name "lisp/" root)))
-    (add-to-list 'load-path lisp-dir)
+    (when (file-directory-p lisp-dir)
+      (add-to-list 'load-path lisp-dir))
     (require 'core/custom-ui-extras nil t)
     (require 'modules nil t))
 
 
-  ;;; 8) Startup message ---------------------------------------------------------
+  ;;; 7) Startup message ---------------------------------------------------------
 
   (defun core--announce-startup ()
     "Report startup time and GC count."
@@ -1246,6 +1245,7 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
     '(
       ;; Core
       core/fixes
+      core/core-session
       core/general
       core/tools
       core/utils
@@ -1259,6 +1259,7 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
       ui/ui-theme
       ui/ui-window
       ui/ui-utils
+      ui/ui-health-modeline
 
       ;; Completion
       completion/completion-core
@@ -1454,6 +1455,207 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   (provide 'core/fixes)
 
   ;;; core/fixes.el ends here
+#+end_src
+
+*** core/core-session.el
+:PROPERTIES:
+:CUSTOM_ID: core-session
+:header-args:emacs-lisp: :tangle lisp/core/core-session.el
+:END:
+
+Purpose:
+Provide a central orchestration layer for long-running Emacs sessions.
+This module defines *policy*, *timing*, and *coordination* while delegating
+actual work to utils modules.
+
+What it does:
+- Coordinates GC, buffer cleanup, and LSP lifecycle helpers
+- Defines safe defaults and thresholds
+- Owns timers and idle hooks
+- Exposes customization knobs for personal overrides
+
+Notes:
+- This module does NOT provide UI, visualization, or notifications.
+- Actual implementations live in utils/*.
+- Personal configuration should only override defcustom values.
+
+#+begin_src emacs-lisp
+  ;;; core-session.el --- Long-running session orchestration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;; Central policy and orchestration layer for long-running Emacs sessions.
+  ;;
+  ;; This module coordinates:
+  ;; - Safe garbage collection
+  ;; - Periodic buffer housekeeping
+  ;; - LSP lifecycle cleanup
+  ;;
+  ;; Actual implementations are delegated to utils modules.
+  ;; This file defines *when* and *under what conditions* they run.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Customization
+  ;; ---------------------------------------------------------------------------
+
+  (defgroup core-session nil
+    "Long-running Emacs session orchestration."
+    :group 'convenience)
+
+  (defcustom core-session-enable-p t
+    "Enable long-running session orchestration."
+    :type 'boolean
+    :group 'core-session)
+
+  (defcustom core-session-idle-delay
+    (* 30 60)
+    "Seconds of idle time before running lightweight maintenance."
+    :type 'integer
+    :group 'core-session)
+
+  (defcustom core-session-periodic-interval
+    600
+    "Interval in seconds for periodic maintenance tasks."
+    :type 'integer
+    :group 'core-session)
+
+  (defcustom core-session-buffer-threshold
+    300
+    "Soft threshold for number of live buffers considered risky."
+    :type 'integer
+    :group 'core-session)
+
+  (defcustom core-session-process-threshold
+    8
+    "Soft threshold for number of live processes considered risky."
+    :type 'integer
+    :group 'core-session)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Internal helpers
+  ;; ---------------------------------------------------------------------------
+
+  (defvar core-session--idle-timer nil
+    "Idle timer for lightweight session maintenance.")
+
+  (defvar core-session--periodic-timer nil
+    "Periodic timer for session health checks.")
+
+  (defun core-session--buffers-count ()
+    "Return the number of live buffers."
+    (length (buffer-list)))
+
+  (defun core-session--processes-count ()
+    "Return the number of live processes."
+    (length (process-list)))
+
+  (defun core-session--risky-state-p ()
+    "Return non-nil if the current session looks risky."
+    (or (> (core-session--buffers-count)
+           core-session-buffer-threshold)
+        (> (core-session--processes-count)
+           core-session-process-threshold)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Maintenance actions (delegation only)
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-session--lightweight-maintenance ()
+    "Run lightweight maintenance tasks.
+
+  This function delegates actual work to utils modules and must remain safe."
+    (when core-session-enable-p
+      ;; GC helpers
+      (when (fboundp 'utils-gc--safe-collect)
+        (utils-gc--safe-collect))
+
+      ;; Buffer housekeeping
+      (when (fboundp 'utils-buffers-cleanup)
+        (utils-buffers-cleanup))))
+
+  (defun core-session--periodic-check ()
+    "Run periodic session health checks.
+
+  Currently this only performs maintenance when the session looks risky."
+    (when (and core-session-enable-p
+               (core-session--risky-state-p))
+      (core-session--lightweight-maintenance)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Public commands
+  ;; ---------------------------------------------------------------------------
+
+  ;;;###autoload
+  (defun core-session-run-health-check ()
+    "Run a manual session health check."
+    (interactive)
+    (core-session--lightweight-maintenance)
+    (message "Core session health check completed"))
+
+  ;;;###autoload
+  (defun core-session-lightweight-restart ()
+    "Perform a safe lightweight restart of the current Emacs session.
+
+  This shuts down obsolete LSP servers, cleans buffers, and runs GC.
+  No buffers with unsaved changes are touched."
+    (interactive)
+    ;; LSP lifecycle cleanup
+    (when (and core-session-enable-p
+               (fboundp 'utils-lsp-on-project-switch))
+      (ignore-errors
+        (utils-lsp-on-project-switch)))
+
+    ;; Buffers and GC
+    (core-session--lightweight-maintenance)
+
+    (clear-image-cache)
+    (message "Core session lightweight restart completed"))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Activation
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-session--enable ()
+    "Enable core session orchestration."
+    ;; Idle maintenance
+    (setq core-session--idle-timer
+          (run-with-idle-timer
+           core-session-idle-delay
+           t
+           #'core-session--lightweight-maintenance))
+
+    ;; Periodic checks
+    (setq core-session--periodic-timer
+          (run-with-timer
+           core-session-periodic-interval
+           core-session-periodic-interval
+           #'core-session--periodic-check)))
+
+  (defun core-session--disable ()
+    "Disable core session orchestration."
+    (when (timerp core-session--idle-timer)
+      (cancel-timer core-session--idle-timer))
+    (when (timerp core-session--periodic-timer)
+      (cancel-timer core-session--periodic-timer))
+    (setq core-session--idle-timer nil
+          core-session--periodic-timer nil))
+
+  (when core-session-enable-p
+    (core-session--enable))
+
+  (provide 'core/core-session)
+  ;;; core/core-session.el ends here
 #+end_src
 
 *** core/general.el
@@ -3044,6 +3246,143 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;; ui/ui-nano-modeline.el ends here
 #+end_src
 
+*** ui/ui-health-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-health-modeline
+:header-args:emacs-lisp: :tangle lisp/ui/ui-health-modeline.el
+:END:
+
+Purpose:
+Provide lightweight, non-intrusive visibility into Emacs session health.
+
+What it does:
+- Displays buffer and process counts in the global mode-line
+- Optionally shows Eglot workspace count
+- Reacts to buffer and process lifecycle events
+
+Notes:
+- This module is read-only with respect to session state.
+- It must not trigger GC, cleanup, or lifecycle actions.
+- All policy decisions live in core/session.el.
+
+#+begin_src emacs-lisp
+  ;;; ui-health-modeline.el --- Session health indicators -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;; Mode-line indicators for Emacs session health.
+  ;;
+  ;; This module provides a small, low-cost visualization of:
+  ;; - Number of live buffers
+  ;; - Number of live processes
+  ;; - (Optionally) active Eglot workspaces
+  ;;
+  ;; This module is UI-only and does not manage session lifecycle.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Customization
+  ;; ---------------------------------------------------------------------------
+
+  (defgroup ui-health-modeline nil
+    "Mode-line indicators for session health."
+    :group 'mode-line)
+
+  (defcustom ui-health-show-buffers-p t
+    "Show buffer count in the mode-line."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defcustom ui-health-show-processes-p t
+    "Show process count in the mode-line."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defcustom ui-health-show-eglot-p t
+    "Show Eglot workspace count in the mode-line when available."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Internal state
+  ;; ---------------------------------------------------------------------------
+
+  (defvar ui-health--mode-line-string ""
+    "Mode-line string representing current session health.")
+
+  ;; ---------------------------------------------------------------------------
+  ;; Data collectors (read-only)
+  ;; ---------------------------------------------------------------------------
+
+  (defun ui-health--buffers-count ()
+    "Return the number of live buffers."
+    (length (buffer-list)))
+
+  (defun ui-health--processes-count ()
+    "Return the number of live processes."
+    (length (process-list)))
+
+  (defun ui-health--eglot-count ()
+    "Return the number of active Eglot workspaces, or nil.
+
+  This function avoids touching Eglot internals and only reports
+  when information is safely available."
+    (when (and ui-health-show-eglot-p
+               (featurep 'eglot)
+               (boundp 'eglot--managed-buffers))
+      (length eglot--managed-buffers)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Mode-line update
+  ;; ---------------------------------------------------------------------------
+
+  (defun ui-health--update ()
+    "Update `ui-health--mode-line-string`."
+    (setq ui-health--mode-line-string
+          (concat
+           (when ui-health-show-buffers-p
+             (format " B:%d" (ui-health--buffers-count)))
+           (when ui-health-show-processes-p
+             (format " P:%d" (ui-health--processes-count)))
+           (when-let* ((n (ui-health--eglot-count)))
+             (format " LSP:%d" n))))
+    (force-mode-line-update))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Hooks
+  ;; ---------------------------------------------------------------------------
+
+  (add-hook 'buffer-list-update-hook #'ui-health--update)
+  (add-hook 'process-status-change-hook #'ui-health--update)
+
+  (with-eval-after-load 'eglot
+    (add-hook 'eglot-managed-mode-hook #'ui-health--update)
+    (add-hook 'eglot-server-stopped-hook #'ui-health--update))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Activation
+  ;; ---------------------------------------------------------------------------
+
+  (unless (member 'ui-health--mode-line-string global-mode-string)
+    (setq global-mode-string
+          (append global-mode-string '(ui-health--mode-line-string))))
+
+  (ui-health--update)
+
+  (provide 'ui/ui-health-modeline)
+  ;;; ui/ui-health-modeline.el ends here
+#+end_src
+
 *** ui/ui-window.el
 :PROPERTIES:
 :CUSTOM_ID: ui-window
@@ -3344,11 +3683,12 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
 
   (leaf cape
     :straight t
-    :after corfu
     :require t
+    :after corfu
     :config
-    (mapc (lambda (fn) (add-to-list 'completion-at-point-functions fn))
-          '(cape-file cape-dabbrev cape-keyword cape-symbol)))
+    (add-to-list 'completion-at-point-functions #'cape-symbol)
+    (add-to-list 'completion-at-point-functions #'cape-file)
+    (add-to-list 'completion-at-point-functions #'cape-dabbrev))
 
   (provide 'completion/completion-corfu)
   ;;; completion/completion-corfu.el ends here
@@ -4918,8 +5258,9 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
   ;;; Search & navigation ------------------------------------------------------
 
   (leaf consult-notes
-    :straight nil
+    :straight t
     :after consult
+    :require t
     :init
     (defun my/notes-consult-ripgrep ()
       "Run `consult-ripgrep` scoped to Markdown notes under Org."
@@ -4927,10 +5268,10 @@ Provide a *deterministic, modular Emacs 30+ configuration* that is:
       (my/notes--ensure-root)
       (let ((default-directory my:d:notes))
         (consult-ripgrep)))
-    :custom
-    ((consult-notes-file-dir-sources
-      . (("Org Notes (MD)" ?m my:d:notes)))))
-
+    :config
+    (setq consult-notes-file-dir-sources
+          (list
+           (list "Org Notes (MD)" ?m my:d:notes))))
 
   ;;; Image handling -----------------------------------------------------------
 
@@ -5230,38 +5571,58 @@ Provide *personal, device-specific overlays* on top of the core configuration:
 
 *** user.el
 :PROPERTIES:
-:CUSTOM_ID: user
+:CUSTOM_ID: personal-user
 :header-args:emacs-lisp: :tangle (eval (format "personal/%s.el" (user-login-name)))
 :END:
+
+Purpose:
+Personal-only knobs and identity information.
+
+What it does:
+- Defines user identity
+- Overrides defcustom values from core/session and ui/health-modeline
+- Injects personal paths and preferences
+
+Notes:
+- This file contains NO hooks, timers, or operational logic.
+- Device- and workflow-specific code lives in separate personal modules.
 
 #+begin_src emacs-lisp
   ;;; user.el --- Personal configuration -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: personal
   ;;
   ;;; Commentary:
-  ;; Personal settings and device-specific configurations.
-  ;; This file orchestrates visualization, logging, alerts, and manual recovery
-  ;; for long-running Emacs sessions.
+  ;; Personal configuration overrides.
   ;;
-  ;; Operational execution (GC / buffer cleanup / LSP lifecycle) lives in utils/.
+  ;; This file intentionally contains:
+  ;; - Identity information
+  ;; - Feature enable/disable flags
+  ;; - Threshold and interval overrides
+  ;;
+  ;; This file intentionally does NOT contain:
+  ;; - Timers
+  ;; - Hooks
+  ;; - Operational logic
+  ;; - UI rendering code
+  ;;
+  ;; All behavior is implemented in core/, ui/, and utils/.
   ;;
   ;;; Code:
 
   ;; ---------------------------------------------------------------------------
   ;; Runtime requirements (do NOT rely on byte-compile)
   ;; ---------------------------------------------------------------------------
-  (require 'leaf)
-  (require 'subr-x)
-  (require 'seq)
+  (eval-when-compile
+    (require 'leaf))
 
-  ;;; ---------------------------------------------------------------------------
-  ;;; Personal Information
-  ;;; ---------------------------------------------------------------------------
-
+  ;; ---------------------------------------------------------------------------
+  ;; Personal Information
+  ;; ---------------------------------------------------------------------------
   (leaf *personals
     :straight nil
     :init
@@ -5301,15 +5662,15 @@ Provide *personal, device-specific overlays* on top of the core configuration:
     ;; Org wiring
     (setq org-directory my:d:org)
     (setq org-roam-db-node-include-function
-        (lambda ()
-          (not (string-match-p "/chatgpt/" (buffer-file-name)))))
+  	(lambda ()
+            (not (string-match-p "/chatgpt/" (buffer-file-name)))))
     (setq org-agenda-files
-          (condition-case nil
+  	(condition-case nil
               (seq-filter
-               (lambda (file)
-                 (and (string-match-p "\\.org\\'" file)
-                      (not (string-match-p "archives" file))))
-               (directory-files-recursively org-directory "\\.org\\'"))
+              (lambda (file)
+                (and (string-match-p "\\.org\\'" file)
+                     (not (string-match-p "archives" file))))
+              (directory-files-recursively org-directory "\\.org\\'"))
             (error nil)))
 
     ;; load-path hygiene
@@ -5319,228 +5680,219 @@ Provide *personal, device-specific overlays* on top of the core configuration:
              (member dir my:d:excluded-directories))
            load-path)))
 
-  ;;; ---------------------------------------------------------------------------
-  ;;; Long-running session: visualization / judgment / orchestration
-  ;;; ---------------------------------------------------------------------------
+  ;; ---------------------------------------------------------------------------
+  ;; Core session orchestration knobs
+  ;; ---------------------------------------------------------------------------
 
-  ;;;; GC / Memory visualization ----------------------------------------------
+  ;; Master switch
+  (setq core-session-enable-p t)
 
-  (defun my/gc-memory-status ()
-    "Display current GC and memory-related status."
-    (interactive)
-    (message
-     "GC:%d | threshold:%.1fMB | heap:%.1fMB | buffers:%d | processes:%d"
-     gcs-done
-     (/ gc-cons-threshold 1048576.0)
-     (/ (memory-limit) 1048576.0)
-     (length (buffer-list))
-     (length (process-list))))
+  ;; Timing overrides
+  (setq core-session-idle-delay
+        (* 30 60))                     ;; 30 minutes idle
 
-  (defun my/gc-diff ()
-    "Run GC and report freed memory."
-    (interactive)
-    (let ((before (memory-limit)))
-      (garbage-collect)
-      (message "GC freed %.1fMB"
-               (/ (- before (memory-limit)) 1048576.0))))
+  (setq core-session-periodic-interval
+        600)                           ;; 10 minutes
 
-  (defun my/system-health-check ()
-    "Run a simple Emacs health check."
-    (interactive)
-    (my/gc-memory-status)
-    (my/gc-diff))
+  ;; Risk thresholds (personal tolerance)
+  (setq core-session-buffer-threshold
+        350)
 
-  ;;;; Idle lightweight refresh -----------------------------------------------
+  (setq core-session-process-threshold
+        8)
 
-  (defvar my/idle-refresh-delay (* 60 30)
-    "Seconds before running a lightweight refresh during idle.")
+  ;; ---------------------------------------------------------------------------
+  ;; UI: session health modeline knobs
+  ;; ---------------------------------------------------------------------------
 
-  (defun my/idle-light-refresh ()
-    "Lightweight refresh during long idle.
-  Delegates cleanup to utils layer."
-    (garbage-collect)
-    (clear-image-cache)
-    (when (fboundp 'utils-buffers-cleanup)
-      (utils-buffers-cleanup)))
+  (setq ui-health-show-buffers-p t)
+  (setq ui-health-show-processes-p t)
+  (setq ui-health-show-eglot-p t)
 
-  (run-with-idle-timer my/idle-refresh-delay t #'my/idle-light-refresh)
+  ;; ---------------------------------------------------------------------------
+  ;; Optional personal safety preferences
+  ;; ---------------------------------------------------------------------------
 
-  ;;;; Mode-line indicators ---------------------------------------------------
+  ;; Avoid font cache compaction on long-running sessions
+  (setq inhibit-compacting-font-caches t)
 
-  (defvar my/mode-line-health-string "")
-  (defvar my/mode-line-eglot-string "")
+  ;; Cache passphrase in memory for encrypted plstore
+  (setq plstore-cache-passphrase-for-symmetric-encryption t)
 
-  (defun my/update-mode-line-health ()
-    (setq my/mode-line-health-string
-          (format " B:%d P:%d"
-                  (length (buffer-list))
-                  (length (process-list))))
-    (force-mode-line-update))
+  ;; ---------------------------------------------------------------------------
+  ;; Load personal optional modules
+  ;; ---------------------------------------------------------------------------
 
-  (add-hook 'buffer-list-update-hook #'my/update-mode-line-health)
-  (add-hook 'process-status-change-hook #'my/update-mode-line-health)
+  (when (eq system-type 'darwin)
+    (require 'device-darwin nil t)
+    (require 'apple-music nil t))
 
-  (setq global-mode-string
-        (append global-mode-string '(my/mode-line-health-string)))
+  (provide 'user)
+  ;;; personal/user.el ends here
+#+end_src
 
-  ;;;; Eglot workspace count --------------------------------------------------
+*** device-darwin.el
+:PROPERTIES:
+:CUSTOM_ID: personal-device-darwin
+:header-args:emacs-lisp: :tangle personal/device-darwin.el
+:END:
 
-  (defun my/eglot-workspace-count ()
-    "Return the number of active eglot workspaces."
-    (when (and (featurep 'eglot) (boundp 'eglot--servers))
-      (length eglot--servers)))
+Purpose:
+macOS-specific device and input method configuration.
 
-  (defun my/update-eglot-workspace ()
-    (setq my/mode-line-eglot-string
-          (if-let* ((n (my/eglot-workspace-count)))
-              (format " LSP:%d" n)
-            ""))
-    (force-mode-line-update))
+What it does:
+- Configure IME behavior via sis
+- Apply macOS-specific mouse and scroll tuning
+- Restore cursor color after theme reload
 
-  (with-eval-after-load 'eglot
-    (add-hook 'eglot-managed-mode-hook #'my/update-eglot-workspace)
-    (add-hook 'eglot-server-stopped-hook #'my/update-eglot-workspace)
-    (my/update-eglot-workspace)
-    (setq global-mode-string
-          (append global-mode-string '(my/mode-line-eglot-string))))
+Notes:
+- This file is loaded only on darwin systems.
+- No core/session or UI orchestration logic lives here.
 
-  ;;;; Memory logging / alert / lightweight restart ----------------------------
+#+begin_src emacs-lisp
+  ;;; device-darwin.el --- macOS device profile -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;; macOS-specific device and input configuration.
+  ;;
+  ;;; Code:
 
-  (defvar my/memory-log-file
-    (expand-file-name "memory.log" user-emacs-directory))
-
-  (defun my/log-memory-usage ()
-    "Append a simple memory usage snapshot to log file."
-    (with-temp-buffer
-      (insert
-       (format "%s GC:%d Buffers:%d Processes:%d\n"
-               (format-time-string "%Y-%m-%d %H:%M:%S")
-               gcs-done
-               (length (buffer-list))
-               (length (process-list))))
-      (append-to-file (point-min) (point-max) my/memory-log-file)))
-
-  (run-with-timer 600 600 #'my/log-memory-usage)
-
-  (defvar my/memory-alert-buffer-threshold 350)
-  (defvar my/memory-alert-process-threshold 8)
-  (defvar my/memory-alert-last-gc-freed 0)
-
-  (defun my/update-last-gc-freed ()
-    (let ((before (memory-limit)))
-      (garbage-collect)
-      (setq my/memory-alert-last-gc-freed
-            (- before (memory-limit)))))
-
-  (defun my/memory-health-alert ()
-    "Notify when Emacs enters a risky memory state."
-    (when (or (> (length (buffer-list)) my/memory-alert-buffer-threshold)
-              (> (length (process-list)) my/memory-alert-process-threshold)
-              (< my/memory-alert-last-gc-freed (* 5 1024 1024)))
-      (message "⚠ Emacs memory risk detected")))
-
-  (defun my/lightweight-restart ()
-    "Safe lightweight refresh.
-  Delegates operational cleanup to utils layer."
-    (interactive)
-    (when (and (featurep 'eglot)
-               (boundp 'eglot--servers))
-      (dolist (server eglot--servers)
-        (ignore-errors (eglot-shutdown (cdr server)))))
-    (when (fboundp 'utils-buffers-cleanup)
-      (utils-buffers-cleanup))
-    (garbage-collect)
-    (clear-image-cache)
-    (message "Lightweight restart completed"))
-
-  (run-with-timer 600 600
-                  (lambda ()
-                    (my/update-last-gc-freed)
-                    (my/memory-health-alert)))
-
-  ;;; ---------------------------------------------------------------------------
-  ;;; Original macOS / device / Apple Music / meow sections (unchanged)
-  ;;; ---------------------------------------------------------------------------
-
-  (leaf sis
-    :if (eq system-type 'darwin)
-    :straight t
-    :commands (sis-ism-lazyman-config
-               sis-global-cursor-color-mode
-               sis-global-respect-mode
-               sis-global-inline-mode)
-    :hook
-    (emacs-startup .
-                   (lambda ()
-                     (when (fboundp 'sis-ism-lazyman-config)
-                       (sis-ism-lazyman-config
-                        "com.apple.keylayout.ABC"
-                        "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
-                        'macism))
-                     (when (fboundp 'sis-global-cursor-color-mode)
-                       (sis-global-cursor-color-mode t))
-                     (when (fboundp 'sis-global-respect-mode)
-                       (sis-global-respect-mode t))
-                     (when (fboundp 'sis-global-inline-mode)
-                       (sis-global-inline-mode t)))))
-
-
-  ;;; Cursor color keep-alive after theme load ---------------------------------
-
-  (add-hook 'after-load-theme-hook
-            (lambda ()
-              (when (facep 'cursor)
-                (let ((c (frame-parameter nil 'cursor-color)))
-                  (when (stringp c)
-                    (set-face-background 'cursor c))))))
-
-
-  ;;; Device profile: MX Ergo S -----------------------------------------------
-
-  (leaf *device/MX_ErgoS
-    :straight nil
-    :init
-    (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
-          mouse-wheel-progressive-speed nil
-          scroll-conservatively 10000
-          scroll-margin 2
-          scroll-preserve-screen-position t
-          mac-mouse-wheel-smooth-scroll t
-          mouse-wheel-tilt-scroll t
-          mouse-wheel-flip-direction nil)
-    (global-set-key [mouse-2] #'yank)
-    (global-set-key [mouse-4] #'previous-buffer)
-    (global-set-key [mouse-5] #'next-buffer))
-
-
-  ;;; Apple Music integration (macOS) ------------------------------------------
+  (eval-when-compile
+    (require 'leaf))
 
   (when (eq system-type 'darwin)
 
-    ;; Async osascript runner
+    ;; -------------------------------------------------------------------------
+    ;; IME integration (sis)
+    ;; -------------------------------------------------------------------------
+
+    (leaf sis
+      :straight t
+      :commands (sis-ism-lazyman-config
+                 sis-global-cursor-color-mode
+                 sis-global-respect-mode
+                 sis-global-inline-mode)
+      :hook
+      (emacs-startup .
+                     (lambda ()
+                       (when (fboundp 'sis-ism-lazyman-config)
+                         (sis-ism-lazyman-config
+                          "com.apple.keylayout.ABC"
+                          "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+                          'macism))
+                       (when (fboundp 'sis-global-cursor-color-mode)
+                         (sis-global-cursor-color-mode t))
+                       (when (fboundp 'sis-global-respect-mode)
+                         (sis-global-respect-mode t))
+                       (when (fboundp 'sis-global-inline-mode)
+                         (sis-global-inline-mode t)))))
+
+    ;; -------------------------------------------------------------------------
+    ;; Cursor color keep-alive after theme load
+    ;; -------------------------------------------------------------------------
+
+    (add-hook 'after-load-theme-hook
+              (lambda ()
+                (when (facep 'cursor)
+                  (let ((c (frame-parameter nil 'cursor-color)))
+                    (when (stringp c)
+                      (set-face-background 'cursor c))))))
+
+    ;; -------------------------------------------------------------------------
+    ;; Mouse / scroll profile (MX Ergo S)
+    ;; -------------------------------------------------------------------------
+
+    (leaf device-mx-ergo-s
+      :straight nil
+      :init
+      (setq mouse-wheel-scroll-amount '(1 ((shift) . 5) ((control) . 10))
+            mouse-wheel-progressive-speed nil
+            scroll-conservatively 10000
+            scroll-margin 2
+            scroll-preserve-screen-position t
+            mac-mouse-wheel-smooth-scroll t
+            mouse-wheel-tilt-scroll t
+            mouse-wheel-flip-direction nil)
+
+      (global-set-key [mouse-2] #'yank)
+      (global-set-key [mouse-4] #'previous-buffer)
+      (global-set-key [mouse-5] #'next-buffer)))
+
+  (provide 'device-darwin)
+  ;;; personal/device-darwin.el ends here
+#+end_src
+
+*** apple-music.el
+:PROPERTIES:
+:CUSTOM_ID: personal-apple-music
+:header-args:emacs-lisp: :tangle personal/apple-music.el
+:END:
+
+Purpose:
+Control Apple Music from Emacs on macOS.
+
+What it does:
+- Provides async/sync AppleScript helpers
+- Defines interactive playback commands
+- Exposes a hydra and optional meow leader binding
+
+Notes:
+- This module is strictly optional and macOS-only.
+- No core/session or utils logic is used here.
+
+#+begin_src emacs-lisp
+  ;;; apple-music.el --- Apple Music integration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;; Control Apple Music using AppleScript.
+  ;;
+  ;;; Code:
+
+  (when (eq system-type 'darwin)
+
+    ;; -------------------------------------------------------------------------
+    ;; AppleScript helpers
+    ;; -------------------------------------------------------------------------
+
     (defun my/apple-music-osascript-async (script &optional callback)
       "Run AppleScript SCRIPT asynchronously.
   If CALLBACK is non-nil, call it with the trimmed output."
       (let* ((proc-name "apple-music-async")
              (buffer-name "*Apple Music Async*")
-             (osascript-cmd (list "osascript" "-e" script))
-             (proc (apply #'start-process proc-name buffer-name osascript-cmd)))
+             (proc (apply #'start-process
+                          proc-name buffer-name
+                          (list "osascript" "-e" script))))
         (when callback
           (set-process-sentinel
            proc
            (lambda (process event)
              (when (string= event "finished\n")
                (with-current-buffer (process-buffer process)
-                 (let ((output (string-trim (buffer-string))))
-                   (funcall callback output)))
+                 (funcall callback
+                          (string-trim (buffer-string))))
                (kill-buffer (process-buffer process))))))))
 
-    ;; Sync osascript runner
     (defun my/apple-music-osascript-sync (script)
       "Run AppleScript SCRIPT synchronously and return trimmed output."
       (string-trim
        (shell-command-to-string
         (format "osascript -e '%s'" script))))
+
+    ;; -------------------------------------------------------------------------
+    ;; Interactive commands
+    ;; -------------------------------------------------------------------------
 
     ;;;###autoload
     (defun my/apple-music-play-pause ()
@@ -5565,18 +5917,16 @@ Provide *personal, device-specific overlays* on top of the core configuration:
 
     ;;;###autoload
     (defun my/apple-music-current-track-info ()
-      "Show current track info as: Title — Artist [Album]."
+      "Display current track information."
       (interactive)
-      (let ((info
-             (my/apple-music-osascript-sync
-              "tell application \"Music\" \
+      (message "%s"
+               (my/apple-music-osascript-sync
+                "tell application \"Music\" \
   to (get name of current track) & \" — \" & (get artist of current track) \
   & \" [\" & (get album of current track) & \"]\"")))
-        (message "%s" info)
-        info))
 
     (defun my/apple-music-get-playlists ()
-      "Return a list of playlist names from Apple Music."
+      "Return a list of playlist names."
       (split-string
        (my/apple-music-osascript-sync
         "tell application \"Music\" to get name of playlists")
@@ -5584,13 +5934,18 @@ Provide *personal, device-specific overlays* on top of the core configuration:
 
     ;;;###autoload
     (defun my/apple-music-play-playlist (playlist)
-      "Prompt for PLAYLIST and play it in Apple Music."
+      "Prompt for PLAYLIST and play it."
       (interactive
-       (list (completing-read "Playlist: " (my/apple-music-get-playlists))))
+       (list (completing-read
+              "Playlist: "
+              (my/apple-music-get-playlists))))
       (my/apple-music-osascript-async
        (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
 
-    ;; Hydra
+    ;; -------------------------------------------------------------------------
+    ;; Hydra / meow integration
+    ;; -------------------------------------------------------------------------
+
     (with-eval-after-load 'hydra
       (defhydra my/hydra-apple-music (:hint nil)
         "
@@ -5605,19 +5960,14 @@ Provide *personal, device-specific overlays* on top of the core configuration:
         ("l" my/apple-music-play-playlist)
         ("i" my/apple-music-current-track-info)
         ("q" nil "quit"))
-      (global-set-key (kbd "C-c M") #'my/hydra-apple-music/body)))
+      (global-set-key (kbd "C-c M") #'my/hydra-apple-music/body))
 
+    (with-eval-after-load 'meow
+      (with-eval-after-load 'hydra
+        (when (fboundp 'meow-leader-define-key)
+          (meow-leader-define-key
+           '("M" . my/hydra-apple-music/body))))))
 
-  ;;; Meow leader integration --------------------------------------------------
-
-  (with-eval-after-load 'meow
-    (with-eval-after-load 'hydra
-      (when (fboundp 'meow-leader-define-key)
-        (meow-leader-define-key
-         '("M" . my/hydra-apple-music/body)))))
-
-
-  (provide 'user)
-
-  ;;; user.el ends here
+  (provide 'apple-music)
+  ;;; personal/apple-music.el ends here
 #+end_src
