@@ -1212,6 +1212,7 @@ Design rules enforced by this map:
       utils/utils-scratch
       utils/utils-backup
       utils/utils-async
+      utils/utils-org-agenda
       utils/utils-notes-markdown
       utils/search-nav
       utils/utils-gc
@@ -4939,6 +4940,132 @@ Notes:
   ;;; utils/utils-async.el ends here
 #+end_src
 
+*** utils/utils-org-agenda.el
+:PROPERTIES:
+:CUSTOM_ID: utils-org-agenda
+:header-args:emacs-lisp: :tangle lisp/utils/utils-org-agenda.el
+:END:
+
+**** Purpose
+
+Build `org-agenda-files` using a persistent cache to avoid running
+`directory-files-recursively` on every startup or reload.
+
+This module is designed to:
+
+- Prevent startup slowdown as the number of Org files grows
+- Remove recursive scanning logic from `personal/user.el`
+- Make agenda selection rules explicit and reusable
+
+**** Design
+
+- All scanning logic lives in `utils/`
+- Results are cached under `user-emacs-directory`
+- Cached data is reused in *O(1)* time
+- Full rescans happen only when explicitly requested
+
+**** What this module does
+
+- Recursively scans `org-directory` for `*.org` files
+- Excludes files whose paths match a configurable regexp (default: `archives`)
+- Stores the resulting file list in a cache file
+- Returns a list suitable for `org-agenda-files`
+
+**** What this module does NOT do
+
+- Define `org-directory`
+- Automatically set `org-agenda-files`
+- Register hooks, timers, or background jobs
+
+**** Usage
+
+Normal operation (use cache):
+
+#+begin_src emacs-lisp :tangle no
+(setq org-agenda-files (utils-org-agenda-build))
+#+end_src
+
+Force cache rebuild:
+
+#+begin_src emacs-lisp :tangle no
+M-x utils-org-agenda-rebuild
+#+end_src
+
+**** Implementation
+
+#+begin_src emacs-lisp
+  ;;; utils-org-agenda.el --- Cached org-agenda-files builder -*- lexical-binding: t; -*-
+  ;;
+  ;; Purpose:
+  ;; - Build org-agenda-files with caching
+  ;; - Avoid full recursive scans on every startup
+  ;;
+  ;;; Code:
+
+  (require 'subr-x)
+  (require 'seq)
+
+  (defgroup utils-org-agenda nil
+    "Cached org-agenda-files builder."
+    :group 'org)
+
+  (defcustom utils-org-agenda-cache-file
+    (expand-file-name "org-agenda-files.cache"
+                      user-emacs-directory)
+    "Cache file for org-agenda-files."
+    :type 'file
+    :group 'utils-org-agenda)
+
+  (defcustom utils-org-agenda-exclude-regexp
+    "archives"
+    "Regexp used to exclude files from org-agenda."
+    :type 'regexp
+    :group 'utils-org-agenda)
+
+  (defun utils-org-agenda--scan (org-directory)
+    "Recursively scan ORG-DIRECTORY and return a list of agenda files."
+    (seq-filter
+     (lambda (file)
+       (and (string-match-p "\\.org\\'" file)
+            (not (string-match-p utils-org-agenda-exclude-regexp file))))
+     (directory-files-recursively org-directory "\\.org\\'")))
+
+  (defun utils-org-agenda--load-cache ()
+    "Load cached agenda files from disk."
+    (when (file-readable-p utils-org-agenda-cache-file)
+      (with-temp-buffer
+        (insert-file-contents utils-org-agenda-cache-file)
+        (read (current-buffer)))))
+
+  (defun utils-org-agenda--save-cache (files)
+    "Save FILES to the agenda cache."
+    (with-temp-file utils-org-agenda-cache-file
+      (prin1 files (current-buffer))))
+
+  ;;;###autoload
+  (defun utils-org-agenda-build (&optional force)
+    "Return agenda files using the cache.
+  If FORCE is non-nil, rebuild the cache."
+    (let ((cached (and (not force)
+                       (utils-org-agenda--load-cache))))
+      (if (and cached (listp cached))
+          cached
+        (let ((files (utils-org-agenda--scan org-directory)))
+          (utils-org-agenda--save-cache files)
+          files))))
+
+  ;;;###autoload
+  (defun utils-org-agenda-rebuild ()
+    "Force a rebuild of the org-agenda-files cache."
+    (interactive)
+    (setq org-agenda-files (utils-org-agenda-build t))
+    (message "org-agenda-files cache rebuilt (%d files)"
+             (length org-agenda-files)))
+
+  (provide 'utils/utils-org-agenda)
+  ;;; utils-org-agenda.el ends here
+#+end_src
+
 *** utils/search-nav.el
 :PROPERTIES:
 :CUSTOM_ID: search-nav
@@ -5567,10 +5694,10 @@ Concretely, this layer covers:
 **** Related source blocks
 
 #+begin_src emacs-lisp :tangle no
-;; See:
-;; - personal/user.el
-;; - personal/device-darwin.el
-;; - personal/apple-music.el
+  ;; See:
+  ;; - personal/user.el
+  ;; - personal/device-darwin.el
+  ;; - personal/apple-music.el
 #+end_src
 
 *** user.el
@@ -5666,16 +5793,16 @@ Notes:
     ;; Org wiring
     (setq org-directory my:d:org)
     (setq org-roam-db-node-include-function
-  	(lambda ()
-            (not (string-match-p "/chatgpt/" (buffer-file-name)))))
+        (lambda ()
+          (let ((file (buffer-file-name)))
+            (if (null file)
+                t
+              (not (string-match-p "/chatgpt/" file))))))
+
     (setq org-agenda-files
-  	(condition-case nil
-              (seq-filter
-              (lambda (file)
-                (and (string-match-p "\\.org\\'" file)
-                     (not (string-match-p "archives" file))))
-              (directory-files-recursively org-directory "\\.org\\'"))
-            (error nil)))
+  	(when (fboundp 'utils-org-agenda-build)
+            (utils-org-agenda-build)))
+
 
     ;; load-path hygiene
     (setq load-path
