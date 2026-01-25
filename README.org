@@ -3583,9 +3583,10 @@ Notes:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf corfu :straight t
+  (leaf corfu
+    :straight t
     :init
-    (setq tab-always-indent 'complete)
+     (setq tab-always-indent 'complete)
     (global-corfu-mode)
     :custom ((corfu-auto . t)
              (corfu-cycle . t)))
@@ -3598,8 +3599,8 @@ Notes:
 
   (leaf cape
     :straight t
-    :require t
-    :after corfu
+    :init
+    (require 'cape)
     :config
     (add-to-list 'completion-at-point-functions #'cape-symbol)
     (add-to-list 'completion-at-point-functions #'cape-file)
@@ -3828,7 +3829,7 @@ Notes:
          (message "[org-roam] autosync enabled (delayed)")))))
 
   (leaf org-download :straight t
-    :custom ((org-download-image-dir . my:d:org-pictures)))
+    :custom ((org-download-enableorg-download-image-dir . my:d:org-pictures)))
 
   (leaf toc-org :straight t
     :hook ((org-mode . toc-org-enable)
@@ -3929,6 +3930,50 @@ Notes:
     (org-babel-do-load-languages
      'org-babel-load-languages
      (append org-babel-load-languages '((dot . t)))))
+
+  (defun my/f:capture-blog-file-open ()
+    "Open blog capture Org file."
+    (interactive)
+    (find-file my:f:capture-blog-file))
+
+  (defun my/org-hugo-draft-entries ()
+    "Return list of draft Hugo entries.
+  Each element is (title file position)."
+    (let (results)
+      (dolist (file my:f:capture-blog-file)
+        (with-current-buffer (find-file-noselect file)
+          (org-map-entries
+           (lambda ()
+             (let ((draft (org-entry-get nil "EXPORT_HUGO_DRAFT")))
+               (when (string= draft "true")
+                 (push (list
+                        (nth 4 (org-heading-components))
+                        file
+                        (point))
+                       results))))
+           nil 'file)))
+      (nreverse results)))
+
+  (defun my/hugo-weekly-review ()
+    "Show weekly review buffer for draft Hugo posts."
+    (interactive)
+    (let ((drafts (my/org-hugo-draft-entries)))
+      (with-current-buffer (get-buffer-create "*Hugo Weekly Review*")
+        (read-only-mode -1)
+        (erase-buffer)
+        (insert (format "# Hugo Weekly Review (%s)\n\n"
+                        (format-time-string "%Y-%m-%d")))
+        (if drafts
+            (dolist (entry drafts)
+              (pcase-let ((`(,title ,file ,pos) entry))
+                (insert (format "- [[file:%s::%d][%s]]\n"
+                                file pos title))))
+          (insert "No draft posts. 🎉\n"))
+        (org-mode)
+        (goto-char (point-min))
+        (read-only-mode 1)
+        (pop-to-buffer (current-buffer)))))
+
 
   (provide 'orgx/org-export)
   ;;; org-export.el ends here
