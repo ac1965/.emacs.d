@@ -635,8 +635,17 @@ This behavior is intentional and by design.
      "emacs/"
      (or (getenv "XDG_CACHE_HOME")
          (expand-file-name ".cache/" my:d))))
-  (defconst my:d:eln-cache (expand-file-name "eln-cache/" my:d:cache))
-  (defconst my:d:treesit   (expand-file-name "tree-sitter/" my:d:var))
+  (defconst my:d:eln-cache
+    (expand-file-name "eln-cache/" my:d:cache))
+
+  ;; Tree-sitter grammar directory
+  (defconst my:d:treesit
+    (expand-file-name "tree-sitter/" my:d:var))
+  (setq treesit-install-dir my:d:treesit)
+  (setq treesit-extra-load-path (list my:d:treesit))
+  (unless (file-directory-p treesit-install-dir)
+    (make-directory treesit-install-dir t))
+
   (defconst my:d:url       (expand-file-name "url/" my:d:var))
   (defconst my:d:eww       (expand-file-name "eww/" my:d:var))
 
@@ -1204,6 +1213,7 @@ module contents.
       core/general
       core/tools
       core/utils
+      core/core-treesit
       core/history
       core/editing
       core/switches
@@ -2479,6 +2489,200 @@ to any single feature domain.
 
   (provide 'core/utils)
   ;;; core/utils.el ends here
+#+end_src
+
+*** core/core-treesit.el
+:PROPERTIES:
+:CUSTOM_ID: core-treesit
+:header-args:emacs-lisp: :tangle lisp/core/core-treesit.el
+:END:
+
+**** Purpose
+Provide a **centralized and deterministic Tree-sitter infrastructure layer**
+for Emacs 29–31+, with strict separation between:
+
+- availability detection
+- major-mode remapping
+- grammar source definition
+- grammar installation (explicit only)
+
+This module guarantees that Tree-sitter grammars are **never installed
+implicitly** and are always placed under the directory defined in
+=early-init.el=.
+
+**** What it does
+- Detects Tree-sitter availability safely
+- Applies explicit =major-mode-remap-alist= entries
+- Defines and owns grammar source metadata
+- Provides a **single explicit API** for grammar installation
+- Forces grammar installation directory via dynamic rebinding
+
+**** What it intentionally does NOT do
+- Does NOT auto-install grammars at init time
+- Does NOT rely on =treesit-auto-install=
+- Does NOT install grammars during:
+  - init
+  - byte-compilation
+  - native-compilation
+  - major-mode activation
+
+**** Design principles (important)
+- Grammar installation is **explicit and user-driven**
+- =treesit-install-language-grammar= is never called implicitly
+- Installation directory is rebound with =let= at call time
+- All Tree-sitter side effects are centralized in this module
+
+**** Notes (Emacs 29–31 behavior)
+- Emacs may attempt to auto-install grammars when entering =*-ts-mode=
+- This module disables that path and replaces it with a controlled API
+- Rebinding =treesit-install-dir= is required to avoid installation under
+  =~/.emacs.d/tree-sitter/=
+
+**** Implementation
+
+#+begin_src emacs-lisp
+  ;;; core/core-treesit.el --- Tree-sitter infrastructure layer -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Centralized Tree-sitter integration.
+  ;;
+  ;; This module provides:
+  ;; - Availability detection
+  ;; - Explicit major-mode remapping
+  ;; - Grammar source management
+  ;; - A single explicit and directory-safe grammar installation API
+  ;;
+  ;; Design rules:
+  ;; - Grammar installation is NEVER implicit
+  ;; - No installation during init / byte-compile / native-comp
+  ;; - Installation directory is defined in early-init.el
+  ;; - Internal Tree-sitter caches are cleared explicitly
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Customization
+  ;; ---------------------------------------------------------------------------
+
+  (defgroup core-treesit nil
+    "Tree-sitter infrastructure layer."
+    :group 'core)
+
+  (defcustom core-treesit-enable-p t
+    "Enable Tree-sitter based major modes when available."
+    :type 'boolean
+    :group 'core-treesit)
+
+  (defcustom core-treesit-auto-install-p nil
+    "Allow explicit Tree-sitter grammar installation via core API.
+
+  When nil, grammar installation is completely disabled."
+    :type 'boolean
+    :group 'core-treesit)
+
+  ;; Disable Emacs built-in implicit auto-install (Emacs 30+)
+  (setq treesit-auto-install nil)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Availability
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-treesit--available-p ()
+    "Return non-nil if Tree-sitter is available and enabled."
+    (and core-treesit-enable-p
+         (fboundp 'treesit-available-p)
+         (treesit-available-p)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Explicit major-mode remapping
+  ;; ---------------------------------------------------------------------------
+
+  (defvar core-treesit--mode-remap-alist
+    '((python-mode     . python-ts-mode)
+      (js-mode         . js-ts-mode)
+      (javascript-mode . js-ts-mode)
+      (css-mode        . css-ts-mode)
+      (json-mode       . json-ts-mode))
+    "Explicit major-mode remapping for Tree-sitter.")
+
+  (defun core-treesit--apply-remap ()
+    "Apply explicit Tree-sitter major-mode remapping."
+    (when (core-treesit--available-p)
+      (dolist (pair core-treesit--mode-remap-alist)
+        (add-to-list 'major-mode-remap-alist pair))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Grammar sources
+  ;; ---------------------------------------------------------------------------
+
+  (defvar core-treesit--language-sources
+    '((python
+       "https://github.com/tree-sitter/tree-sitter-python")
+      (javascript
+       "https://github.com/tree-sitter/tree-sitter-javascript")
+      (css
+       "https://github.com/tree-sitter/tree-sitter-css")
+      (json
+       "https://github.com/tree-sitter/tree-sitter-json"))
+    "Tree-sitter grammar sources managed by core.")
+
+  ;; ---------------------------------------------------------------------------
+  ;; Explicit grammar installation API
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-treesit-install-grammar (lang)
+    "Explicitly install Tree-sitter grammar for LANG.
+
+  This is the ONLY supported entry point for grammar installation.
+
+  Guarantees:
+  - No implicit installation
+  - Installation directory is forced to `my:d:treesit`
+  - Internal Tree-sitter install directory cache is cleared"
+    (interactive
+     (list
+      (intern
+       (completing-read
+        "Language: "
+        (mapcar #'car core-treesit--language-sources)
+        nil t))))
+    (unless core-treesit-auto-install-p
+      (user-error "Tree-sitter auto-install is disabled"))
+
+    (unless (assoc lang core-treesit--language-sources)
+      (user-error "Unknown Tree-sitter language: %s" lang))
+
+    ;; Register grammar source
+    (add-to-list 'treesit-language-source-alist
+                 (assoc lang core-treesit--language-sources))
+
+    ;; CRITICAL: clear internal install dir cache (Emacs 29–31)
+    (when (boundp 'treesit--install-dir-cache)
+      (setq treesit--install-dir-cache nil))
+
+    ;; Force install directory
+    (let ((treesit-install-dir my:d:treesit))
+      (treesit-install-language-grammar lang)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Initialization
+  ;; ---------------------------------------------------------------------------
+
+  (when (core-treesit--available-p)
+    (core-treesit--apply-remap))
+
+  (provide 'core/core-treesit)
+  ;;; core/core-treesit.el ends here
 #+end_src
 
 *** core/history.el
@@ -6772,6 +6976,10 @@ Notes:
     ;; Ensure directories exist
     (mapc #'my/ensure-directory-exists
           (list my:d:cloud my:d:org my:d:blog))
+
+    ;; core/core-treesit
+    (setq core-treesit-enable-p t)
+    (setq core-treesit-auto-install-p t)
 
     ;; Org wiring
     (setq org-directory my:d:org)
