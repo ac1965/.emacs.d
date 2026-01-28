@@ -367,7 +367,7 @@ coupling between modules.
   (advice-remove 'require #'graph/require-advice)
   (message "[graph] require capture disabled"))
 
-(provide 'tools/graph)
+(provide 'graph)
 ;;; tools/graph.el ends here
 #+end_src
 
@@ -630,6 +630,13 @@ This behavior is intentional and by design.
   (defconst my:d:var       (expand-file-name ".var/" my:d))
   (defconst my:d:etc       (expand-file-name ".etc/" my:d))
   (defconst my:d:lisp      (expand-file-name "lisp/" my:d))
+  ;; Populate load-path with all lisp subdirectories
+  (when (and (boundp 'my:d:lisp)
+             (file-directory-p my:d:lisp))
+    (dolist (dir (directory-files my:d:lisp t "\\`[^.]"))
+      (when (file-directory-p dir)
+        (add-to-list 'load-path dir))))
+
   (defconst my:d:cache
     (expand-file-name
      "emacs/"
@@ -987,7 +994,7 @@ This behavior is intentional and by design.
          (lisp-dir (expand-file-name "lisp/" root)))
     (when (file-directory-p lisp-dir)
       (add-to-list 'load-path lisp-dir))
-    (require 'core/custom-ui-extras nil t)
+    (require 'custom-ui-extras nil t)
     (require 'modules nil t))
 
 
@@ -1208,72 +1215,72 @@ module contents.
   (defconst my:modules
     '(
       ;; Core
-      core/fixes
-      core/core-session
-      core/general
-      core/tools
-      core/utils
-      core/core-treesit
-      core/history
-      core/editing
-      core/switches
-      core/custom
+      fixes
+      core-session
+      general
+      tools
+      utils
+      core-treesit
+      core-history
+      editing
+      switches
+      custom
 
       ;; UI
-      ui/ui-font
-      ui/ui-theme
-      ui/ui-window
-      ui/ui-utils
-      ui/ui-health-modeline
+      ui-font
+      ui-theme
+      ui-window
+      ui-utils
+      ui-health-modeline
 
       ;; Completion
-      completion/completion-core
-      completion/completion-vertico
-      completion/completion-consult
-      completion/completion-embark
-      completion/completion-corfu
-      completion/completion-icons
-      completion/completion-capf
-      completion/completion-capf-org-src
-      completion/completion-capf-org-src-lang
-      completion/completion-corfu-org-src
-      completion/completion-orderless-org-src
+      completion-core
+      completion-vertico
+      completion-consult
+      completion-embark
+      completion-corfu
+      completion-icons
+      completion-capf
+      completion-capf-org-src
+      completion-capf-org-src-lang
+      completion-corfu-org-src
+      completion-orderless-org-src
 
-      ;; Org ecosystem (module namespace = orgx/)
-      orgx/org-core
-      orgx/org-visual
-      orgx/org-extensions
-      orgx/org-export
+      ;; Org ecosystem (module namespace = )
+      org-core
+      org-visual
+      org-extensions
+      org-export
 
       ;; VCS (uncomment when needed)
-      vcs/vcs-magit
-      vcs/vcs-gutter
-      vcs/vcs-forge
+      vcs-magit
+      vcs-gutter
+      vcs-forge
 
       ;; Development
-      dev/dev-ai
-      dev/dev-term
-      dev/dev-build
-      dev/dev-docker
+      dev-ai
+      dev-term
+      dev-build
+      dev-docker
 
       ;; Web/Infra
-      dev/dev-web-core
-      dev/dev-format
-      dev/dev-infra-modes
-      dev/dev-sql
-      dev/dev-rest
+      dev-web-core
+      dev-format
+      dev-infra-modes
+      dev-sql
+      dev-rest
 
       ;; Utils
-      utils/utils-functions
-      utils/utils-scratch
-      utils/utils-backup
-      utils/utils-async
-      utils/utils-org-agenda
-      utils/utils-notes-markdown
-      utils/utils-search-nav
-      utils/utils-gc
-      utils/utils-buffers
-      utils/utils-lsp
+      utils-functions
+      utils-scratch
+      utils-backup
+      utils-async
+      utils-org-agenda
+      utils-notes-markdown
+      utils-search-nav
+      utils-gc
+      utils-buffers
+      utils-lsp
       )
     "Default set of modules to load in order.")
 
@@ -1434,7 +1441,7 @@ changing architecture or refactoring existing code.
   ;;     * Why advice (and not local change)?
   ;;
 
-  (provide 'core/fixes)
+  (provide 'fixes)
 
   ;;; core/fixes.el ends here
 #+end_src
@@ -1638,7 +1645,7 @@ actual work to utils modules.
   (when core-session-enable-p
     (core-session--enable))
 
-  (provide 'core/core-session)
+  (provide 'core-session)
   ;;; core/core-session.el ends here
 #+end_src
 
@@ -2172,7 +2179,7 @@ without depending on any specific UI, completion framework, or LSP backend.
         (setq plstore-secret-keys 'silent
               plstore-encrypt-to (getenv "GPG_KEY_ID")))))
 
-  (provide 'core/general)
+  (provide 'general)
   ;;; core/general.el ends here
 #+end_src
 
@@ -2381,6 +2388,22 @@ not fit into other core domains.
         (view-mode 1))
       (switch-to-buffer buf)))
 
+  ;;; Provide/feature sanity check -----------------------------------------------
+
+  (defun my/check-provide-matches-file (file)
+    "Warn if provide does not match file name (only for user config)."
+    (when (and file
+               ;; Only check files under user-emacs-directory/lisp
+               (string-prefix-p
+                (expand-file-name "lisp/" user-emacs-directory)
+                (expand-file-name file)))
+      (let* ((base (file-name-base file))
+             (feat (intern base)))
+        (unless (featurep feat)
+          (warn "[provide] %s did not provide feature `%s`"
+                base feat)))))
+  (add-hook 'after-load-functions #'my/check-provide-matches-file)
+
   (with-eval-after-load 'org
     (require 'org-fold)
     (defun my/org-fold-subtree ()   (interactive) (org-fold-subtree t))
@@ -2393,7 +2416,7 @@ not fit into other core domains.
     (define-key org-mode-map (kbd "C-c e") #'my/org-unfold-subtree)
     (define-key org-mode-map (kbd "C-c t") #'my/org-toggle-fold))
 
-  (provide 'core/tools)
+  (provide 'tools)
   ;;; core/tools.el ends here
 #+end_src
 
@@ -2487,7 +2510,7 @@ to any single feature domain.
       (view-mode -1)))
   (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
 
-  (provide 'core/utils)
+  (provide 'utils)
   ;;; core/utils.el ends here
 #+end_src
 
@@ -2716,14 +2739,14 @@ implicitly** and are always placed under the directory defined in
     (when core-treesit-auto-install-p
       (ignore-errors (core-treesit-install-all))))
 
-  (provide 'core/core-treesit)
+  (provide 'core-treesit)
   ;;; core/core-treesit.el ends here
 #+end_src
 
-*** core/history.el
+*** core/core-history.el
 :PROPERTIES:
 :CUSTOM_ID: core-history
-:header-args:emacs-lisp: :tangle lisp/core/history.el
+:header-args:emacs-lisp: :tangle lisp/core/core-history.el
 :END:
 
 **** Purpose
@@ -2776,7 +2799,7 @@ history survive Emacs restarts.
     (my/ensure-directory-exists (file-name-directory savehist-file))
     (add-to-list 'savehist-additional-variables 'my:desktop-ask-on-restore))
 
-  (provide 'core/history)
+  (provide 'core-history)
   ;;; core/history.el ends here
 #+end_src
 
@@ -2886,7 +2909,7 @@ buffers without imposing workflow constraints.
           transient-values-file  (concat no-littering-var-directory "transient/values.el"))
     (my/ensure-directory-exists (concat no-littering-var-directory "transient/")))
 
-  (provide 'core/editing)
+  (provide 'editing)
   ;;; core/editing.el ends here
 #+end_src
 
@@ -3016,7 +3039,7 @@ Provide a unified switchboard for selecting UI bundles and LSP backends.
      (present (message "[switches] LSP seems present but could not enable: %s" my:use-lsp))
      (t (message "[switches] LSP backend unavailable: %s" my:use-lsp))))
 
-  (provide 'core/switches)
+  (provide 'switches)
   ;;; core/switches.el ends here
 #+end_src
 
@@ -3138,7 +3161,7 @@ This module isolates Customize side effects from the main configuration.
     (custom-save-all)
     (message "[custom] Wrote snapshot to %s" my:f:custom))
 
-  (provide 'core/custom)
+  (provide 'custom)
   ;;; core/custom.el ends here
 #+end_src
 
@@ -3173,11 +3196,11 @@ This file exists as a safe extension point.
   (setq my:modules-extra
         (delete-dups
          (append my:modules-extra
-                 '(ui/ui-visual-aids
-                   orgx/org-typography
-                   ui/ui-macos))))
+                 '(ui-visual-aids
+                   org-typography
+  		 ui-macos))))
 
-  (provide 'core/custom-ui-extras)
+  (provide 'custom-ui-extras)
   ;;; core/custom-ui-extras.el ends here
 #+end_src
 
@@ -3343,7 +3366,7 @@ including default, variable-pitch, and emoji fonts, with optional ligature suppo
      'prog-mode
      '("->" "=>" "::" "===" "!=" "&&" "||")))
 
-  (provide 'ui/ui-font)
+  (provide 'ui-font)
   ;;; ui-font.el ends here
 #+end_src
 
@@ -3375,116 +3398,116 @@ customizable variables.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; ui-nano-palette.el --- Nano-style palette -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2026
-;; License: GNU GPL v3 or later
-;;
-;; Category: ui
-;;
-;; Commentary:
-;; One source of truth:
-;; - Define the palette once (defcustom → easy to tweak via M-x customize)
-;; - Apply all faces from a single function
-;; - No duplicated literal colors scattered around
-;;
-;;; Code:
+  ;;; ui-nano-palette.el --- Nano-style palette -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; One source of truth:
+  ;; - Define the palette once (defcustom → easy to tweak via M-x customize)
+  ;; - Apply all faces from a single function
+  ;; - No duplicated literal colors scattered around
+  ;;
+  ;;; Code:
 
-(defgroup my:nano nil
-  "Minimal nano-style light palette."
-  :group 'faces)
+  (defgroup my:nano nil
+    "Minimal nano-style light palette."
+    :group 'faces)
 
-(defcustom nano-color-background "#fafafa"
-  "UI background for buffers/panels."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-background "#fafafa"
+    "UI background for buffers/panels."
+    :type 'string :group 'my:nano)
 
-(defcustom nano-color-foreground "#374151"
-  "Default body text color."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-foreground "#374151"
+    "Default body text color."
+    :type 'string :group 'my:nano)
 
-(defcustom nano-color-salient "#2563eb"
-  "Accent for links/keywords/standout choices."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-salient "#2563eb"
+    "Accent for links/keywords/standout choices."
+    :type 'string :group 'my:nano)
 
-(defcustom nano-color-popout "#6b7280"
-  "Neutral notice / muted highlight."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-popout "#6b7280"
+    "Neutral notice / muted highlight."
+    :type 'string :group 'my:nano)
 
-(defcustom nano-color-critical "#dc2626"
-  "Critical error / danger color."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-critical "#dc2626"
+    "Critical error / danger color."
+    :type 'string :group 'my:nano)
 
-(defcustom nano-color-strong "#111827"
-  "Strong emphasis (headings, key mode-line parts)."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-strong "#111827"
+    "Strong emphasis (headings, key mode-line parts)."
+    :type 'string :group 'my:nano)
 
-(defcustom nano-color-faded "#9ca3af"
-  "De-emphasized info (comments/secondary/disabled)."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-faded "#9ca3af"
+    "De-emphasized info (comments/secondary/disabled)."
+    :type 'string :group 'my:nano)
 
-(defcustom nano-color-subtle "#e5e7eb"
-  "Subtle backgrounds (mode/header lines, gentle selections)."
-  :type 'string :group 'my:nano)
+  (defcustom nano-color-subtle "#e5e7eb"
+    "Subtle backgrounds (mode/header lines, gentle selections)."
+    :type 'string :group 'my:nano)
 
-(defun my/nano-apply-faces ()
-  "Apply faces based on the nano-style palette defined above."
-  (set-face-attribute 'default nil
-                      :background nano-color-background
-                      :foreground nano-color-foreground)
-  (set-face-attribute 'bold nil :foreground nano-color-strong :weight 'bold)
-  (set-face-attribute 'italic nil :slant 'italic)
-
-  (set-face-attribute 'font-lock-comment-face nil :foreground nano-color-faded)
-  (set-face-attribute 'font-lock-keyword-face nil
-                      :foreground nano-color-salient :weight 'semi-bold)
-  (set-face-attribute 'font-lock-string-face nil :foreground nano-color-popout)
-  (set-face-attribute 'font-lock-warning-face nil
-                      :foreground nano-color-popout :weight 'bold)
-
-  (set-face-attribute 'link nil :foreground nano-color-salient :underline t)
-  (set-face-attribute 'button nil :foreground nano-color-salient :underline t)
-
-  (set-face-attribute 'error nil
-                      :foreground nano-color-critical :weight 'bold)
-  (set-face-attribute 'warning nil
-                      :foreground nano-color-popout :weight 'bold)
-  (set-face-attribute 'success nil :foreground "#10b981")
-
-  (set-face-attribute 'region nil :background nano-color-subtle)
-
-  (let ((ml-bg nano-color-subtle)
-        (ml-fg nano-color-strong))
-    (set-face-attribute 'mode-line nil
-                        :background ml-bg :foreground ml-fg
-                        :box `(:line-width 1 :color ,ml-bg))
-    (set-face-attribute 'mode-line-inactive nil
+  (defun my/nano-apply-faces ()
+    "Apply faces based on the nano-style palette defined above."
+    (set-face-attribute 'default nil
                         :background nano-color-background
-                        :foreground nano-color-faded
-                        :box `(:line-width 1 :color ,nano-color-background)))
+                        :foreground nano-color-foreground)
+    (set-face-attribute 'bold nil :foreground nano-color-strong :weight 'bold)
+    (set-face-attribute 'italic nil :slant 'italic)
 
-  (set-face-attribute 'minibuffer-prompt nil
-                      :foreground nano-color-salient :weight 'semi-bold))
+    (set-face-attribute 'font-lock-comment-face nil :foreground nano-color-faded)
+    (set-face-attribute 'font-lock-keyword-face nil
+                        :foreground nano-color-salient :weight 'semi-bold)
+    (set-face-attribute 'font-lock-string-face nil :foreground nano-color-popout)
+    (set-face-attribute 'font-lock-warning-face nil
+                        :foreground nano-color-popout :weight 'bold)
 
-(defun my/nano-set-palette-and-apply (&rest plist)
-  "Override palette entries via PLIST and apply faces."
-  (when plist
-    (let ((map '((:background . nano-color-background)
-                 (:foreground . nano-color-foreground)
-                 (:salient    . nano-color-salient)
-                 (:popout     . nano-color-popout)
-                 (:critical   . nano-color-critical)
-                 (:strong     . nano-color-strong)
-                 (:faded      . nano-color-faded)
-                 (:subtle     . nano-color-subtle))))
-      (while plist
-        (let* ((k (pop plist))
-               (v (pop plist))
-               (sym (cdr (assq k map))))
-          (when sym (set sym v))))))
-  (my/nano-apply-faces))
+    (set-face-attribute 'link nil :foreground nano-color-salient :underline t)
+    (set-face-attribute 'button nil :foreground nano-color-salient :underline t)
 
-(provide 'ui/ui-nano-palette)
-;;; ui/ui-nano-palette.el ends here
+    (set-face-attribute 'error nil
+                        :foreground nano-color-critical :weight 'bold)
+    (set-face-attribute 'warning nil
+                        :foreground nano-color-popout :weight 'bold)
+    (set-face-attribute 'success nil :foreground "#10b981")
+
+    (set-face-attribute 'region nil :background nano-color-subtle)
+
+    (let ((ml-bg nano-color-subtle)
+          (ml-fg nano-color-strong))
+      (set-face-attribute 'mode-line nil
+                          :background ml-bg :foreground ml-fg
+                          :box `(:line-width 1 :color ,ml-bg))
+      (set-face-attribute 'mode-line-inactive nil
+                          :background nano-color-background
+                          :foreground nano-color-faded
+                          :box `(:line-width 1 :color ,nano-color-background)))
+
+    (set-face-attribute 'minibuffer-prompt nil
+                        :foreground nano-color-salient :weight 'semi-bold))
+
+  (defun my/nano-set-palette-and-apply (&rest plist)
+    "Override palette entries via PLIST and apply faces."
+    (when plist
+      (let ((map '((:background . nano-color-background)
+                   (:foreground . nano-color-foreground)
+                   (:salient    . nano-color-salient)
+                   (:popout     . nano-color-popout)
+                   (:critical   . nano-color-critical)
+                   (:strong     . nano-color-strong)
+                   (:faded      . nano-color-faded)
+                   (:subtle     . nano-color-subtle))))
+        (while plist
+          (let* ((k (pop plist))
+                 (v (pop plist))
+                 (sym (cdr (assq k map))))
+            (when sym (set sym v))))))
+    (my/nano-apply-faces))
+
+  (provide 'ui-nano-palette)
+  ;;; ui/ui-nano-palette.el ends here
 #+end_src
 
 *** ui/ui-theme.el
@@ -3513,67 +3536,67 @@ nano palette to produce a consistent visual system.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
-;;
-;; Category: ui
-;;
-(eval-when-compile (require 'leaf))
+  ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: ui
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(require 'ui/ui-nano-palette)
+  (require 'ui-nano-palette)
 
-(setq-default line-spacing 0.24)
+  (setq-default line-spacing 0.24)
 
-(defun my/nano--reapply-after-theme (&rest _)
-  "Re-apply nano-style face normalization after a theme change."
-  (when (fboundp 'my/nano-apply-faces)
-    (my/nano-apply-faces)))
+  (defun my/nano--reapply-after-theme (&rest _)
+    "Re-apply nano-style face normalization after a theme change."
+    (when (fboundp 'my/nano-apply-faces)
+      (my/nano-apply-faces)))
 
-(with-eval-after-load 'cus-theme
-  (if (boundp 'enable-theme-functions)
-      (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
-    (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
+  (with-eval-after-load 'cus-theme
+    (if (boundp 'enable-theme-functions)
+        (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
+      (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
 
-(leaf nano-emacs
-  :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs")
-  :config
-  (require 'nano-layout)
-  (require 'nano-faces)
-  (nano-faces)
-
-  (set-face-attribute 'nano-face-strong nil
-                      :foreground (face-foreground 'nano-face-default)
-                      :weight 'bold)
-
-  (leaf nano-theme
-    :straight (nano-theme :type git :host github :repo "rougier/nano-theme")
+  (leaf nano-emacs
+    :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs")
     :config
-    (load-theme 'nano t)
-    (my/nano-apply-faces)
+    (require 'nano-layout)
+    (require 'nano-faces)
+    (nano-faces)
 
-    (set-face-attribute 'bold nil :weight 'bold)
-    (set-face-attribute 'italic nil :slant 'italic)
-    (with-eval-after-load 'elec-pair
-      (custom-set-faces
-       '(electric-pair-overlay-face ((t (:background "#e5e7eb"))))
-       '(show-paren-match ((t (:background "#e5e7eb"
-                                           :foreground "#111827"
-                                           :weight bold))))
-       '(show-paren-mismatch ((t (:background "#dc2626"
-                                              :foreground "white"
-                                              :weight bold))))))))
+    (set-face-attribute 'nano-face-strong nil
+                        :foreground (face-foreground 'nano-face-default)
+                        :weight 'bold)
 
-(leaf spacious-padding
-  :straight t
-  :if (display-graphic-p)
-  :custom
-  ((spacious-padding-widths . '((left . 15) (right . 15)))
-   (spacious-padding-subtle-mode-line . t))
-  :config
-  (spacious-padding-mode 1)
-  (my/nano-apply-faces))
+    (leaf nano-theme
+      :straight (nano-theme :type git :host github :repo "rougier/nano-theme")
+      :config
+      (load-theme 'nano t)
+      (my/nano-apply-faces)
 
-(provide 'ui/ui-theme)
-;;; ui/ui-theme.el ends here
+      (set-face-attribute 'bold nil :weight 'bold)
+      (set-face-attribute 'italic nil :slant 'italic)
+      (with-eval-after-load 'elec-pair
+        (custom-set-faces
+         '(electric-pair-overlay-face ((t (:background "#e5e7eb"))))
+         '(show-paren-match ((t (:background "#e5e7eb"
+                                             :foreground "#111827"
+                                             :weight bold))))
+         '(show-paren-mismatch ((t (:background "#dc2626"
+                                                :foreground "white"
+                                                :weight bold))))))))
+
+  (leaf spacious-padding
+    :straight t
+    :if (display-graphic-p)
+    :custom
+    ((spacious-padding-widths . '((left . 15) (right . 15)))
+     (spacious-padding-subtle-mode-line . t))
+    :config
+    (spacious-padding-mode 1)
+    (my/nano-apply-faces))
+
+  (provide 'ui-theme)
+  ;;; ui/ui-theme.el ends here
 #+end_src
 
 *** ui/ui-doom-modeline.el
@@ -3597,34 +3620,34 @@ Provide an alternative **Doom-style modeline bundle**.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; ui-doom-modeline.el --- Doom UI bundle entry -*- lexical-binding: t; -*-
-;;
-;; Category: ui
-;;
-(eval-when-compile (require 'leaf))
-(declare-function doom-modeline-mode "doom-modeline")
+  ;;; ui-doom-modeline.el --- Doom UI bundle entry -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: ui
+  ;;
+  (eval-when-compile (require 'leaf))
+  (declare-function doom-modeline-mode "doom-modeline")
 
-(leaf nerd-icons :straight t)
+  (leaf nerd-icons :straight t)
 
-(leaf doom-modeline
-  :straight t
-  :custom ((doom-modeline-height . 28)
-           (doom-modeline-buffer-file-name-style
-            . 'truncate-with-project)
-           (doom-modeline-minor-modes . nil)
-           (doom-modeline-enable-word-count . t))
-  :config
-  (doom-modeline-mode 1))
+  (leaf doom-modeline
+    :straight t
+    :custom ((doom-modeline-height . 28)
+             (doom-modeline-buffer-file-name-style
+              . 'truncate-with-project)
+             (doom-modeline-minor-modes . nil)
+             (doom-modeline-enable-word-count . t))
+    :config
+    (doom-modeline-mode 1))
 
-;;;###autoload
-(defun my/ui-enable-doom ()
-  "Enable Doom UI modeline bundle."
-  (interactive)
-  (doom-modeline-mode 1)
-  (message "[ui] Doom modeline enabled."))
+  ;;;###autoload
+  (defun my/ui-enable-doom ()
+    "Enable Doom UI modeline bundle."
+    (interactive)
+    (doom-modeline-mode 1)
+    (message "[ui] Doom modeline enabled."))
 
-(provide 'ui/ui-doom-modeline)
-;;; ui/ui-doom-modeline.el ends here
+  (provide 'ui-doom-modeline)
+  ;;; ui/ui-doom-modeline.el ends here
 #+end_src
 
 *** ui/ui-nano-modeline.el
@@ -3648,41 +3671,41 @@ Provide a **robust, guarded loader** for nano-modeline.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; ui-nano-modeline.el --- Nano UI bundle entry -*- lexical-binding: t; -*-
-;;
-;; Category: ui
-;;
-(eval-when-compile (require 'leaf))
+  ;;; ui-nano-modeline.el --- Nano UI bundle entry -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: ui
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(defvar ui--nano-modeline-initialized nil)
+  (defvar ui--nano-modeline-initialized nil)
 
-(defun my/ui--nano-available-p ()
-  (require 'nano-modeline nil 'noerror))
+  (defun my/ui--nano-available-p ()
+    (require 'nano-modeline nil 'noerror))
 
-(defun my/ui--nano-setup ()
-  (when (and (not ui--nano-modeline-initialized)
-             (my/ui--nano-available-p))
-    (setopt nano-modeline-padding '(0.20 . 0.25))
-    (add-hook 'prog-mode-hook #'nano-modeline-prog-mode)
-    (add-hook 'text-mode-hook #'nano-modeline-text-mode)
-    (setq ui--nano-modeline-initialized t)
-    (message "[ui] nano-modeline initialized.")))
+  (defun my/ui--nano-setup ()
+    (when (and (not ui--nano-modeline-initialized)
+               (my/ui--nano-available-p))
+      (setopt nano-modeline-padding '(0.20 . 0.25))
+      (add-hook 'prog-mode-hook #'nano-modeline-prog-mode)
+      (add-hook 'text-mode-hook #'nano-modeline-text-mode)
+      (setq ui--nano-modeline-initialized t)
+      (message "[ui] nano-modeline initialized.")))
 
-(leaf nano-modeline
-  :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
-  :after nano-emacs
-  :require nil
-  :init
-  (add-hook 'after-init-hook #'my/ui--nano-setup))
+  (leaf nano-modeline
+    :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
+    :after nano-emacs
+    :require nil
+    :init
+    (add-hook 'after-init-hook #'my/ui--nano-setup))
 
-;;;###autoload
-(defun my/ui-enable-nano ()
-  "Enable Nano UI modeline bundle."
-  (interactive)
-  (my/ui--nano-setup))
+  ;;;###autoload
+  (defun my/ui-enable-nano ()
+    "Enable Nano UI modeline bundle."
+    (interactive)
+    (my/ui--nano-setup))
 
-(provide 'ui/ui-nano-modeline)
-;;; ui/ui-nano-modeline.el ends here
+  (provide 'ui-nano-modeline)
+  ;;; ui/ui-nano-modeline.el ends here
 #+end_src
 
 *** ui/ui-health-modeline.el
@@ -3788,7 +3811,7 @@ via the global mode-line.
 
   (ui-health--update)
 
-  (provide 'ui/ui-health-modeline)
+  (provide 'ui-health-modeline)
   ;;; ui/ui-health-modeline.el ends here
 #+end_src
 
@@ -3814,57 +3837,57 @@ Provide **window and layout management utilities** for daily use.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
-;;
-;; Category: ui
-;;
-(eval-when-compile (require 'leaf))
+  ;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: ui
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf zoom
-  :straight t
-  :hook (after-init-hook . zoom-mode)
-  :custom
-  ((zoom-size . '(0.62 . 0.62))
-   (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
-   (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
+  (leaf zoom
+    :straight t
+    :hook (after-init-hook . zoom-mode)
+    :custom
+    ((zoom-size . '(0.62 . 0.62))
+     (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
+     (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
 
-(leaf desktop
-  :straight nil
-  :config
-  (let ((dir (concat no-littering-var-directory "desktop/")))
-    (setq desktop-dirname dir
-          desktop-path (list dir)
-          desktop-base-file-name "desktop"
-          desktop-base-lock-name "lock"
-          desktop-restore-eager 10
-          desktop-save t
-          desktop-load-locked-desktop nil
-          desktop-auto-save-timeout 300)
-    (my/ensure-directory-exists dir)
-    (desktop-save-mode 1)))
+  (leaf desktop
+    :straight nil
+    :config
+    (let ((dir (concat no-littering-var-directory "desktop/")))
+      (setq desktop-dirname dir
+            desktop-path (list dir)
+            desktop-base-file-name "desktop"
+            desktop-base-lock-name "lock"
+            desktop-restore-eager 10
+            desktop-save t
+            desktop-load-locked-desktop nil
+            desktop-auto-save-timeout 300)
+      (my/ensure-directory-exists dir)
+      (desktop-save-mode 1)))
 
-(leaf winner
-  :straight nil
-  :global-minor-mode t)
+  (leaf winner
+    :straight nil
+    :global-minor-mode t)
 
-(defvar my:saved-window-config nil
-  "Saved window configuration state.")
+  (defvar my:saved-window-config nil
+    "Saved window configuration state.")
 
-(defun my/save-window-layout ()
-  "Save current window layout."
-  (interactive)
-  (setq my:saved-window-config (window-state-get nil t))
-  (message "Window configuration saved."))
+  (defun my/save-window-layout ()
+    "Save current window layout."
+    (interactive)
+    (setq my:saved-window-config (window-state-get nil t))
+    (message "Window configuration saved."))
 
-(defun my/restore-window-layout ()
-  "Restore last saved window layout."
-  (interactive)
-  (if my:saved-window-config
-      (window-state-put my:saved-window-config)
-    (message "No saved window configuration found.")))
+  (defun my/restore-window-layout ()
+    "Restore last saved window layout."
+    (interactive)
+    (if my:saved-window-config
+        (window-state-put my:saved-window-config)
+      (message "No saved window configuration found.")))
 
-(provide 'ui/ui-window)
-;;; ui/ui-window.el ends here
+  (provide 'ui-window)
+  ;;; ui/ui-window.el ends here
 #+end_src
 
 *** ui/ui-utils.el
@@ -3908,7 +3931,7 @@ Provide **window and layout management utilities** for daily use.
     :straight t
     :config (turn-on-pbcopy))
 
-  (provide 'ui/ui-utils)
+  (provide 'ui-utils)
   ;;; ui/ui-utils.el ends here
 #+end_src
 
@@ -3976,7 +3999,7 @@ orientation without clutter.
   (setq indent-bars-prefer-character t
         indent-bars-spacing-override 2))
 
-(provide 'ui/ui-visual-aids)
+(provide 'ui-visual-aids)
 ;;; ui/ui-visual-aids.el ends here
 #+end_src
 
@@ -4012,7 +4035,7 @@ Provide **macOS-specific UI niceties**.
   (add-to-list 'default-frame-alist
                '(use-title-bar . t)))
 
-(provide 'ui/ui-macos)
+(provide 'ui-macos)
 ;;; ui/ui-macos.el ends here
 #+end_src
 
@@ -4046,22 +4069,22 @@ and higher-level completion UIs.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
-;;
-;; Category: completion
-;;
-(eval-when-compile (require 'leaf))
+  ;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf orderless
-  :straight t
-  :custom
-  ((completion-styles . '(orderless basic))
-   (completion-category-overrides
-    . '((file    (styles . (partial-completion)))
-        (symbol  (styles . (orderless)))
-        (command (styles . (orderless)))))))
+  (leaf orderless
+    :straight t
+    :custom
+    ((completion-styles . '(orderless basic))
+     (completion-category-overrides
+      . '((file    (styles . (partial-completion)))
+          (symbol  (styles . (orderless)))
+          (command (styles . (orderless)))))))
 
-(provide 'completion/completion-core)
+  (provide 'completion-core)
 #+end_src
 
 *** completion/completion-vertico.el
@@ -4113,7 +4136,7 @@ affect in-buffer completion.
   :straight t
   :global-minor-mode marginalia-mode)
 
-(provide 'completion/completion-vertico)
+(provide 'completion-vertico)
 #+end_src
 
 *** completion/completion-consult.el
@@ -4154,7 +4177,7 @@ incremental narrowing.
   ((xref-show-xrefs-function        . #'consult-xref)
    (xref-show-definitions-function . #'consult-xref)))
 
-(provide 'completion/completion-consult)
+(provide 'completion-consult)
 #+end_src
 
 *** completion/completion-embark.el
@@ -4197,7 +4220,7 @@ completion context.
   :after (embark consult)
   :hook (embark-collect-mode . consult-preview-at-point-mode))
 
-(provide 'completion/completion-embark)
+(provide 'completion-embark)
 #+end_src
 
 *** completion/completion-corfu.el
@@ -4268,7 +4291,7 @@ completion sources.
   (add-to-list 'completion-at-point-functions #'cape-file)
   (add-to-list 'completion-at-point-functions #'cape-dabbrev))
 
-(provide 'completion/completion-corfu)
+(provide 'completion-corfu)
 ;;; completion/completion-corfu.el ends here
 #+end_src
 
@@ -4315,7 +4338,7 @@ This module improves recognizability without changing completion logic.
 
 (setq marginalia-align 'right)
 
-(provide 'completion/completion-icons)
+(provide 'completion-icons)
 #+end_src
 
 *** completion/completion-capf.el
@@ -4442,7 +4465,7 @@ and REPL buffers.
           (dabbrev (styles basic))))
 
 
-  (provide 'completion/completion-capf)
+  (provide 'completion-capf)
   ;;; completion/capf.el ends here
 #+end_src
 
@@ -4510,7 +4533,7 @@ This ensures that:
 
   (add-hook 'org-src-mode-hook #'completion--org-src-capfs)
 
-  (provide 'completion/completion-capf-org-src)
+  (provide 'completion-capf-org-src)
   ;;; completion/completion-capf-org-src.el ends here
 #+end_src
 
@@ -4596,7 +4619,7 @@ completion strategies for shell, SQL, and Python source blocks.
 
   (add-hook 'org-src-mode-hook #'completion--org-src-lang-capfs)
 
-  (provide 'completion/completion-capf-org-src-lang)
+  (provide 'completion-capf-org-src-lang)
   ;;; completion/completion-capf-org-src-lang.el ends here
 #+end_src
 
@@ -4650,7 +4673,7 @@ embedded source blocks.
 
   (add-hook 'org-src-mode-hook #'completion--org-src-corfu-setup)
 
-  (provide 'completion/completion-corfu-org-src)
+  (provide 'completion-corfu-org-src)
   ;;; completion/completion-corfu-org-src.el ends here
 #+end_src
 
@@ -4711,7 +4734,7 @@ stricter or simpler styles in normal buffers.
 
   (add-hook 'org-src-mode-hook #'completion--org-src-orderless-setup)
 
-  (provide 'completion/completion-orderless-org-src)
+  (provide 'completion-orderless-org-src)
   ;;; completion/completion-orderless-org-src.el ends here
 #+end_src
 
@@ -4791,7 +4814,7 @@ stricter or simpler styles in normal buffers.
                                                        (expand-file-name "~/org")))))
       (setopt org-archive-location (concat central "::"))))
 
-  (provide 'orgx/org-core)
+  (provide 'org-core)
   ;;; orgx/org-core.el ends here
 #+end_src
 
@@ -4856,7 +4879,7 @@ Provide **modern, distraction-free visuals** for Org buffers.
    (org-agenda-current-time-string
     . "⭠ now ─────────────────────────────────────────────────")))
 
-(provide 'orgx/org-visual)
+(provide 'org-visual)
 ;;; orgx/org-visual.el ends here
 #+end_src
 
@@ -4882,59 +4905,59 @@ Provide **optional but production-safe extensions** for Org workflows.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; orgx/org-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
-;;
-;; Category: org
-;;
-;;; Code:
+  ;;; orgx/org-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf org-journal
-  :straight t
-  :custom ((org-journal-dir . my:d:org-journal)))
+  (leaf org-journal
+    :straight t
+    :custom ((org-journal-dir . my:d:org-journal)))
 
-(leaf org-roam
-  :straight t
-  :custom ((org-roam-directory . my:d:org-roam))
-  :config
-  (setq org-roam-db-location
-        (expand-file-name "org-roam.db" my:d:org-roam))
+  (leaf org-roam
+    :straight t
+    :custom ((org-roam-directory . my:d:org-roam))
+    :config
+    (setq org-roam-db-location
+          (expand-file-name "org-roam.db" my:d:org-roam))
 
-  (defun orgx--org-roam-file-hash-guard (orig file)
-    "Guard `org-roam-db--file-hash' against file read errors."
-    (condition-case err
-        (funcall orig file)
-      (error
-       (message "[org-roam] skip hash: %s (%s)"
-                file (error-message-string err))
-       nil)))
+    (defun orgx--org-roam-file-hash-guard (orig file)
+      "Guard `org-roam-db--file-hash' against file read errors."
+      (condition-case err
+          (funcall orig file)
+        (error
+         (message "[org-roam] skip hash: %s (%s)"
+                  file (error-message-string err))
+         nil)))
 
-  (with-eval-after-load 'org-roam
-    (when (fboundp 'org-roam-db--file-hash)
-      (advice-add 'org-roam-db--file-hash
-                  :around #'orgx--org-roam-file-hash-guard)))
+    (with-eval-after-load 'org-roam
+      (when (fboundp 'org-roam-db--file-hash)
+        (advice-add 'org-roam-db--file-hash
+                    :around #'orgx--org-roam-file-hash-guard)))
 
-  (run-with-idle-timer
-   5 nil
-   (lambda ()
-     (when (fboundp 'org-roam-db-autosync-mode)
-       (org-roam-db-autosync-mode 1)
-       (message "[org-roam] autosync enabled (delayed)")))))
+    (run-with-idle-timer
+     5 nil
+     (lambda ()
+       (when (fboundp 'org-roam-db-autosync-mode)
+         (org-roam-db-autosync-mode 1)
+         (message "[org-roam] autosync enabled (delayed)")))))
 
-(leaf org-download
-  :straight t
-  :custom ((org-download-image-dir . my:d:org-pictures)))
+  (leaf org-download
+    :straight t
+    :custom ((org-download-image-dir . my:d:org-pictures)))
 
-(leaf toc-org
-  :straight t
-  :hook ((org-mode . toc-org-enable)
-         (markdown-mode . toc-org-mode)))
+  (leaf toc-org
+    :straight t
+    :hook ((org-mode . toc-org-enable)
+           (markdown-mode . toc-org-mode)))
 
-(leaf org-cliplink :straight t)
+  (leaf org-cliplink :straight t)
 
-(provide 'orgx/org-extensions)
-;;; orgx/org-extensions.el ends here
+  (provide 'org-extensions)
+  ;;; orgx/org-extensions.el ends here
 #+end_src
 
 *** orgx/org-export.el
@@ -4994,7 +5017,7 @@ Provide a **robust Org export pipeline** for Hugo, Markdown, and diagrams.
    'org-babel-load-languages
    (append org-babel-load-languages '((dot . t)))))
 
-(provide 'orgx/org-export)
+(provide 'org-export)
 ;;; orgx/org-export.el ends here
 #+end_src
 
@@ -5064,7 +5087,7 @@ complementing `orgx/org-visual.el` (org-modern).
         org-appear-autolinks t
         org-appear-autosubmarkers t))
 
-(provide 'orgx/org-typography)
+(provide 'org-typography)
 ;;; orgx/org-typography.el ends here
 #+end_src
 
@@ -5106,7 +5129,7 @@ Provide **Git integration via Magit** with safe defaults.
   (setq magit-refresh-status-buffer nil
         magit-diff-refine-hunk 'all))
 
-(provide 'vcs/vcs-magit)
+(provide 'vcs-magit)
 ;;; vcs/vcs-magit.el ends here
 #+end_src
 
@@ -5149,7 +5172,7 @@ Provide **lightweight Git change indicators** in the fringe.
     (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
   (customize-set-variable 'diff-hl-draw-borders nil))
 
-(provide 'vcs/vcs-gutter)
+(provide 'vcs-gutter)
 ;;; vcs/vcs-gutter.el ends here
 #+end_src
 
@@ -5206,7 +5229,7 @@ Integrate **GitHub/GitLab forges** into Magit via Forge.
     (my/ensure-directory-exists db-dir)
     (setq forge-database-file db)))
 
-(provide 'vcs/vcs-forge)
+(provide 'vcs-forge)
 ;;; vcs/vcs-forge.el ends here
 #+end_src
 
@@ -5272,7 +5295,7 @@ only when a language server is likely available.
                 (eglot-ensure))))
   (message "[lsp] Eglot enabled."))
 
-(provide 'dev/dev-lsp-eglot)
+(provide 'dev-lsp-eglot)
 ;;; dev-lsp-eglot.el ends here
 #+end_src
 
@@ -5341,7 +5364,7 @@ delegating in-buffer completion to Corfu/CAPF.
     (add-hook 'prog-mode-hook #'lsp-deferred)
     (message "[lsp] lsp-mode enabled."))
 
-  (provide 'dev/dev-lsp-mode)
+  (provide 'dev-lsp-mode)
   ;;; dev-lsp-mode.el ends here
 #+end_src
 
@@ -5449,7 +5472,7 @@ consolidate its runtime/history files into a stable per-user directory.
             aidermacs-retry-delay   2.0
             aidermacs-backend       'vterm))
 
-  (provide 'dev/dev-ai)
+  (provide 'dev-ai)
   ;;; dev/dev-ai.el ends here
 #+end_src
 
@@ -5496,7 +5519,7 @@ keep terminal colors consistent by reusing the nano palette.
     (require 'cl-lib))
 
   ;; Palette is provided by the caller's load-path setup.
-  (require 'ui/ui-nano-palette)
+  (require 'ui-nano-palette)
 
   (defun my/vterm-apply-palette ()
     "Apply nano-style palette to vterm faces safely and compatibly.
@@ -5573,7 +5596,7 @@ keep terminal colors consistent by reusing the nano palette.
                    (reusable-frames . visible)
                    (window-height   . 0.3))))
 
-  (provide 'dev/dev-term)
+  (provide 'dev-term)
   ;;; dev/dev-term.el ends here
 #+end_src
 
@@ -5639,7 +5662,7 @@ indentation, and ANSI color rendering.
                                     (let ((inhibit-read-only t))
                                       (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
 
-  (provide 'dev/dev-build)
+  (provide 'dev-build)
   ;;; dev/dev-build.el ends here
 #+end_src
 
@@ -5709,7 +5732,7 @@ Provide **Docker-oriented editing and inspection** support in Emacs.
                       "CMD [" p "]" n)))
       (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
 
-  (provide 'dev/dev-docker)
+  (provide 'dev-docker)
   ;;; dev/dev-docker.el ends here
 #+end_src
 
@@ -5777,7 +5800,7 @@ and project/file hygiene.
   (add-to-list 'auto-mode-alist '("\\.json\\'" . json-ts-mode))
   (add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode))
 
-  (provide 'dev/dev-web-core)
+  (provide 'dev-web-core)
   ;;; dev-web-core.el ends here
 #+end_src
 
@@ -5834,7 +5857,7 @@ via Apheleia with Prettier/Prettierd.
       (add-to-list 'apheleia-mode-alist pair))
     (apheleia-global-mode +1))
 
-  (provide 'dev/dev-format)
+  (provide 'dev-format)
   ;;; dev-format.el ends here
 #+end_src
 
@@ -5880,7 +5903,7 @@ Provide **infra file syntax support** for common ops/devops formats.
            ("\\.env\\'"     . dotenv-mode)))
   (leaf toml-mode :straight t :mode ("\\.toml\\'" . toml-mode))
 
-  (provide 'dev/dev-infra-modes)
+  (provide 'dev-infra-modes)
   ;;; dev/dev-infra-modes.el ends here
 #+end_src
 
@@ -5930,7 +5953,7 @@ and on-save formatting.
   :hook (sql-mode . sqlformat-on-save-mode)
   :hook (sql-ts-mode . sqlformat-on-save-mode))
 
-(provide 'dev/dev-sql)
+(provide 'dev-sql)
 ;;; dev-sql.el ends here
 #+end_src
 
@@ -5974,7 +5997,7 @@ API testing and iteration.
 (leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
 (leaf restclient-jq :straight t :after restclient)
 
-(provide 'dev/dev-rest)
+(provide 'dev-rest)
 ;;; dev/dev-rest.el ends here
 #+end_src
 
@@ -6121,7 +6144,7 @@ covering editing helpers, Org helpers, and lightweight UI glue.
               (switch-to-buffer (buffer-base-buffer))))
         (my/org-sidebar))))
 
-  (provide 'utils/utils-functions)
+  (provide 'utils-functions)
   ;;; utils/utils-functions.el ends here
 #+end_src
 
@@ -6175,7 +6198,7 @@ when killed.
               (lambda ()
                 (my/kill-scratch-buffer-advice (current-buffer)))))
 
-  (provide 'utils/utils-scratch)
+  (provide 'utils-scratch)
   ;;; utils/utils-scratch.el ends here
 #+end_src
 
@@ -6220,7 +6243,7 @@ Automatically **clean up old backup files** to keep the var directory tidy.
 
   (add-hook 'emacs-startup-hook #'my/delete-old-backups)
 
-  (provide 'utils/utils-backup)
+  (provide 'utils-backup)
   ;;; utils/utils-backup.el ends here
 #+end_src
 
@@ -6257,7 +6280,7 @@ Provide a **safe helper** for running asynchronous tasks without crashing Emacs.
                        (funcall task)
                      (error (message "[async] error: %s" err))))))
 
-  (provide 'utils/utils-async)
+  (provide 'utils-async)
   ;;; utils/utils-async.el ends here
 #+end_src
 
@@ -6348,7 +6371,7 @@ recursive scans on every startup.
     (message "org-agenda-files cache rebuilt (%d files)"
              (length org-agenda-files)))
 
-  (provide 'utils/utils-org-agenda)
+  (provide 'utils-org-agenda)
   ;;; utils-org-agenda.el ends here
 #+end_src
 
@@ -6420,7 +6443,7 @@ with safe fallbacks.
       (setq shr-inhibit-images (not shr-inhibit-images))
       (eww-reload)))
 
-  (provide 'utils/utils-search-nav)
+  (provide 'utils-search-nav)
   ;;; utils-search-nav.el ends here
 #+end_src
 
@@ -6643,7 +6666,7 @@ my:d:org/
     (add-hook 'markdown-mode-hook
               #'my/notes-markdown-org-download-setup))
 
-  (provide 'utils/utils-notes-markdown)
+  (provide 'utils-notes-markdown)
   ;;; utils/utils-notes-markdown.el ends here
 #+end_src
 
@@ -6691,7 +6714,7 @@ Run **garbage collection at safe moments** during long-running sessions.
     (add-hook 'focus-out-hook #'utils-gc--collect)
     (add-hook 'minibuffer-exit-hook #'utils-gc--collect))
 
-  (provide 'utils/utils-gc)
+  (provide 'utils-gc)
   ;;; utils/utils-gc.el ends here
 #+end_src
 
@@ -6759,7 +6782,7 @@ Provide **automatic housekeeping** for temporary and dead-process buffers.
 
     (run-with-timer 900 900 #'utils-buffers-cleanup))
 
-  (provide 'utils/utils-buffers)
+  (provide 'utils-buffers)
   ;;; utils/utils-buffers.el ends here
 #+end_src
 
@@ -6821,7 +6844,7 @@ Manage **Eglot lifecycle** when switching projects.
     (add-hook 'find-file-hook #'utils-lsp-on-project-switch)
     (add-hook 'project-switch-project-hook #'utils-lsp-on-project-switch))
 
-  (provide 'utils/utils-lsp)
+  (provide 'utils-lsp)
   ;;; utils/utils-lsp.el ends here
 #+end_src
 
