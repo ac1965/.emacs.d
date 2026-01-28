@@ -3188,81 +3188,163 @@ This file exists as a safe extension point.
 :END:
 
 **** Purpose
-Provide a single, OS-aware font configuration entry point for Emacs.
-
-This module defines font *policy* and applies it consistently across frames.
+Define a stable and portable font configuration for graphical Emacs,
+including default, variable-pitch, and emoji fonts, with optional ligature support.
 
 **** What it does
-- Selects default monospace and emoji fonts per OS
-- Applies font settings on startup and new frames
-- Provides commands to inspect current font state
-- Optionally enables ligatures in programming modes
+- Selects reasonable default fonts depending on the operating system.
+- Applies font settings only in graphical frames.
+- Supports daemon and non-daemon startup correctly.
+- Provides an interactive command to report the current font.
+- Optionally enables programming ligatures via ligature.el.
 
 **** Notes
-- GUI-only behavior is guarded
-- Font values can be overridden via variables
-- No theme-specific face logic lives here
+- All user-customizable options are exposed via `defcustom`.
+- This module does not force fonts if Emacs is running in terminal mode.
+- Ligatures are enabled only in `prog-mode` buffers.
 
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
+  ;;; ui-font.el --- Font configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Font configuration for UI (ui category).
+  ;; This module sets default, variable-pitch, and emoji fonts
+  ;; with OS-aware fallbacks and optional ligature support.
+  ;;;
+  ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf))
 
-  (defun my/system-default-font ()
+  ;;;; Custom variables
+
+  (defgroup ui-font nil
+    "Font configuration for UI."
+    :group 'ui)
+
+  (defcustom ui-font-default nil
+    "Default monospace font family.
+  If nil, an OS-dependent fallback is used."
+    :type '(choice (const :tag "Auto" nil)
+                   (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-variable-pitch nil
+    "Variable-pitch font family.
+  If nil, the default monospace font is reused."
+    :type '(choice (const :tag "Auto" nil)
+                   (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-emoji nil
+    "Emoji font family.
+  If nil, an OS-dependent fallback is used."
+    :type '(choice (const :tag "Auto" nil)
+                   (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-size 18
+    "Default font size in points."
+    :type 'integer
+    :group 'ui-font)
+
+  ;;;; Internal helpers
+
+  (defun ui-font--system-default ()
     "Return a default monospace font family depending on OS."
-    (cond ((eq system-type 'darwin)    "Menlo")
-          ((eq system-type 'gnu/linux) "Monospace")
-          ((eq system-type 'windows-nt) "Consolas")
-          (t "Monospace")))
+    (cond
+     ((eq system-type 'darwin)     "Menlo")
+     ((eq system-type 'gnu/linux)  "Monospace")
+     ((eq system-type 'windows-nt) "Consolas")
+     (t "Monospace")))
 
-  (defun my/system-emoji-font ()
+  (defun ui-font--system-emoji ()
     "Return a default emoji font family depending on OS."
-    (cond ((eq system-type 'darwin)    "Apple Color Emoji")
-          ((eq system-type 'gnu/linux) "Noto Color Emoji")
-          ((eq system-type 'windows-nt) "Segoe UI Emoji")
-          (t "Noto Color Emoji")))
+    (cond
+     ((eq system-type 'darwin)     "Apple Color Emoji")
+     ((eq system-type 'gnu/linux)  "Noto Color Emoji")
+     ((eq system-type 'windows-nt) "Segoe UI Emoji")
+     (t "Noto Color Emoji")))
 
-  (defun my/font-setup ()
-    "Apply font settings, respecting overrides, and report applied fonts."
+  ;;;; Core setup
+
+  (defun ui-font-apply ()
+    "Apply font settings to the current frame."
     (when (display-graphic-p)
-      (set-face-attribute 'default nil
-                          :family (or my:font-default (my/system-default-font))
-                          :height (* 10 (or my:font-size 18)))
-      (set-face-attribute 'variable-pitch nil
-                          :family (or my:font-alt (my/system-default-font)))
-      (set-fontset-font t 'emoji
-                        (font-spec :family
-                                   (or my:emoji-font
-                                       (my/system-emoji-font))))))
+      (set-face-attribute
+       'default nil
+       :family (or ui-font-default (ui-font--system-default))
+       :height (* 10 ui-font-size))
+      (set-face-attribute
+       'variable-pitch nil
+       :family (or ui-font-variable-pitch
+                   ui-font-default
+                   (ui-font--system-default)))
+      (set-fontset-font
+       t 'emoji
+       (font-spec :family
+                  (or ui-font-emoji (ui-font--system-emoji))))))
 
-  (defun my/show-current-font ()
+  ;;;###autoload
+  (defun ui-font-show-current ()
     "Echo the current default font family and point size."
     (interactive)
-    (let* ((family (face-attribute 'default :family))
-           (height (face-attribute 'default :height)))
+    (let ((family (face-attribute 'default :family))
+          (height (face-attribute 'default :height)))
       (message "Current font: %s, %.1f pt"
                family (/ height 10.0))))
+
+  ;;;###autoload
+  (defun ui-font-describe ()
+    "Display font information applied by `ui-font-apply`."
+    (interactive)
+    (unless (display-graphic-p)
+      (user-error "Fonts are only meaningful in graphical frames"))
+    (let* ((default-family (face-attribute 'default :family))
+           (default-height (face-attribute 'default :height))
+           (variable-family (face-attribute 'variable-pitch :family))
+           (emoji-font (font-get
+                        (font-spec :script 'emoji)
+                        :family)))
+      (message
+       (concat
+        "Fonts applied:\n"
+        "  Default        : %s (%.1f pt)\n"
+        "  Variable-pitch : %s\n"
+        "  Emoji          : %s")
+       default-family
+       (/ default-height 10.0)
+       variable-family
+       (or emoji-font "unknown"))))
+
+  ;;;; Startup handling
 
   (if (daemonp)
       (add-hook 'after-make-frame-functions
                 (lambda (frame)
                   (with-selected-frame frame
-                    (my/font-setup))))
-    (add-hook 'after-init-hook #'my/font-setup))
+                    (ui-font-apply))))
+    (add-hook 'after-init-hook #'ui-font-apply))
 
-  ;; Optional ligatures
+  ;;;; Optional ligatures
+
   (leaf ligature
     :straight (ligature :type git :host github :repo "mickeynp/ligature.el")
     :when (display-graphic-p)
+    :hook (prog-mode-hook . global-ligature-mode)
     :config
     (ligature-set-ligatures
-     'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
-    (global-ligature-mode 1))
+     'prog-mode
+     '("->" "=>" "::" "===" "!=" "&&" "||")))
 
   (provide 'ui/ui-font)
-  ;;; ui/ui-font.el ends here
+  ;;; ui-font.el ends here
 #+end_src
 
 *** ui/ui-nano-palette.el
@@ -6985,11 +7067,11 @@ Notes:
           inhibit-compacting-font-caches t
           plstore-cache-passphrase-for-symmetric-encryption t)
 
-    ;; Fonts / UI / LSP switches
-    (setq my:font-default "JetBrains Mono"
-          my:font-alt     "Noto Sans JP"
-          my:emoji-font   "Apple Color Emoji"
-          my:font-size    18)
+    ;; Fonts / UI
+  (setq ui-font-default "JetBrains Mono"
+        ui-font-variable-pitch "Noto Sans JP"
+        ui-font-emoji "Apple Color Emoji"
+        ui-font-size 18)
 
     (setq my:use-ui 'nano
           my:use-lsp 'eglot)
