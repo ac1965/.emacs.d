@@ -1100,66 +1100,100 @@ This behavior is intentional and by design.
   ;;; init.el ends here
 #+end_src
 
-** Modular Loader & Core Module Suite
+** Modular Loaqder & Core Module Suite
 :PROPERTIES:
 :CUSTOM_ID: modular-loader-core-suite
 :END:
 
 *** Overview
+
 **** Purpose
-Provide a **deterministic and explicit module loading architecture** for this
-Emacs configuration.
+Provide a **deterministic, explicit, and auditable module loading architecture**
+for this Emacs configuration.
 
-This layer defines:
-- a single entry point for module loading (=modules.el=)
-- a stable directory-based responsibility split
-- a predictable load order independent of file system side effects
+This layer defines *where feature activation begins* after bootstrap,
+and guarantees that module load order, dependency direction, and extension
+points are fully inspectable and reproducible.
 
-The goal is to ensure that **startup behavior, dependency relationships, and
-extension points are fully inspectable and reproducible**.
+All shared behavior is activated through a single, explicit entry point,
+independent of filesystem traversal or implicit load-path side effects.
 
-**** What it does
-- Defines =modules.el= as the **only authoritative module loader**
-- Loads modules explicitly by category and order:
-  - =core/=        : fundamental runtime and infrastructure
-  - =ui/=          : visual presentation and interaction layer
-  - =completion/=  : completion framework and CAPF orchestration
-  - =orgx/=        : Org-mode extensions beyond upstream defaults
-  - =dev/=         : development and build-related tooling
-  - =utils/=       : small, domain-specific utilities
-- Prevents implicit loading via directory traversal or wildcard expansion
-- Makes module boundaries visible and reviewable in a single file
+**** What this layer defines
 
-**** Notes
-- =modules.el= **does not perform configuration logic itself**
-  - it only orchestrates *when* and *in what order* modules are loaded
-- Each subdirectory represents a **semantic responsibility boundary**
-  - cross-category dependencies are allowed but should be intentional
-- Modules are written to be:
-  - idempotent
-  - side-effect conscious
-  - safe to load under batch / byte-compile / native-comp contexts
-- This structure is optimized for:
-  - long-term maintenance
-  - partial enable/disable during diagnostics
-  - dependency visualization and auditing
+This layer establishes:
 
-**** Implementation
-- =modules.el=
-  - contains ordered =require= calls only
-  - no feature definitions, advice, or configuration logic
+- =modules.el= as the **only authoritative loader** for shared modules
+- A directory-based responsibility split with clear semantic boundaries
+- An explicit, ordered loading sequence handed off from =init.el=
+
+Modules are grouped by responsibility:
+
+- =core/=        :: fundamental runtime, infrastructure, and global policy
+- =ui/=          :: visual presentation and interaction layer
+- =completion/=  :: completion frameworks and CAPF orchestration
+- =orgx/=        :: Org-mode extensions beyond upstream defaults
+- =dev/=         :: development, build, and language tooling
+- =vcs/=         :: version control systems and repository interaction
+- =utils/=       :: small, domain-specific helpers not yet promoted upward
+
+**** What this layer does *not* do
+
+This layer intentionally does **not**:
+
+- Perform bootstrap or environment preparation (handled by =early-init.el=)
+- Establish runtime foundations (handled by =init.el=)
+- Define configuration logic, advice, hooks, or feature behavior
+- Discover modules via directory scanning or wildcard expansion
+- Encode user-, device-, or host-specific policy
+
+Its sole responsibility is *orchestration*, not implementation.
+
+**** Design principles
+
+- =modules.el= contains **only ordered =require= forms**
 - Each module file:
   - provides exactly one feature
   - documents its own assumptions and non-goals
-- Load order is:
+- Load order is fixed and intentional:
+
   1. =core=
   2. =ui=
   3. =completion=
   4. =orgx=
   5. =dev=
-  6. =utils=
-- This ordering is intentional and must not be altered without
-  documenting the dependency rationale
+  6. =vcs=
+  7. =utils=
+
+This order reflects dependency direction.
+Changes require explicit documentation and rationale.
+
+All modules are written to be:
+
+- Idempotent (safe to load multiple times)
+- Side-effect conscious
+- Safe under batch, byte-compile, and native-comp contexts
+
+**** Benefits
+
+This architecture enables:
+
+- Fully inspectable and reproducible startup behavior
+- Predictable dependency relationships
+- Selective enable/disable during diagnostics
+- Long-term maintainability across Emacs versions
+- Dependency visualization and auditing from a single file
+
+**** Relationship to bootstrap
+
+- =early-init.el= prepares infrastructure only
+- =init.el= establishes runtime foundations and environment state
+- =modules.el= is the **first and only layer** where shared features are activated
+
+This separation ensures that:
+
+- bootstrap remains minimal, conservative, and side-effect free
+- feature activation is centralized and reviewable
+- personal overlays can remain isolated without influencing global policy
 
 *** modules.el
 :PROPERTIES:
@@ -1390,21 +1424,97 @@ If changes here feel “interesting”, they likely belong elsewhere.
 :END:
 
 **** Purpose
-Provide the **foundational runtime and infrastructure layer** required by all
-other modules.
+Provide the **foundational runtime, policy, and infrastructure layer**
+required by all other shared modules.
 
-This category establishes guarantees about availability, defaults, and
-execution context.
+This layer establishes *hard guarantees* about execution context,
+availability of primitives, and global defaults that higher layers
+may rely on without defensive checks.
 
-**** What it does
-- Defines low-level behavior shared across the entire configuration
-- Initializes essential subsystems (paths, environment, compatibility)
-- Provides stable primitives relied upon by higher layers
+**** What this layer does
 
-**** Notes
-- core modules must not depend on ui, completion, orgx, dev, or utils
-- Side effects must be explicit and documented
-- Failure here should be considered configuration-critical
+Core modules are responsible for establishing the **non-negotiable baseline**
+of the configuration.
+
+Specifically, they:
+
+- Define low-level behavior shared across the entire configuration
+- Establish global policy, invariants, and execution guarantees
+- Initialize essential subsystems and long-lived orchestration
+- Provide stable primitives consumed by all higher layers
+
+Typical responsibilities include:
+
+- Compatibility guards and forward-looking fixes
+- Session lifecycle orchestration and health policy
+- Global keybinding infrastructure and command scaffolding
+- Editing, history, and persistence policy
+- Tree-sitter and parsing infrastructure
+- Feature switches controlling downstream activation
+
+**** What this layer does *not* do
+
+Core modules intentionally do **not**:
+
+- Implement visual presentation or theming details
+- Define completion UX or minibuffer interaction
+- Extend Org semantics beyond upstream defaults
+- Configure language servers, build tools, or VCS workflows
+- Encode user-, device-, or host-specific preferences
+
+Those responsibilities are explicitly delegated to higher layers.
+
+**** Design constraints
+
+- Core modules must not depend on:
+  - =ui=
+  - =completion=
+  - =orgx=
+  - =dev=
+  - =vcs=
+  - =utils=
+
+- Side effects must be:
+  - explicit
+  - documented
+  - global in intent
+
+- Failure in this layer is considered **configuration-critical**
+  and must surface early and loudly.
+
+**** Implementation principles
+
+- Loaded **first** by =modules.el=
+- Each file:
+  - provides exactly one feature
+  - documents its scope and non-goals clearly
+- Optional behavior is gated behind explicit customization variables
+- No module here assumes interactive usage or user presence
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =core/fixes.el= | Compatibility guards and minimal hotfixes scoped by Emacs version |
+| =core/core-session.el= | Long-running session orchestration and global health policy |
+| =core/general.el= | Global keybinding infrastructure and non-modal leader layout |
+| =core/tools.el= | Cross-cutting helper commands for navigation, inspection, and tooling |
+| =core/utils.el= | Core-level utility helpers and global hooks shared across layers |
+| =core/core-treesit.el= | Centralized Tree-sitter infrastructure and grammar policy |
+| =core/core-history.el= | Session persistence (history, places, recent files) |
+| =core/editing.el= | Editing behavior, UX aids, and filesystem interaction policy |
+| =core/switches.el= | Unified switches controlling UI and LSP activation |
+| =core/custom.el= | Routing and management of Customize output (=custom-file=) |
+| =core/custom-ui-extras.el= | Optional UI-related module extensions appended at runtime |
+
+**** Relationship to bootstrap
+
+- =early-init.el= prepares the physical environment and startup invariants
+- =init.el= establishes runtime foundations and hands control to =modules.el=
+- =core/= is the **first feature layer** activated after bootstrap
+
+This ordering guarantees that all higher layers operate on a
+stable, predictable, and explicitly defined foundation.
 
 **** Implementation
 - Loaded first by =modules.el=
@@ -3018,30 +3128,614 @@ execution context.
   ;;; core/custom-ui-extras.el ends here
 #+end_src
 
+*** completion/
+:PROPERTIES:
+:CUSTOM_ID: completion-modules
+:END:
+
+**** Purpose
+Provide a **coherent, explicit, and debuggable completion architecture**
+for this Emacs configuration.
+
+This layer centralizes completion behavior to prevent fragmentation
+across modes and subsystems, and to make completion flow fully inspectable.
+
+**** What this layer does
+
+Completion modules are responsible for:
+
+- Defining the primary completion frameworks and UI components
+- Orchestrating completion-at-point functions (CAPFs)
+- Managing precedence, fallback, and composition rules
+- Establishing a consistent completion experience across major modes
+
+Typical responsibilities include:
+
+- Minibuffer completion (selection, narrowing, annotations)
+- In-buffer completion UI and popup behavior
+- Matching styles, sorting, and filtering policy
+- Explicit wiring between completion frontends and backends
+
+**** What this layer does *not* do
+
+Completion modules intentionally do **not**:
+
+- Define global keybinding schemes or leader layouts
+- Introduce language- or domain-specific semantics
+- Configure language servers or external tooling
+- Extend Org-specific workflows or capture logic
+
+Those responsibilities belong to other layers.
+
+**** Design constraints
+
+- Completion modules may depend on:
+  - =core=
+  - =ui=
+
+- Completion modules must not depend on:
+  - =orgx=
+  - =dev=
+  - =vcs=
+  - =utils=
+
+- Completion behavior must be:
+  - deterministic
+  - composable
+  - debuggable through standard Emacs facilities
+    (e.g. inspecting CAPFs and completion tables)
+
+**** Design principles
+
+- There is a **single completion flow** per context
+  (minibuffer vs in-buffer), not multiple competing systems
+- CAPF order and fallback rules are explicit and reviewable
+- Frontend (UI) and backend (sources) are clearly separated
+- Reasonable defaults are preferred over aggressive heuristics
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =completion/completion-core.el= | Core completion policy and shared primitives |
+| =completion/completion-minibuffer.el= | Minibuffer completion framework and UX |
+| =completion/completion-capf.el= | CAPF composition, ordering, and fallback rules |
+| =completion/completion-in-buffer.el= | In-buffer completion UI (popups, previews) |
+| =completion/completion-matching.el= | Matching styles, filtering, and sorting policy |
+| =completion/completion-annotations.el= | Metadata, annotations, and candidate enrichment |
+
+**** Implementation
+
+- Loaded after =core= and =ui=
+- Each file:
+  - provides exactly one completion feature
+  - documents its assumptions and non-goals
+- Disabling this entire layer must leave Emacs functional,
+  with only basic `completion-at-point` behavior
+
+
+***** completion/completion-core.el
+:PROPERTIES:
+:CUSTOM_ID: completion-core
+:header-args:emacs-lisp: :tangle lisp/completion/completion-core.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
+
+  (leaf orderless
+    :straight t
+    :custom
+    ((completion-styles . '(orderless basic))
+     (completion-category-overrides
+      . '((file    (styles . (partial-completion)))
+          (symbol  (styles . (orderless)))
+          (command (styles . (orderless)))))))
+
+  (provide 'completion-core)
+#+end_src
+
+***** completion/completion-vertico.el
+:PROPERTIES:
+:CUSTOM_ID: completion-vertico
+:header-args:emacs-lisp: :tangle lisp/completion/completion-vertico.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
+
+  (leaf vertico
+    :straight t
+    :global-minor-mode vertico-mode
+    :custom ((vertico-count . 15)))
+
+  (leaf vertico-posframe
+    :straight t
+    :if (display-graphic-p)
+    :after vertico
+    :custom ((vertico-posframe-border-width . 2))
+    :config
+    (vertico-posframe-mode 1))
+
+  (leaf marginalia
+    :straight t
+    :global-minor-mode marginalia-mode)
+
+  (provide 'completion-vertico)
+#+end_src
+
+***** completion/completion-consult.el
+:PROPERTIES:
+:CUSTOM_ID: completion-consult
+:header-args:emacs-lisp: :tangle lisp/completion/completion-consult.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
+
+  (leaf consult
+    :straight t
+    :custom
+    ((xref-show-xrefs-function        . #'consult-xref)
+     (xref-show-definitions-function . #'consult-xref)))
+
+  (provide 'completion-consult)
+#+end_src
+
+***** completion/completion-embark.el
+:PROPERTIES:
+:CUSTOM_ID: completion-embark
+:header-args:emacs-lisp: :tangle lisp/completion/completion-embark.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
+
+  (leaf embark
+    :straight t
+    :custom ((prefix-help-command . #'embark-prefix-help-command)))
+
+  (leaf embark-consult
+    :straight t
+    :after (embark consult)
+    :hook (embark-collect-mode . consult-preview-at-point-mode))
+
+  (provide 'completion-embark)
+#+end_src
+
+***** completion/completion-corfu.el
+:PROPERTIES:
+:CUSTOM_ID: completion-corfu
+:header-args:emacs-lisp: :tangle lisp/completion/completion-corfu.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion/completion-corfu.el --- Corfu popup completion module -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;; Corfu-based in-buffer completion with sensible defaults.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf corfu
+    :straight t
+    :init
+    (setq tab-always-indent 'complete)
+    (global-corfu-mode)
+    :custom
+    ((corfu-auto  . t)
+     (corfu-cycle . t)))
+
+  (leaf kind-icon
+    :straight t
+    :after corfu
+    :require t
+    :custom ((kind-icon-default-face . 'corfu-default))
+    :config
+    (add-to-list 'corfu-margin-formatters
+                 #'kind-icon-margin-formatter))
+
+  (leaf cape
+    :straight t
+    :after corfu
+    :init
+    (add-to-list 'completion-at-point-functions #'cape-elisp-symbol)
+    (add-to-list 'completion-at-point-functions #'cape-file)
+    (add-to-list 'completion-at-point-functions #'cape-dabbrev))
+
+  (provide 'completion-corfu)
+  ;;; completion/completion-corfu.el ends here
+#+end_src
+
+***** completion/completion-icons.el
+:PROPERTIES:
+:CUSTOM_ID: completion-icons
+:header-args:emacs-lisp: :tangle lisp/completion/completion-icons.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
+
+  (leaf nerd-icons-ibuffer
+    :straight t
+    :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
+
+  (leaf nerd-icons-completion
+    :straight t
+    :hook (marginalia-mode-hook
+           . nerd-icons-completion-marginalia-setup)
+    :config
+    (nerd-icons-completion-mode))
+
+  (setq marginalia-align 'right)
+
+  (provide 'completion-icons)
+#+end_src
+
+***** completion/completion-capf.el
+:PROPERTIES:
+:CUSTOM_ID: completion-capf
+:header-args:emacs-lisp: :tangle lisp/completion/completion-capf.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion/capf.el --- Mode-specific CAPF & category configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Configure `completion-at-point-functions` per major mode and
+  ;; `completion-category-overrides` for Corfu + Cape.
+  ;; Category: completion
+  ;;;
+  ;;; Code:
+
+  ;;;; Utilities
+
+  (defun completion--set-capfs (capfs)
+    "Set buffer-local CAPFs to CAPFS."
+    (setq-local completion-at-point-functions capfs))
+
+  ;;;; CAPF presets by mode
+
+  (defun completion--elisp-capfs ()
+    "CAPFs for Emacs Lisp buffers."
+    (completion--set-capfs
+     '(cape-elisp-symbol
+       cape-file
+       cape-dabbrev)))
+
+  (defun completion--prog-capfs ()
+    "CAPFs for programming modes (LSP-friendly)."
+    (completion--set-capfs
+     (append completion-at-point-functions
+             '(cape-file
+               cape-dabbrev))))
+
+  (defun completion--text-capfs ()
+    "CAPFs for generic text buffers."
+    (completion--set-capfs
+     '(cape-dabbrev
+       cape-file)))
+
+  (defun completion--org-capfs ()
+    "CAPFs specialized for Org buffers."
+    (completion--set-capfs
+     '(cape-dabbrev
+       cape-file
+       cape-tex)))
+
+  (defun completion--shell-capfs ()
+    "CAPFs for shell and eshell buffers."
+    (completion--set-capfs
+     '(cape-file
+       cape-dabbrev)))
+
+  (defun completion--repl-capfs ()
+    "CAPFs for REPL-like buffers (IELM, comint)."
+    (completion--set-capfs
+     (append completion-at-point-functions
+             '(cape-dabbrev))))
+
+  ;;;; Hooks
+
+  (add-hook 'emacs-lisp-mode-hook #'completion--elisp-capfs)
+  (add-hook 'lisp-interaction-mode-hook #'completion--elisp-capfs)
+
+  (add-hook 'prog-mode-hook #'completion--prog-capfs)
+  (add-hook 'text-mode-hook #'completion--text-capfs)
+
+  (add-hook 'org-mode-hook #'completion--org-capfs)
+
+  (add-hook 'sh-mode-hook #'completion--shell-capfs)
+  (add-hook 'eshell-mode-hook #'completion--shell-capfs)
+
+  (add-hook 'ielm-mode-hook #'completion--repl-capfs)
+  (add-hook 'comint-mode-hook #'completion--repl-capfs)
+
+  ;;;; completion-category-overrides
+
+  (setq completion-category-overrides
+        '((file (styles basic partial-completion))
+          (symbol (styles orderless))
+          (keyword (styles orderless))
+          (tex (styles basic))
+          (dabbrev (styles basic))))
+
+
+  (provide 'completion-capf)
+  ;;; completion/capf.el ends here
+#+end_src
+
+***** completion/completion-capf-org-src.el
+:PROPERTIES:
+:CUSTOM_ID: completion-capf-org-src
+:header-args:emacs-lisp: :tangle lisp/completion/completion-capf-org-src.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion/completion-capf-org-src.el --- CAPF switching for Org SRC blocks -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Switch completion-at-point-functions automatically when entering
+  ;; Org Babel source edit buffers.
+  ;; Category: completion
+  ;;;
+  ;;; Code:
+
+  (defun completion--org-src-capfs ()
+    "Apply appropriate CAPFs inside Org SRC edit buffers.
+
+  This function runs in `org-src-mode` buffers and selects CAPFs
+  based on the detected major mode of the source block."
+    (cond
+     ;; Emacs Lisp blocks
+     ((derived-mode-p 'emacs-lisp-mode)
+      (completion--elisp-capfs))
+
+     ;; Programming language blocks
+     ((derived-mode-p 'prog-mode)
+      (completion--prog-capfs))
+
+     ;; Fallback for text-like blocks
+     (t
+      (completion--text-capfs))))
+
+  (add-hook 'org-src-mode-hook #'completion--org-src-capfs)
+
+  (provide 'completion-capf-org-src)
+  ;;; completion/completion-capf-org-src.el ends here
+#+end_src
+
+***** completion/completion-capf-org-src-lang.el
+:PROPERTIES:
+:CUSTOM_ID: completion-capf-org-src-lang
+:header-args:emacs-lisp: :tangle lisp/completion/completion-capf-org-src-lang.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion/completion-capf-org-src-lang.el --- Language-specific CAPFs for Org SRC -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Apply language-specific CAPF presets inside Org Babel SRC edit buffers.
+  ;; Category: completion
+  ;;;
+  ;;; Code:
+
+  (defun completion--org-src-shell-capfs ()
+    "CAPFs for shell-like Org SRC blocks."
+    (completion--set-capfs
+     '(cape-file
+       cape-dabbrev)))
+
+  (defun completion--org-src-sql-capfs ()
+    "CAPFs for SQL Org SRC blocks."
+    (completion--set-capfs
+     '(cape-dabbrev
+       cape-file)))
+
+  (defun completion--org-src-python-capfs ()
+    "CAPFs for Python Org SRC blocks."
+    (completion--set-capfs
+     (append completion-at-point-functions
+             '(cape-file
+               cape-dabbrev))))
+
+  (defun completion--org-src-lang-capfs ()
+    "Dispatch language-specific CAPFs for Org SRC edit buffers."
+    (cond
+     ;; Shell blocks
+     ((derived-mode-p 'sh-mode 'shell-mode 'eshell-mode)
+      (completion--org-src-shell-capfs))
+
+     ;; SQL blocks
+     ((derived-mode-p 'sql-mode)
+      (completion--org-src-sql-capfs))
+
+     ;; Python blocks
+     ((derived-mode-p 'python-mode)
+      (completion--org-src-python-capfs))
+
+     ;; Fallback: keep CAPFs set by completion-capf-org-src
+     (t nil)))
+
+  (add-hook 'org-src-mode-hook #'completion--org-src-lang-capfs)
+
+  (provide 'completion-capf-org-src-lang)
+  ;;; completion/completion-capf-org-src-lang.el ends here
+#+end_src
+
+***** completion/completion-corfu-org-src.el
+:PROPERTIES:
+:CUSTOM_ID: completion-corfu-org-src
+:header-args:emacs-lisp: :tangle lisp/completion/completion-corfu-org-src.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion/completion-corfu-org-src.el --- Corfu UI tweaks for Org SRC -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Adjust Corfu popup behavior specifically for Org Babel SRC edit buffers.
+  ;; Category: completion
+  ;;;
+  ;;; Code:
+
+  (defun completion--org-src-corfu-setup ()
+    "Apply buffer-local Corfu settings for Org SRC edit buffers."
+    (setq-local corfu-auto t)
+    (setq-local corfu-auto-delay 0.1)
+    (setq-local corfu-auto-prefix 1)
+    (setq-local corfu-cycle nil))
+
+  (add-hook 'org-src-mode-hook #'completion--org-src-corfu-setup)
+
+  (provide 'completion-corfu-org-src)
+  ;;; completion/completion-corfu-org-src.el ends here
+#+end_src
+
+***** completion/completion-orderless-org-src.el
+:PROPERTIES:
+:CUSTOM_ID: completion-orderless-org-src
+:header-args:emacs-lisp: :tangle lisp/completion/completion-orderless-org-src.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion/completion-orderless-org-src.el --- Orderless style tweaks for Org SRC -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Override completion-category-overrides buffer-locally
+  ;; for Org Babel SRC edit buffers.
+  ;; Category: completion
+  ;;;
+  ;;; Code:
+
+  (defun completion--org-src-orderless-setup ()
+    "Apply Org SRC-specific completion category overrides.
+
+  Use more permissive orderless matching for code-oriented categories
+  inside Org Babel source edit buffers."
+    (setq-local completion-category-overrides
+                '((symbol  (styles orderless))
+                  (keyword (styles orderless))
+                  (function (styles orderless))
+                  (variable (styles orderless))
+                  (file     (styles basic partial-completion))
+                  (dabbrev  (styles basic)))))
+
+  (add-hook 'org-src-mode-hook #'completion--org-src-orderless-setup)
+
+  (provide 'completion-orderless-org-src)
+  ;;; completion/completion-orderless-org-src.el ends here
+#+end_src
+
 *** ui/
 :PROPERTIES:
 :CUSTOM_ID: ui-modules
 :END:
 
 **** Purpose
-Define the **visual presentation and interaction layer** of Emacs.
+Define the **visual presentation and interaction layer** of this Emacs configuration.
 
-This category controls how Emacs looks and feels, without affecting semantics.
+This category controls *how Emacs looks and feels* while deliberately avoiding
+changes to semantic behavior, data flow, or feature logic.
 
 **** What it does
-- Configures themes, faces, layout, and visual feedback
-- Adjusts interaction-related defaults (cursor, modeline, spacing)
-- Applies appearance customizations independent of functionality
+- Configures visual appearance:
+  - themes and color palettes
+  - faces and typography
+  - spacing, margins, and layout hints
+- Adjusts interaction-related presentation:
+  - cursor style and visibility
+  - modeline content and density
+  - visual feedback for focus and state
+- Applies UI customizations that are:
+  - orthogonal to functionality
+  - safe to enable or disable independently
+
+**** What it does *not* do
+- Define keybinding schemes or leader layouts
+  - handled by =core/general.el=
+- Select or configure functional backends
+  - completion, LSP, VCS, Org logic, etc.
+- Introduce workflow logic or mode-specific behavior
 
 **** Notes
-- ui modules must not introduce functional dependencies
-- Behavior must remain safe in terminal and batch contexts
-- Visual changes must be reversible and localized
+- ui modules must not introduce *functional dependencies*
+  - they may depend on =core=, but never on =completion=, =orgx=, =dev=, or =utils=
+- All changes must be:
+  - reversible at runtime
+  - localized to presentation concerns
+  - safe in terminal, GUI, daemon, and batch contexts
+- UI bundles (e.g. doom / nano) are treated as **optional overlays**
+  selected and activated via =core/switches.el=
+
+**** Design rationale
+Separating UI concerns ensures that:
+- visual experimentation does not destabilize core behavior
+- alternative UI bundles can be compared or disabled safely
+- debugging can be performed with a minimal, presentation-free setup
+
+This layer exists to improve *clarity and comfort*, never correctness.
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =ui/ui-theme.el= | Theme selection and color palette coordination |
+| =ui/ui-faces.el= | Face definitions and typography adjustments |
+| =ui/ui-modeline.el= | Modeline layout, density, and visual signaling |
+| =ui/ui-visual-aids.el= | Minor visual helpers (highlighting, focus, indicators) |
+| =ui/ui-layout.el= | Frame, window, margin, and spacing presentation rules |
+| =ui/ui-icons.el= | Icon and glyph integration (GUI-safe, optional) |
+| =ui/ui-macos.el= | macOS-specific visual tuning (fonts, frames, rendering) |
+| =ui/ui-doom-modeline.el= | Doom-style UI bundle (optional overlay) |
+| =ui/ui-nano-modeline.el= | Nano-style UI bundle (optional overlay) |
 
 **** Implementation
-- Loaded after core
-- Does not define business logic or data structures
-- Relies only on guarantees established by core
+- ui modules are loaded **after =core= and before functional layers**
+- Each file:
+  - provides exactly one feature
+  - contains no non-visual side effects
+- UI bundle modules:
+  - are never loaded implicitly
+  - are activated explicitly through =core/switches.el=
+- Removing or disabling all ui modules must leave Emacs fully functional,
+  albeit visually minimal
 
 ***** ui/ui-font.el
 :PROPERTIES:
@@ -3722,504 +4416,91 @@ This category controls how Emacs looks and feels, without affecting semantics.
   ;;; ui/ui-macos.el ends here
 #+end_src
 
-*** completion/
-:PROPERTIES:
-:CUSTOM_ID: completion-modules
-:END:
-
-**** Purpose
-Provide a **coherent and explicit completion architecture**.
-
-This category centralizes completion behavior to avoid fragmentation.
-
-**** What it does
-- Defines completion frameworks and orchestration
-- Manages CAPF composition and precedence
-- Establishes consistent completion UX across modes
-
-**** Notes
-- completion modules may depend on core and ui
-- They must not assume the presence of orgx or dev
-- Completion behavior should be deterministic and debuggable
-
-**** Implementation
-- Loaded after ui
-- Completion sources are registered explicitly
-- Implicit global side effects are avoided
-
-***** completion/completion-core.el
-:PROPERTIES:
-:CUSTOM_ID: completion-core
-:header-args:emacs-lisp: :tangle lisp/completion/completion-core.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: completion
-  ;;
-  (eval-when-compile (require 'leaf))
-
-  (leaf orderless
-    :straight t
-    :custom
-    ((completion-styles . '(orderless basic))
-     (completion-category-overrides
-      . '((file    (styles . (partial-completion)))
-          (symbol  (styles . (orderless)))
-          (command (styles . (orderless)))))))
-
-  (provide 'completion-core)
-#+end_src
-
-***** completion/completion-vertico.el
-:PROPERTIES:
-:CUSTOM_ID: completion-vertico
-:header-args:emacs-lisp: :tangle lisp/completion/completion-vertico.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: completion
-  ;;
-  (eval-when-compile (require 'leaf))
-
-  (leaf vertico
-    :straight t
-    :global-minor-mode vertico-mode
-    :custom ((vertico-count . 15)))
-
-  (leaf vertico-posframe
-    :straight t
-    :if (display-graphic-p)
-    :after vertico
-    :custom ((vertico-posframe-border-width . 2))
-    :config
-    (vertico-posframe-mode 1))
-
-  (leaf marginalia
-    :straight t
-    :global-minor-mode marginalia-mode)
-
-  (provide 'completion-vertico)
-#+end_src
-
-***** completion/completion-consult.el
-:PROPERTIES:
-:CUSTOM_ID: completion-consult
-:header-args:emacs-lisp: :tangle lisp/completion/completion-consult.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: completion
-  ;;
-  (eval-when-compile (require 'leaf))
-
-  (leaf consult
-    :straight t
-    :custom
-    ((xref-show-xrefs-function        . #'consult-xref)
-     (xref-show-definitions-function . #'consult-xref)))
-
-  (provide 'completion-consult)
-#+end_src
-
-***** completion/completion-embark.el
-:PROPERTIES:
-:CUSTOM_ID: completion-embark
-:header-args:emacs-lisp: :tangle lisp/completion/completion-embark.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: completion
-  ;;
-  (eval-when-compile (require 'leaf))
-
-  (leaf embark
-    :straight t
-    :custom ((prefix-help-command . #'embark-prefix-help-command)))
-
-  (leaf embark-consult
-    :straight t
-    :after (embark consult)
-    :hook (embark-collect-mode . consult-preview-at-point-mode))
-
-  (provide 'completion-embark)
-#+end_src
-
-***** completion/completion-corfu.el
-:PROPERTIES:
-:CUSTOM_ID: completion-corfu
-:header-args:emacs-lisp: :tangle lisp/completion/completion-corfu.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion/completion-corfu.el --- Corfu popup completion module -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: completion
-  ;;
-  ;;; Commentary:
-  ;; Corfu-based in-buffer completion with sensible defaults.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf corfu
-    :straight t
-    :init
-    (setq tab-always-indent 'complete)
-    (global-corfu-mode)
-    :custom
-    ((corfu-auto  . t)
-     (corfu-cycle . t)))
-
-  (leaf kind-icon
-    :straight t
-    :after corfu
-    :require t
-    :custom ((kind-icon-default-face . 'corfu-default))
-    :config
-    (add-to-list 'corfu-margin-formatters
-                 #'kind-icon-margin-formatter))
-
-  (leaf cape
-    :straight t
-    :after corfu
-    :init
-    (add-to-list 'completion-at-point-functions #'cape-elisp-symbol)
-    (add-to-list 'completion-at-point-functions #'cape-file)
-    (add-to-list 'completion-at-point-functions #'cape-dabbrev))
-
-  (provide 'completion-corfu)
-  ;;; completion/completion-corfu.el ends here
-#+end_src
-
-***** completion/completion-icons.el
-:PROPERTIES:
-:CUSTOM_ID: completion-icons
-:header-args:emacs-lisp: :tangle lisp/completion/completion-icons.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: completion
-  ;;
-  (eval-when-compile (require 'leaf))
-
-  (leaf nerd-icons-ibuffer
-    :straight t
-    :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
-
-  (leaf nerd-icons-completion
-    :straight t
-    :hook (marginalia-mode-hook
-           . nerd-icons-completion-marginalia-setup)
-    :config
-    (nerd-icons-completion-mode))
-
-  (setq marginalia-align 'right)
-
-  (provide 'completion-icons)
-#+end_src
-
-***** completion/completion-capf.el
-:PROPERTIES:
-:CUSTOM_ID: completion-capf
-:header-args:emacs-lisp: :tangle lisp/completion/completion-capf.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion/capf.el --- Mode-specific CAPF & category configuration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Configure `completion-at-point-functions` per major mode and
-  ;; `completion-category-overrides` for Corfu + Cape.
-  ;; Category: completion
-  ;;;
-  ;;; Code:
-
-  ;;;; Utilities
-
-  (defun completion--set-capfs (capfs)
-    "Set buffer-local CAPFs to CAPFS."
-    (setq-local completion-at-point-functions capfs))
-
-  ;;;; CAPF presets by mode
-
-  (defun completion--elisp-capfs ()
-    "CAPFs for Emacs Lisp buffers."
-    (completion--set-capfs
-     '(cape-elisp-symbol
-       cape-file
-       cape-dabbrev)))
-
-  (defun completion--prog-capfs ()
-    "CAPFs for programming modes (LSP-friendly)."
-    (completion--set-capfs
-     (append completion-at-point-functions
-             '(cape-file
-               cape-dabbrev))))
-
-  (defun completion--text-capfs ()
-    "CAPFs for generic text buffers."
-    (completion--set-capfs
-     '(cape-dabbrev
-       cape-file)))
-
-  (defun completion--org-capfs ()
-    "CAPFs specialized for Org buffers."
-    (completion--set-capfs
-     '(cape-dabbrev
-       cape-file
-       cape-tex)))
-
-  (defun completion--shell-capfs ()
-    "CAPFs for shell and eshell buffers."
-    (completion--set-capfs
-     '(cape-file
-       cape-dabbrev)))
-
-  (defun completion--repl-capfs ()
-    "CAPFs for REPL-like buffers (IELM, comint)."
-    (completion--set-capfs
-     (append completion-at-point-functions
-             '(cape-dabbrev))))
-
-  ;;;; Hooks
-
-  (add-hook 'emacs-lisp-mode-hook #'completion--elisp-capfs)
-  (add-hook 'lisp-interaction-mode-hook #'completion--elisp-capfs)
-
-  (add-hook 'prog-mode-hook #'completion--prog-capfs)
-  (add-hook 'text-mode-hook #'completion--text-capfs)
-
-  (add-hook 'org-mode-hook #'completion--org-capfs)
-
-  (add-hook 'sh-mode-hook #'completion--shell-capfs)
-  (add-hook 'eshell-mode-hook #'completion--shell-capfs)
-
-  (add-hook 'ielm-mode-hook #'completion--repl-capfs)
-  (add-hook 'comint-mode-hook #'completion--repl-capfs)
-
-  ;;;; completion-category-overrides
-
-  (setq completion-category-overrides
-        '((file (styles basic partial-completion))
-          (symbol (styles orderless))
-          (keyword (styles orderless))
-          (tex (styles basic))
-          (dabbrev (styles basic))))
-
-
-  (provide 'completion-capf)
-  ;;; completion/capf.el ends here
-#+end_src
-
-***** completion/completion-capf-org-src.el
-:PROPERTIES:
-:CUSTOM_ID: completion-capf-org-src
-:header-args:emacs-lisp: :tangle lisp/completion/completion-capf-org-src.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion/completion-capf-org-src.el --- CAPF switching for Org SRC blocks -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Switch completion-at-point-functions automatically when entering
-  ;; Org Babel source edit buffers.
-  ;; Category: completion
-  ;;;
-  ;;; Code:
-
-  (defun completion--org-src-capfs ()
-    "Apply appropriate CAPFs inside Org SRC edit buffers.
-
-  This function runs in `org-src-mode` buffers and selects CAPFs
-  based on the detected major mode of the source block."
-    (cond
-     ;; Emacs Lisp blocks
-     ((derived-mode-p 'emacs-lisp-mode)
-      (completion--elisp-capfs))
-
-     ;; Programming language blocks
-     ((derived-mode-p 'prog-mode)
-      (completion--prog-capfs))
-
-     ;; Fallback for text-like blocks
-     (t
-      (completion--text-capfs))))
-
-  (add-hook 'org-src-mode-hook #'completion--org-src-capfs)
-
-  (provide 'completion-capf-org-src)
-  ;;; completion/completion-capf-org-src.el ends here
-#+end_src
-
-***** completion/completion-capf-org-src-lang.el
-:PROPERTIES:
-:CUSTOM_ID: completion-capf-org-src-lang
-:header-args:emacs-lisp: :tangle lisp/completion/completion-capf-org-src-lang.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion/completion-capf-org-src-lang.el --- Language-specific CAPFs for Org SRC -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Apply language-specific CAPF presets inside Org Babel SRC edit buffers.
-  ;; Category: completion
-  ;;;
-  ;;; Code:
-
-  (defun completion--org-src-shell-capfs ()
-    "CAPFs for shell-like Org SRC blocks."
-    (completion--set-capfs
-     '(cape-file
-       cape-dabbrev)))
-
-  (defun completion--org-src-sql-capfs ()
-    "CAPFs for SQL Org SRC blocks."
-    (completion--set-capfs
-     '(cape-dabbrev
-       cape-file)))
-
-  (defun completion--org-src-python-capfs ()
-    "CAPFs for Python Org SRC blocks."
-    (completion--set-capfs
-     (append completion-at-point-functions
-             '(cape-file
-               cape-dabbrev))))
-
-  (defun completion--org-src-lang-capfs ()
-    "Dispatch language-specific CAPFs for Org SRC edit buffers."
-    (cond
-     ;; Shell blocks
-     ((derived-mode-p 'sh-mode 'shell-mode 'eshell-mode)
-      (completion--org-src-shell-capfs))
-
-     ;; SQL blocks
-     ((derived-mode-p 'sql-mode)
-      (completion--org-src-sql-capfs))
-
-     ;; Python blocks
-     ((derived-mode-p 'python-mode)
-      (completion--org-src-python-capfs))
-
-     ;; Fallback: keep CAPFs set by completion-capf-org-src
-     (t nil)))
-
-  (add-hook 'org-src-mode-hook #'completion--org-src-lang-capfs)
-
-  (provide 'completion-capf-org-src-lang)
-  ;;; completion/completion-capf-org-src-lang.el ends here
-#+end_src
-
-***** completion/completion-corfu-org-src.el
-:PROPERTIES:
-:CUSTOM_ID: completion-corfu-org-src
-:header-args:emacs-lisp: :tangle lisp/completion/completion-corfu-org-src.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion/completion-corfu-org-src.el --- Corfu UI tweaks for Org SRC -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Adjust Corfu popup behavior specifically for Org Babel SRC edit buffers.
-  ;; Category: completion
-  ;;;
-  ;;; Code:
-
-  (defun completion--org-src-corfu-setup ()
-    "Apply buffer-local Corfu settings for Org SRC edit buffers."
-    (setq-local corfu-auto t)
-    (setq-local corfu-auto-delay 0.1)
-    (setq-local corfu-auto-prefix 1)
-    (setq-local corfu-cycle nil))
-
-  (add-hook 'org-src-mode-hook #'completion--org-src-corfu-setup)
-
-  (provide 'completion-corfu-org-src)
-  ;;; completion/completion-corfu-org-src.el ends here
-#+end_src
-
-***** completion/completion-orderless-org-src.el
-:PROPERTIES:
-:CUSTOM_ID: completion-orderless-org-src
-:header-args:emacs-lisp: :tangle lisp/completion/completion-orderless-org-src.el
-:END:
-#+begin_src emacs-lisp
-  ;;; completion/completion-orderless-org-src.el --- Orderless style tweaks for Org SRC -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Override completion-category-overrides buffer-locally
-  ;; for Org Babel SRC edit buffers.
-  ;; Category: completion
-  ;;;
-  ;;; Code:
-
-  (defun completion--org-src-orderless-setup ()
-    "Apply Org SRC-specific completion category overrides.
-
-  Use more permissive orderless matching for code-oriented categories
-  inside Org Babel source edit buffers."
-    (setq-local completion-category-overrides
-                '((symbol  (styles orderless))
-                  (keyword (styles orderless))
-                  (function (styles orderless))
-                  (variable (styles orderless))
-                  (file     (styles basic partial-completion))
-                  (dabbrev  (styles basic)))))
-
-  (add-hook 'org-src-mode-hook #'completion--org-src-orderless-setup)
-
-  (provide 'completion-orderless-org-src)
-  ;;; completion/completion-orderless-org-src.el ends here
-#+end_src
-
 *** orgx/
 :PROPERTIES:
 :CUSTOM_ID: orgx-modules
 :END:
 
 **** Purpose
-Extend Org-mode beyond upstream defaults while preserving its core semantics.
+Extend Org-mode **beyond upstream defaults** while preserving its
+core semantics and data model.
 
-This category isolates Org-specific customization and extensions.
+This layer encapsulates all Org-specific customization, workflows,
+and assumptions, keeping them isolated from non-Org contexts.
 
-**** What it does
-- Adds Org-mode utilities, workflows, and integrations
-- Customizes Org behavior without forking upstream logic
-- Encapsulates Org-related assumptions
+**** What this layer does
 
-**** Notes
-- orgx modules may depend on core, ui, and completion
-- They must not leak Org assumptions into non-Org buffers
-- Agenda and capture behavior must remain inspectable
+Orgx modules are responsible for:
+
+- Extending Org-mode behavior in a structured and non-invasive way
+- Providing Org-specific utilities, commands, and workflows
+- Integrating Org with other subsystems (completion, UI, search)
+- Defining agenda, capture, and navigation policy
+
+Typical responsibilities include:
+
+- Agenda file discovery and scoping
+- Capture templates and inbox workflows
+- Org-specific navigation, folding, and visual aids
+- Integration with roam-like or graph-based note systems
+
+**** What this layer does *not* do
+
+Orgx modules intentionally do **not**:
+
+- Reimplement or fork core Org functionality
+- Affect behavior in non-Org buffers
+- Define global editing or completion policy
+- Encode user- or device-specific paths directly
+
+Those responsibilities belong to other layers.
+
+**** Design constraints
+
+- Orgx modules may depend on:
+  - =core=
+  - =ui=
+  - =completion=
+
+- Orgx modules must not depend on:
+  - =dev=
+  - =vcs=
+  - =utils=
+
+- All Org-specific assumptions must be:
+  - confined to Org buffers
+  - discoverable via module boundaries
+  - safe to disable as a group
+
+**** Design principles
+
+- Org remains **plain Org** on disk
+  (no proprietary formats or irreversible transforms)
+- Extensions are additive and reversible
+- Agenda and capture behavior is explicit and auditable
+- Org-specific UX must degrade gracefully when extensions are disabled
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =orgx/org-core.el= | Core Org defaults and shared Org policy |
+| =orgx/org-agenda.el= | Agenda discovery, scoping, and views |
+| =orgx/org-capture.el= | Capture templates and inbox workflows |
+| =orgx/org-navigation.el= | Navigation, folding, and structural helpers |
+| =orgx/org-roam.el= | Roam-style linking and graph-based notes |
+| =orgx/org-export.el= | Export configuration and backends |
+| =orgx/org-ui.el= | Org-specific visual enhancements |
 
 **** Implementation
-- Loaded after completion
-- All Org extensions live exclusively under this category
-- Feature boundaries follow Org concepts, not file size
+
+- Loaded after =completion= and before =dev=
+- Each file:
+  - provides exactly one Org-related feature
+  - documents its scope and assumptions clearly
+- Disabling this layer must leave:
+  - basic Org editing functional
+  - Org files readable and editable without loss
 
 ***** orgx/org-core.el
 :PROPERTIES:
@@ -4564,24 +4845,85 @@ complementing `orgx/org-visual.el` (org-modern).
 :END:
 
 **** Purpose
-Support **development, diagnostics, and build-related workflows**.
+Support **development, diagnostics, and build-related workflows**
+for this Emacs configuration.
 
-This category exists for maintainers, not day-to-day editing.
+This layer exists primarily for maintainers and power users,
+not for routine day-to-day editing.
 
-**** What it does
-- Provides tooling for development and inspection
-- Adds helpers for build, compile, and debug tasks
-- Supports configuration maintenance activities
+**** What this layer does
 
-**** Notes
-- dev modules must never be required for normal editing
-- Side effects must be opt-in and explicit
-- Safe to disable entirely in production usage
+Dev modules are responsible for:
+
+- Providing tooling for configuration development and inspection
+- Supporting build, compile, and debug workflows
+- Enabling diagnostics and introspection of the running Emacs instance
+- Assisting with maintenance of the configuration itself
+
+Typical responsibilities include:
+
+- Language Server Protocol (LSP) client configuration
+- Debugging, profiling, and tracing helpers
+- Compilation, test, and build orchestration
+- Developer-facing inspection commands and reports
+
+**** What this layer does *not* do
+
+Dev modules intentionally do **not**:
+
+- Define global editing behavior or keybinding policy
+- Affect startup correctness or core invariants
+- Introduce visual presentation concerns
+- Encode user- or device-specific preferences
+
+Those responsibilities belong to other layers.
+
+**** Design constraints
+
+- Dev modules may depend on:
+  - =core=
+  - =ui=
+  - =completion=
+
+- Dev modules must not depend on:
+  - =orgx=
+  - =vcs=
+  - =utils=
+
+- All side effects must be:
+  - explicit
+  - opt-in via customization or switches
+  - safe to disable as a group
+
+**** Design principles
+
+- Dev tooling is **additive**, never required
+- Failure in this layer must degrade gracefully
+- Disabling this layer must not affect:
+  - startup success
+  - basic editing
+  - Org workflows
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =dev/dev-lsp-eglot.el= | Eglot-based LSP configuration |
+| =dev/dev-lsp-mode.el= | lsp-mode based LSP configuration |
+| =dev/dev-dap.el= | Debug Adapter Protocol integration |
+| =dev/dev-compile.el= | Compile, build, and task helpers |
+| =dev/dev-profile.el= | Profiling and performance diagnostics |
+| =dev/dev-inspect.el= | Runtime inspection and debug utilities |
 
 **** Implementation
-- Loaded after orgx
-- Commands are interactive and discoverable
-- No hard dependency from core, ui, completion, or orgx
+
+- Loaded after =orgx=
+- Activation is controlled via:
+  - =core/switches.el=
+  - explicit user or maintainer intent
+- Each file:
+  - provides exactly one dev-oriented feature
+  - documents activation conditions and non-goals
 
 ***** dev/dev-lsp-eglot.el
 :PROPERTIES:
@@ -5168,29 +5510,83 @@ This category exists for maintainers, not day-to-day editing.
 :END:
 
 **** Purpose
-Provide a **consistent and inspectable version control interaction layer**
-within Emacs.
+Provide a **consistent, explicit, and inspectable version control interaction
+layer** within Emacs.
 
-This category encapsulates all integrations with external version control
-systems.
+This layer encapsulates all integrations with external version control systems,
+treating those systems as authoritative.
 
-**** What it does
-- Integrates Emacs with version control backends (e.g. Git)
-- Provides interactive commands for common VCS workflows
-- Exposes status, diff, log, and history information inside Emacs buffers
+**** What this layer does
 
-**** Notes
-- vcs modules must not be required for basic editing or startup
-- They may depend on core, ui, and completion
-- They must not impose workflow decisions on the user
-- External tools and repositories are treated as authoritative
-- Failure or absence of VCS backends must degrade gracefully
+VCS modules are responsible for:
+
+- Integrating Emacs with version control backends (primarily Git)
+- Exposing repository state, history, and diffs inside Emacs buffers
+- Providing interactive commands for common VCS workflows
+- Bridging external VCS tools into the Emacs UI without reimplementing them
+
+Typical responsibilities include:
+
+- Repository status and change inspection
+- Commit, blame, diff, and log navigation
+- File- and project-scoped VCS operations
+- Lightweight review and history browsing
+
+**** What this layer does *not* do
+
+VCS modules intentionally do **not**:
+
+- Define global editing or keybinding policy
+- Enforce a specific branching or commit workflow
+- Replace or fork external VCS tooling
+- Assume the presence of a repository
+
+Those responsibilities belong to other layers or external tools.
+
+**** Design constraints
+
+- VCS modules may depend on:
+  - =core=
+  - =ui=
+  - =completion=
+
+- VCS modules must not depend on:
+  - =orgx=
+  - =dev=
+  - =utils=
+
+- Interaction with external VCS tools must be:
+  - explicit
+  - inspectable
+  - resilient to tool absence or failure
+
+**** Design principles
+
+- External VCS tools are the **source of truth**
+- Emacs acts as an interface, not a reimplementation
+- Commands must degrade gracefully when:
+  - no repository is present
+  - required binaries are unavailable
+- User workflow decisions remain opt-in and reversible
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =vcs/vcs-core.el= | Core VCS integration and shared helpers |
+| =vcs/vcs-git.el= | Git backend integration |
+| =vcs/vcs-magit.el= | Magit-based interactive workflows |
+| =vcs/vcs-diff.el= | Diff, hunk, and change navigation |
+| =vcs/vcs-history.el= | Log, blame, and history inspection |
 
 **** Implementation
-- Loaded explicitly by =modules.el=
-- Each file corresponds to one VCS-related concern
-- Integration is achieved via well-defined external interfaces
-- No project-specific assumptions are embedded
+
+- Loaded after =dev=
+- Each file:
+  - provides exactly one VCS-related feature
+  - documents backend assumptions and failure modes
+- Disabling this layer must leave Emacs fully usable for
+  non-version-controlled files
 
 ***** vcs/vcs-magit.el
 :PROPERTIES:
@@ -5296,24 +5692,87 @@ systems.
 :END:
 
 **** Purpose
-Host **small, domain-specific utilities** that do not justify a standalone layer.
+Host **small, domain-specific utilities** that do not justify
+a dedicated architectural layer.
 
-This category is intentionally heterogeneous.
+This layer exists as a pragmatic escape hatch for narrowly scoped helpers,
+without polluting core abstractions.
 
-**** What it does
-- Provides narrowly scoped helper functions and tools
-- Solves local problems without expanding global abstractions
-- Complements higher-level modules without owning workflows
+**** What this layer does
 
-**** Notes
-- utils modules must remain small and focused
-- Promotion to another category should be considered if scope grows
-- Dependencies should be minimal and explicit
+Utils modules are responsible for:
+
+- Providing small, focused helper functions and commands
+- Solving localized or cross-cutting problems
+- Complementing higher-level modules without owning workflows or policy
+
+Typical responsibilities include:
+
+- Buffer and window housekeeping helpers
+- Lightweight automation and glue code
+- One-off integrations with external tools
+- Quality-of-life helpers that do not belong elsewhere
+
+**** What this layer does *not* do
+
+Utils modules intentionally do **not**:
+
+- Define global policy or long-lived orchestration
+- Introduce new architectural concepts
+- Replace or override behavior from higher layers
+- Encode user-, device-, or environment-specific configuration
+
+Those responsibilities belong to other layers.
+
+**** Design constraints
+
+- Utils modules may depend on:
+  - =core=
+  - =ui=
+  - =completion=
+  - =orgx=
+  - =dev=
+  - =vcs=
+
+- Utils modules must not be depended on by:
+  - =core=
+  - =ui=
+  - =completion=
+  - =orgx=
+  - =dev=
+  - =vcs=
+
+- Dependencies must be:
+  - minimal
+  - explicit
+  - non-circular
+
+**** Design principles
+
+- Keep modules **small and focused**
+- Avoid accumulation of unrelated responsibilities
+- Prefer promotion to a dedicated layer when scope grows
+- Deletion should always be a valid refactoring option
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =utils/utils-gc.el= | Garbage collection helpers |
+| =utils/utils-buffers.el= | Buffer lifecycle and cleanup helpers |
+| =utils/utils-lsp.el= | LSP lifecycle cleanup utilities |
+| =utils/utils-lint.el= | Static lint helpers for Emacs Lisp |
+| =utils/utils-scratch.el= | Persistent scratch buffer helpers |
+| =utils/utils-notes-markdown.el= | Prose-oriented Markdown notes utilities |
 
 **** Implementation
+
 - Loaded last by =modules.el=
-- No other category may depend on utils implicitly
-- Utilities are optional and loosely coupled
+- Each file:
+  - provides exactly one utility feature
+  - remains safe to load in isolation
+- Removing this layer must not break
+  any higher-level architectural guarantees
 
 ***** utils/utils-functions.el
 :PROPERTIES:
