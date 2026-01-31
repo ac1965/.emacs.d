@@ -1114,21 +1114,21 @@ there**.
 The goal is **stable core behavior**, **replaceable UI**, and
 **fully isolated personal code**.
 
-| Path / Module | Responsibility | Must NOT contain |
-|---------------+----------------+------------------|
-| lisp/modules.el | Canonical module load order | Configuration or policy logic |
-| lisp/core/ | *Foundation & policy* (paths, startup, sessions, switches) | UI, personal taste, platform glue |
-| lisp/core/session*.el | Session health, thresholds, timers | UI, notifications |
-| lisp/core/general.el | Global keybinding foundation | Mode-specific bindings |
-| lisp/ui/ | *Presentation only* (theme, fonts, modeline) | Timers, GC, cleanup logic |
-| lisp/completion/ | Completion stack & CAPF composition | Session or lifecycle policy |
-| lisp/orgx/ | Org extensions & workflows (stable, practical) | Experimental Org features |
-| lisp/dev/ | Developer tooling (LSP, treesit, formatters) | UI or personal identity |
-| lisp/vcs/ | Version control entry points | Project or session policy |
-| lisp/utils/ | *Operational executors* (GC, housekeeping, LSP hygiene) | Policy or startup logic |
-| personal/user.el | *Personal overlays* (identity, switches, paths) | Shared policy |
-| personal/device-*.el | Device / OS–specific glue | Cross-platform code |
-| personal/*-integration.el | External service integrations | Core or utils dependencies |
+| Path / Module             | Responsibility                                           | Must NOT contain                  |
+|---------------------------+----------------------------------------------------------+-----------------------------------|
+| lisp/modules.el           | Canonical module load order                              | Configuration or policy logic     |
+| lisp/core/                | *Foundation & policy* (paths, startup, sessions, switches) | UI, personal taste, platform glue |
+| lisp/core/session*.el     | Session health, thresholds, timers                       | UI, notifications                 |
+| lisp/core/general.el      | Global keybinding foundation                             | Mode-specific bindings            |
+| lisp/ui/                  | *Presentation only* (theme, fonts, modeline)               | Timers, GC, cleanup logic         |
+| lisp/completion/          | Completion stack & CAPF composition                      | Session or lifecycle policy       |
+| lisp/orgx/                | Org extensions & workflows (stable, practical)           | Experimental Org features         |
+| lisp/dev/                 | Developer tooling (LSP, treesit, formatters)             | UI or personal identity           |
+| lisp/vcs/                 | Version control entry points                             | Project or session policy         |
+| lisp/utils/               | *Operational executors* (GC, housekeeping, LSP hygiene)    | Policy or startup logic           |
+| personal/user.el          | *Personal overlays* (identity, switches, paths)            | Shared policy                     |
+| personal/device-*.el      | Device / OS–specific glue                                | Cross-platform code               |
+| personal/*-integration.el | External service integrations                            | Core or utils dependencies        |
 
 **** Design rules enforced by this structure
 
@@ -1142,6 +1142,12 @@ The goal is **stable core behavior**, **replaceable UI**, and
   User- and device-specific glue only.
 - *Platform-specific code never leaks upward*
   OS-dependent logic stays under =personal/=.
+- The personal/user.el layer MUST NOT register hooks or timers.
+  All hooks and timers must live in core/, ui/, utils/, or
+  device-specific personal modules.
+- *A dev module is considered "opt-in" when it is explicitly*
+  required by init.el or a user-selected feature flag.
+  No dev module is loaded implicitly.
 
 *** modules.el
 :PROPERTIES:
@@ -3312,7 +3318,8 @@ including default, variable-pitch, and emoji fonts, with optional ligature suppo
       (set-fontset-font
        t 'emoji
        (font-spec :family
-                  (or ui-font-emoji (ui-font--system-emoji))))))
+                  (or ui-font-emoji (ui-font--system-emoji))))
+      (ui-font-describe)))
 
   ;;;###autoload
   (defun ui-font-show-current ()
@@ -6336,8 +6343,10 @@ recursive scans on every startup.
     (seq-filter
      (lambda (file)
        (and (string-match-p "\\.org\\'" file)
+            (not (file-symlink-p file))
             (not (string-match-p utils-org-agenda-exclude-regexp file))))
-     (directory-files-recursively org-directory "\\.org\\'")))
+     (directory-files-recursively
+      org-directory "\\.org\\'" nil nil)))
 
   (defun utils-org-agenda--load-cache ()
     "Load cached agenda files from disk."
@@ -6418,7 +6427,10 @@ with safe fallbacks.
     :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
              (eww-download-directory . "~/Downloads"))
     :init
-    (defvar my:d:eww (expand-file-name "eww/" my:d:var))
+    (defvar my:d:eww
+      (expand-file-name "eww/"
+                        (or (bound-and-true-p my:d:var)
+                            user-emacs-directory)))
     (setopt eww-cache-directory (expand-file-name "cache/" my:d:eww))
     (my/ensure-directory-exists eww-cache-directory)
     (setq eww-history-limit 200)
@@ -6778,7 +6790,8 @@ Provide **automatic housekeeping** for temporary and dead-process buffers.
         (dolist (buf (buffer-list))
           (when (or (utils-buffers--temporary-p buf)
                     (utils-buffers--dead-process-p buf))
-            (kill-buffer buf)))))
+            (ignore-errors
+  	    (kill-buffer buf))))))
 
     (run-with-timer 900 900 #'utils-buffers-cleanup))
 
@@ -6823,8 +6836,9 @@ Manage **Eglot lifecycle** when switching projects.
     (defvar utils-lsp--current-project-root nil)
 
     (defun utils-lsp--project-root ()
-      (when-let* ((project (project-current nil)))
-        (car (project-roots project))))
+      (when-let* ((project (project-current nil))
+  		(roots (project-roots project)))
+        (car roots)))
 
     (defun utils-lsp-on-project-switch ()
       "Shutdown obsolete eglot servers on project switch."
@@ -7093,7 +7107,6 @@ Notes:
     ;; Fonts / UI
   (setq ui-font-default "JetBrains Mono"
         ui-font-variable-pitch "Noto Sans JP"
-        ui-font-emoji "Apple Color Emoji"
         ui-font-size 18)
 
     (setq my:use-ui 'nano
@@ -7402,7 +7415,8 @@ Notes:
               "Playlist: "
               (my/apple-music-get-playlists))))
       (my/apple-music--osascript-async
-       (format "tell application \"Music\" to play playlist \"%s\"" playlist)))
+       (format "tell application \"Music\" to play playlist \"%s\""
+  	     (replace-regexp-in-string "\"" "\\\\\"" playlist))))
 
     ;; -------------------------------------------------------------------------
     ;; Hydra / meow integration
