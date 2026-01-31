@@ -229,15 +229,15 @@ Use the provided build script:
 **** Apple Silicon (Primary)
 - GNU Emacs *31.0.50*
 
-|Property|Value|
-|--------|-----|
-|Commit|6287637ccd9f66a219844231380ab9873d049c6e|
-|Branch|master|
-|System|aarch64-apple-darwin25.2.0|
-|Date|2026-01-17 15:41:46 (JST)|
-|Patch|N/A ns-inline.patch|
-|Features|ACL DBUS GLIB GNUTLS IMAGEMAGICK LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB|
-|Options|--with-ns --enable-mac-app=yes --with-xwidgets --with-native-compilation --with-json --with-tree-sitter --with-imagemagick --with-gnutls --prefix=/Users/ac1965/.local CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++'|
+| Property | Value                                                                                                                                                                                                                                                                                                                              |
+|----------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Commit   | 69a2b9fa17054794723455fbac84beb51290dfa1                                                                                                                                                                                                                                                                                           |
+| Branch   | master                                                                                                                                                                                                                                                                                                                             |
+| System   | aarch64-apple-darwin25.2.0                                                                                                                                                                                                                                                                                                         |
+| Date     | 2026-01-31 16:15:31 (JST)                                                                                                                                                                                                                                                                                                          |
+| Patch    | N/A ns-inline.patch                                                                                                                                                                                                                                                                                                                |
+| Features | ACL DBUS GLIB GNUTLS IMAGEMAGICK LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB                                                                                                                                                            |
+| Options  | --with-ns --enable-mac-app=yes --with-xwidgets --with-native-compilation --with-json --with-tree-sitter --with-imagemagick --with-gnutls --prefix=/Users/ac1965/.local CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++' |
 
 **** Intel (Secondary)
 - GNU Emacs *31.0.50*
@@ -1100,173 +1100,118 @@ This behavior is intentional and by design.
   ;;; init.el ends here
 #+end_src
 
-** Modular Loader & Core Module Suite — `modules.el` + core/ui/completion/orgx/dev/utils
+** Modular Loader & Core Module Suite
 :PROPERTIES:
-:CUSTOM_ID: modular-loader-and-core-suite
+:CUSTOM_ID: modular-loader-core-suite
 :END:
 
 *** Overview
-
 **** Purpose
-Provide a *deterministic, maintainable, and debuggable Emacs 30+ configuration*
-with a **strict separation of responsibility and execution**.
+Provide a **deterministic and explicit module loading architecture** for this
+Emacs configuration.
 
-This configuration is designed around the following principles:
+This layer defines:
+- a single entry point for module loading (=modules.el=)
+- a stable directory-based responsibility split
+- a predictable load order independent of file system side effects
 
-- *Composable*: all shared modules live under =lisp/= and are loaded in a fixed,
-  explicit order via a single entrypoint.
-- *Selectable*: UI, LSP, and optional feature stacks are resolved centrally and
-  can be switched without cross-module edits.
-- *Low-noise*: Customize output is isolated under =.etc/=; writable runtime state
-  lives under =.var/= and is never mixed with policy code.
-- *Forward-compatible*: the codebase follows **Emacs 31+ compatibility guidance**
-  and avoids obsolete, transitional, or undocumented APIs even when still
-  technically functional.
+The goal is to ensure that **startup behavior, dependency relationships, and
+extension points are fully inspectable and reproducible**.
 
-The loader and core layers define *policy and orchestration*.
-Execution, presentation, and personal overlays are kept physically and
-conceptually separate.
+**** What it does
+- Defines =modules.el= as the **only authoritative module loader**
+- Loads modules explicitly by category and order:
+  - =core/=        : fundamental runtime and infrastructure
+  - =ui/=          : visual presentation and interaction layer
+  - =completion/=  : completion framework and CAPF orchestration
+  - =orgx/=        : Org-mode extensions beyond upstream defaults
+  - =dev/=         : development and build-related tooling
+  - =utils/=       : small, domain-specific utilities
+- Prevents implicit loading via directory traversal or wildcard expansion
+- Makes module boundaries visible and reviewable in a single file
 
-**** What this configuration does
+**** Notes
+- =modules.el= **does not perform configuration logic itself**
+  - it only orchestrates *when* and *in what order* modules are loaded
+- Each subdirectory represents a **semantic responsibility boundary**
+  - cross-category dependencies are allowed but should be intentional
+- Modules are written to be:
+  - idempotent
+  - side-effect conscious
+  - safe to load under batch / byte-compile / native-comp contexts
+- This structure is optimized for:
+  - long-term maintenance
+  - partial enable/disable during diagnostics
+  - dependency visualization and auditing
 
-- *Bootstraps modules deterministically* via =lisp/modules.el=, honoring:
-  - =my:modules-verbose= for per-module timing and summary reporting,
-  - =my:modules-skip= to omit selected features safely,
-  - =my:modules-extra= to append optional or experimental modules last.
-- *Resolves replaceable stacks centrally* via =core/switches.el=:
-  - UI backends: =none= | =nano= | =doom=
-  - LSP backends: =eglot= | =lsp-mode=
-- *Defines core policy layers* for daily editing:
-  - Editing and Dired defaults,
-  - Undo and history policy (=undo-fu= / =vundo=),
-  - Window and buffer navigation foundations.
-- *Defines session policy explicitly*:
-  - saveplace, recentf, savehist, desktop, winner,
-  - autosave and recovery strategy.
-- *Delegates execution to the utilities layer* for long-running sessions:
-  - Garbage collection at safe boundaries,
-  - Temporary buffer and dead-process housekeeping,
-  - LSP lifecycle cleanup on project switches.
-- *Exposes UI as replaceable bundles*:
-  - Fonts and typography normalization,
-  - Theming via nano-theme + palette normalization,
-  - Optional modeline bundles (=nano-modeline= or =doom-modeline=),
-  - Icons, clock/battery, and visual aids.
-- *Defines development surfaces*:
-  - Tree-sitter grammars and major-mode remapping,
-  - Project and editorconfig integration,
-  - Eglot or lsp-mode (+ lsp-ui),
-  - Formatting via Apheleia,
-  - Docker, REST, SQL, terminal, and build helpers,
-  - AI-assisted development via Aidermacs with all state isolated under =.var/=.
-- *Builds a layered completion surface*:
-  - Minibuffer: Orderless + Vertico (+ Marginalia),
-  - In-buffer: Corfu (+ kind-icon) driven by CAPF,
-  - CAPF sources composed explicitly (CAPE, mode-specific, Org SRC–aware),
-  - Navigation and actions via Consult + Embark (+ embark-consult).
-
-**** Utilities Layer Philosophy
-
-The =utils/= layer provides **operational executors**, not policy.
-
-It exists to *do work* requested implicitly by higher-level policy defined in
-=core/=, never to decide *why* or *when* something should happen.
-
-Characteristics:
-- May install guarded hooks or timers.
-- May execute GC, buffer/process cleanup, or LSP lifecycle actions.
-- Must remain safe to disable entirely for debugging or bisection.
-- Must never impose UI, logging, notifications, or user preferences.
-
-The =utils/= layer contains *no policy*.
-All decisions belong to =core/= or =personal/=.
-
-**** Utilities Layer Design Principles
-
-- *Operational helpers*:
-  Cross-cutting executors for long-running sessions
-  (GC strategy, housekeeping, lifecycle cleanup).
-- *Opt-in and non-intrusive*:
-  All utilities degrade to no-ops when disabled and never affect global policy.
-- *Future-proof*:
-  Implementations follow Emacs 31+ guidance and avoid obsolete APIs.
-
-**** Module map (where things live)
-
-This table documents **where responsibilities live** and **what must not live
-there**.
-The goal is **stable core behavior**, **replaceable UI**, and
-**fully isolated personal code**.
-
-| Path / Module             | Responsibility                                           | Must NOT contain                  |
-|---------------------------+----------------------------------------------------------+-----------------------------------|
-| lisp/modules.el           | Canonical module load order                              | Configuration or policy logic     |
-| lisp/core/                | *Foundation & policy* (paths, startup, sessions, switches) | UI, personal taste, platform glue |
-| lisp/core/session*.el     | Session health, thresholds, timers                       | UI, notifications                 |
-| lisp/core/general.el      | Global keybinding foundation                             | Mode-specific bindings            |
-| lisp/ui/                  | *Presentation only* (theme, fonts, modeline)               | Timers, GC, cleanup logic         |
-| lisp/completion/          | Completion stack & CAPF composition                      | Session or lifecycle policy       |
-| lisp/orgx/                | Org extensions & workflows (stable, practical)           | Experimental Org features         |
-| lisp/dev/                 | Developer tooling (LSP, treesit, formatters)             | UI or personal identity           |
-| lisp/vcs/                 | Version control entry points                             | Project or session policy         |
-| lisp/utils/               | *Operational executors* (GC, housekeeping, LSP hygiene)    | Policy or startup logic           |
-| personal/user.el          | *Personal overlays* (identity, switches, paths)            | Shared policy                     |
-| personal/device-*.el      | Device / OS–specific glue                                | Cross-platform code               |
-| personal/*-integration.el | External service integrations                            | Core or utils dependencies        |
-
-**** Design rules enforced by this structure
-
-- *Core is policy, not appearance*
-  No UI, no personal taste, no platform specifics.
-- *UI is replaceable*
-  nano / doom / none can be switched without touching core.
-- *Utils are executors, not decision-makers*
-  Safe to disable and never authoritative.
-- *Personal code is isolated*
-  User- and device-specific glue only.
-- *Platform-specific code never leaks upward*
-  OS-dependent logic stays under =personal/=.
-- The personal/user.el layer MUST NOT register hooks or timers.
-  All hooks and timers must live in core/, ui/, utils/, or
-  device-specific personal modules.
-- *A dev module is considered "opt-in" when it is explicitly*
-  required by init.el or a user-selected feature flag.
-  No dev module is loaded implicitly.
+**** Implementation
+- =modules.el=
+  - contains ordered =require= calls only
+  - no feature definitions, advice, or configuration logic
+- Each module file:
+  - provides exactly one feature
+  - documents its own assumptions and non-goals
+- Load order is:
+  1. =core=
+  2. =ui=
+  3. =completion=
+  4. =orgx=
+  5. =dev=
+  6. =utils=
+- This ordering is intentional and must not be altered without
+  documenting the dependency rationale
 
 *** modules.el
 :PROPERTIES:
-:CUSTOM_ID: core-modules
+:CUSTOM_ID: modules-el
 :header-args:emacs-lisp: :tangle lisp/modules.el
 :END:
 
 **** Purpose
-Serve as the **single authoritative entry point** for loading all modular
-configuration files under `lisp/`.
+Act as the **single authoritative module loader** for this Emacs configuration.
 
-This module defines *load order*, *error handling policy*, and *diagnostics*
-for the entire Emacs configuration, while remaining agnostic of individual
-module contents.
+=modules.el= exists solely to make module loading:
+- explicit
+- ordered
+- inspectable
+
+It intentionally separates *module orchestration* from *module implementation*.
 
 **** What it does
-- Defines the canonical ordered module list (`my:modules`)
-- Supports selective loading via:
-  - `my:modules-skip`
-  - `my:modules-extra`
-- Loads each module safely using `require`
-- Measures and reports per-module load time
-- Produces a final summary including:
-  - Loaded modules
-  - Skipped modules
-  - Failed modules (non-fatal)
+- Defines the **canonical load order** of all configuration modules
+- Loads modules explicitly via ordered =require= calls
+- Serves as a *readable index* of the entire configuration surface
+- Allows selective commenting-out or reordering for diagnostics
 
 **** Notes
-- This module **must load early**
-- It does not configure any editor behavior directly
-- A failure in one module never aborts the full startup
-- Feature symbols must exactly match each module’s `provide` form
-- Acts as the backbone for all higher-level systems (UI, completion, org, etc.)
+- =modules.el= **must not contain configuration logic**
+  - no variable customization
+  - no advice
+  - no hooks
+- Its responsibility is limited to *when* modules are loaded, not *how*
+- Any dependency between modules should be:
+  - visible from the order in this file, or
+  - documented explicitly in the dependent module
+- This file is expected to be:
+  - short
+  - boring
+  - stable
+
+If changes here feel “interesting”, they likely belong elsewhere.
 
 **** Implementation
+- Uses only =require= and comments
+- No conditional loading based on environment or features
+- Load order reflects semantic dependency layers:
+  1. core
+  2. ui
+  3. completion
+  4. orgx
+  5. dev
+  6. utils
+- Every required feature must:
+  - be provided by exactly one file
+  - correspond to a clearly named module
 
 #+begin_src emacs-lisp
   ;;; modules.el --- Modular config loader -*- lexical-binding: t; -*-
@@ -1439,35 +1384,38 @@ module contents.
   ;;; modules.el ends here
 #+end_src
 
-*** core/fixes.el
+*** core/
+:PROPERTIES:
+:CUSTOM_ID: core-modules
+:END:
+
+**** Purpose
+Provide the **foundational runtime and infrastructure layer** required by all
+other modules.
+
+This category establishes guarantees about availability, defaults, and
+execution context.
+
+**** What it does
+- Defines low-level behavior shared across the entire configuration
+- Initializes essential subsystems (paths, environment, compatibility)
+- Provides stable primitives relied upon by higher layers
+
+**** Notes
+- core modules must not depend on ui, completion, orgx, dev, or utils
+- Side effects must be explicit and documented
+- Failure here should be considered configuration-critical
+
+**** Implementation
+- Loaded first by =modules.el=
+- Each file provides exactly one core feature
+- No optional or user-facing behavior is introduced
+
+***** core/fixes.el
 :PROPERTIES:
 :CUSTOM_ID: core-fixes
 :header-args:emacs-lisp: :tangle lisp/core/fixes.el
 :END:
-
-**** Purpose
-Provide a minimal and strictly scoped compatibility and hotfix layer to
-keep the configuration stable across Emacs versions.
-
-This module exists to absorb **version-specific breakage** without
-changing architecture or refactoring existing code.
-
-**** What it does
-- Defines version comparison helpers
-- Adds defensive advice guards for Emacs 30.1+
-- Prevents duplicate advice installation on reload
-- Limits fixes to clearly justified, version-scoped cases
-
-**** Notes
-- This is **not** a general tweaks file
-- No new features or behavior changes are allowed here
-- All fixes must be:
-  - Explicitly justified
-  - Version-scoped
-  - Minimal and reversible
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/fixes.el --- Compatibility & hotfix layer -*- lexical-binding: t; -*-
 
@@ -1535,30 +1483,11 @@ changing architecture or refactoring existing code.
   ;;; core/fixes.el ends here
 #+end_src
 
-*** core/core-session.el
+***** core/core-session.el
 :PROPERTIES:
 :CUSTOM_ID: core-session
 :header-args:emacs-lisp: :tangle lisp/core/core-session.el
 :END:
-
-**** Purpose
-Provide a central orchestration layer for long-running Emacs sessions.
-This module defines *policy*, *timing*, and *coordination* while delegating
-actual work to utils modules.
-
-**** What it does
-- Coordinates GC, buffer cleanup, and LSP lifecycle helpers
-- Defines safe defaults and thresholds
-- Owns timers and idle hooks
-- Exposes customization knobs for personal overrides
-
-**** Notes
-- This module does NOT provide UI, visualization, or notifications.
-- Actual implementations live in utils/*.
-- Personal configuration should only override defcustom values.
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core-session.el --- Long-running session orchestration -*- lexical-binding: t; -*-
   ;;
@@ -1738,35 +1667,11 @@ actual work to utils modules.
   ;;; core/core-session.el ends here
 #+end_src
 
-*** core/general.el
+***** core/general.el
 :PROPERTIES:
 :CUSTOM_ID: core-general
 :header-args:emacs-lisp: :tangle lisp/core/general.el
 :END:
-
-**** Purpose
-Provide global, non-modal keybindings and general-purpose helpers that form
-the ergonomic foundation of the entire configuration.
-
-This module defines *interaction policy* (leader keys, navigation, commands)
-without depending on any specific UI, completion framework, or LSP backend.
-
-**** What it does
-- Defines a **global leader key** (`C-c SPC`) and structured sub-maps
-- Establishes a **local leader** for major-mode–specific commands
-- Provides IDE-agnostic helpers (rename, format, code actions)
-- Integrates Which-Key labels for discoverability
-- Adds safe global keybindings (macOS-like and terminal-friendly)
-- Wires local leader bindings for common major modes (Org, Dired, Magit, etc.)
-
-**** Notes
-- This module intentionally avoids modal editing (no Meow / Evil)
-- No completion or UI-specific logic is implemented here
-- Leader layout is stable and meant to be muscle-memory friendly
-- Major-mode bindings are added lazily via `with-eval-after-load`
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/general.el --- General settings & keybindings (NO Meow) -*- lexical-binding: t; -*-
   ;;
@@ -2272,30 +2177,11 @@ without depending on any specific UI, completion framework, or LSP backend.
   ;;; core/general.el ends here
 #+end_src
 
-*** core/tools.el
+***** core/tools.el
 :PROPERTIES:
 :CUSTOM_ID: core-tools
 :header-args:emacs-lisp: :tangle lisp/core/tools.el
 :END:
-
-**** Purpose
-Provide developer-oriented helper commands and low-level tooling that do
-not fit into other core domains.
-
-**** What it does
-- Window and buffer inspection helpers
-- Keybinding conflict detection
-- Dired and Org navigation helpers
-- Tree-sitter grammar management
-- Misc developer utilities
-
-**** Notes
-- Commands here are mostly interactive
-- No persistent state is stored
-- Safe to load unconditionally
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/tools.el --- Developer & UI helper tools -*- lexical-binding: t; -*-
   ;;
@@ -2509,32 +2395,11 @@ not fit into other core domains.
   ;;; core/tools.el ends here
 #+end_src
 
-*** core/utils.el
+***** core/utils.el
 :PROPERTIES:
 :CUSTOM_ID: core-utils
 :header-args:emacs-lisp: :tangle lisp/core/utils.el
 :END:
-
-**** Purpose
-Provide small, reusable utility helpers shared across core modules.
-
-This module contains **infrastructure-level glue** that does not belong
-to any single feature domain.
-
-**** What it does
-- Ensures directory creation helpers exist
-- Adds save-time timestamp updates
-- Implements automatic Org Babel tangling on save
-- Provides lightweight buffer helpers
-- Adds safety helpers for read-only buffers
-
-**** Notes
-- Functions here must be generic and dependency-free
-- No UI, no mode-specific behavior
-- Hooks are kept simple and local in effect
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/utils.el --- Core utility helpers -*- lexical-binding: t; -*-
   ;;
@@ -2603,55 +2468,11 @@ to any single feature domain.
   ;;; core/utils.el ends here
 #+end_src
 
-*** core/core-treesit.el
+***** core/core-treesit.el
 :PROPERTIES:
 :CUSTOM_ID: core-treesit
 :header-args:emacs-lisp: :tangle lisp/core/core-treesit.el
 :END:
-
-**** Purpose
-Provide a **centralized and deterministic Tree-sitter infrastructure layer**
-for Emacs 29–31+, with strict separation between:
-
-- availability detection
-- major-mode remapping
-- grammar source definition
-- grammar installation (explicit only)
-
-This module guarantees that Tree-sitter grammars are **never installed
-implicitly** and are always placed under the directory defined in
-=early-init.el=.
-
-**** What it does
-- Detects Tree-sitter availability safely
-- Applies explicit =major-mode-remap-alist= entries
-- Defines and owns grammar source metadata
-- Provides a **single explicit API** for grammar installation
-- Forces grammar installation directory via dynamic rebinding
-
-**** What it intentionally does NOT do
-- Does NOT auto-install grammars at init time
-- Does NOT rely on =treesit-auto-install=
-- Does NOT install grammars during:
-  - init
-  - byte-compilation
-  - native-compilation
-  - major-mode activation
-
-**** Design principles (important)
-- Grammar installation is **explicit and user-driven**
-- =treesit-install-language-grammar= is never called implicitly
-- Installation directory is rebound with =let= at call time
-- All Tree-sitter side effects are centralized in this module
-
-**** Notes (Emacs 29–31 behavior)
-- Emacs may attempt to auto-install grammars when entering =*-ts-mode=
-- This module disables that path and replaces it with a controlled API
-- Rebinding =treesit-install-dir= is required to avoid installation under
-  =~/.emacs.d/tree-sitter/=
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/core-treesit.el --- Tree-sitter infrastructure layer -*- lexical-binding: t; -*-
   ;;
@@ -2832,31 +2653,11 @@ implicitly** and are always placed under the directory defined in
   ;;; core/core-treesit.el ends here
 #+end_src
 
-*** core/core-history.el
+***** core/core-history.el
 :PROPERTIES:
 :CUSTOM_ID: core-history
 :header-args:emacs-lisp: :tangle lisp/core/core-history.el
 :END:
-
-**** Purpose
-Provide persistent session history and autorevert behavior.
-
-This module ensures that buffer positions, recent files, and minibuffer
-history survive Emacs restarts.
-
-**** What it does
-- Enables save-place for cursor restoration
-- Configures recentf for file history
-- Enables savehist for minibuffer persistence
-- Stores all state under no-littering directories
-
-**** Notes
-- No UI elements are defined here
-- Safe to enable globally
-- All persistence is file-based and explicit
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/history.el --- Session persistence & autorevert -*- lexical-binding: t; -*-
   ;;
@@ -2892,29 +2693,11 @@ history survive Emacs restarts.
   ;;; core/history.el ends here
 #+end_src
 
-*** core/editing.el
+***** core/editing.el
 :PROPERTIES:
 :CUSTOM_ID: core-editing
 :header-args:emacs-lisp: :tangle lisp/core/editing.el
 :END:
-
-**** Purpose
-Provide editing helpers and UX improvements that apply broadly across
-buffers without imposing workflow constraints.
-
-**** What it does
-- Configures TRAMP and autosave behavior
-- Enables structural editing (paredit, puni)
-- Adds undo, window, and navigation helpers
-- Centralizes Dired and autorevert behavior
-
-**** Notes
-- No mode-specific keymaps are defined here
-- Features are globally safe and reversible
-- Heavy logic is avoided
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/editing.el --- Editing helpers & UX aids -*- lexical-binding: t; -*-
   ;;
@@ -3002,28 +2785,11 @@ buffers without imposing workflow constraints.
   ;;; core/editing.el ends here
 #+end_src
 
-*** core/switches.el
+***** core/switches.el
 :PROPERTIES:
 :CUSTOM_ID: core-switches
 :header-args:emacs-lisp: :tangle lisp/core/switches.el
 :END:
-
-**** Purpose
-Provide a unified switchboard for selecting UI bundles and LSP backends.
-
-**** What it does
-- Selects between Doom / Nano / none UI bundles
-- Selects between Eglot and lsp-mode
-- Performs presence checks before enabling
-- Loads modules lazily and safely
-
-**** Notes
-- This module owns *policy*, not implementation
-- Actual UI / LSP setup lives in other modules
-- Safe to reload
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/switches.el --- Unified feature switches (UI/LSP) -*- lexical-binding: t; -*-
   ;;
@@ -3132,33 +2898,11 @@ Provide a unified switchboard for selecting UI bundles and LSP backends.
   ;;; core/switches.el ends here
 #+end_src
 
-*** core/custom.el
+***** core/custom.el
 :PROPERTIES:
 :CUSTOM_ID: custom-file
 :header-args:emacs-lisp: :tangle lisp/core/custom.el
 :END:
-
-**** Purpose
-Centralize Emacs Customize output into a dedicated, non-intrusive file and
-provide helper commands to inspect and snapshot selected customization state.
-
-This module isolates Customize side effects from the main configuration.
-
-**** What it does
-- Redirects `custom-file` to `.etc/custom.el`
-- Ensures the custom file and directory exist
-- Loads the custom file safely at startup
-- Provides commands to:
-  - Open the custom file
-  - Dump a curated snapshot of current variables and faces
-
-**** Notes
-- Customize output is *not* evaluated inline in init files
-- Snapshot dumping is manual and explicit
-- This module owns **routing and helpers**, not UI policy
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/custom.el --- custom-file helpers -*- lexical-binding: t; -*-
   ;;
@@ -3254,30 +2998,11 @@ This module isolates Customize side effects from the main configuration.
   ;;; core/custom.el ends here
 #+end_src
 
-*** core/custom-ui-extras.el
+***** core/custom-ui-extras.el
 :PROPERTIES:
 :CUSTOM_ID: core-custom-ui-extras
 :header-args:emacs-lisp: :tangle lisp/core/custom-ui-extras.el
 :END:
-
-**** Purpose
-Allow users to enable optional UI-related modules **without modifying**
-the default module list.
-
-This file exists as a safe extension point.
-
-**** What it does
-- Appends UI-related modules to `my:modules-extra`
-- Avoids duplication
-- Leaves default module ordering untouched
-
-**** Notes
-- Loaded only when explicitly added
-- Intended for personal / experimental UI layers
-- Zero side effects outside module selection
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; core/custom-ui-extras.el --- user extras -*- lexical-binding: t; -*-
 
@@ -3293,30 +3018,36 @@ This file exists as a safe extension point.
   ;;; core/custom-ui-extras.el ends here
 #+end_src
 
-*** ui/ui-font.el
+*** ui/
+:PROPERTIES:
+:CUSTOM_ID: ui-modules
+:END:
+
+**** Purpose
+Define the **visual presentation and interaction layer** of Emacs.
+
+This category controls how Emacs looks and feels, without affecting semantics.
+
+**** What it does
+- Configures themes, faces, layout, and visual feedback
+- Adjusts interaction-related defaults (cursor, modeline, spacing)
+- Applies appearance customizations independent of functionality
+
+**** Notes
+- ui modules must not introduce functional dependencies
+- Behavior must remain safe in terminal and batch contexts
+- Visual changes must be reversible and localized
+
+**** Implementation
+- Loaded after core
+- Does not define business logic or data structures
+- Relies only on guarantees established by core
+
+***** ui/ui-font.el
 :PROPERTIES:
 :CUSTOM_ID: ui-font
 :header-args:emacs-lisp: :tangle lisp/ui/ui-font.el
 :END:
-
-**** Purpose
-Define a stable and portable font configuration for graphical Emacs,
-including default, variable-pitch, and emoji fonts, with optional ligature support.
-
-**** What it does
-- Selects reasonable default fonts depending on the operating system.
-- Applies font settings only in graphical frames.
-- Supports daemon and non-daemon startup correctly.
-- Provides an interactive command to report the current font.
-- Optionally enables programming ligatures via ligature.el.
-
-**** Notes
-- All user-customizable options are exposed via `defcustom`.
-- This module does not force fonts if Emacs is running in terminal mode.
-- Ligatures are enabled only in `prog-mode` buffers.
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui-font.el --- Font configuration -*- lexical-binding: t; -*-
   ;;
@@ -3460,33 +3191,11 @@ including default, variable-pitch, and emoji fonts, with optional ligature suppo
   ;;; ui-font.el ends here
 #+end_src
 
-*** ui/ui-nano-palette.el
+***** ui/ui-nano-palette.el
 :PROPERTIES:
 :CUSTOM_ID: ui-nano-palette
 :header-args:emacs-lisp: :tangle lisp/ui/ui-nano-palette.el
 :END:
-
-**** Purpose
-Provide a **single source of truth** for a nano-style light color palette
-and apply it consistently across Emacs faces.
-
-This module centralizes all literal color values and exposes them as
-customizable variables.
-
-**** What it does
-- Defines a minimal nano-style palette via `defcustom`
-- Applies core UI, syntax, and mode-line faces from the palette
-- Provides helper functions to:
-  - Apply faces as-is
-  - Override a subset of colors and re-apply
-
-**** Notes
-- Faces should be applied *after* a theme is enabled
-- No theme logic lives here
-- Intended to normalize faces across different themes
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui-nano-palette.el --- Nano-style palette -*- lexical-binding: t; -*-
   ;;
@@ -3600,31 +3309,11 @@ customizable variables.
   ;;; ui/ui-nano-palette.el ends here
 #+end_src
 
-*** ui/ui-theme.el
+***** ui/ui-theme.el
 :PROPERTIES:
 :CUSTOM_ID: ui-theme
 :header-args:emacs-lisp: :tangle lisp/ui/ui-theme.el
 :END:
-
-**** Purpose
-Define the **theme orchestration layer** for the UI.
-
-This module wires together nano-emacs, nano-theme, spacing, and the
-nano palette to produce a consistent visual system.
-
-**** What it does
-- Loads the nano palette as the color authority
-- Enables nano-emacs and nano-theme
-- Re-applies palette-based face normalization after theme changes
-- Adds subtle GUI padding
-
-**** Notes
-- Face normalization always runs *after* theme activation
-- Palette logic lives in `ui-nano-palette.el`
-- Safe across Emacs 29+ theme APIs
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
   ;;
@@ -3689,26 +3378,11 @@ nano palette to produce a consistent visual system.
   ;;; ui/ui-theme.el ends here
 #+end_src
 
-*** ui/ui-doom-modeline.el
+***** ui/ui-doom-modeline.el
 :PROPERTIES:
 :CUSTOM_ID: ui-doom-modeline
 :header-args:emacs-lisp: :tangle lisp/ui/ui-doom-modeline.el
 :END:
-
-**** Purpose
-Provide an alternative **Doom-style modeline bundle**.
-
-**** What it does
-- Enables doom-modeline with Nerd Icons
-- Configures a compact, informative modeline
-- Exposes an interactive command to enable it
-
-**** Notes
-- Mutually exclusive with nano-modeline
-- Purely UI; no session state logic
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui-doom-modeline.el --- Doom UI bundle entry -*- lexical-binding: t; -*-
   ;;
@@ -3740,26 +3414,11 @@ Provide an alternative **Doom-style modeline bundle**.
   ;;; ui/ui-doom-modeline.el ends here
 #+end_src
 
-*** ui/ui-nano-modeline.el
+***** ui/ui-nano-modeline.el
 :PROPERTIES:
 :CUSTOM_ID: ui-nano-modeline
 :header-args:emacs-lisp: :tangle lisp/ui/ui-nano-modeline.el
 :END:
-
-**** Purpose
-Provide a **robust, guarded loader** for nano-modeline.
-
-**** What it does
-- Lazily enables nano-modeline when available
-- Installs hooks for many major modes
-- Guarantees idempotent initialization
-
-**** Notes
-- Safe even if nano-modeline is not installed
-- Designed for long-running sessions
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui-nano-modeline.el --- Nano UI bundle entry -*- lexical-binding: t; -*-
   ;;
@@ -3798,29 +3457,11 @@ Provide a **robust, guarded loader** for nano-modeline.
   ;;; ui/ui-nano-modeline.el ends here
 #+end_src
 
-*** ui/ui-health-modeline.el
+***** ui/ui-health-modeline.el
 :PROPERTIES:
 :CUSTOM_ID: ui-health-modeline
 :header-args:emacs-lisp: :tangle lisp/ui/ui-health-modeline.el
 :END:
-
-**** Purpose
-Provide **lightweight, read-only visibility** into Emacs session health
-via the global mode-line.
-
-**** What it does
-- Displays the number of live buffers
-- Displays the number of running processes
-- Optionally displays active Eglot workspace count
-- Reacts to buffer, process, and Eglot lifecycle events
-
-**** Notes
-- This module is **UI-only**
-- It must not trigger GC, cleanup, or lifecycle actions
-- All policy decisions belong to `core/core-session.el`
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui-health-modeline.el --- Session health indicators -*- lexical-binding: t; -*-
   ;;
@@ -3905,27 +3546,11 @@ via the global mode-line.
   ;;; ui/ui-health-modeline.el ends here
 #+end_src
 
-*** ui/ui-window.el
+***** ui/ui-window.el
 :PROPERTIES:
 :CUSTOM_ID: ui-window
 :header-args:emacs-lisp: :tangle lisp/ui/ui-window.el
 :END:
-
-**** Purpose
-Provide **window and layout management utilities** for daily use.
-
-**** What it does
-- Automatically resizes windows using `zoom-mode`
-- Persists window layouts via `desktop.el`
-- Enables undo/redo for window configurations
-- Provides simple commands to save and restore layouts
-
-**** Notes
-- Desktop data is stored under `no-littering` directories
-- Layout save/restore is manual and explicit
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
   ;;
@@ -3980,14 +3605,11 @@ Provide **window and layout management utilities** for daily use.
   ;;; ui/ui-window.el ends here
 #+end_src
 
-*** ui/ui-utils.el
+***** ui/ui-utils.el
 :PROPERTIES:
 :CUSTOM_ID: ui-utils
 :header-args:emacs-lisp: :tangle lisp/ui/ui-utils.el
 :END:
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui/ui-utils.el --- Treemacs configuration & UI utils -*- lexical-binding: t; -*-
   ;;
@@ -4027,28 +3649,11 @@ Provide **window and layout management utilities** for daily use.
   ;;; ui/ui-utils.el ends here
 #+end_src
 
-*** ui/ui-visual-aids.el
+***** ui/ui-visual-aids.el
 :PROPERTIES:
 :CUSTOM_ID: ui-visual-aids
 :header-args:emacs-lisp: :tangle lisp/ui/ui-visual-aids.el
 :END:
-
-**** Purpose
-Add **subtle, non-intrusive visual aids** that improve readability and
-orientation without clutter.
-
-**** What it does
-- Pulses the cursor after navigation jumps
-- Highlights TODO/FIXME-style annotations
-- Adds rainbow delimiters in programming modes
-- Displays lightweight indentation guides
-
-**** Notes
-- Avoids Tree-sitter or heavy overlays
-- Designed to coexist with existing UI features
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui/ui-visual-aids.el --- Subtle visual helpers -*- lexical-binding: t; -*-
   ;;
@@ -4095,25 +3700,11 @@ orientation without clutter.
   ;;; ui/ui-visual-aids.el ends here
 #+end_src
 
-*** ui/ui-macos.el
+***** ui/ui-macos.el
 :PROPERTIES:
 :CUSTOM_ID: ui-macos
 :header-args:emacs-lisp: :tangle lisp/ui/ui-macos.el
 :END:
-
-**** Purpose
-Provide **macOS-specific UI niceties**.
-
-**** What it does
-- Enables transparent title bars
-- Uses native title bars where supported
-
-**** Notes
-- Guarded by `system-type`
-- No effect on non-macOS platforms
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; ui/ui-macos.el --- macOS niceties -*- lexical-binding: t; -*-
   ;;
@@ -4131,35 +3722,36 @@ Provide **macOS-specific UI niceties**.
   ;;; ui/ui-macos.el ends here
 #+end_src
 
-*** completion/completion-core.el
+*** completion/
+:PROPERTIES:
+:CUSTOM_ID: completion-modules
+:END:
+
+**** Purpose
+Provide a **coherent and explicit completion architecture**.
+
+This category centralizes completion behavior to avoid fragmentation.
+
+**** What it does
+- Defines completion frameworks and orchestration
+- Manages CAPF composition and precedence
+- Establishes consistent completion UX across modes
+
+**** Notes
+- completion modules may depend on core and ui
+- They must not assume the presence of orgx or dev
+- Completion behavior should be deterministic and debuggable
+
+**** Implementation
+- Loaded after ui
+- Completion sources are registered explicitly
+- Implicit global side effects are avoided
+
+***** completion/completion-core.el
 :PROPERTIES:
 :CUSTOM_ID: completion-core
 :header-args:emacs-lisp: :tangle lisp/completion/completion-core.el
 :END:
-
-**** Purpose
-Define the **global completion matching policy** used throughout Emacs.
-
-This module establishes the default completion styles and category-specific
-overrides that are shared by minibuffer completion, in-buffer completion,
-and higher-level completion UIs.
-
-**** What it does
-- Enables `orderless` as the primary completion style
-- Keeps `basic` completion as a fallback
-- Customizes completion behavior per category:
-  - Files use partial completion
-  - Symbols and commands use orderless matching
-- Acts as the foundation for all other completion modules
-
-**** Notes
-- This module does **not** enable any UI
-- No Corfu / Vertico / Consult logic lives here
-- Category overrides can be further refined by context-specific modules
-  (e.g. Org SRC overrides)
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
   ;;
@@ -4179,31 +3771,11 @@ and higher-level completion UIs.
   (provide 'completion-core)
 #+end_src
 
-*** completion/completion-vertico.el
+***** completion/completion-vertico.el
 :PROPERTIES:
 :CUSTOM_ID: completion-vertico
 :header-args:emacs-lisp: :tangle lisp/completion/completion-vertico.el
 :END:
-
-**** Purpose
-Provide a **minimal and fast minibuffer completion UI** based on Vertico.
-
-This module focuses exclusively on minibuffer interaction and does not
-affect in-buffer completion.
-
-**** What it does
-- Enables `vertico-mode` globally
-- Limits the number of visible candidates for clarity
-- Uses `vertico-posframe` in GUI sessions for a floating minibuffer
-- Enables `marginalia` to enrich candidates with annotations
-
-**** Notes
-- Posframe support is enabled only in graphical sessions
-- Candidate annotation is delegated to `marginalia`
-- Styling and icons are handled in separate modules
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
   ;;
@@ -4231,31 +3803,11 @@ affect in-buffer completion.
   (provide 'completion-vertico)
 #+end_src
 
-*** completion/completion-consult.el
+***** completion/completion-consult.el
 :PROPERTIES:
 :CUSTOM_ID: completion-consult
 :header-args:emacs-lisp: :tangle lisp/completion/completion-consult.el
 :END:
-
-**** Purpose
-Integrate `consult` as the primary **search, navigation, and narrowing**
-backend.
-
-This module enhances standard Emacs commands with previewable,
-incremental narrowing.
-
-**** What it does
-- Installs `consult`
-- Routes Xref lookups through Consult for a unified UI
-- Provides consistent navigation across projects and buffers
-
-**** Notes
-- This module does not define keybindings
-- Integration with Embark is handled separately
-- Preview behavior depends on the active UI (Vertico / Corfu)
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
   ;;
@@ -4272,30 +3824,11 @@ incremental narrowing.
   (provide 'completion-consult)
 #+end_src
 
-*** completion/completion-embark.el
+***** completion/completion-embark.el
 :PROPERTIES:
 :CUSTOM_ID: completion-embark
 :header-args:emacs-lisp: :tangle lisp/completion/completion-embark.el
 :END:
-
-**** Purpose
-Enable **context-aware actions** on completion candidates via Embark.
-
-This module allows users to act on candidates without leaving the
-completion context.
-
-**** What it does
-- Enables `embark` as the prefix help system
-- Integrates Embark with Consult for live previews
-- Adds action menus for files, buffers, symbols, and more
-
-**** Notes
-- Actions are discovered dynamically
-- UI and keybindings are intentionally minimal
-- Embark does not alter completion sources or styles
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
   ;;
@@ -4315,32 +3848,11 @@ completion context.
   (provide 'completion-embark)
 #+end_src
 
-*** completion/completion-corfu.el
+***** completion/completion-corfu.el
 :PROPERTIES:
 :CUSTOM_ID: completion-corfu
 :header-args:emacs-lisp: :tangle lisp/completion/completion-corfu.el
 :END:
-
-**** Purpose
-Provide **in-buffer popup completion** using Corfu.
-
-This module defines the default Corfu behavior and integrates Cape-based
-completion sources.
-
-**** What it does
-- Enables `global-corfu-mode`
-- Uses TAB for completion and indentation
-- Enables automatic popup completion
-- Integrates `kind-icon` for visual annotations
-- Registers common Cape CAPFs globally
-
-**** Notes
-- Context-specific overrides (Org SRC, REPLs) are defined elsewhere
-- CAPF ordering matters and is refined by other modules
-- Corfu UI behavior is adjusted buffer-locally when needed
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion/completion-corfu.el --- Corfu popup completion module -*- lexical-binding: t; -*-
   ;;
@@ -4387,29 +3899,11 @@ completion sources.
   ;;; completion/completion-corfu.el ends here
 #+end_src
 
-*** completion/completion-icons.el
+***** completion/completion-icons.el
 :PROPERTIES:
 :CUSTOM_ID: completion-icons
 :header-args:emacs-lisp: :tangle lisp/completion/completion-icons.el
 :END:
-
-**** Purpose
-Add **icon-based visual cues** to completion and buffer lists.
-
-This module improves recognizability without changing completion logic.
-
-**** What it does
-- Adds Nerd Font icons to `ibuffer`
-- Adds icons to Marginalia annotations
-- Aligns Marginalia annotations to the right
-
-**** Notes
-- Requires Nerd Fonts to be installed
-- Purely cosmetic; safe to disable
-- Depends on Marginalia being enabled
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
   ;;
@@ -4433,43 +3927,11 @@ This module improves recognizability without changing completion logic.
   (provide 'completion-icons)
 #+end_src
 
-*** completion/completion-capf.el
+***** completion/completion-capf.el
 :PROPERTIES:
 :CUSTOM_ID: completion-capf
 :header-args:emacs-lisp: :tangle lisp/completion/completion-capf.el
 :END:
-
-**** Purpose
-Provide a clear and predictable completion strategy by selecting
-`completion-at-point-functions` (CAPFs) per major mode and defining
-semantic completion behavior via `completion-category-overrides`.
-
-This module separates *what to complete* (CAPFs) from *how to display*
-(Corfu), ensuring stable behavior across programming, text, Org, shell,
-and REPL buffers.
-
-**** What it does
-- Sets `completion-at-point-functions` **buffer-locally** per major mode
-- Uses only **existing and stable Cape CAPFs**
-- Keeps LSP / Eglot CAPFs intact in `prog-mode`
-- Adds specialized presets for:
-  - Emacs Lisp
-  - Programming modes
-  - Text modes
-  - Org mode
-  - Shell / Eshell
-  - REPL buffers (IELM / comint)
-- Defines `completion-category-overrides` to control matching styles
-  by semantic category (file, symbol, keyword, etc.)
-
-**** Notes
-- This module intentionally avoids global mutation of CAPFs
-- Corfu is treated purely as a UI layer
-- Category overrides belong to the completion layer, not the UI
-- Safe to load early; relies only on standard completion APIs and Cape
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion/capf.el --- Mode-specific CAPF & category configuration -*- lexical-binding: t; -*-
   ;;
@@ -4561,36 +4023,11 @@ and REPL buffers.
   ;;; completion/capf.el ends here
 #+end_src
 
-*** completion/completion-capf-org-src.el
+***** completion/completion-capf-org-src.el
 :PROPERTIES:
 :CUSTOM_ID: completion-capf-org-src
 :header-args:emacs-lisp: :tangle lisp/completion/completion-capf-org-src.el
 :END:
-
-**** Purpose
-Provide context-aware completion inside Org buffers by dynamically
-switching `completion-at-point-functions` when entering and leaving
-Org Babel source edit buffers.
-
-This ensures that:
-- Org text uses text-oriented CAPFs
-- Source blocks use language-appropriate CAPFs
-- Completion behavior remains predictable and non-intrusive
-
-**** What it does
-- Applies Org-specific CAPFs in normal Org buffers
-- Detects entry into Org SRC edit buffers (`org-src-mode`)
-- Delegates CAPF selection to the major mode of the SRC buffer
-- Falls back safely for unknown or unsupported languages
-
-**** Notes
-- Uses `org-src-mode-hook`, which runs in the *edit buffer*
-- Does not advise or override Org internals
-- Respects existing CAPF logic defined in `completion/capf.el`
-- No effect outside Org buffers
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion/completion-capf-org-src.el --- CAPF switching for Org SRC blocks -*- lexical-binding: t; -*-
   ;;
@@ -4629,36 +4066,11 @@ This ensures that:
   ;;; completion/completion-capf-org-src.el ends here
 #+end_src
 
-*** completion/completion-capf-org-src-lang.el
+***** completion/completion-capf-org-src-lang.el
 :PROPERTIES:
 :CUSTOM_ID: completion-capf-org-src-lang
 :header-args:emacs-lisp: :tangle lisp/completion/completion-capf-org-src-lang.el
 :END:
-
-**** Purpose
-Provide language-specific completion behavior inside Org Babel SRC edit
-buffers by selecting appropriate CAPFs for each language.
-
-This refines the generic Org SRC CAPF switching by applying tailored
-completion strategies for shell, SQL, and Python source blocks.
-
-**** What it does
-- Detects the major mode of the Org SRC edit buffer
-- Applies language-specific CAPF presets:
-  - Shell / Eshell
-  - SQL
-  - Python
-- Falls back to generic Org SRC CAPFs when no language match is found
-- Does not affect non-Org buffers
-
-**** Notes
-- This module runs only inside `org-src-mode` buffers
-- It extends (not replaces) `completion-capf-org-src`
-- Language detection relies on `derived-mode-p`
-- Safe to extend with additional languages
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion/completion-capf-org-src-lang.el --- Language-specific CAPFs for Org SRC -*- lexical-binding: t; -*-
   ;;
@@ -4715,34 +4127,11 @@ completion strategies for shell, SQL, and Python source blocks.
   ;;; completion/completion-capf-org-src-lang.el ends here
 #+end_src
 
-*** completion/completion-corfu-org-src.el
+***** completion/completion-corfu-org-src.el
 :PROPERTIES:
 :CUSTOM_ID: completion-corfu-org-src
 :header-args:emacs-lisp: :tangle lisp/completion/completion-corfu-org-src.el
 :END:
-
-**** Purpose
-Adjust Corfu popup behavior exclusively inside Org Babel SRC edit buffers
-to better suit short-lived, context-focused code editing.
-
-This avoids global UI changes while improving usability when editing
-embedded source blocks.
-
-**** What it does
-- Enables Corfu auto completion only inside Org SRC buffers
-- Reduces popup delay for faster feedback
-- Disables cycling to avoid accidental selection
-- Uses buffer-local overrides only
-- Restores global Corfu behavior automatically when exiting SRC buffers
-
-**** Notes
-- Applies only to `org-src-mode` buffers
-- Does not modify global Corfu configuration
-- Safe with Corfu global mode enabled
-- No advice or internal Corfu hooks used
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion/completion-corfu-org-src.el --- Corfu UI tweaks for Org SRC -*- lexical-binding: t; -*-
   ;;
@@ -4769,34 +4158,11 @@ embedded source blocks.
   ;;; completion/completion-corfu-org-src.el ends here
 #+end_src
 
-*** completion/completion-orderless-org-src.el
+***** completion/completion-orderless-org-src.el
 :PROPERTIES:
 :CUSTOM_ID: completion-orderless-org-src
 :header-args:emacs-lisp: :tangle lisp/completion/completion-orderless-org-src.el
 :END:
-
-**** Purpose
-Adjust `orderless` matching styles exclusively inside Org Babel SRC edit
-buffers to provide more permissive and code-friendly completion behavior.
-
-This allows aggressive symbol matching in source blocks while keeping
-stricter or simpler styles in normal buffers.
-
-**** What it does
-- Applies buffer-local `completion-category-overrides` in Org SRC buffers
-- Uses `orderless` for symbol- and keyword-like categories
-- Keeps file and dabbrev completion conservative
-- Leaves global completion styles untouched
-- Automatically resets when leaving the SRC edit buffer
-
-**** Notes
-- Applied only in `org-src-mode` buffers
-- Implemented via buffer-local variable binding
-- No advice, no global mutation
-- Designed to work with Corfu + Cape presets
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; completion/completion-orderless-org-src.el --- Orderless style tweaks for Org SRC -*- lexical-binding: t; -*-
   ;;
@@ -4830,14 +4196,36 @@ stricter or simpler styles in normal buffers.
   ;;; completion/completion-orderless-org-src.el ends here
 #+end_src
 
-*** orgx/org-core.el
+*** orgx/
+:PROPERTIES:
+:CUSTOM_ID: orgx-modules
+:END:
+
+**** Purpose
+Extend Org-mode beyond upstream defaults while preserving its core semantics.
+
+This category isolates Org-specific customization and extensions.
+
+**** What it does
+- Adds Org-mode utilities, workflows, and integrations
+- Customizes Org behavior without forking upstream logic
+- Encapsulates Org-related assumptions
+
+**** Notes
+- orgx modules may depend on core, ui, and completion
+- They must not leak Org assumptions into non-Org buffers
+- Agenda and capture behavior must remain inspectable
+
+**** Implementation
+- Loaded after completion
+- All Org extensions live exclusively under this category
+- Feature boundaries follow Org concepts, not file size
+
+***** orgx/org-core.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-core
 :header-args:emacs-lisp: :tangle lisp/orgx/org-core.el
 :END:
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; orgx/org-core.el --- Org Mode core configuration -*- lexical-binding: t; -*-
   ;;
@@ -4912,26 +4300,11 @@ stricter or simpler styles in normal buffers.
   ;;; orgx/org-core.el ends here
 #+end_src
 
-*** orgx/org-visual.el
+***** orgx/org-visual.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-visual
 :header-args:emacs-lisp: :tangle lisp/orgx/org-visual.el
 :END:
-
-**** Purpose
-Provide **modern, distraction-free visuals** for Org buffers.
-
-**** What it does
-- Enables `org-modern`
-- Improves heading, list, checkbox, and priority visuals
-- Beautifies agenda layout and time grid
-
-**** Notes
-- Purely visual; no semantic changes
-- Typography extras live in `orgx/org-typography.el`
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; orgx/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
   ;;
@@ -4977,26 +4350,26 @@ Provide **modern, distraction-free visuals** for Org buffers.
   ;;; orgx/org-visual.el ends here
 #+end_src
 
-*** orgx/org-extensions.el
+***** orgx/org-extensions.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-extensions
 :header-args:emacs-lisp: :tangle lisp/orgx/org-extensions.el
 :END:
 
-**** Purpose
+****** Purpose
 Provide **optional but production-safe extensions** for Org workflows.
 
-**** What it does
+****** What it does
 - Enables org-journal and org-roam
 - Adds defensive guards for org-roam hashing
 - Delays org-roam autosync to avoid IO races
 - Adds helpers for downloads, TOC, and link capture
 
-**** Notes
+****** Notes
 - org-roam autosync is intentionally delayed
 - Guards avoid crashes on network/iCloud filesystems
 
-**** Implementation
+****** Implementation
 
 #+begin_src emacs-lisp
   ;;; orgx/org-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
@@ -5054,26 +4427,26 @@ Provide **optional but production-safe extensions** for Org workflows.
   ;;; orgx/org-extensions.el ends here
 #+end_src
 
-*** orgx/org-export.el
+***** orgx/org-export.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-export
 :header-args:emacs-lisp: :tangle lisp/orgx/org-export.el
 :END:
 
-**** Purpose
+****** Purpose
 Provide a **robust Org export pipeline** for Hugo, Markdown, and diagrams.
 
-**** What it does
+****** What it does
 - Configures ox-hugo and Hugo capture templates
 - Enables Markdown editing and preview
 - Enables Mermaid and Graphviz in Org Babel
 - Provides Hugo draft review helpers
 
-**** Notes
+****** Notes
 - Hugo filenames are generated safely and deterministically
 - Mermaid requires `mmdc` executable
 
-**** Implementation
+****** Implementation
 
 #+begin_src emacs-lisp
   ;;; orgx/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
@@ -5115,32 +4488,32 @@ Provide a **robust Org export pipeline** for Hugo, Markdown, and diagrams.
   ;;; orgx/org-export.el ends here
 #+end_src
 
-*** orgx/org-typography.el
+***** orgx/org-typography.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-typography
 :header-args:emacs-lisp: :tangle lisp/orgx/org-typography.el
 :END:
 
-**** Purpose
+****** Purpose
 Provide **modern typography enhancements** for Org buffers without
 overlapping with structural or decorative visuals.
 
 This module focuses on *readability and flow* of prose-heavy Org documents,
 complementing `orgx/org-visual.el` (org-modern).
 
-**** What it does
+****** What it does
 - Aligns Org tables and inline images visually using `valign`
 - Reveals emphasis markers, links, and sub/superscripts contextually
   using `org-appear`
 - Improves prose editing experience while keeping code blocks untouched
 
-**** Notes
+****** Notes
 - This module is intentionally **orthogonal** to `org-modern`
 - No faces, icons, or agenda styling are defined here
 - Variable-pitch support is documented but disabled by default
 - Safe to enable in long-running sessions
 
-**** Implementation
+****** Implementation
 
 #+begin_src emacs-lisp
   ;;; orgx/org-typography.el --- Org modern typography extras -*- lexical-binding: t; -*-
@@ -5185,171 +4558,36 @@ complementing `orgx/org-visual.el` (org-modern).
   ;;; orgx/org-typography.el ends here
 #+end_src
 
-*** vcs/vcs-magit.el
+*** dev/
 :PROPERTIES:
-:CUSTOM_ID: vcs-magit
-:header-args:emacs-lisp: :tangle lisp/vcs/vcs-magit.el
+:CUSTOM_ID: dev-modules
 :END:
 
 **** Purpose
-Provide **Git integration via Magit** with safe defaults.
+Support **development, diagnostics, and build-related workflows**.
+
+This category exists for maintainers, not day-to-day editing.
 
 **** What it does
-- Lazily loads Magit entry points
-- Keeps auto-revert opt-in
-- Enables refined diff display
+- Provides tooling for development and inspection
+- Adds helpers for build, compile, and debug tasks
+- Supports configuration maintenance activities
 
 **** Notes
-- Avoids eager refresh churn
-- Plays well with long-running sessions
+- dev modules must never be required for normal editing
+- Side effects must be opt-in and explicit
+- Safe to disable entirely in production usage
 
 **** Implementation
+- Loaded after orgx
+- Commands are interactive and discoverable
+- No hard dependency from core, ui, completion, or orgx
 
-#+begin_src emacs-lisp
-  ;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: vcs
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf magit
-    :straight t
-    :commands (magit-status magit-dispatch)
-    :init
-    (setq magit-auto-revert-mode nil)
-    :config
-    (setq magit-refresh-status-buffer nil
-          magit-diff-refine-hunk 'all))
-
-  (provide 'vcs-magit)
-  ;;; vcs/vcs-magit.el ends here
-#+end_src
-
-*** vcs/vcs-gutter.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-gutter
-:header-args:emacs-lisp: :tangle lisp/vcs/vcs-gutter.el
-:END:
-
-**** Purpose
-Provide **lightweight Git change indicators** in the fringe.
-
-**** What it does
-- Enables diff-hl in code, text, and dired buffers
-- Integrates with Magit refresh lifecycle
-
-**** Notes
-- Sole fringe indicator by design
-- Borders are disabled for clarity
-
-**** Implementation
-
-#+begin_src emacs-lisp
-  ;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: vcs
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf diff-hl
-    :straight t
-    :commands (diff-hl-mode diff-hl-dired-mode diff-hl-magit-post-refresh)
-    :hook ((prog-mode . diff-hl-mode)
-           (text-mode . diff-hl-mode)
-           (dired-mode . diff-hl-dired-mode))
-    :config
-    (with-eval-after-load 'magit
-      (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
-    (customize-set-variable 'diff-hl-draw-borders nil))
-
-  (provide 'vcs-gutter)
-  ;;; vcs/vcs-gutter.el ends here
-#+end_src
-
-*** vcs/vcs-forge.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-forge
-:header-args:emacs-lisp: :tangle lisp/vcs/vcs-forge.el
-:END:
-
-**** Purpose
-Integrate **GitHub/GitLab forges** into Magit via Forge.
-
-**** What it does
-- Installs Forge with Magit integration
-- Forces built-in SQLite backend on Emacs 29+
-- Stores Forge DB under var directory
-
-**** Notes
-- Defensive fallbacks are included
-- No-littering is respected when available
-
-**** Implementation
-
-#+begin_src emacs-lisp
-  ;;; vcs/vcs-forge.el --- GitHub/GitLab integration via Forge -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: vcs
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (defvar no-littering-var-directory
-    (expand-file-name ".var/" user-emacs-directory))
-
-  (unless (file-directory-p no-littering-var-directory)
-    (make-directory no-littering-var-directory t))
-
-  (unless (fboundp 'my/ensure-directory-exists)
-    (defun my/ensure-directory-exists (dir)
-      (unless (file-directory-p dir)
-        (make-directory dir t))))
-
-  (leaf forge
-    :straight t
-    :after magit
-    :init
-    (with-eval-after-load 'emacsql
-      (when (boundp 'emacsql-sqlite3-executable)
-        (setq emacsql-sqlite3-executable nil)))
-    :config
-    (let* ((db-dir (expand-file-name "forge" no-littering-var-directory))
-           (db (expand-file-name "forge-database.sqlite" db-dir)))
-      (my/ensure-directory-exists db-dir)
-      (setq forge-database-file db)))
-
-  (provide 'vcs-forge)
-  ;;; vcs/vcs-forge.el ends here
-#+end_src
-
-*** dev/dev-lsp-eglot.el
+***** dev/dev-lsp-eglot.el
 :PROPERTIES:
 :CUSTOM_ID: dev-lsp-eglot
 :header-args:emacs-lisp: :tangle lisp/dev/dev-lsp-eglot.el
 :END:
-
-**** Purpose
-Provide a **safe, minimal Eglot-based LSP setup** with automatic activation
-only when a language server is likely available.
-
-**** What it does
-- Installs Eglot as the LSP client
-- Detects whether an LSP server can be guessed for the current buffer
-- Enables Eglot automatically in `prog-mode` buffers when safe
-- Avoids hard dependency on Eglot internal APIs
-
-**** Notes
-- Never errors even if Eglot changes private helpers
-- Does not force LSP startup when no server is detected
-- Designed to coexist with alternative LSP stacks
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev-lsp-eglot.el --- Eglot setup -*- lexical-binding: t; -*-
   ;;
@@ -5393,30 +4631,11 @@ only when a language server is likely available.
   ;;; dev-lsp-eglot.el ends here
 #+end_src
 
-*** dev/dev-lsp-mode.el
+***** dev/dev-lsp-mode.el
 :PROPERTIES:
 :CUSTOM_ID: dev-lsp-mode
 :header-args:emacs-lisp: :tangle lisp/dev/dev-lsp-mode.el
 :END:
-
-**** Purpose
-Provide an **lsp-mode based LSP stack** (optionally with `lsp-ui`) while
-delegating in-buffer completion to Corfu/CAPF.
-
-**** What it does
-- Enables `lsp-mode` for `prog-mode` via `lsp-deferred`
-- Configures conservative watcher/timeouts for stability
-- Disables `lsp-mode`’s own completion provider (`:none`)
-- Enables `lsp-ui` as an optional UI layer
-- Exposes an autoloaded entry point to enable this stack on demand
-
-**** Notes
-- Completion is intentionally delegated to Corfu/Cape (CAPF)
-- Hooks are simple and predictable (no advice)
-- Designed to coexist with Eglot stack selection via `core/switches.el`
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev-lsp-mode.el --- lsp-mode setup -*- lexical-binding: t; -*-
   ;;
@@ -5462,32 +4681,11 @@ delegating in-buffer completion to Corfu/CAPF.
   ;;; dev-lsp-mode.el ends here
 #+end_src
 
-*** dev/dev-ai.el
+***** dev/dev-ai.el
 :PROPERTIES:
 :CUSTOM_ID: dev-ai
 :header-args:emacs-lisp: :tangle lisp/dev/dev-ai.el
 :END:
-
-**** Purpose
-Centralize **AI-assisted development** configuration (Aidermacs) and
-consolidate its runtime/history files into a stable per-user directory.
-
-**** What it does
-- Creates/uses `~/.var/aideremacs/` (or `my:d:var`-based) as a base dir
-- Sets official `AIDER_*` environment variables for history/log files
-- Optionally injects a per-user `.env` via Aidermacs extra args
-- Selects model/provider based on environment variables
-  - OpenRouter (`OPENROUTER_API_KEY`)
-  - OpenAI (`OPENAI_API_KEY`)
-
-**** Notes
-- Safe to load early (only env + variables, no UI)
-- Uses official Aider env vars so CLI and Aidermacs stay consistent
-- If your Aidermacs build uses `aidermacs-args` instead of `aidermacs-extra-args`,
-  you can rename locally (this module assumes the newer variable exists)
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev/dev-ai.el --- AI-assisted development -*- lexical-binding: t; -*-
   ;;
@@ -5570,30 +4768,11 @@ consolidate its runtime/history files into a stable per-user directory.
   ;;; dev/dev-ai.el ends here
 #+end_src
 
-*** dev/dev-term.el
+***** dev/dev-term.el
 :PROPERTIES:
 :CUSTOM_ID: dev-term
 :header-args:emacs-lisp: :tangle lisp/dev/dev-term.el
 :END:
-
-**** Purpose
-Provide a **terminal workflow** inside Emacs via vterm/vterm-toggle, and
-keep terminal colors consistent by reusing the nano palette.
-
-**** What it does
-- Loads `vterm` and applies `ui/ui-nano-palette` to vterm faces
-- Works around vterm builds that lack `vterm-color-default`
-- Re-applies palette after theme changes
-- Adds `vterm-toggle` for quick toggling and project scoping
-- Adds a `display-buffer-alist` rule to show vterm at the bottom
-
-**** Notes
-- Uses palette as a single source of truth (no :custom-face)
-- Color application is guarded by `facep` checks
-- Display rule is installed only after vterm is available
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev/dev-term.el --- Terminal integration -*- lexical-binding: t; -*-
   ;;
@@ -5694,29 +4873,11 @@ keep terminal colors consistent by reusing the nano palette.
   ;;; dev/dev-term.el ends here
 #+end_src
 
-*** dev/dev-web-core.el
+***** dev/dev-web-core.el
 :PROPERTIES:
 :CUSTOM_ID: dev-web-core
 :header-args:emacs-lisp: :tangle lisp/dev/dev-web-core.el
 :END:
-
-**** Purpose
-Provide a **web/dev baseline** for modern syntax highlighting (tree-sitter)
-and project/file hygiene.
-
-**** What it does
-- Loads `project` for project workflows
-- Enforces trailing whitespace cleanup and final newline defaults
-- Enables `editorconfig` globally
-- Remaps legacy major modes to `*-ts-mode` via `major-mode-remap-alist`
-- Extends `auto-mode-alist` for TS/TSX/JSON/YAML tree-sitter modes
-
-**** Notes
-- Tree-sitter remapping applies only when Emacs has `treesit` support
-- Uses built-in `files` and `project` packages where available
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev-web-core.el --- Treesit & project core -*- lexical-binding: t; -*-
   ;;
@@ -5762,27 +4923,12 @@ and project/file hygiene.
   ;;; dev-web-core.el ends here
 #+end_src
 
-*** dev/dev-build.el
+***** dev/dev-build.el
 :PROPERTIES:
 :CUSTOM_ID: dev-build
 :header-args:emacs-lisp: :tangle lisp/dev/dev-build.el
 :END:
-
-**** Purpose
-Provide **build / Makefile tooling** with sane defaults for compilation,
-indentation, and ANSI color rendering.
-
-**** What it does
-- Enables Makefile modes and sets Makefile-friendly indentation
-- Sets `compile-command` to `make -k` when a Makefile is present
-- Enables scrolling compilation output and thresholding
-- Applies ANSI colors in compilation buffers
-
-**** Notes
-- Hooks are mode-local and do not affect non-build buffers
-- ANSI color application is guarded by read-only inhibition
-
-**** Implementation
+****** Implementation
 
 #+begin_src emacs-lisp
   ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
@@ -5828,28 +4974,11 @@ indentation, and ANSI color rendering.
   ;;; dev/dev-build.el ends here
 #+end_src
 
-*** dev/dev-format.el
+***** dev/dev-format.el
 :PROPERTIES:
 :CUSTOM_ID: dev-format
 :header-args:emacs-lisp: :tangle lisp/dev/dev-format.el
 :END:
-
-**** Purpose
-Provide **auto-formatting** for web-centric buffers (TypeScript/TSX/JSON/CSS/Markdown)
-via Apheleia with Prettier/Prettierd.
-
-**** What it does
-- Installs and enables `apheleia` globally
-- Registers `prettierd` and `prettier` formatters
-- Maps major modes to use `prettierd` by default
-
-**** Notes
-- Requires `prettierd` or `npx prettier` available in PATH
-- Uses Apheleia’s formatter registry (`apheleia-formatters`)
-- Leaves non-listed modes untouched
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev-format.el --- Prettier formatting via Apheleia -*- lexical-binding: t; -*-
   ;;
@@ -5887,26 +5016,11 @@ via Apheleia with Prettier/Prettierd.
   ;;; dev-format.el ends here
 #+end_src
 
-*** dev/dev-infra-modes.el
+***** dev/dev-infra-modes.el
 :PROPERTIES:
 :CUSTOM_ID: dev-infra-modes
 :header-args:emacs-lisp: :tangle lisp/dev/dev-infra-modes.el
 :END:
-
-**** Purpose
-Provide **infra file syntax support** for common ops/devops formats.
-
-**** What it does
-- Enables `docker-compose-mode` for docker-compose YAML variants
-- Enables `dotenv-mode` for `.env` files (and `.env.*`)
-- Enables `toml-mode` for TOML files
-
-**** Notes
-- This module is intentionally narrow: only mode associations
-- Leaves formatting/linting to other modules (e.g. Apheleia)
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev-infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
   ;;
@@ -5933,28 +5047,11 @@ Provide **infra file syntax support** for common ops/devops formats.
   ;;; dev/dev-infra-modes.el ends here
 #+end_src
 
-*** dev/dev-docker.el
+***** dev/dev-docker.el
 :PROPERTIES:
 :CUSTOM_ID: dev-docker
 :header-args:emacs-lisp: :tangle lisp/dev/dev-docker.el
 :END:
-
-**** Purpose
-Provide **Docker-oriented editing and inspection** support in Emacs.
-
-**** What it does
-- Enables `dockerfile-mode` for Dockerfiles
-- Enables `yaml-mode` for Compose files and YAML
-- Provides `docker` commands (containers/images/volumes/networks)
-- Enables TRAMP container method via `tramp-container`
-- Adds Tempel snippet(s) for Dockerfile authoring
-
-**** Notes
-- TRAMP container method is configured after TRAMP is available
-- Tempel template registration is delayed until Tempel is loaded
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
   ;;
@@ -6003,28 +5100,11 @@ Provide **Docker-oriented editing and inspection** support in Emacs.
   ;;; dev/dev-docker.el ends here
 #+end_src
 
-*** dev/dev-sql.el
+***** dev/dev-sql.el
 :PROPERTIES:
 :CUSTOM_ID: dev-sql
 :header-args:emacs-lisp: :tangle lisp/dev/dev-sql.el
 :END:
-
-**** Purpose
-Provide a **PostgreSQL-focused SQL editing** experience with indentation
-and on-save formatting.
-
-**** What it does
-- Sets `sql-product` to PostgreSQL
-- Enables `sql-indent` minor mode in `sql-mode`
-- Enables `sqlformat` on-save for `sql-mode` and `sql-ts-mode`
-- Configures formatter command (`pgformatter`) and args
-
-**** Notes
-- Requires `pgformatter` available in PATH for sqlformat
-- Hooks are mode-local and safe
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; lisp/dev/dev-sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
   ;;
@@ -6053,26 +5133,11 @@ and on-save formatting.
   ;;; dev-sql.el ends here
 #+end_src
 
-*** dev/dev-rest.el
+***** dev/dev-rest.el
 :PROPERTIES:
 :CUSTOM_ID: dev-rest
 :header-args:emacs-lisp: :tangle lisp/dev/dev-rest.el
 :END:
-
-**** Purpose
-Provide a simple **HTTP/REST client workflow** inside Emacs for quick
-API testing and iteration.
-
-**** What it does
-- Enables `restclient-mode` for `.http` files
-- Adds `restclient-jq` integration for JSON parsing/formatting
-
-**** Notes
-- `jq` should be available in PATH for best results
-- This module keeps configuration minimal (just mode and integration)
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; dev-rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
   ;;
@@ -6097,29 +5162,164 @@ API testing and iteration.
   ;;; dev/dev-rest.el ends here
 #+end_src
 
-*** utils/utils-functions.el
+*** vcs/
+:PROPERTIES:
+:CUSTOM_ID: vcs-modules
+:END:
+
+**** Purpose
+Provide a **consistent and inspectable version control interaction layer**
+within Emacs.
+
+This category encapsulates all integrations with external version control
+systems.
+
+**** What it does
+- Integrates Emacs with version control backends (e.g. Git)
+- Provides interactive commands for common VCS workflows
+- Exposes status, diff, log, and history information inside Emacs buffers
+
+**** Notes
+- vcs modules must not be required for basic editing or startup
+- They may depend on core, ui, and completion
+- They must not impose workflow decisions on the user
+- External tools and repositories are treated as authoritative
+- Failure or absence of VCS backends must degrade gracefully
+
+**** Implementation
+- Loaded explicitly by =modules.el=
+- Each file corresponds to one VCS-related concern
+- Integration is achieved via well-defined external interfaces
+- No project-specific assumptions are embedded
+
+***** vcs/vcs-magit.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-magit
+:header-args:emacs-lisp: :tangle lisp/vcs/vcs-magit.el
+:END:
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf magit
+    :straight t
+    :commands (magit-status magit-dispatch)
+    :init
+    (setq magit-auto-revert-mode nil)
+    :config
+    (setq magit-refresh-status-buffer nil
+          magit-diff-refine-hunk 'all))
+
+  (provide 'vcs-magit)
+  ;;; vcs/vcs-magit.el ends here
+#+end_src
+
+***** vcs/vcs-gutter.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-gutter
+:header-args:emacs-lisp: :tangle lisp/vcs/vcs-gutter.el
+:END:
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf diff-hl
+    :straight t
+    :commands (diff-hl-mode diff-hl-dired-mode diff-hl-magit-post-refresh)
+    :hook ((prog-mode . diff-hl-mode)
+           (text-mode . diff-hl-mode)
+           (dired-mode . diff-hl-dired-mode))
+    :config
+    (with-eval-after-load 'magit
+      (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
+    (customize-set-variable 'diff-hl-draw-borders nil))
+
+  (provide 'vcs-gutter)
+  ;;; vcs/vcs-gutter.el ends here
+#+end_src
+
+***** vcs/vcs-forge.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-forge
+:header-args:emacs-lisp: :tangle lisp/vcs/vcs-forge.el
+:END:
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-forge.el --- GitHub/GitLab integration via Forge -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (defvar no-littering-var-directory
+    (expand-file-name ".var/" user-emacs-directory))
+
+  (unless (file-directory-p no-littering-var-directory)
+    (make-directory no-littering-var-directory t))
+
+  (unless (fboundp 'my/ensure-directory-exists)
+    (defun my/ensure-directory-exists (dir)
+      (unless (file-directory-p dir)
+        (make-directory dir t))))
+
+  (leaf forge
+    :straight t
+    :after magit
+    :init
+    (with-eval-after-load 'emacsql
+      (when (boundp 'emacsql-sqlite3-executable)
+        (setq emacsql-sqlite3-executable nil)))
+    :config
+    (let* ((db-dir (expand-file-name "forge" no-littering-var-directory))
+           (db (expand-file-name "forge-database.sqlite" db-dir)))
+      (my/ensure-directory-exists db-dir)
+      (setq forge-database-file db)))
+
+  (provide 'vcs-forge)
+  ;;; vcs/vcs-forge.el ends here
+#+end_src
+
+*** utils/
+:PROPERTIES:
+:CUSTOM_ID: utils-modules
+:END:
+
+**** Purpose
+Host **small, domain-specific utilities** that do not justify a standalone layer.
+
+This category is intentionally heterogeneous.
+
+**** What it does
+- Provides narrowly scoped helper functions and tools
+- Solves local problems without expanding global abstractions
+- Complements higher-level modules without owning workflows
+
+**** Notes
+- utils modules must remain small and focused
+- Promotion to another category should be considered if scope grows
+- Dependencies should be minimal and explicit
+
+**** Implementation
+- Loaded last by =modules.el=
+- No other category may depend on utils implicitly
+- Utilities are optional and loosely coupled
+
+***** utils/utils-functions.el
 :PROPERTIES:
 :CUSTOM_ID: utils-functions
 :header-args:emacs-lisp: :tangle lisp/utils/utils-functions.el
 :END:
-
-**** Purpose
-Provide **small, safe utility functions** shared across the configuration,
-covering editing helpers, Org helpers, and lightweight UI glue.
-
-**** What it does
-- Smart buffer/window killing
-- Org subtree → indirect buffer helper
-- Org outline sidebar using `imenu-list`
-- Nano-modeline–aware header-line rendering (with safe fallback)
-
-**** Notes
-- Optional dependencies are declared defensively to avoid byte-compile warnings
-- Prefers modern Org APIs (`org-fold-show-all`) when available
-- Designed to degrade gracefully if optional packages are missing
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils/utils-functions.el --- General utility functions -*- lexical-binding: t; -*-
   ;;
@@ -6244,24 +5444,11 @@ covering editing helpers, Org helpers, and lightweight UI glue.
   ;;; utils/utils-functions.el ends here
 #+end_src
 
-*** utils/utils-async.el
+***** utils/utils-async.el
 :PROPERTIES:
 :CUSTOM_ID: utils-async
 :header-args:emacs-lisp: :tangle lisp/utils/utils-async.el
 :END:
-
-**** Purpose
-Provide a **safe helper** for running asynchronous tasks without crashing Emacs.
-
-**** What it does
-- Executes a function asynchronously
-- Catches and logs any errors
-
-**** Notes
-- Intended for lightweight background tasks only
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-async.el --- Safe async task helpers -*- lexical-binding: t; -*-
   ;;
@@ -6289,25 +5476,11 @@ Provide a **safe helper** for running asynchronous tasks without crashing Emacs.
   ;;; utils/utils-async.el ends here
 #+end_src
 
-*** utils/utils-gc.el
+***** utils/utils-gc.el
 :PROPERTIES:
 :CUSTOM_ID: utils-gc
 :header-args:emacs-lisp: :tangle lisp/utils/utils-gc.el
 :END:
-
-**** Purpose
-Run **garbage collection at safe moments** during long-running sessions.
-
-**** What it does
-- Triggers GC on focus-out
-- Triggers GC on minibuffer exit
-
-**** Notes
-- Never signals errors
-- No logging or visualization
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-gc.el --- Safe garbage collection helpers -*- lexical-binding: t; -*-
   ;;
@@ -6347,24 +5520,11 @@ Run **garbage collection at safe moments** during long-running sessions.
   ;;; utils/utils-gc.el ends here
 #+end_src
 
-*** utils/utils-backup.el
+***** utils/utils-backup.el
 :PROPERTIES:
 :CUSTOM_ID: utils-backup
 :header-args:emacs-lisp: :tangle lisp/utils/utils-backup.el
 :END:
-
-**** Purpose
-Automatically **clean up old backup files** to keep the var directory tidy.
-
-**** What it does
-- Deletes backup files older than 7 days
-- Runs once at Emacs startup
-
-**** Notes
-- Assumes `no-littering-var-directory` is in use
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils/utils-backup.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
   ;;
@@ -6392,26 +5552,11 @@ Automatically **clean up old backup files** to keep the var directory tidy.
   ;;; utils/utils-backup.el ends here
 #+end_src
 
-*** utils/utils-buffers.el
+***** utils/utils-buffers.el
 :PROPERTIES:
 :CUSTOM_ID: utils-buffers
 :header-args:emacs-lisp: :tangle lisp/utils/utils-buffers.el
 :END:
-
-**** Purpose
-Provide **automatic housekeeping** for temporary and dead-process buffers.
-
-**** What it does
-- Detects temporary buffers by name/pattern
-- Cleans buffers with exited processes
-- Runs periodically in the background
-
-**** Notes
-- Skips modified or visible buffers
-- Safe defaults only
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-buffers.el --- Automatic buffer housekeeping -*- lexical-binding: t; -*-
   ;;
@@ -6471,29 +5616,11 @@ Provide **automatic housekeeping** for temporary and dead-process buffers.
   ;;; utils/utils-buffers.el ends here
 #+end_src
 
-*** utils/utils-org-agenda.el
+***** utils/utils-org-agenda.el
 :PROPERTIES:
 :CUSTOM_ID: utils-org-agenda
 :header-args:emacs-lisp: :tangle lisp/utils/utils-org-agenda.el
 :END:
-
-**** Purpose
-Build `org-agenda-files` using a **persistent cache** to avoid expensive
-recursive scans on every startup.
-
-**** What it does
-- Recursively scans `org-directory` for `*.org`
-- Excludes paths matching a configurable regexp (default: `archives`)
-- Caches results on disk under `user-emacs-directory`
-- Returns agenda files in *O(1)* time when cached
-
-**** Notes
-- Does **not** define `org-directory`
-- Does **not** automatically set `org-agenda-files`
-- Full rescans happen only when explicitly requested
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-org-agenda.el --- Cached org-agenda-files builder -*- lexical-binding: t; -*-
   ;;
@@ -6574,27 +5701,11 @@ recursive scans on every startup.
   ;;; utils-org-agenda.el ends here
 #+end_src
 
-*** utils/utils-search-nav.el
+***** utils/utils-search-nav.el
 :PROPERTIES:
 :CUSTOM_ID: search-nav
 :header-args:emacs-lisp: :tangle lisp/utils/utils-search-nav.el
 :END:
-
-**** Purpose
-Provide **modern search and navigation** helpers built on ripgrep and Consult,
-with safe fallbacks.
-
-**** What it does
-- Jump-to-definition via `dumb-jump`
-- Multiple cursors support
-- Lightweight web search and browsing via `eww`
-
-**** Notes
-- Search backend prefers ripgrep (`rg`)
-- EWW helpers avoid heavy browser dependencies
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-search-nav.el --- Search and navigation helpers -*- lexical-binding: t; -*-
   ;;
@@ -6659,58 +5770,11 @@ with safe fallbacks.
   ;;; utils-search-nav.el ends here
 #+end_src
 
-*** utils/utils-notes-markdown.el
+***** utils/utils-notes-markdown.el
 :PROPERTIES:
 :CUSTOM_ID: utils-notes-markdown
 :header-args:emacs-lisp: :tangle lisp/utils/utils-notes-markdown.el
 :END:
-
-**** Purpose
-Provide a **prose-oriented Markdown notes system** that lives *alongside* Org
-files under the same logical knowledge base, without interfering with Org’s
-agenda, capture, or task semantics.
-
-This module defines Markdown notes as a *sibling domain* of Org, optimized for
-long-form writing, reflection, and reference material rather than task
-management.
-
-**** What it does
-- Defines a dedicated Markdown notes root under =my:d:org/notes=
-- Ensures a stable notebook-style directory structure
-- Provides helpers to:
-  - Create timestamped Markdown notes with front matter
-  - Open the notes root quickly
-- Configures Markdown UX for prose:
-  - Visual line wrapping and variable-pitch text
-  - Centered text via =visual-fill-column=
-  - Native code block fontification
-- Integrates search and navigation:
-  - Scoped ripgrep search via =consult-ripgrep=
-  - Source registration for =consult-notes=
-- Enables image pasting in Markdown via =org-download= with Markdown-friendly
-  link formatting
-
-**** Notes
-- Assumes =my:d:org= is already defined and points to the Org root directory
-- Markdown notes are **explicitly excluded** from:
-  - Org agenda
-  - Org capture
-  - Zettelkasten / backlink semantics
-- This module defines *no policy* about when notes are created or searched
-- Search and navigation rely on consult + ripgrep
-- Safe to load early; all filesystem operations are defensive and idempotent
-
-Directory layout (conceptual):
-
-#+begin_example
-  my:d:org/
-    ├─ agenda/        (Org tasks, schedules)
-    ├─ projects/      (Org project files)
-    └─ notes/         (Markdown prose notes)  ← this module
-#+end_example
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils/utils-notes-markdown.el --- Prose-oriented Markdown notes under Org -*- lexical-binding: t; -*-
   ;;
@@ -6882,26 +5946,11 @@ Directory layout (conceptual):
   ;;; utils/utils-notes-markdown.el ends here
 #+end_src
 
-*** utils/utils-scratch.el
+***** utils/utils-scratch.el
 :PROPERTIES:
 :CUSTOM_ID: utils-scratch
 :header-args:emacs-lisp: :tangle lisp/utils/utils-scratch.el
 :END:
-
-**** Purpose
-Ensure that `*scratch*` is **always available** by automatically recreating it
-when killed.
-
-**** What it does
-- Recreates `*scratch*` after it is killed
-- Uses `lisp-interaction-mode`
-- Inserts a small header
-
-**** Notes
-- Recreation is asynchronous to avoid interfering with kill flow
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-scratch.el --- Persistent *scratch* buffer helper -*- lexical-binding: t; -*-
   ;;
@@ -6944,25 +5993,11 @@ when killed.
   ;;; utils/utils-scratch.el ends here
 #+end_src
 
-*** utils/utils-lsp.el
+***** utils/utils-lsp.el
 :PROPERTIES:
 :CUSTOM_ID: utils-lsp
 :header-args:emacs-lisp: :tangle lisp/utils/utils-lsp.el
 :END:
-
-**** Purpose
-Manage **Eglot lifecycle** when switching projects.
-
-**** What it does
-- Detects project root changes
-- Shuts down obsolete Eglot servers
-
-**** Notes
-- Defensive: never errors if Eglot internals change
-- Complements `dev/dev-lsp-eglot.el`
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-lsp.el --- LSP lifecycle cleanup helpers -*- lexical-binding: t; -*-
   ;;
@@ -7017,28 +6052,11 @@ Manage **Eglot lifecycle** when switching projects.
   ;;; utils/utils-lsp.el ends here
 #+end_src
 
-*** utils/utils-lint.el
+***** utils/utils-lint.el
 :PROPERTIES:
 :CUSTOM_ID: utils-lint
 :header-args:emacs-lisp: :tangle lisp/utils/utils-lint.el
 :END:
-
-**** Purpose
-Provide **static linting helpers** for Emacs Lisp modules using
-=checkdoc= and =package-lint=.
-
-**** What it does
-- Runs =checkdoc= on the current buffer or directory
-- Runs =package-lint= on individual files
-- Reports issues without modifying files
-
-**** Notes
-- Intended for manual or CI-triggered use
-- Never runs automatically
-- Safe to load in any environment
-
-**** Implementation
-
 #+begin_src emacs-lisp
   ;;; utils-lint.el --- Static lint helpers for Emacs Lisp -*- lexical-binding: t; -*-
   ;;
@@ -7351,19 +6369,6 @@ Concretely, this layer covers:
 :CUSTOM_ID: personal-user
 :header-args:emacs-lisp: :tangle (eval (format "personal/%s.el" (user-login-name)))
 :END:
-
-Purpose:
-Personal-only knobs and identity information.
-
-What it does:
-- Defines user identity
-- Overrides defcustom values from core/session and ui/health-modeline
-- Injects personal paths and preferences
-
-Notes:
-- This file contains NO hooks, timers, or operational logic.
-- Device- and workflow-specific code lives in separate personal modules.
-
 #+begin_src emacs-lisp
   ;;; user.el --- Personal configuration -*- lexical-binding: t; -*-
   ;;
@@ -7516,19 +6521,6 @@ Notes:
 :CUSTOM_ID: personal-device-darwin
 :header-args:emacs-lisp: :tangle personal/device-darwin.el
 :END:
-
-Purpose:
-macOS-specific device and input method configuration.
-
-What it does:
-- Configure IME behavior via sis
-- Apply macOS-specific mouse and scroll tuning
-- Restore cursor color after theme reload
-
-Notes:
-- This file is loaded only on darwin systems.
-- No core/session or UI orchestration logic lives here.
-
 #+begin_src emacs-lisp
   ;;; device-darwin.el --- macOS device profile -*- lexical-binding: t; -*-
   ;;
