@@ -285,90 +285,90 @@ coupling between modules.
 **** Implementation (tangled to lisp/tools/graph.el)
 
 #+begin_src emacs-lisp
-;;; tools/graph.el --- Require dependency graph capture -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2025
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-;;;
-;;; Commentary:
-;; Diagnostic tool to capture and visualize `require` dependencies
-;; between Emacs Lisp features.  Outputs Graphviz DOT or Mermaid graphs.
-;; Category: tools
-;;;
-;;; Code:
+  ;;; tools/graph.el --- Require dependency graph capture -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;;
+  ;;; Commentary:
+  ;; Diagnostic tool to capture and visualize `require` dependencies
+  ;; between Emacs Lisp features.  Outputs Graphviz DOT or Mermaid graphs.
+  ;; Category: tools
+  ;;;
+  ;;; Code:
 
-(defvar graph/require-edges (make-hash-table :test 'equal)
-  "Hash table storing recorded require edges as FROM->TO keys.")
+  (defvar graph/require-edges (make-hash-table :test 'equal)
+    "Hash table storing recorded require edges as FROM->TO keys.")
 
-(defun graph--record (from to)
-  "Record a require edge FROM -> TO if both are symbols."
-  (when (and (symbolp from) (symbolp to))
-    (puthash (format "%s->%s" from to) t graph/require-edges)))
+  (defun graph--record (from to)
+    "Record a require edge FROM -> TO if both are symbols."
+    (when (and (symbolp from) (symbolp to))
+      (puthash (format "%s->%s" from to) t graph/require-edges)))
 
-(defun graph/require-advice (orig feature &optional filename noerror)
-  "Advice around `require` to record dependency edges."
-  (let* ((from-file (or load-file-name (buffer-file-name)))
-         (from-sym (if from-file
-                       (intern (file-name-sans-extension
-                                (file-name-nondirectory from-file)))
-                     'init))
-         (to-sym (if (symbolp feature)
-                     feature
-                   (intern (format "%s" feature)))))
-    (graph--record from-sym to-sym)
-    (funcall orig feature filename noerror)))
+  (defun graph/require-advice (orig feature &optional filename noerror)
+    "Advice around `require` to record dependency edges."
+    (let* ((from-file (or load-file-name (buffer-file-name)))
+           (from-sym (if from-file
+                         (intern (file-name-sans-extension
+                                  (file-name-nondirectory from-file)))
+                       'init))
+           (to-sym (if (symbolp feature)
+                       feature
+                     (intern (format "%s" feature)))))
+      (graph--record from-sym to-sym)
+      (funcall orig feature filename noerror)))
 
-(defun graph/edge-list ()
-  "Return a sorted list of recorded edges."
-  (sort (hash-table-keys graph/require-edges) #'string<))
+  (defun graph/edge-list ()
+    "Return a sorted list of recorded edges."
+    (sort (hash-table-keys graph/require-edges) #'string<))
 
-(defun graph/export-dot ()
-  "Render recorded require edges as Graphviz DOT."
-  (interactive)
-  (let ((buf (get-buffer-create "*Require Graph (DOT)*")))
-    (with-current-buffer buf
-      (erase-buffer)
-      (insert "digraph G {\n  rankdir=LR;\n  node [shape=box, fontsize=10];\n")
-      (dolist (e (graph/edge-list))
-        (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
-          (insert (format "  \"%s\" -> \"%s\";\n"
-                          (match-string 1 e)
-                          (match-string 2 e)))))
-      (insert "}\n"))
-    (pop-to-buffer buf)))
+  (defun graph/export-dot ()
+    "Render recorded require edges as Graphviz DOT."
+    (interactive)
+    (let ((buf (get-buffer-create "*Require Graph (DOT)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "digraph G {\n  rankdir=LR;\n  node [shape=box, fontsize=10];\n")
+        (dolist (e (graph/edge-list))
+          (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+            (insert (format "  \"%s\" -> \"%s\";\n"
+                            (match-string 1 e)
+                            (match-string 2 e)))))
+        (insert "}\n"))
+      (pop-to-buffer buf)))
 
-(defun graph/export-mermaid ()
-  "Render recorded require edges as Mermaid flowchart."
-  (interactive)
-  (let ((buf (get-buffer-create "*Require Graph (Mermaid)*")))
-    (with-current-buffer buf
-      (erase-buffer)
-      (insert "```mermaid\nflowchart LR\n")
-      (dolist (e (graph/edge-list))
-        (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
-          (insert
-           (format "  %s --> %s\n"
-                   (replace-regexp-in-string "[./-]" "_" (match-string 1 e))
-                   (replace-regexp-in-string "[./-]" "_" (match-string 2 e))))))
-      (insert "```\n"))
-    (pop-to-buffer buf)))
+  (defun graph/export-mermaid ()
+    "Render recorded require edges as Mermaid flowchart."
+    (interactive)
+    (let ((buf (get-buffer-create "*Require Graph (Mermaid)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "```mermaid\nflowchart LR\n")
+        (dolist (e (graph/edge-list))
+          (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+            (insert
+             (format "  %s --> %s\n"
+                     (replace-regexp-in-string "[./-]" "_" (match-string 1 e))
+                     (replace-regexp-in-string "[./-]" "_" (match-string 2 e))))))
+        (insert "```\n"))
+      (pop-to-buffer buf)))
 
-(defun graph/enable-require-capture ()
-  "Enable require dependency capture."
-  (interactive)
-  (clrhash graph/require-edges)
-  (advice-add 'require :around #'graph/require-advice)
-  (message "[graph] require capture enabled"))
+  (defun graph/enable-require-capture ()
+    "Enable require dependency capture."
+    (interactive)
+    (clrhash graph/require-edges)
+    (advice-add 'require :around #'graph/require-advice)
+    (message "[graph] require capture enabled"))
 
-(defun graph/disable-require-capture ()
-  "Disable require dependency capture."
-  (interactive)
-  (advice-remove 'require #'graph/require-advice)
-  (message "[graph] require capture disabled"))
+  (defun graph/disable-require-capture ()
+    "Disable require dependency capture."
+    (interactive)
+    (advice-remove 'require #'graph/require-advice)
+    (message "[graph] require capture disabled"))
 
-(provide 'graph)
-;;; tools/graph.el ends here
+  (provide 'graph)
+  ;;; tools/graph.el ends here
 #+end_src
 
 **** Module Load Summary Helper
@@ -3901,6 +3901,8 @@ Provide **window and layout management utilities** for daily use.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-utils.el
 :END:
 
+**** Implementation
+
 #+begin_src emacs-lisp
   ;;; ui/ui-utils.el --- Treemacs configuration & UI utils -*- lexical-binding: t; -*-
   ;;
@@ -3963,49 +3965,49 @@ orientation without clutter.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; ui/ui-visual-aids.el --- Subtle visual helpers -*- lexical-binding: t; -*-
-;;
-;; Category: ui
-;;
-(eval-when-compile (require 'leaf))
+  ;;; ui/ui-visual-aids.el --- Subtle visual helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: ui
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf pulsar
-  :straight t
-  :init
-  (setq pulsar-delay 0.04
-        pulsar-pulse t
-        pulsar-face 'pulsar-generic)
-  :config
-  (pulsar-global-mode 1)
-  (dolist (cmd '(recenter-top-bottom
-                 other-window
-                 next-buffer
-                 previous-buffer))
-    (add-to-list 'pulsar-pulse-functions cmd)))
+  (leaf pulsar
+    :straight t
+    :init
+    (setq pulsar-delay 0.04
+          pulsar-pulse t
+          pulsar-face 'pulsar-generic)
+    :config
+    (pulsar-global-mode 1)
+    (dolist (cmd '(recenter-top-bottom
+                   other-window
+                   next-buffer
+                   previous-buffer))
+      (add-to-list 'pulsar-pulse-functions cmd)))
 
-(leaf hl-todo
-  :straight t
-  :hook ((prog-mode-hook text-mode-hook) . hl-todo-mode)
-  :init
-  (setq hl-todo-keyword-faces
-        '(("TODO" . "#d97706")
-          ("FIXME" . "#dc2626")
-          ("NOTE" . "#2563eb")
-          ("HACK" . "#9333ea"))))
+  (leaf hl-todo
+    :straight t
+    :hook ((prog-mode-hook text-mode-hook) . hl-todo-mode)
+    :init
+    (setq hl-todo-keyword-faces
+          '(("TODO" . "#d97706")
+            ("FIXME" . "#dc2626")
+            ("NOTE" . "#2563eb")
+            ("HACK" . "#9333ea"))))
 
-(leaf rainbow-delimiters
-  :straight t
-  :hook (prog-mode-hook . rainbow-delimiters-mode))
+  (leaf rainbow-delimiters
+    :straight t
+    :hook (prog-mode-hook . rainbow-delimiters-mode))
 
-(leaf indent-bars
-  :straight t
-  :hook (prog-mode-hook . indent-bars-mode)
-  :init
-  (setq indent-bars-prefer-character t
-        indent-bars-spacing-override 2))
+  (leaf indent-bars
+    :straight t
+    :hook (prog-mode-hook . indent-bars-mode)
+    :init
+    (setq indent-bars-prefer-character t
+          indent-bars-spacing-override 2))
 
-(provide 'ui-visual-aids)
-;;; ui/ui-visual-aids.el ends here
+  (provide 'ui-visual-aids)
+  ;;; ui/ui-visual-aids.el ends here
 #+end_src
 
 *** ui/ui-macos.el
@@ -4028,20 +4030,20 @@ Provide **macOS-specific UI niceties**.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; ui/ui-macos.el --- macOS niceties -*- lexical-binding: t; -*-
-;;
-;; Category: ui
-;;
-(eval-when-compile (require 'leaf))
+  ;;; ui/ui-macos.el --- macOS niceties -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: ui
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(when (eq system-type 'darwin)
-  (add-to-list 'default-frame-alist
-               '(ns-transparent-titlebar . t))
-  (add-to-list 'default-frame-alist
-               '(use-title-bar . t)))
+  (when (eq system-type 'darwin)
+    (add-to-list 'default-frame-alist
+                 '(ns-transparent-titlebar . t))
+    (add-to-list 'default-frame-alist
+                 '(use-title-bar . t)))
 
-(provide 'ui-macos)
-;;; ui/ui-macos.el ends here
+  (provide 'ui-macos)
+  ;;; ui/ui-macos.el ends here
 #+end_src
 
 *** completion/completion-core.el
@@ -4118,30 +4120,30 @@ affect in-buffer completion.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
-;;
-;; Category: completion
-;;
-(eval-when-compile (require 'leaf))
+  ;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf vertico
-  :straight t
-  :global-minor-mode vertico-mode
-  :custom ((vertico-count . 15)))
+  (leaf vertico
+    :straight t
+    :global-minor-mode vertico-mode
+    :custom ((vertico-count . 15)))
 
-(leaf vertico-posframe
-  :straight t
-  :if (display-graphic-p)
-  :after vertico
-  :custom ((vertico-posframe-border-width . 2))
-  :config
-  (vertico-posframe-mode 1))
+  (leaf vertico-posframe
+    :straight t
+    :if (display-graphic-p)
+    :after vertico
+    :custom ((vertico-posframe-border-width . 2))
+    :config
+    (vertico-posframe-mode 1))
 
-(leaf marginalia
-  :straight t
-  :global-minor-mode marginalia-mode)
+  (leaf marginalia
+    :straight t
+    :global-minor-mode marginalia-mode)
 
-(provide 'completion-vertico)
+  (provide 'completion-vertico)
 #+end_src
 
 *** completion/completion-consult.el
@@ -4170,19 +4172,19 @@ incremental narrowing.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
-;;
-;; Category: completion
-;;
-(eval-when-compile (require 'leaf))
+  ;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf consult
-  :straight t
-  :custom
-  ((xref-show-xrefs-function        . #'consult-xref)
-   (xref-show-definitions-function . #'consult-xref)))
+  (leaf consult
+    :straight t
+    :custom
+    ((xref-show-xrefs-function        . #'consult-xref)
+     (xref-show-definitions-function . #'consult-xref)))
 
-(provide 'completion-consult)
+  (provide 'completion-consult)
 #+end_src
 
 *** completion/completion-embark.el
@@ -4210,22 +4212,22 @@ completion context.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
-;;
-;; Category: completion
-;;
-(eval-when-compile (require 'leaf))
+  ;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf embark
-  :straight t
-  :custom ((prefix-help-command . #'embark-prefix-help-command)))
+  (leaf embark
+    :straight t
+    :custom ((prefix-help-command . #'embark-prefix-help-command)))
 
-(leaf embark-consult
-  :straight t
-  :after (embark consult)
-  :hook (embark-collect-mode . consult-preview-at-point-mode))
+  (leaf embark-consult
+    :straight t
+    :after (embark consult)
+    :hook (embark-collect-mode . consult-preview-at-point-mode))
 
-(provide 'completion-embark)
+  (provide 'completion-embark)
 #+end_src
 
 *** completion/completion-corfu.el
@@ -4255,49 +4257,49 @@ completion sources.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; completion/completion-corfu.el --- Corfu popup completion module -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2026
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-;;
-;; Category: completion
-;;
-;;; Commentary:
-;; Corfu-based in-buffer completion with sensible defaults.
-;;
-;;; Code:
+  ;;; completion/completion-corfu.el --- Corfu popup completion module -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;; Corfu-based in-buffer completion with sensible defaults.
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf corfu
-  :straight t
-  :init
-  (setq tab-always-indent 'complete)
-  (global-corfu-mode)
-  :custom
-  ((corfu-auto  . t)
-   (corfu-cycle . t)))
+  (leaf corfu
+    :straight t
+    :init
+    (setq tab-always-indent 'complete)
+    (global-corfu-mode)
+    :custom
+    ((corfu-auto  . t)
+     (corfu-cycle . t)))
 
-(leaf kind-icon
-  :straight t
-  :after corfu
-  :require t
-  :custom ((kind-icon-default-face . 'corfu-default))
-  :config
-  (add-to-list 'corfu-margin-formatters
-               #'kind-icon-margin-formatter))
+  (leaf kind-icon
+    :straight t
+    :after corfu
+    :require t
+    :custom ((kind-icon-default-face . 'corfu-default))
+    :config
+    (add-to-list 'corfu-margin-formatters
+                 #'kind-icon-margin-formatter))
 
-(leaf cape
-  :straight t
-  :after corfu
-  :init
-  (add-to-list 'completion-at-point-functions #'cape-elisp-symbol)
-  (add-to-list 'completion-at-point-functions #'cape-file)
-  (add-to-list 'completion-at-point-functions #'cape-dabbrev))
+  (leaf cape
+    :straight t
+    :after corfu
+    :init
+    (add-to-list 'completion-at-point-functions #'cape-elisp-symbol)
+    (add-to-list 'completion-at-point-functions #'cape-file)
+    (add-to-list 'completion-at-point-functions #'cape-dabbrev))
 
-(provide 'completion-corfu)
-;;; completion/completion-corfu.el ends here
+  (provide 'completion-corfu)
+  ;;; completion/completion-corfu.el ends here
 #+end_src
 
 *** completion/completion-icons.el
@@ -4324,26 +4326,26 @@ This module improves recognizability without changing completion logic.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
-;;
-;; Category: completion
-;;
-(eval-when-compile (require 'leaf))
+  ;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: completion
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf nerd-icons-ibuffer
-  :straight t
-  :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
+  (leaf nerd-icons-ibuffer
+    :straight t
+    :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
 
-(leaf nerd-icons-completion
-  :straight t
-  :hook (marginalia-mode-hook
-         . nerd-icons-completion-marginalia-setup)
-  :config
-  (nerd-icons-completion-mode))
+  (leaf nerd-icons-completion
+    :straight t
+    :hook (marginalia-mode-hook
+           . nerd-icons-completion-marginalia-setup)
+    :config
+    (nerd-icons-completion-mode))
 
-(setq marginalia-align 'right)
+  (setq marginalia-align 'right)
 
-(provide 'completion-icons)
+  (provide 'completion-icons)
 #+end_src
 
 *** completion/completion-capf.el
@@ -4749,6 +4751,8 @@ stricter or simpler styles in normal buffers.
 :header-args:emacs-lisp: :tangle lisp/orgx/org-core.el
 :END:
 
+**** Implementation
+
 #+begin_src emacs-lisp
   ;;; orgx/org-core.el --- Org Mode core configuration -*- lexical-binding: t; -*-
   ;;
@@ -4844,48 +4848,48 @@ Provide **modern, distraction-free visuals** for Org buffers.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; orgx/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
-;;
-;; Category: org
-;;
-;;; Code:
+  ;;; orgx/org-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf org-modern
-  :straight t
-  :hook (org-mode . org-modern-mode)
-  :custom
-  ((org-startup-indented . t)
-   (org-hide-leading-stars . t)
-   (org-auto-align-tags . nil)
-   (org-tags-column . 0)
-   (org-catch-invisible-edits . 'show-and-error)
-   (org-special-ctrl-a/e . t)
-   (org-insert-heading-respect-content . t)
-   (org-hide-emphasis-markers . t)
-   (org-pretty-entities . t)
-   (org-modern-todo-faces
-    . '(("TODO"     :background "#673AB7" :foreground "#f8f8f2")
-        ("SOMEDAY"  :background "#6b7280" :foreground "#f8f8f2")
-        ("WAITING"  :background "#6272a4" :foreground "#f8f8f2")
-        ("DONE"     :background "#373844" :foreground "#b0b8d1")
-        ("CANCELED" :background "#4b5563" :foreground "#e5e7eb")))
-   (org-modern-list . '((?+ . "◦") (?- . "–") (?* . "•")))
-   (org-modern-checkbox . '((?X . "") (?- . "") (?\s . "")))
-   (org-modern-priority . '((?A . "") (?B . "") (?C . "")))
-   (org-modern-replace-stars . "")
-   (org-agenda-tags-column . 0)
-   (org-agenda-block-separator . ?─)
-   (org-agenda-time-grid
-    . '((daily today require-timed)
-        (800 1000 1200 1400 1600 1800 2000)
-        " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
-   (org-agenda-current-time-string
-    . "⭠ now ─────────────────────────────────────────────────")))
+  (leaf org-modern
+    :straight t
+    :hook (org-mode . org-modern-mode)
+    :custom
+    ((org-startup-indented . t)
+     (org-hide-leading-stars . t)
+     (org-auto-align-tags . nil)
+     (org-tags-column . 0)
+     (org-catch-invisible-edits . 'show-and-error)
+     (org-special-ctrl-a/e . t)
+     (org-insert-heading-respect-content . t)
+     (org-hide-emphasis-markers . t)
+     (org-pretty-entities . t)
+     (org-modern-todo-faces
+      . '(("TODO"     :background "#673AB7" :foreground "#f8f8f2")
+          ("SOMEDAY"  :background "#6b7280" :foreground "#f8f8f2")
+          ("WAITING"  :background "#6272a4" :foreground "#f8f8f2")
+          ("DONE"     :background "#373844" :foreground "#b0b8d1")
+          ("CANCELED" :background "#4b5563" :foreground "#e5e7eb")))
+     (org-modern-list . '((?+ . "◦") (?- . "–") (?* . "•")))
+     (org-modern-checkbox . '((?X . "") (?- . "") (?\s . "")))
+     (org-modern-priority . '((?A . "") (?B . "") (?C . "")))
+     (org-modern-replace-stars . "")
+     (org-agenda-tags-column . 0)
+     (org-agenda-block-separator . ?─)
+     (org-agenda-time-grid
+      . '((daily today require-timed)
+          (800 1000 1200 1400 1600 1800 2000)
+          " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
+     (org-agenda-current-time-string
+      . "⭠ now ─────────────────────────────────────────────────")))
 
-(provide 'org-visual)
-;;; orgx/org-visual.el ends here
+  (provide 'org-visual)
+  ;;; orgx/org-visual.el ends here
 #+end_src
 
 *** orgx/org-extensions.el
@@ -4987,43 +4991,43 @@ Provide a **robust Org export pipeline** for Hugo, Markdown, and diagrams.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; orgx/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
-;;
-;; Category: org
-;;
-;;; Code:
+  ;;; orgx/org-export.el --- Org export configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf ox-hugo
-  :straight t
-  :after ox
-  :custom ((org-hugo-front-matter-format . "toml")))
+  (leaf ox-hugo
+    :straight t
+    :after ox
+    :custom ((org-hugo-front-matter-format . "toml")))
 
-(leaf markdown-mode :straight t)
-(leaf markdown-preview-mode :straight t)
-(leaf edit-indirect :straight t)
+  (leaf markdown-mode :straight t)
+  (leaf markdown-preview-mode :straight t)
+  (leaf edit-indirect :straight t)
 
-(leaf ob-mermaid
-  :straight t
-  :after org
-  :config
-  (when (executable-find "mmdc")
-    (setq ob-mermaid-cli-path (executable-find "mmdc")))
-  (org-babel-do-load-languages
-   'org-babel-load-languages
-   (append org-babel-load-languages '((mermaid . t)))))
+  (leaf ob-mermaid
+    :straight t
+    :after org
+    :config
+    (when (executable-find "mmdc")
+      (setq ob-mermaid-cli-path (executable-find "mmdc")))
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     (append org-babel-load-languages '((mermaid . t)))))
 
-(leaf ob-dot
-  :straight nil
-  :after org
-  :config
-  (org-babel-do-load-languages
-   'org-babel-load-languages
-   (append org-babel-load-languages '((dot . t)))))
+  (leaf ob-dot
+    :straight nil
+    :after org
+    :config
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     (append org-babel-load-languages '((dot . t)))))
 
-(provide 'org-export)
-;;; orgx/org-export.el ends here
+  (provide 'org-export)
+  ;;; orgx/org-export.el ends here
 #+end_src
 
 *** orgx/org-typography.el
@@ -5054,46 +5058,46 @@ complementing `orgx/org-visual.el` (org-modern).
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; orgx/org-typography.el --- Org modern typography extras -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2026
-;; License: GNU GPL v3 or later
-;;
-;; Category: org
-;;
-;;; Commentary:
-;; Complements orgx/org-visual.el (org-modern) without overlap.
-;; Focuses on typography and prose readability.
-;;
-;;; Code:
+  ;;; orgx/org-typography.el --- Org modern typography extras -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;; Complements orgx/org-visual.el (org-modern) without overlap.
+  ;; Focuses on typography and prose readability.
+  ;;
+  ;;; Code:
 
-(eval-when-compile
-  (require 'leaf))
+  (eval-when-compile
+    (require 'leaf))
 
-;; Optional prose setting:
-;; Use variable-pitch for text while keeping code blocks monospaced.
-;; Disabled by default to avoid surprising font changes.
-;;
-;; (leaf org
-;;   :straight nil
-;;   :hook (org-mode-hook . variable-pitch-mode))
+  ;; Optional prose setting:
+  ;; Use variable-pitch for text while keeping code blocks monospaced.
+  ;; Disabled by default to avoid surprising font changes.
+  ;;
+  ;; (leaf org
+  ;;   :straight nil
+  ;;   :hook (org-mode-hook . variable-pitch-mode))
 
-;; Align tables and inline images for better visual flow
-(leaf valign
-  :straight t
-  :hook (org-mode-hook . valign-mode))
+  ;; Align tables and inline images for better visual flow
+  (leaf valign
+    :straight t
+    :hook (org-mode-hook . valign-mode))
 
-;; Contextual reveal of emphasis, links, and markers
-(leaf org-appear
-  :straight t
-  :hook (org-mode-hook . org-appear-mode)
-  :init
-  (setq org-appear-autoemphasis t
-        org-appear-autolinks t
-        org-appear-autosubmarkers t))
+  ;; Contextual reveal of emphasis, links, and markers
+  (leaf org-appear
+    :straight t
+    :hook (org-mode-hook . org-appear-mode)
+    :init
+    (setq org-appear-autoemphasis t
+          org-appear-autolinks t
+          org-appear-autosubmarkers t))
 
-(provide 'org-typography)
-;;; orgx/org-typography.el ends here
+  (provide 'org-typography)
+  ;;; orgx/org-typography.el ends here
 #+end_src
 
 *** vcs/vcs-magit.el
@@ -5117,25 +5121,25 @@ Provide **Git integration via Magit** with safe defaults.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
-;;
-;; Category: vcs
-;;
-;;; Code:
+  ;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf magit
-  :straight t
-  :commands (magit-status magit-dispatch)
-  :init
-  (setq magit-auto-revert-mode nil)
-  :config
-  (setq magit-refresh-status-buffer nil
-        magit-diff-refine-hunk 'all))
+  (leaf magit
+    :straight t
+    :commands (magit-status magit-dispatch)
+    :init
+    (setq magit-auto-revert-mode nil)
+    :config
+    (setq magit-refresh-status-buffer nil
+          magit-diff-refine-hunk 'all))
 
-(provide 'vcs-magit)
-;;; vcs/vcs-magit.el ends here
+  (provide 'vcs-magit)
+  ;;; vcs/vcs-magit.el ends here
 #+end_src
 
 *** vcs/vcs-gutter.el
@@ -5158,27 +5162,27 @@ Provide **lightweight Git change indicators** in the fringe.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
-;;
-;; Category: vcs
-;;
-;;; Code:
+  ;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf diff-hl
-  :straight t
-  :commands (diff-hl-mode diff-hl-dired-mode diff-hl-magit-post-refresh)
-  :hook ((prog-mode . diff-hl-mode)
-         (text-mode . diff-hl-mode)
-         (dired-mode . diff-hl-dired-mode))
-  :config
-  (with-eval-after-load 'magit
-    (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
-  (customize-set-variable 'diff-hl-draw-borders nil))
+  (leaf diff-hl
+    :straight t
+    :commands (diff-hl-mode diff-hl-dired-mode diff-hl-magit-post-refresh)
+    :hook ((prog-mode . diff-hl-mode)
+           (text-mode . diff-hl-mode)
+           (dired-mode . diff-hl-dired-mode))
+    :config
+    (with-eval-after-load 'magit
+      (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
+    (customize-set-variable 'diff-hl-draw-borders nil))
 
-(provide 'vcs-gutter)
-;;; vcs/vcs-gutter.el ends here
+  (provide 'vcs-gutter)
+  ;;; vcs/vcs-gutter.el ends here
 #+end_src
 
 *** vcs/vcs-forge.el
@@ -5202,40 +5206,40 @@ Integrate **GitHub/GitLab forges** into Magit via Forge.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; vcs/vcs-forge.el --- GitHub/GitLab integration via Forge -*- lexical-binding: t; -*-
-;;
-;; Category: vcs
-;;
-;;; Code:
+  ;;; vcs/vcs-forge.el --- GitHub/GitLab integration via Forge -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(defvar no-littering-var-directory
-  (expand-file-name ".var/" user-emacs-directory))
+  (defvar no-littering-var-directory
+    (expand-file-name ".var/" user-emacs-directory))
 
-(unless (file-directory-p no-littering-var-directory)
-  (make-directory no-littering-var-directory t))
+  (unless (file-directory-p no-littering-var-directory)
+    (make-directory no-littering-var-directory t))
 
-(unless (fboundp 'my/ensure-directory-exists)
-  (defun my/ensure-directory-exists (dir)
-    (unless (file-directory-p dir)
-      (make-directory dir t))))
+  (unless (fboundp 'my/ensure-directory-exists)
+    (defun my/ensure-directory-exists (dir)
+      (unless (file-directory-p dir)
+        (make-directory dir t))))
 
-(leaf forge
-  :straight t
-  :after magit
-  :init
-  (with-eval-after-load 'emacsql
-    (when (boundp 'emacsql-sqlite3-executable)
-      (setq emacsql-sqlite3-executable nil)))
-  :config
-  (let* ((db-dir (expand-file-name "forge" no-littering-var-directory))
-         (db (expand-file-name "forge-database.sqlite" db-dir)))
-    (my/ensure-directory-exists db-dir)
-    (setq forge-database-file db)))
+  (leaf forge
+    :straight t
+    :after magit
+    :init
+    (with-eval-after-load 'emacsql
+      (when (boundp 'emacsql-sqlite3-executable)
+        (setq emacsql-sqlite3-executable nil)))
+    :config
+    (let* ((db-dir (expand-file-name "forge" no-littering-var-directory))
+           (db (expand-file-name "forge-database.sqlite" db-dir)))
+      (my/ensure-directory-exists db-dir)
+      (setq forge-database-file db)))
 
-(provide 'vcs-forge)
-;;; vcs/vcs-forge.el ends here
+  (provide 'vcs-forge)
+  ;;; vcs/vcs-forge.el ends here
 #+end_src
 
 *** dev/dev-lsp-eglot.el
@@ -5262,46 +5266,46 @@ only when a language server is likely available.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; dev-lsp-eglot.el --- Eglot setup -*- lexical-binding: t; -*-
-;;
-;; Category: dev
-;;
-;;; Commentary:
-;; Eglot baseline with safe auto-enable.
-;;
-;;; Code:
+  ;;; dev-lsp-eglot.el --- Eglot setup -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: dev
+  ;;
+  ;;; Commentary:
+  ;; Eglot baseline with safe auto-enable.
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(defun my/eglot-guessable-p ()
-  "Return non-nil if current buffer seems to have an LSP server we can start."
-  (cond
-   ((fboundp 'eglot--guess-contact)
-    (ignore-errors (eglot--guess-contact)))
-   ((fboundp 'eglot-guess-contact)
-    (ignore-errors (eglot-guess-contact)))
-   (t nil)))
+  (defun my/eglot-guessable-p ()
+    "Return non-nil if current buffer seems to have an LSP server we can start."
+    (cond
+     ((fboundp 'eglot--guess-contact)
+      (ignore-errors (eglot--guess-contact)))
+     ((fboundp 'eglot-guess-contact)
+      (ignore-errors (eglot-guess-contact)))
+     (t nil)))
 
-(leaf eglot
-  :straight t
-  :commands (eglot eglot-ensure)
-  :custom ((eglot-autoreconnect . t))
-  :hook ((prog-mode . (lambda ()
-                        (when (my/eglot-guessable-p)
-                          (eglot-ensure))))))
+  (leaf eglot
+    :straight t
+    :commands (eglot eglot-ensure)
+    :custom ((eglot-autoreconnect . t))
+    :hook ((prog-mode . (lambda ()
+                          (when (my/eglot-guessable-p)
+                            (eglot-ensure))))))
 
-;;;###autoload
-(defun my/lsp-enable-eglot ()
-  "Enable Eglot-based LSP setup."
-  (interactive)
-  (add-hook 'prog-mode-hook
-            (lambda ()
-              (when (my/eglot-guessable-p)
-                (eglot-ensure))))
-  (message "[lsp] Eglot enabled."))
+  ;;;###autoload
+  (defun my/lsp-enable-eglot ()
+    "Enable Eglot-based LSP setup."
+    (interactive)
+    (add-hook 'prog-mode-hook
+              (lambda ()
+                (when (my/eglot-guessable-p)
+                  (eglot-ensure))))
+    (message "[lsp] Eglot enabled."))
 
-(provide 'dev-lsp-eglot)
-;;; dev-lsp-eglot.el ends here
+  (provide 'dev-lsp-eglot)
+  ;;; dev-lsp-eglot.el ends here
 #+end_src
 
 *** dev/dev-lsp-mode.el
@@ -5935,31 +5939,31 @@ and on-save formatting.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; lisp/dev/dev-sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2026
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-;;
-;; Category: dev
-;;
-(eval-when-compile (require 'leaf))
+  ;;; lisp/dev/dev-sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  (eval-when-compile (require 'leaf))
 
-(leaf sql :straight nil
-  :custom ((sql-product . 'postgres)))
+  (leaf sql :straight nil
+    :custom ((sql-product . 'postgres)))
 
-(leaf sql-indent :straight t
-  :hook (sql-mode . sqlind-minor-mode))
+  (leaf sql-indent :straight t
+    :hook (sql-mode . sqlind-minor-mode))
 
-(leaf sqlformat
-  :straight t
-  :custom ((sqlformat-command . 'pgformatter)
-           (sqlformat-args . '("--nostyle")))
-  :hook (sql-mode . sqlformat-on-save-mode)
-  :hook (sql-ts-mode . sqlformat-on-save-mode))
+  (leaf sqlformat
+    :straight t
+    :custom ((sqlformat-command . 'pgformatter)
+             (sqlformat-args . '("--nostyle")))
+    :hook (sql-mode . sqlformat-on-save-mode)
+    :hook (sql-ts-mode . sqlformat-on-save-mode))
 
-(provide 'dev-sql)
-;;; dev-sql.el ends here
+  (provide 'dev-sql)
+  ;;; dev-sql.el ends here
 #+end_src
 
 *** dev/dev-rest.el
@@ -5983,27 +5987,27 @@ API testing and iteration.
 **** Implementation
 
 #+begin_src emacs-lisp
-;;; dev-rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
-;;
-;; Copyright (c) 2021-2026
-;; Author: YAMASHITA, Takao
-;; License: GNU GPL v3 or later
-;;
-;; Category: dev
-;;
-;; Commentary:
-;; REST client integration for testing HTTP requests inside Emacs.
-;; Supports JSON parsing with jq.
-;;
-;;; Code:
+  ;;; dev-rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; REST client integration for testing HTTP requests inside Emacs.
+  ;; Supports JSON parsing with jq.
+  ;;
+  ;;; Code:
 
-(eval-when-compile (require 'leaf))
+  (eval-when-compile (require 'leaf))
 
-(leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
-(leaf restclient-jq :straight t :after restclient)
+  (leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
+  (leaf restclient-jq :straight t :after restclient)
 
-(provide 'dev-rest)
-;;; dev/dev-rest.el ends here
+  (provide 'dev-rest)
+  ;;; dev/dev-rest.el ends here
 #+end_src
 
 *** utils/utils-functions.el
@@ -6564,10 +6568,10 @@ management.
 Directory layout (conceptual):
 
 #+begin_example
-my:d:org/
-  ├─ agenda/        (Org tasks, schedules)
-  ├─ projects/      (Org project files)
-  └─ notes/         (Markdown prose notes)  ← this module
+  my:d:org/
+    ├─ agenda/        (Org tasks, schedules)
+    ├─ projects/      (Org project files)
+    └─ notes/         (Markdown prose notes)  ← this module
 #+end_example
 
 **** Implementation
