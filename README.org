@@ -1,3 +1,4 @@
+;;; README.org --- xx
 # -*- mode: org; coding: utf-8; -*-
 #+TITLE: Modern Emacs Configuration
 #+AUTHOR: YAMASHITA, Takao
@@ -287,94 +288,142 @@ coupling between modules.
 #+begin_src emacs-lisp
   ;;; tools/graph.el --- Require dependency graph capture -*- lexical-binding: t; -*-
   ;;
-  ;; Copyright (c) 2021-2025
+  ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
+  ;;
+  ;; Category: tools
+  ;;
   ;;; Commentary:
   ;; Diagnostic tool to capture and visualize `require` dependencies
-  ;; between Emacs Lisp features.  Outputs Graphviz DOT or Mermaid graphs.
-  ;; Category: tools
-  ;;;
+  ;; between Emacs Lisp features.
+  ;;
+  ;; This module advises `require` to record feature-to-feature edges
+  ;; during evaluation and exports the dependency graph as:
+  ;;
+  ;; - Graphviz DOT
+  ;; - Mermaid flowchart
+  ;; - Org Babel mermaid source block
+  ;;
+  ;; Intended for diagnostics only.
+  ;; Do not enable during normal startup.
+  ;;
   ;;; Code:
 
-  (defvar graph/require-edges (make-hash-table :test 'equal)
+  ;; ---------------------------------------------------------------------------
+  ;; State
+  ;; ---------------------------------------------------------------------------
+
+  (defvar tools-graph/require-edges (make-hash-table :test 'equal)
     "Hash table storing recorded require edges as FROM->TO keys.")
 
-  (defun graph--record (from to)
+  ;; ---------------------------------------------------------------------------
+  ;; Internal helpers
+  ;; ---------------------------------------------------------------------------
+
+  (defun tools-graph--record (from to)
     "Record a require edge FROM -> TO if both are symbols."
     (when (and (symbolp from) (symbolp to))
-      (puthash (format "%s->%s" from to) t graph/require-edges)))
+      (puthash (format "%s->%s" from to) t tools-graph/require-edges)))
 
-  (defun graph/require-advice (orig feature &optional filename noerror)
+  (defun tools-graph--edge-list ()
+    "Return a sorted list of recorded edges."
+    (sort (hash-table-keys tools-graph/require-edges) #'string<))
+
+  (defun tools-graph--sanitize (name)
+    "Return a Mermaid/Org-safe node NAME."
+    (replace-regexp-in-string "[./-]" "_" name))
+
+  ;; ---------------------------------------------------------------------------
+  ;; require advice
+  ;; ---------------------------------------------------------------------------
+
+  (defun tools-graph/require-advice (orig feature &optional filename noerror)
     "Advice around `require` to record dependency edges."
     (let* ((from-file (or load-file-name (buffer-file-name)))
-           (from-sym (if from-file
-                         (intern (file-name-sans-extension
-                                  (file-name-nondirectory from-file)))
-                       'init))
+           (from-sym
+            (if from-file
+                (intern
+                 (file-name-sans-extension
+                  (file-name-nondirectory from-file)))
+              'init))
            (to-sym (if (symbolp feature)
                        feature
                      (intern (format "%s" feature)))))
-      (graph--record from-sym to-sym)
+      (tools-graph--record from-sym to-sym)
       (funcall orig feature filename noerror)))
 
-  (defun graph/edge-list ()
-    "Return a sorted list of recorded edges."
-    (sort (hash-table-keys graph/require-edges) #'string<))
+  ;; ---------------------------------------------------------------------------
+  ;; Exporters
+  ;; ---------------------------------------------------------------------------
 
-  (defun graph/export-dot ()
+  ;;;###autoload
+  (defun tools-graph/export-dot ()
     "Render recorded require edges as Graphviz DOT."
     (interactive)
     (let ((buf (get-buffer-create "*Require Graph (DOT)*")))
       (with-current-buffer buf
         (erase-buffer)
         (insert "digraph G {\n  rankdir=LR;\n  node [shape=box, fontsize=10];\n")
-        (dolist (e (graph/edge-list))
+        (dolist (e (tools-graph--edge-list))
           (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
-            (insert (format "  \"%s\" -> \"%s\";\n"
-                            (match-string 1 e)
-                            (match-string 2 e)))))
+            (insert
+             (format "  \"%s\" -> \"%s\";\n"
+                     (match-string 1 e)
+  		   (match-string 2 e)))))
         (insert "}\n"))
       (pop-to-buffer buf)))
 
-  (defun graph/export-mermaid ()
+  ;;;###autoload
+  (defun tools-graph/export-mermaid ()
     "Render recorded require edges as Mermaid flowchart."
     (interactive)
     (let ((buf (get-buffer-create "*Require Graph (Mermaid)*")))
       (with-current-buffer buf
         (erase-buffer)
         (insert "```mermaid\nflowchart LR\n")
-        (dolist (e (graph/edge-list))
+        (dolist (e (tools-graph--edge-list))
           (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
             (insert
              (format "  %s --> %s\n"
-                     (replace-regexp-in-string "[./-]" "_" (match-string 1 e))
-                     (replace-regexp-in-string "[./-]" "_" (match-string 2 e))))))
+                     (tools-graph--sanitize (match-string 1 e))
+                     (tools-graph--sanitize (match-string 2 e))))))
         (insert "```\n"))
       (pop-to-buffer buf)))
 
-  (defun graph/enable-require-capture ()
-    "Enable require dependency capture."
+  ;;;###autoload
+  (defun tools-graph/export-org ()
+    "Render recorded require edges as an Org mermaid source block."
     (interactive)
-    (clrhash graph/require-edges)
-    (advice-add 'require :around #'graph/require-advice)
-    (message "[graph] require capture enabled"))
+    (let ((buf (get-buffer-create "*Require Graph (Org)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "#+begin_src mermaid\n")
+        (insert "flowchart LR\n")
+        (dolist (e (tools-graph--edge-list))
+          (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+            (insert
+             (format "  %s --> %s\n"
+                     (tools-graph--sanitize (match-string 1 e))
+                     (tools-graph--sanitize (match-string 2 e))))))
+        (insert "#+end_src\n"))
+      (pop-to-buffer buf)))
 
-  (defun graph/disable-require-capture ()
-    "Disable require dependency capture."
-    (interactive)
-    (advice-remove 'require #'graph/require-advice)
-    (message "[graph] require capture disabled"))
-
-  (provide 'graph)
-  ;;; tools/graph.el ends here
+  ;; ---------------------------------------------------------------------------
+  ;; Control
+  ;; ----------
 #+end_src
 
 **** Module Load Summary Helper
 
-#+begin_src emacs-lisp :tangle lisp/tools/graph.el
-(defun my/modules-summary-line ()
+#+begin_src emacs-lisp :tangle no
+
+;;; Commentary:
+;;
+
+(;;; Code:
+
+defun my/modules-summary-line ()
   "Display a concise summary of module loading and captured require edges."
   (interactive)
   (let* ((edges (if (and (boundp 'graph/require-edges)
@@ -395,7 +444,7 @@ coupling between modules.
 
 1. Restart Emacs
 2. Enable capture:
-   - `M-: (require 'tools/graph)`
+   - `M-: (require 'tools-graph)`
    - `M-: (graph/enable-require-capture)`
 3. Load modules (e.g. `(require 'modules)` or normal startup)
 4. Export graph:
@@ -403,6 +452,19 @@ coupling between modules.
    - or `M-: (graph/export-dot)`
 5. Paste the result into Org / Markdown
 6. (Optional) `M-: (my/modules-summary-line)`
+
+#+begin_src emacs-lisp :tangle no
+  (require 'tools-graph)
+  (tools-graph/enable-require-capture)
+
+  ;; (require 'modules)
+
+  (tools-graph/export-org)
+  ;; (tools-graph/export-mermaid)
+  ;; (tools-graph/export-dot)
+
+  (tools-graph/disable-require-capture)
+#+end_src
 
 **** Mermaid Example
 
@@ -1285,6 +1347,7 @@ module contents.
       utils-notes-markdown
       utils-scratch
       utils-lsp
+      utils-lint
       )
     "Default set of modules to load in order.")
 
@@ -5766,7 +5829,7 @@ via Apheleia with Prettier/Prettierd.
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; dev-format.el --- Prettier/ESLint via Apheleia -*- lexical-binding: t; -*-
+  ;;; dev-format.el --- Prettier formatting via Apheleia -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -5774,7 +5837,9 @@ via Apheleia with Prettier/Prettierd.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
+  ;; Automatic code formatting for web-centric modes.
+  ;; Uses Apheleia with prettierd/prettier backends.
   ;;
   ;;; Code:
 
@@ -6176,9 +6241,17 @@ Provide a **safe helper** for running asynchronous tasks without crashing Emacs.
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
+  ;;; utils-async.el --- Safe async task helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Provide a minimal helper for running asynchronous tasks safely.
+  ;; Errors are caught and reported without affecting Emacs stability.
   ;;
   ;;; Code:
 
@@ -6214,7 +6287,17 @@ Run **garbage collection at safe moments** during long-running sessions.
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-gc.el --- GC helpers for long-running sessions -*- lexical-binding: t; -*-
+  ;;; utils-gc.el --- Safe garbage collection helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Run garbage collection at safe moments during long-running sessions.
+  ;; Triggered on focus-out and minibuffer exit only.
   ;;
   ;;; Code:
 
@@ -6308,7 +6391,17 @@ Provide **automatic housekeeping** for temporary and dead-process buffers.
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-buffers.el --- Buffer housekeeping utilities -*- lexical-binding: t; -*-
+  ;;; utils-buffers.el --- Automatic buffer housekeeping -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Automatically clean up temporary and dead-process buffers.
+  ;; Visible or modified buffers are never touched.
   ;;
   ;;; Code:
 
@@ -6381,6 +6474,16 @@ recursive scans on every startup.
 
 #+begin_src emacs-lisp
   ;;; utils-org-agenda.el --- Cached org-agenda-files builder -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Build org-agenda-files using a persistent on-disk cache.
+  ;; Avoids expensive recursive scans on every startup.
   ;;
   ;;; Code:
 
@@ -6471,7 +6574,17 @@ with safe fallbacks.
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-search-nav.el --- Project search & navigation -*- lexical-binding: t; -*-
+  ;;; utils-search-nav.el --- Search and navigation helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Project-wide search and navigation helpers.
+  ;; Built on ripgrep, dumb-jump, and lightweight EWW integration.
   ;;
   ;;; Code:
 
@@ -6768,9 +6881,17 @@ when killed.
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-scratch.el --- Scratch buffer helpers -*- lexical-binding: t; -*-
+  ;;; utils-scratch.el --- Persistent *scratch* buffer helper -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Ensure that *scratch* buffer always exists.
+  ;; Automatically recreated when killed.
   ;;
   ;;; Code:
 
@@ -6821,7 +6942,17 @@ Manage **Eglot lifecycle** when switching projects.
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-lsp.el --- LSP lifecycle helpers -*- lexical-binding: t; -*-
+  ;;; utils-lsp.el --- LSP lifecycle cleanup helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Manage Eglot server lifecycle when switching projects.
+  ;; Obsolete servers are shut down defensively.
   ;;
   ;;; Code:
 
@@ -6862,6 +6993,156 @@ Manage **Eglot lifecycle** when switching projects.
 
   (provide 'utils-lsp)
   ;;; utils/utils-lsp.el ends here
+#+end_src
+
+*** utils/utils-lint.el
+:PROPERTIES:
+:CUSTOM_ID: utils-lint
+:header-args:emacs-lisp: :tangle lisp/utils/utils-lint.el
+:END:
+
+**** Purpose
+Provide **static linting helpers** for Emacs Lisp modules using
+=checkdoc= and =package-lint=.
+
+**** What it does
+- Runs =checkdoc= on the current buffer or directory
+- Runs =package-lint= on individual files
+- Reports issues without modifying files
+
+**** Notes
+- Intended for manual or CI-triggered use
+- Never runs automatically
+- Safe to load in any environment
+
+**** Implementation
+
+#+begin_src emacs-lisp
+  ;;; utils-lint.el --- Static lint helpers for Emacs Lisp -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Provide static linting helpers for Emacs Lisp modules.
+  ;;
+  ;; This module integrates:
+  ;; - checkdoc: documentation and header/comment conventions
+  ;; - package-lint: package metadata and public API validation
+  ;;
+  ;; All commands are interactive and never modify files.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Optional dependencies (declared defensively)
+  ;; ---------------------------------------------------------------------------
+
+  (declare-function checkdoc-current-buffer "checkdoc")
+  (declare-function checkdoc-file           "checkdoc")
+  (declare-function package-lint-current-buffer "package-lint")
+  (declare-function package-lint-buffer     "package-lint")
+
+  ;; ---------------------------------------------------------------------------
+  ;; Customization
+  ;; ---------------------------------------------------------------------------
+
+  (defgroup utils-lint nil
+    "Static lint helpers for Emacs Lisp."
+    :group 'lisp)
+
+  (defcustom utils-lint-enable-package-lint-p t
+    "Enable package-lint checks when available."
+    :type 'boolean
+    :group 'utils-lint)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Helpers
+  ;; ---------------------------------------------------------------------------
+
+  (defun utils-lint--elisp-file-p (file)
+    "Return non-nil if FILE looks like an Emacs Lisp file."
+    (and (stringp file)
+         (string-match-p "\\.el\\'" file)
+         (file-regular-p file)))
+
+  (defun utils-lint--ensure-elisp-buffer ()
+    "Signal an error unless current buffer is visiting an Emacs Lisp file."
+    (unless (and buffer-file-name
+                 (utils-lint--elisp-file-p buffer-file-name))
+      (user-error "Not visiting an Emacs Lisp file")))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Public commands
+  ;; ---------------------------------------------------------------------------
+
+  ;;;###autoload
+  (defun utils-lint-checkdoc-current-buffer ()
+    "Run checkdoc on the current Emacs Lisp buffer."
+    (interactive)
+    (utils-lint--ensure-elisp-buffer)
+    (require 'checkdoc)
+    (checkdoc-current-buffer)
+    (message "checkdoc completed"))
+
+  ;;;###autoload
+  (defun utils-lint-package-lint-current-buffer ()
+    "Run package-lint on the current Emacs Lisp buffer, if available."
+    (interactive)
+    (utils-lint--ensure-elisp-buffer)
+    (unless utils-lint-enable-package-lint-p
+      (user-error "package-lint is disabled by customization"))
+    (unless (require 'package-lint nil t)
+      (user-error "package-lint is not installed"))
+    (package-lint-current-buffer)
+    (message "package-lint completed"))
+
+  ;;;###autoload
+  (defun utils-lint-run-all ()
+    "Run checkdoc and package-lint on the current Emacs Lisp buffer."
+    (interactive)
+    (utils-lint-checkdoc-current-buffer)
+    (when (and utils-lint-enable-package-lint-p
+               (require 'package-lint nil t))
+      (utils-lint-package-lint-current-buffer)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Batch / CI helper
+  ;; ---------------------------------------------------------------------------
+
+  ;;;###autoload
+  (defun utils-lint-run-on-directory (directory)
+    "Run checkdoc and package-lint on all .el files under DIRECTORY."
+    (interactive "DDirectory: ")
+    (let ((files (directory-files-recursively directory "\\.el\\'")))
+      (unless files
+        (message "No .el files found"))
+      (dolist (file files)
+        (when (utils-lint--elisp-file-p file)
+          (with-current-buffer (find-file-noselect file)
+            (condition-case err
+                (progn
+                  (checkdoc-current-buffer)
+                  (when (and utils-lint-enable-package-lint-p
+                             (require 'package-lint nil t))
+                    (package-lint-current-buffer)))
+              (error
+               (message "[lint] %s: %s"
+                        (file-name-nondirectory file)
+                        (error-message-string err))))
+            ;; IMPORTANT: must be inside with-current-buffer
+            (kill-buffer (current-buffer))))))
+    (message "Lint run completed"))
+
+  (provide 'utils-lint)
+  ;;; utils-lint.el ends here
 #+end_src
 
 ** Personal Profile & Device Integrations — `user.el`
@@ -7449,3 +7730,7 @@ Notes:
   (provide 'apple-music)
   ;;; personal/apple-music.el ends here
 #+end_src
+
+(provide 'README)
+
+;;; README.org ends here
