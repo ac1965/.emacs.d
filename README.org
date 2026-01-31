@@ -1266,26 +1266,24 @@ module contents.
       ;; Development
       dev-ai
       dev-term
-      dev-build
-      dev-docker
-
-      ;; Web/Infra
       dev-web-core
+      dev-build
       dev-format
       dev-infra-modes
+      dev-docker
       dev-sql
       dev-rest
 
       ;; Utils
-      utils-functions
-      utils-scratch
-      utils-backup
       utils-async
+      utils-gc
+      utils-backup
+      utils-buffers
+      utils-functions
+      utils-search-nav
       utils-org-agenda
       utils-notes-markdown
-      utils-search-nav
-      utils-gc
-      utils-buffers
+      utils-scratch
       utils-lsp
       )
     "Default set of modules to load in order.")
@@ -5607,142 +5605,6 @@ keep terminal colors consistent by reusing the nano palette.
   ;;; dev/dev-term.el ends here
 #+end_src
 
-*** dev/dev-build.el
-:PROPERTIES:
-:CUSTOM_ID: dev-build
-:header-args:emacs-lisp: :tangle lisp/dev/dev-build.el
-:END:
-
-**** Purpose
-Provide **build / Makefile tooling** with sane defaults for compilation,
-indentation, and ANSI color rendering.
-
-**** What it does
-- Enables Makefile modes and sets Makefile-friendly indentation
-- Sets `compile-command` to `make -k` when a Makefile is present
-- Enables scrolling compilation output and thresholding
-- Applies ANSI colors in compilation buffers
-
-**** Notes
-- Hooks are mode-local and do not affect non-build buffers
-- ANSI color application is guarded by read-only inhibition
-
-**** Implementation
-
-#+begin_src emacs-lisp
-  ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; Build system integration.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf make-mode :straight nil
-    :mode (("\\`Makefile\\'"    . makefile-gmake-mode)
-           ("\\`GNUmakefile\\'" . makefile-gmake-mode)
-           ("\\`makefile\\'"    . makefile-gmake-mode))
-    :hook ((makefile-mode . (lambda ()
-                              (setq-local indent-tabs-mode t
-                                          tab-width 8
-                                          show-trailing-whitespace t))))
-    :config
-    (leaf compile :straight nil
-      :custom ((compilation-scroll-output . t)
-               (compilation-skip-threshold . 2))
-      :init
-      (defun my/set-make-compile-command ()
-        "Use `make -k` when Makefile is present."
-        (when (or (derived-mode-p 'makefile-mode)
-                  (locate-dominating-file default-directory "Makefile")
-                  (locate-dominating-file default-directory "GNUmakefile"))
-          (setq-local compile-command "make -k")))
-      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
-    (leaf ansi-color :straight nil
-      :hook (compilation-filter . (lambda ()
-                                    (let ((inhibit-read-only t))
-                                      (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
-
-  (provide 'dev-build)
-  ;;; dev/dev-build.el ends here
-#+end_src
-
-*** dev/dev-docker.el
-:PROPERTIES:
-:CUSTOM_ID: dev-docker
-:header-args:emacs-lisp: :tangle lisp/dev/dev-docker.el
-:END:
-
-**** Purpose
-Provide **Docker-oriented editing and inspection** support in Emacs.
-
-**** What it does
-- Enables `dockerfile-mode` for Dockerfiles
-- Enables `yaml-mode` for Compose files and YAML
-- Provides `docker` commands (containers/images/volumes/networks)
-- Enables TRAMP container method via `tramp-container`
-- Adds Tempel snippet(s) for Dockerfile authoring
-
-**** Notes
-- TRAMP container method is configured after TRAMP is available
-- Tempel template registration is delayed until Tempel is loaded
-
-**** Implementation
-
-#+begin_src emacs-lisp
-  ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; Docker development support.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf dockerfile-mode :straight t
-    :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
-           ("\\.dockerfile\\'"         . dockerfile-mode))
-    :custom ((dockerfile-mode-command . "docker")))
-
-  (leaf yaml-mode :straight t
-    :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode)
-           ("\\.ya?ml\\'"                   . yaml-mode)))
-
-  (leaf docker :straight t
-    :commands (docker docker-containers docker-images docker-volumes docker-networks))
-
-  (leaf tramp-container :straight nil
-    :after tramp
-    :init
-    (setq tramp-container-method "docker"))
-
-  (leaf tempel :straight t
-    :commands (tempel-insert)
-    :init
-    (with-eval-after-load 'tempel
-      (defvar my:tempel-docker-templates
-        '((dockerfile "FROM " p n
-                      "WORKDIR /app" n
-                      "COPY . /app" n
-                      "RUN " p n
-                      "CMD [" p "]" n)))
-      (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
-
-  (provide 'dev-docker)
-  ;;; dev/dev-docker.el ends here
-#+end_src
-
 *** dev/dev-web-core.el
 :PROPERTIES:
 :CUSTOM_ID: dev-web-core
@@ -5809,6 +5671,72 @@ and project/file hygiene.
 
   (provide 'dev-web-core)
   ;;; dev-web-core.el ends here
+#+end_src
+
+*** dev/dev-build.el
+:PROPERTIES:
+:CUSTOM_ID: dev-build
+:header-args:emacs-lisp: :tangle lisp/dev/dev-build.el
+:END:
+
+**** Purpose
+Provide **build / Makefile tooling** with sane defaults for compilation,
+indentation, and ANSI color rendering.
+
+**** What it does
+- Enables Makefile modes and sets Makefile-friendly indentation
+- Sets `compile-command` to `make -k` when a Makefile is present
+- Enables scrolling compilation output and thresholding
+- Applies ANSI colors in compilation buffers
+
+**** Notes
+- Hooks are mode-local and do not affect non-build buffers
+- ANSI color application is guarded by read-only inhibition
+
+**** Implementation
+
+#+begin_src emacs-lisp
+  ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Build system integration.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf make-mode :straight nil
+    :mode (("\\`Makefile\\'"    . makefile-gmake-mode)
+           ("\\`GNUmakefile\\'" . makefile-gmake-mode)
+           ("\\`makefile\\'"    . makefile-gmake-mode))
+    :hook ((makefile-mode . (lambda ()
+                              (setq-local indent-tabs-mode t
+                                          tab-width 8
+                                          show-trailing-whitespace t))))
+    :config
+    (leaf compile :straight nil
+      :custom ((compilation-scroll-output . t)
+               (compilation-skip-threshold . 2))
+      :init
+      (defun my/set-make-compile-command ()
+        "Use `make -k` when Makefile is present."
+        (when (or (derived-mode-p 'makefile-mode)
+                  (locate-dominating-file default-directory "Makefile")
+                  (locate-dominating-file default-directory "GNUmakefile"))
+          (setq-local compile-command "make -k")))
+      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
+    (leaf ansi-color :straight nil
+      :hook (compilation-filter . (lambda ()
+                                    (let ((inhibit-read-only t))
+                                      (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
+
+  (provide 'dev-build)
+  ;;; dev/dev-build.el ends here
 #+end_src
 
 *** dev/dev-format.el
@@ -5912,6 +5840,76 @@ Provide **infra file syntax support** for common ops/devops formats.
 
   (provide 'dev-infra-modes)
   ;;; dev/dev-infra-modes.el ends here
+#+end_src
+
+*** dev/dev-docker.el
+:PROPERTIES:
+:CUSTOM_ID: dev-docker
+:header-args:emacs-lisp: :tangle lisp/dev/dev-docker.el
+:END:
+
+**** Purpose
+Provide **Docker-oriented editing and inspection** support in Emacs.
+
+**** What it does
+- Enables `dockerfile-mode` for Dockerfiles
+- Enables `yaml-mode` for Compose files and YAML
+- Provides `docker` commands (containers/images/volumes/networks)
+- Enables TRAMP container method via `tramp-container`
+- Adds Tempel snippet(s) for Dockerfile authoring
+
+**** Notes
+- TRAMP container method is configured after TRAMP is available
+- Tempel template registration is delayed until Tempel is loaded
+
+**** Implementation
+
+#+begin_src emacs-lisp
+  ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Docker development support.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf dockerfile-mode :straight t
+    :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
+           ("\\.dockerfile\\'"         . dockerfile-mode))
+    :custom ((dockerfile-mode-command . "docker")))
+
+  (leaf yaml-mode :straight t
+    :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode)
+           ("\\.ya?ml\\'"                   . yaml-mode)))
+
+  (leaf docker :straight t
+    :commands (docker docker-containers docker-images docker-volumes docker-networks))
+
+  (leaf tramp-container :straight nil
+    :after tramp
+    :init
+    (setq tramp-container-method "docker"))
+
+  (leaf tempel :straight t
+    :commands (tempel-insert)
+    :init
+    (with-eval-after-load 'tempel
+      (defvar my:tempel-docker-templates
+        '((dockerfile "FROM " p n
+                      "WORKDIR /app" n
+                      "COPY . /app" n
+                      "RUN " p n
+                      "CMD [" p "]" n)))
+      (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
+
+  (provide 'dev-docker)
+  ;;; dev/dev-docker.el ends here
 #+end_src
 
 *** dev/dev-sql.el
@@ -6155,58 +6153,89 @@ covering editing helpers, Org helpers, and lightweight UI glue.
   ;;; utils/utils-functions.el ends here
 #+end_src
 
-*** utils/utils-scratch.el
+*** utils/utils-async.el
 :PROPERTIES:
-:CUSTOM_ID: utils-scratch
-:header-args:emacs-lisp: :tangle lisp/utils/utils-scratch.el
+:CUSTOM_ID: utils-async
+:header-args:emacs-lisp: :tangle lisp/utils/utils-async.el
 :END:
 
 **** Purpose
-Ensure that `*scratch*` is **always available** by automatically recreating it
-when killed.
+Provide a **safe helper** for running asynchronous tasks without crashing Emacs.
 
 **** What it does
-- Recreates `*scratch*` after it is killed
-- Uses `lisp-interaction-mode`
-- Inserts a small header
+- Executes a function asynchronously
+- Catches and logs any errors
 
 **** Notes
-- Recreation is asynchronous to avoid interfering with kill flow
+- Intended for lightweight background tasks only
 
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-scratch.el --- Scratch buffer helpers -*- lexical-binding: t; -*-
+  ;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
   ;;
   ;; Category: utils
   ;;
   ;;; Code:
 
+  (defun my/safe-run-async (task)
+    "Run TASK asynchronously, catching and reporting any errors."
+    (run-at-time 0 nil
+                 (lambda ()
+                   (condition-case err
+                       (funcall task)
+                     (error (message "[async] error: %s" err))))))
+
+  (provide 'utils-async)
+  ;;; utils/utils-async.el ends here
+#+end_src
+
+*** utils/utils-gc.el
+:PROPERTIES:
+:CUSTOM_ID: utils-gc
+:header-args:emacs-lisp: :tangle lisp/utils/utils-gc.el
+:END:
+
+**** Purpose
+Run **garbage collection at safe moments** during long-running sessions.
+
+**** What it does
+- Triggers GC on focus-out
+- Triggers GC on minibuffer exit
+
+**** Notes
+- Never signals errors
+- No logging or visualization
+
+**** Implementation
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-gc.el --- GC helpers for long-running sessions -*- lexical-binding: t; -*-
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
-  (leaf my:scratch-auto-recreate
+  (leaf nil
     :straight nil
     :init
-    (defun my/create-scratch-buffer ()
-      "Create or reset a `*scratch*` buffer."
-      (let ((buf (get-buffer-create "*scratch*")))
-        (with-current-buffer buf
-          (lisp-interaction-mode)
-          (erase-buffer)
-          (insert ";; This is a new *scratch* buffer\n\n"))
-        buf))
+    (defcustom utils-gc-enable-p t
+      "Enable GC hooks for long-running sessions."
+      :type 'boolean
+      :group 'utils)
 
-    (defun my/kill-scratch-buffer-advice (buf)
-      "If BUF is *scratch*, recreate it shortly after kill."
-      (when (string= (buffer-name buf) "*scratch*")
-        (run-at-time 0 nil #'my/create-scratch-buffer)))
+    (defun utils-gc--collect ()
+      "Run garbage collection safely."
+      (when utils-gc-enable-p
+        (condition-case _err
+            (garbage-collect)
+          (error nil))))
 
-    (add-hook 'kill-buffer-hook
-              (lambda ()
-                (my/kill-scratch-buffer-advice (current-buffer)))))
+    (add-hook 'focus-out-hook #'utils-gc--collect)
+    (add-hook 'minibuffer-exit-hook #'utils-gc--collect))
 
-  (provide 'utils-scratch)
-  ;;; utils/utils-scratch.el ends here
+  (provide 'utils-gc)
+  ;;; utils/utils-gc.el ends here
 #+end_src
 
 *** utils/utils-backup.el
@@ -6254,41 +6283,73 @@ Automatically **clean up old backup files** to keep the var directory tidy.
   ;;; utils/utils-backup.el ends here
 #+end_src
 
-*** utils/utils-async.el
+*** utils/utils-buffers.el
 :PROPERTIES:
-:CUSTOM_ID: utils-async
-:header-args:emacs-lisp: :tangle lisp/utils/utils-async.el
+:CUSTOM_ID: utils-buffers
+:header-args:emacs-lisp: :tangle lisp/utils/utils-buffers.el
 :END:
 
 **** Purpose
-Provide a **safe helper** for running asynchronous tasks without crashing Emacs.
+Provide **automatic housekeeping** for temporary and dead-process buffers.
 
 **** What it does
-- Executes a function asynchronously
-- Catches and logs any errors
+- Detects temporary buffers by name/pattern
+- Cleans buffers with exited processes
+- Runs periodically in the background
 
 **** Notes
-- Intended for lightweight background tasks only
+- Skips modified or visible buffers
+- Safe defaults only
 
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-async.el --- Async helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: utils
+  ;;; utils/utils-buffers.el --- Buffer housekeeping utilities -*- lexical-binding: t; -*-
   ;;
   ;;; Code:
 
-  (defun my/safe-run-async (task)
-    "Run TASK asynchronously, catching and reporting any errors."
-    (run-at-time 0 nil
-                 (lambda ()
-                   (condition-case err
-                       (funcall task)
-                     (error (message "[async] error: %s" err))))))
+  (eval-when-compile (require 'leaf))
 
-  (provide 'utils-async)
-  ;;; utils/utils-async.el ends here
+  (leaf nil
+    :straight nil
+    :init
+    (defcustom utils-buffers-enable-p t
+      "Enable automatic buffer housekeeping."
+      :type 'boolean
+      :group 'utils)
+
+    (defvar utils-buffers--temporary-regexp
+      (rx string-start "*"
+          (or "Help" "Warnings" "Compile-Log" "Backtrace"
+              "Async-native-compile-log" "eglot-events")
+          (* any) string-end))
+
+    (defun utils-buffers--temporary-p (buffer)
+      (with-current-buffer buffer
+        (and (string-match-p utils-buffers--temporary-regexp (buffer-name))
+             (not (buffer-file-name))
+             (not (buffer-modified-p))
+             (not (get-buffer-window buffer 'visible)))))
+
+    (defun utils-buffers--dead-process-p (buffer)
+      (let ((proc (get-buffer-process buffer)))
+        (and proc
+             (memq (process-status proc) '(exit signal)))))
+
+    (defun utils-buffers-cleanup ()
+      "Clean up temporary and dead-process buffers."
+      (interactive)
+      (when utils-buffers-enable-p
+        (dolist (buf (buffer-list))
+          (when (or (utils-buffers--temporary-p buf)
+                    (utils-buffers--dead-process-p buf))
+            (ignore-errors
+  	    (kill-buffer buf))))))
+
+    (run-with-timer 900 900 #'utils-buffers-cleanup))
+
+  (provide 'utils-buffers)
+  ;;; utils/utils-buffers.el ends here
 #+end_src
 
 *** utils/utils-org-agenda.el
@@ -6682,121 +6743,58 @@ my:d:org/
   ;;; utils/utils-notes-markdown.el ends here
 #+end_src
 
-*** utils/utils-gc.el
+*** utils/utils-scratch.el
 :PROPERTIES:
-:CUSTOM_ID: utils-gc
-:header-args:emacs-lisp: :tangle lisp/utils/utils-gc.el
+:CUSTOM_ID: utils-scratch
+:header-args:emacs-lisp: :tangle lisp/utils/utils-scratch.el
 :END:
 
 **** Purpose
-Run **garbage collection at safe moments** during long-running sessions.
+Ensure that `*scratch*` is **always available** by automatically recreating it
+when killed.
 
 **** What it does
-- Triggers GC on focus-out
-- Triggers GC on minibuffer exit
+- Recreates `*scratch*` after it is killed
+- Uses `lisp-interaction-mode`
+- Inserts a small header
 
 **** Notes
-- Never signals errors
-- No logging or visualization
+- Recreation is asynchronous to avoid interfering with kill flow
 
 **** Implementation
 
 #+begin_src emacs-lisp
-  ;;; utils/utils-gc.el --- GC helpers for long-running sessions -*- lexical-binding: t; -*-
+  ;;; utils/utils-scratch.el --- Scratch buffer helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: utils
   ;;
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf nil
+  (leaf my:scratch-auto-recreate
     :straight nil
     :init
-    (defcustom utils-gc-enable-p t
-      "Enable GC hooks for long-running sessions."
-      :type 'boolean
-      :group 'utils)
+    (defun my/create-scratch-buffer ()
+      "Create or reset a `*scratch*` buffer."
+      (let ((buf (get-buffer-create "*scratch*")))
+        (with-current-buffer buf
+          (lisp-interaction-mode)
+          (erase-buffer)
+          (insert ";; This is a new *scratch* buffer\n\n"))
+        buf))
 
-    (defun utils-gc--collect ()
-      "Run garbage collection safely."
-      (when utils-gc-enable-p
-        (condition-case _err
-            (garbage-collect)
-          (error nil))))
+    (defun my/kill-scratch-buffer-advice (buf)
+      "If BUF is *scratch*, recreate it shortly after kill."
+      (when (string= (buffer-name buf) "*scratch*")
+        (run-at-time 0 nil #'my/create-scratch-buffer)))
 
-    (add-hook 'focus-out-hook #'utils-gc--collect)
-    (add-hook 'minibuffer-exit-hook #'utils-gc--collect))
+    (add-hook 'kill-buffer-hook
+              (lambda ()
+                (my/kill-scratch-buffer-advice (current-buffer)))))
 
-  (provide 'utils-gc)
-  ;;; utils/utils-gc.el ends here
-#+end_src
-
-*** utils/utils-buffers.el
-:PROPERTIES:
-:CUSTOM_ID: utils-buffers
-:header-args:emacs-lisp: :tangle lisp/utils/utils-buffers.el
-:END:
-
-**** Purpose
-Provide **automatic housekeeping** for temporary and dead-process buffers.
-
-**** What it does
-- Detects temporary buffers by name/pattern
-- Cleans buffers with exited processes
-- Runs periodically in the background
-
-**** Notes
-- Skips modified or visible buffers
-- Safe defaults only
-
-**** Implementation
-
-#+begin_src emacs-lisp
-  ;;; utils/utils-buffers.el --- Buffer housekeeping utilities -*- lexical-binding: t; -*-
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf nil
-    :straight nil
-    :init
-    (defcustom utils-buffers-enable-p t
-      "Enable automatic buffer housekeeping."
-      :type 'boolean
-      :group 'utils)
-
-    (defvar utils-buffers--temporary-regexp
-      (rx string-start "*"
-          (or "Help" "Warnings" "Compile-Log" "Backtrace"
-              "Async-native-compile-log" "eglot-events")
-          (* any) string-end))
-
-    (defun utils-buffers--temporary-p (buffer)
-      (with-current-buffer buffer
-        (and (string-match-p utils-buffers--temporary-regexp (buffer-name))
-             (not (buffer-file-name))
-             (not (buffer-modified-p))
-             (not (get-buffer-window buffer 'visible)))))
-
-    (defun utils-buffers--dead-process-p (buffer)
-      (let ((proc (get-buffer-process buffer)))
-        (and proc
-             (memq (process-status proc) '(exit signal)))))
-
-    (defun utils-buffers-cleanup ()
-      "Clean up temporary and dead-process buffers."
-      (interactive)
-      (when utils-buffers-enable-p
-        (dolist (buf (buffer-list))
-          (when (or (utils-buffers--temporary-p buf)
-                    (utils-buffers--dead-process-p buf))
-            (ignore-errors
-  	    (kill-buffer buf))))))
-
-    (run-with-timer 900 900 #'utils-buffers-cleanup))
-
-  (provide 'utils-buffers)
-  ;;; utils/utils-buffers.el ends here
+  (provide 'utils-scratch)
+  ;;; utils/utils-scratch.el ends here
 #+end_src
 
 *** utils/utils-lsp.el
