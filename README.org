@@ -257,10 +257,6 @@ Use the provided build script:
 :END:
 
 *** Graph Capture (Require Dependency Visualization)
-:PROPERTIES:
-:CUSTOM_ID: tools-graph-capture
-:header-args:emacs-lisp: :tangle lisp/tools/graph.el
-:END:
 
 **** Purpose
 Capture and visualize `require` relationships between Emacs Lisp features
@@ -282,10 +278,14 @@ coupling between modules.
 - Disable capture after use to avoid overhead
 - Feature names are derived from file names or `require` symbols
 
-**** Implementation (tangled to lisp/tools/graph.el)
-
+**** Implementation
+***** tools/tools-graph.el
+:PROPERTIES:
+:CUSTOM_ID: tools-graph-capture
+:header-args:emacs-lisp: :tangle lisp/tools/tools-graph.el
+:END:
 #+begin_src emacs-lisp
-  ;;; tools/graph.el --- Require dependency graph capture -*- lexical-binding: t; -*-
+  ;;; tools/tools-graph.el --- Require dependency graph capture -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -410,7 +410,170 @@ coupling between modules.
 
   ;; ---------------------------------------------------------------------------
   ;; Control
-  ;; ----------
+  ;; ---------------------------------------------------------------------------
+
+  (defvar tools-graph--enabled-p nil
+    "Non-nil if require capture advice is enabled.")
+
+  ;;;###autoload
+  (defun tools-graph/enable-require-capture ()
+    "Enable capture of `require` dependency edges.
+
+  This advises `require` globally. Intended for diagnostic use only."
+    (interactive)
+    (unless tools-graph--enabled-p
+      (advice-add 'require :around #'tools-graph/require-advice)
+      (setq tools-graph--enabled-p t)
+      (message "[tools-graph] require capture enabled")))
+
+  ;;;###autoload
+  (defun tools-graph/disable-require-capture ()
+    "Disable capture of `require` dependency edges."
+    (interactive)
+    (when tools-graph--enabled-p
+      (advice-remove 'require #'tools-graph/require-advice)
+      (setq tools-graph--enabled-p nil)
+      (message "[tools-graph] require capture disabled")))
+
+  (provide 'tools-graph)
+  ;;; tools/tools-graph.el ends here
+#+end_src
+
+***** tools/tools-graph-unused.el
+:PROPERTIES:
+:CUSTOM_ID: tools-graph-unused
+:header-args:emacs-lisp: :tangle lisp/tools/tools-graph-unused.el
+:END:
+#+begin_src emacs-lisp
+  ;;; tools-graph-unused.el --- Detect unused defuns (aware of hooks/bindings) -*- lexical-binding: t; -*-
+
+  ;;; Commentary:
+  ;; Static detector for unused top-level defuns.
+  ;; Excludes functions referenced via hooks, keymaps, advice, or autoloads.
+  ;; Intended for diagnostic use only.
+
+  ;;; Code:
+
+  (require 'cl-lib)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Collectors
+  ;; ---------------------------------------------------------------------------
+
+  (defun tools-graph--collect-defuns (dir)
+    "Return an alist of (symbol . file) for defuns under DIR."
+    (let (defs)
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "^(defun\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (push (cons (intern (match-string 1)) file) defs))))
+      defs))
+
+  (defun tools-graph--collect-called-symbols (dir)
+    "Return hash table of symbols that appear in function call position."
+    (let ((calls (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) t calls))))
+      calls))
+
+  (defun tools-graph--collect-hooked-symbols (dir)
+    "Return hash table of functions registered to hooks."
+    (let ((hooks (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(add-hook\\s-+'[^ ]+\\s-+#'\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) 'hook hooks))
+          ;; leaf :hook (xxx . func)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  ":hook\\s-*(\\(?:[^ .]+\\)\\s-+.\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\))"
+                  nil t)
+            (puthash (intern (match-string 1)) 'hook hooks))))
+      hooks))
+
+  (defun tools-graph--collect-bound-symbols (dir)
+    "Return hash table of functions bound in keymaps."
+    (let ((binds (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(define-key[^)]*#'\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) 'keymap binds))
+          ;; leaf :bind ("x" . func)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  ":bind\\s-*(\"[^\"]+\"\\s-+.\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\))"
+                  nil t)
+            (puthash (intern (match-string 1)) 'keymap binds))))
+      binds))
+
+  (defun tools-graph--collect-advised-symbols (dir)
+    "Return hash table of functions used as advice."
+    (let ((advs (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(advice-add[^)]*#'\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) 'advice advs))))
+      advs))
+
+  (defun tools-graph--collect-autoloaded-symbols (dir)
+    "Return hash table of autoloaded defuns."
+    (let ((autos (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  ";;;###autoload[ \t\n]+(defun\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\)"
+                  nil t)
+            (puthash (intern (match-string 1)) 'autoload autos))))
+      autos))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Public command
+  ;; ---------------------------------------------------------------------------
+
+  ;;;###autoload
+  (defun tools-graph/unused-functions (dir)
+    "Report unused defuns under DIR, excluding hooks/bindings/advice/autoload."
+    (interactive "DDirectory: ")
+    (let* ((defs   (tools-graph--collect-defuns dir))
+           (calls  (tools-graph--collect-called-symbols dir))
+           (hooks  (tools-graph--collect-hooked-symbols dir))
+           (binds  (tools-graph--collect-bound-symbols dir))
+           (advs   (tools-graph--collect-advised-symbols dir))
+           (autos  (tools-graph--collect-autoloaded-symbols dir)))
+      (with-current-buffer (get-buffer-create "*Unused Defuns*")
+        (erase-buffer)
+        (insert (format "Unused function candidates under: %s\n\n" dir))
+        (dolist (d defs)
+          (let ((sym (car d)))
+            (unless (or (gethash sym calls)
+                        (gethash sym hooks)
+                        (gethash sym binds)
+                        (gethash sym advs)
+                        (gethash sym autos))
+              (insert (format "%-35s  (%s)\n" sym (cdr d))))))
+        (pop-to-buffer (current-buffer)))))
+
+  (provide 'tools-graph-unused)
+  ;;; tools-graph-unused.el ends herex
 #+end_src
 
 **** Module Load Summary Helper
