@@ -1,0 +1,2579 @@
+README.org part 1/3
+--------------------
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: Modern Emacs Configuration
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: en
+#+OPTIONS: toc:3 num:t
+#+STARTUP: overview
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export
+
+* Introduction
+:PROPERTIES:
+  :CUSTOM_ID: introduction
+  :END:
+
+A modern, literate Emacs configuration using Org Mode's Babel format, emphasizing performance, language server integration, AI assistance, and productivity.
+
+** Features
+:PROPERTIES:
+:CUSTOM_ID: features
+:END:
+
+-  🚀 *Performance & Native Compilation* — Early-init moves ELN under `.cache/`, silences async warnings, widens GC at startup and restores sane values later, and uses GCMH for idle GC.
+-  🧩 *Language Server Protocol* — Backend-agnostic helpers in `core/general.el`; choose *Eglot* or *lsp-mode* via `core/switches.el` with presence checks and auto-enable logic.
+-  🤖 *AI Integration* — Aidermacs (vterm backend). Prefers OpenRouter when `OPENROUTER_API_KEY` is set; otherwise uses OpenAI with `OPENAI_API_KEY`.
+-  🎨 *Modern UI & Editing* — Tree-sitter remaps (`*-ts-mode`), ef-themes + spacious-padding, Nerd Icons, Vertico/Orderless/Corfu/CAPE/Embark/Consult, Doom/Nano modeline switchers.
+-  🗂️ *Productivity Tools* — Opinionated Org stack (agenda, capture, journal, roam, download, TOC), Magit + diff-hl/Forge, REST client, Docker/dev helpers, tidy backups/autosave-visited.
+
+[[file:demo.png]]
+
+** Coding Rules
+:PROPERTIES:
+:CUSTOM_ID: conventions
+:END:
+
+- ✅ `lexical-binding: t` is *mandatory* for all files.
+- ✅ The `(provide 'FEATURE)` symbol *must match the file’s logical feature name*
+  (usually derived from the file path).
+- 📦 Built-in packages MUST explicitly declare `:straight nil`.
+- 🌿 Each `leaf` form follows a stable, readable structure:
+  `:straight` → `:bind` → `:hook` → `:custom` → `:config`
+- 📚 Only documented, public APIs are used.
+  - Private, internal, or speculative APIs are intentionally avoided.
+- 🧠 *Compatibility & Forward-Safety Policy*
+  - This configuration targets **Emacs 30+**.
+  - Code is written with **Emacs 31 and later** in mind.
+  - Obsolete APIs are avoided even if still functional.
+    - Prefer `if-let*`, `when-let*`, `and-let*` over deprecated forms.
+  - New compiler or runtime warnings are treated as *actionable signals*.
+  - The codebase aims to remain warning-free under the latest stable Emacs
+    with default `byte-compile-warnings`.
+
+See also: [[#modular-loader-and-core-suite][Modular Loader & Core/Utils design]]
+for how these rules are enforced structurally.
+
+** Installation
+:PROPERTIES:
+   :CUSTOM_ID: installation
+   :END:
+
+*** Prerequisites
+:PROPERTIES:
+:CUSTOM_ID: prerequisites
+:END:
+
+- *Required*
+  - Emacs *30.0+* with native compilation (`--with-native-compilation`)
+  - Git
+  - GNU Make
+  - GCC *10+* with `libgccjit`
+
+- *Optional but Recommended*
+  - ripgrep (`rg`) → faster project-wide search
+  - aspell or hunspell → spell checking
+  - pass + GnuPG → password and auth-source integration
+  - Homebrew (macOS only) → for consistent toolchain installation
+
+*** Building Emacs
+
+Use the provided build script:
+[[https://github.com/ac1965/dotfiles/blob/master/.local/bin/build-emacs.sh][build-emacs.sh]]
+
+#+begin_src shell
+  build-emacs.sh
+#+end_src
+
+*** Quick Start
+
+1. Clone the repository:
+   #+begin_src shell
+     git clone --depth 1 https://github.com/ac1965/.emacs.d ~/.emacs.d/
+   #+end_src
+
+2. Tangle configuration:
+   #+begin_src shell
+     EMACS=/Applications/Emacs.app/Contents/MacOS/Emacs make -C ~/.emacs.d/ tangle
+   #+end_src
+
+*** Makefile
+
+#+begin_src text :tangle Makefile :comments no
+  # Makefile — One-pass builder for a modular Emacs config
+  # - Default / `make all` : onepass-init (tangle -> incremental byte-compile)
+  # - `make onepass-q`     : -Q (minimal env) tangle -> full byte-compile
+  # - Paths are absolutized from repo root to avoid "lisp/personal" confusion.
+
+  SHELL := /bin/sh
+
+  # ---- Repo-root & absolutized dirs --------------------------------------------
+  ROOT := $(CURDIR)
+
+  EMACS  ?= emacs
+  ORG    ?= README.org
+  EARLY  ?= early-init.el
+  INIT   ?= init.el
+
+  # Always treat these as top-level under repo root
+  LISPDIR_REL     ?= lisp
+  PERSONALDIR_REL ?= personal
+
+  LISPDIR     := $(abspath $(ROOT)/$(LISPDIR_REL))
+  PERSONALDIR := $(abspath $(ROOT)/$(PERSONALDIR_REL))
+  ORG := $(abspath $(ROOT)/$(ORG))
+  EARLY := $(abspath $(ROOT)/$(EARLY))
+  INIT  := $(abspath $(ROOT)/$(INIT))
+
+  STRICT_BYTE_WARN ?= 0   # Treat byte-compile warnings as errors
+  NATIVE_COMPILE   ?= 1   # Prefer native-compile if available
+
+  # ---- Emacs runners & common eval snippets ------------------------------------
+  EMACS_BATCH := "$(EMACS)" --batch
+  EMACS_Q     := $(EMACS_BATCH) -Q
+
+  EVAL_STRICT := $(if $(filter 1,$(STRICT_BYTE_WARN)),--eval "(setq byte-compile-error-on-warn t)",)
+  EVAL_NATIVE := $(if $(filter 1,$(NATIVE_COMPILE)),--eval "(setq comp-deferred-compilation t)",)
+
+  # Optional leaf injection for -Q
+  STRAIGHT_BASE_DIR ?= $(shell \
+    if [ -f "$(EARLY)" ]; then \
+      $(EMACS_Q) -l "$(EARLY)" \
+        --eval "(princ (expand-file-name (or (ignore-errors STRAIGHT_BASE_DIR) \
+                                             (ignore-errors (and (boundp 'straight-base-dir) straight-base-dir)) \
+                                             (expand-file-name \"straight\" user-emacs-directory))))"; \
+    else \
+      printf "%s" "$$HOME/.emacs.d/straight"; \
+    fi)
+  LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf
+  LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords
+
+  EVAL_LEAF := \
+    --eval "(let* ((ldir \"$(LEAF_DIR)\") (kwdir \"$(LEAFKW_DIR)\")) \
+              (when (file-directory-p ldir)  (add-to-list 'load-path ldir)) \
+              (when (file-directory-p kwdir) (add-to-list 'load-path kwdir)) \
+              (ignore-errors (require 'leaf)) \
+              (ignore-errors (require 'leaf-keywords)) \
+              (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
+
+  # ---- Default target (no args) ------------------------------------------------
+  .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle
+  all: onepass-init
+
+  # ---- One-pass (early+init env) : tangle -> incremental compile ---------------
+  onepass-init: $(ORG)
+  	@echo "[onepass-init] tangle -> incremental byte-compile (init loaded)"
+  	@$(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" \
+  	  $(EVAL_STRICT) $(EVAL_NATIVE) \
+  	  --eval "(setq org-confirm-babel-evaluate nil)" \
+  	  --eval "(require 'org)" \
+  	  --eval "(org-babel-tangle-file \"$(ORG)\")" \
+  	  --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
+  	                                        (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
+  	            (dolist (d dirs) (byte-recompile-directory d 0)) \
+  	            (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
+  	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
+  	  --eval "(message \"[onepass-init] done\")"
+
+  # ---- One-pass (-Q minimal env) : tangle -> full compile ----------------------
+  onepass-q: $(ORG)
+  	@echo "[onepass-q] -Q tangle -> full byte-compile (init not loaded)"
+  	@$(EMACS_Q) \
+  	  $(EVAL_LEAF) $(EVAL_STRICT) $(EVAL_NATIVE) \
+  	  --eval "(setq org-confirm-babel-evaluate nil)" \
+  	  --eval "(require 'org)" \
+  	  --eval "(org-babel-tangle-file \"$(ORG)\")" \
+  	  --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
+  	                                        (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
+  	            (dolist (d dirs) (byte-recompile-directory d t)) \
+  	            (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
+  	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
+  	  --eval "(message \"[onepass-q] done\")"
+
+  # ---- Utilities ---------------------------------------------------------------
+  show-files:
+  	@echo "[list] $(LISPDIR)";    { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } || true
+  	@echo "[list] $(PERSONALDIR)"; { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } || true
+
+  echo-paths:
+  	@echo "ROOT=$(ROOT)"; \
+  	echo "EARLY=$(EARLY)"; \
+  	echo "INIT=$(INIT)"; \
+  	echo "LISPDIR=$(LISPDIR)"; \
+  	echo "PERSONALDIR=$(PERSONALDIR)"; \
+  	echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
+  	echo "LEAF_DIR=$(LEAF_DIR)"; \
+  	echo "LEAFKW_DIR=$(LEAFKW_DIR)"
+
+  clean:
+  	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
+  	@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+  	@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+
+  distclean: clean
+  	@echo "[distclean] remove stray *.eln"
+  	@find "$(ROOT)" -type f -name '*.eln' -delete
+
+  tangle:
+  	@echo "[tangle] $(ORG)"
+  	@$(EMACS_Q) \
+  	  --eval "(require 'org)" \
+  	  --eval "(require 'ob-core)" \
+  	  --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
+  	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+  	  --eval "(org-babel-tangle-file \"$(ORG)\")"
+#+end_src
+
+*** System Information
+
+**** Apple Silicon (Primary)
+- GNU Emacs *31.0.50*
+
+| Property | Value                                                                                                                                                                                                                                                                                                                              |
+|----------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Commit   | 69a2b9fa17054794723455fbac84beb51290dfa1                                                                                                                                                                                                                                                                                           |
+| Branch   | master                                                                                                                                                                                                                                                                                                                             |
+| System   | aarch64-apple-darwin25.2.0                                                                                                                                                                                                                                                                                                         |
+| Date     | 2026-01-31 16:15:31 (JST)                                                                                                                                                                                                                                                                                                          |
+| Patch    | N/A ns-inline.patch                                                                                                                                                                                                                                                                                                                |
+| Features | ACL DBUS GLIB GNUTLS IMAGEMAGICK LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM XWIDGETS ZLIB                                                                                                                                                            |
+| Options  | --with-ns --enable-mac-app=yes --with-xwidgets --with-native-compilation --with-json --with-tree-sitter --with-imagemagick --with-gnutls --prefix=/Users/ac1965/.local CPPFLAGS=-I/opt/homebrew/opt/llvm/include 'LDFLAGS=-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++' |
+
+**** Intel (Secondary)
+- GNU Emacs *31.0.50*
+
+|Property|Value|
+|--------|-----|
+|Commit|63ea5e5b3a57e7660ece022ba1834002ca2f206d|
+|Branch|master|
+|System|x86_64-apple-darwin25.1.0|
+|Date|2025-11-01 12:05:25 (JST)|
+|Patch|N/A ns-inline.patch|
+|Features|ACL DBUS GIF GLIB GMP GNUTLS JPEG LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TIFF TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM ZLIB|
+|Options|--with-native-compilation --with-gnutls=ifavailable --with-json --with-modules --with-tree-sitter --with-xml2 --with-librsvg --with-mailutils --with-native-image-api --with-ns CPPFLAGS=-I/usr/local/opt/llvm/include 'LDFLAGS=-L/usr/local/opt/llvm/lib -L/usr/local/opt/llvm/lib/c++ -Wl,-rpath,/usr/local/opt/llvm/lib/c++'|
+
+** Tools
+:PROPERTIES:
+   :CUSTOM_ID: tools
+:END:
+
+*** Graph Capture (Require Dependency Visualization)
+
+**** Purpose
+Capture and visualize `require` relationships between Emacs Lisp features
+during startup or module loading.
+This helps understanding implicit dependencies, load order, and unwanted
+coupling between modules.
+
+**** What it does
+- Advises `require` to record *from → to* edges between features
+- Stores edges in a hash table (no duplicates)
+- Exports the dependency graph as:
+  - Graphviz DOT
+  - Mermaid (for Org / Markdown)
+- Provides interactive commands to enable/disable capture at runtime
+
+**** Notes
+- Intended for **diagnostics only**, not for normal startup
+- Enable capture *before* loading modules
+- Disable capture after use to avoid overhead
+- Feature names are derived from file names or `require` symbols
+
+**** Implementation
+***** tools/tools-graph.el
+:PROPERTIES:
+:CUSTOM_ID: tools-graph-capture
+:header-args:emacs-lisp: :tangle lisp/tools/tools-graph.el
+:END:
+#+begin_src emacs-lisp
+  ;;; tools/tools-graph.el --- Require dependency graph capture -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: tools
+  ;;
+  ;;; Commentary:
+  ;; Diagnostic tool to capture and visualize `require` dependencies
+  ;; between Emacs Lisp features.
+  ;;
+  ;; This module advises `require` to record feature-to-feature edges
+  ;; during evaluation and exports the dependency graph as:
+  ;;
+  ;; - Graphviz DOT
+  ;; - Mermaid flowchart
+  ;; - Org Babel mermaid source block
+  ;;
+  ;; Intended for diagnostics only.
+  ;; Do not enable during normal startup.
+  ;;
+  ;;; Code:
+
+  ;; ---------------------------------------------------------------------------
+  ;; State
+  ;; ---------------------------------------------------------------------------
+
+  (defvar tools-graph/require-edges (make-hash-table :test 'equal)
+    "Hash table storing recorded require edges as FROM->TO keys.")
+
+  ;; ---------------------------------------------------------------------------
+  ;; Internal helpers
+  ;; ---------------------------------------------------------------------------
+
+  (defun tools-graph--record (from to)
+    "Record a require edge FROM -> TO if both are symbols."
+    (when (and (symbolp from) (symbolp to))
+      (puthash (format "%s->%s" from to) t tools-graph/require-edges)))
+
+  (defun tools-graph--edge-list ()
+    "Return a sorted list of recorded edges."
+    (sort (hash-table-keys tools-graph/require-edges) #'string<))
+
+  (defun tools-graph--sanitize (name)
+    "Return a Mermaid/Org-safe node NAME."
+    (replace-regexp-in-string "[./-]" "_" name))
+
+  ;; ---------------------------------------------------------------------------
+  ;; require advice
+  ;; ---------------------------------------------------------------------------
+
+  (defun tools-graph/require-advice (orig feature &optional filename noerror)
+    "Advice around `require` to record dependency edges."
+    (let* ((from-file (or load-file-name (buffer-file-name)))
+           (from-sym
+            (if from-file
+                (intern
+                 (file-name-sans-extension
+                  (file-name-nondirectory from-file)))
+              'init))
+           (to-sym (if (symbolp feature)
+                       feature
+                     (intern (format "%s" feature)))))
+      (tools-graph--record from-sym to-sym)
+      (funcall orig feature filename noerror)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Exporters
+  ;; ---------------------------------------------------------------------------
+
+  ;;;###autoload
+  (defun tools-graph/export-dot ()
+    "Render recorded require edges as Graphviz DOT."
+    (interactive)
+    (let ((buf (get-buffer-create "*Require Graph (DOT)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "digraph G {\n  rankdir=LR;\n  node [shape=box, fontsize=10];\n")
+        (dolist (e (tools-graph--edge-list))
+          (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+            (insert
+             (format "  \"%s\" -> \"%s\";\n"
+                     (match-string 1 e)
+  		   (match-string 2 e)))))
+        (insert "}\n"))
+      (pop-to-buffer buf)))
+
+  ;;;###autoload
+  (defun tools-graph/export-mermaid ()
+    "Render recorded require edges as Mermaid flowchart."
+    (interactive)
+    (let ((buf (get-buffer-create "*Require Graph (Mermaid)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "```mermaid\nflowchart LR\n")
+        (dolist (e (tools-graph--edge-list))
+          (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+            (insert
+             (format "  %s --> %s\n"
+                     (tools-graph--sanitize (match-string 1 e))
+                     (tools-graph--sanitize (match-string 2 e))))))
+        (insert "```\n"))
+      (pop-to-buffer buf)))
+
+  ;;;###autoload
+  (defun tools-graph/export-org ()
+    "Render recorded require edges as an Org mermaid source block."
+    (interactive)
+    (let ((buf (get-buffer-create "*Require Graph (Org)*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "#+begin_src mermaid\n")
+        (insert "flowchart LR\n")
+        (dolist (e (tools-graph--edge-list))
+          (when (string-match "^\\([^->]+\\)->\\(.+\\)$" e)
+            (insert
+             (format "  %s --> %s\n"
+                     (tools-graph--sanitize (match-string 1 e))
+                     (tools-graph--sanitize (match-string 2 e))))))
+        (insert "#+end_src\n"))
+      (pop-to-buffer buf)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Control
+  ;; ---------------------------------------------------------------------------
+
+  (defvar tools-graph--enabled-p nil
+    "Non-nil if require capture advice is enabled.")
+
+  ;;;###autoload
+  (defun tools-graph/enable-require-capture ()
+    "Enable capture of `require` dependency edges.
+
+  This advises `require` globally. Intended for diagnostic use only."
+    (interactive)
+    (unless tools-graph--enabled-p
+      (advice-add 'require :around #'tools-graph/require-advice)
+      (setq tools-graph--enabled-p t)
+      (message "[tools-graph] require capture enabled")))
+
+  ;;;###autoload
+  (defun tools-graph/disable-require-capture ()
+    "Disable capture of `require` dependency edges."
+    (interactive)
+    (when tools-graph--enabled-p
+      (advice-remove 'require #'tools-graph/require-advice)
+      (setq tools-graph--enabled-p nil)
+      (message "[tools-graph] require capture disabled")))
+
+  (provide 'tools-graph)
+  ;;; tools/tools-graph.el ends here
+#+end_src
+
+***** tools/tools-graph-unused.el
+:PROPERTIES:
+:CUSTOM_ID: tools-graph-unused
+:header-args:emacs-lisp: :tangle lisp/tools/tools-graph-unused.el
+:END:
+#+begin_src emacs-lisp
+  ;;; tools-graph-unused.el --- Detect unused defuns (aware of hooks/bindings) -*- lexical-binding: t; -*-
+
+  ;;; Commentary:
+  ;; Static detector for unused top-level defuns.
+  ;; Excludes functions referenced via hooks, keymaps, advice, or autoloads.
+  ;; Intended for diagnostic use only.
+
+  ;;; Code:
+
+  (require 'cl-lib)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Collectors
+  ;; ---------------------------------------------------------------------------
+
+  (defun tools-graph--collect-defuns (dir)
+    "Return an alist of (symbol . file) for defuns under DIR."
+    (let (defs)
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "^(defun\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (push (cons (intern (match-string 1)) file) defs))))
+      defs))
+
+  (defun tools-graph--collect-called-symbols (dir)
+    "Return hash table of symbols that appear in function call position."
+    (let ((calls (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) t calls))))
+      calls))
+
+  (defun tools-graph--collect-hooked-symbols (dir)
+    "Return hash table of functions registered to hooks."
+    (let ((hooks (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(add-hook\\s-+'[^ ]+\\s-+#'\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) 'hook hooks))
+          ;; leaf :hook (xxx . func)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  ":hook\\s-*(\\(?:[^ .]+\\)\\s-+.\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\))"
+                  nil t)
+            (puthash (intern (match-string 1)) 'hook hooks))))
+      hooks))
+
+  (defun tools-graph--collect-bound-symbols (dir)
+    "Return hash table of functions bound in keymaps."
+    (let ((binds (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(define-key[^)]*#'\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) 'keymap binds))
+          ;; leaf :bind ("x" . func)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  ":bind\\s-*(\"[^\"]+\"\\s-+.\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\))"
+                  nil t)
+            (puthash (intern (match-string 1)) 'keymap binds))))
+      binds))
+
+  (defun tools-graph--collect-advised-symbols (dir)
+    "Return hash table of functions used as advice."
+    (let ((advs (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "(advice-add[^)]*#'\\(\\(?:\\sw\\|\\s_\\)+\\)" nil t)
+            (puthash (intern (match-string 1)) 'advice advs))))
+      advs))
+
+  (defun tools-graph--collect-autoloaded-symbols (dir)
+    "Return hash table of autoloaded defuns."
+    (let ((autos (make-hash-table :test 'eq)))
+      (dolist (file (directory-files-recursively dir "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  ";;;###autoload[ \t\n]+(defun\\s-+\\(\\(?:\\sw\\|\\s_\\)+\\)"
+                  nil t)
+            (puthash (intern (match-string 1)) 'autoload autos))))
+      autos))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Public command
+  ;; ---------------------------------------------------------------------------
+
+  ;;;###autoload
+  (defun tools-graph/unused-functions (dir)
+    "Report unused defuns under DIR, excluding hooks/bindings/advice/autoload."
+    (interactive "DDirectory: ")
+    (let* ((defs   (tools-graph--collect-defuns dir))
+           (calls  (tools-graph--collect-called-symbols dir))
+           (hooks  (tools-graph--collect-hooked-symbols dir))
+           (binds  (tools-graph--collect-bound-symbols dir))
+           (advs   (tools-graph--collect-advised-symbols dir))
+           (autos  (tools-graph--collect-autoloaded-symbols dir)))
+      (with-current-buffer (get-buffer-create "*Unused Defuns*")
+        (erase-buffer)
+        (insert (format "Unused function candidates under: %s\n\n" dir))
+        (dolist (d defs)
+          (let ((sym (car d)))
+            (unless (or (gethash sym calls)
+                        (gethash sym hooks)
+                        (gethash sym binds)
+                        (gethash sym advs)
+                        (gethash sym autos))
+              (insert (format "%-35s  (%s)\n" sym (cdr d))))))
+        (pop-to-buffer (current-buffer)))))
+
+  (provide 'tools-graph-unused)
+  ;;; tools-graph-unused.el ends herex
+#+end_src
+
+**** Module Load Summary Helper
+
+#+begin_src emacs-lisp :tangle no
+  ;;; my-modules-summary.el --- Module loading summary helper -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;; Provide an interactive command to display a concise summary of
+  ;; module loading status and captured require dependency edges.
+  ;;
+  ;;; Code:
+
+  (defun my/modules-summary-line ()
+    "Display a concise summary of module loading and captured require edges."
+    (interactive)
+    (let* ((edges (if (and (boundp 'graph/require-edges)
+                           (hash-table-p graph/require-edges))
+                      (hash-table-count graph/require-edges)
+                    "N/A"))
+           (skip  (if (boundp 'my-modules-skip)
+                      (length (or my-modules-skip '()))
+                    0))
+           (extra (if (boundp 'my-modules-extra)
+                      (length (or my-modules-extra '()))
+                    0)))
+      (message "[modules] edges=%s, skip=%d, extra=%d"
+               edges skip extra)))
+
+  (provide 'my-modules-summary)
+  ;;; my-modules-summary.el ends here
+
+#+end_src
+
+**** Usage
+
+Purpose:
+Capture runtime `require` dependencies between Emacs Lisp modules and export them as a graph.
+
+1. Restart Emacs
+2. Enable capture (evaluate in order):
+   - `M-: (require 'tools-graph)`
+   - `M-: (tools-graph/enable-require-capture)`
+3. Load modules (e.g. `(require 'modules)` or normal startup)
+4. Export graph:
+   - `M-: (tools-graph/export-mermaid)`
+   - or `M-: (tools-graph/export-dot)`
+   - or `M-: (tools-graph/export-org)`
+5. Paste the result into Org / Markdown
+6. (Optional) `M-: (my/modules-summary-line)`
+7. (Optional) Disable capture:
+   - `M-: (tools-graph/disable-require-capture)`
+
+#+begin_src emacs-lisp :tangle no
+  ;; 1) Enable capture
+  (require 'tools-graph)
+  (tools-graph/enable-require-capture)
+
+  ;; 2) Load modules (example)
+  ;; (require 'modules)
+
+  ;; 3) Export captured edges (choose one)
+  (tools-graph/export-org)
+  ;; (tools-graph/export-mermaid)
+  ;; (tools-graph/export-dot)
+
+  ;; 4) Optional: stop capturing
+  (tools-graph/disable-require-capture)
+#+end_src
+
+**** Mermaid Example
+
+#+begin_src mermaid :file ./graphs/require-graph.svg :results file
+  %% Paste the Mermaid text generated by (tools-graph/export-mermaid) below:
+  flowchart LR
+    modules --> core_general
+    core_general --> utils_misc
+#+end_src
+
+#+RESULTS:
+[[file:./graphs/require-graph.svg]]
+
+* Configuration Files
+:PROPERTIES:
+:CUSTOM_ID: structure
+:END:
+
+This Emacs configuration is *modular by design* and targets **Emacs 30+**.
+Each layer has a clearly defined responsibility to keep behavior predictable,
+UI replaceable, and personal customizations isolated.
+
+- =early-init.el= → earliest bootstrap (performance, paths, UI defaults)
+- =init.el=       → package bootstrap, global defaults, module entrypoint
+- =lisp/=         → shared, versioned modules (core, ui, completion, orgx, dev, vcs, utils)
+- =personal/=     → user- and device-specific overlays (not shared policy)
+
+** Core Bootstrap — early-init.el & init.el
+:PROPERTIES:
+:CUSTOM_ID: core-bootstrap
+:END:
+
+*** Overview
+
+**** Purpose
+Provide a *clean, fast, and conservative* bootstrap sequence that prepares
+Emacs before regular initialization.
+
+The bootstrap is split into two explicit stages:
+
+- =early-init.el= runs **before package initialization** and establishes
+  directories, performance guards, and flicker-free UI defaults.
+- =init.el= completes package bootstrapping (*straight.el + leaf*), imports
+  the login environment on macOS, applies runtime performance knobs, and
+  exposes a deterministic module loader entrypoint.
+
+This separation keeps early startup minimal and infrastructure-focused,
+while deferring all feature logic to later stages.
+
+**** What this configuration does
+
+- Disables =package.el= early; *straight.el* and *leaf* are the only package managers.
+- Speeds up startup by temporarily widening GC limits and clearing
+  =file-name-handler-alist=, then restoring sane runtime values.
+- Normalizes all state under predictable directories:
+  =.cache/=, =.etc/=, and =.var/= (including native-comp artifacts).
+- On macOS, prefers the Homebrew toolchain by preparing PATH-related variables
+  (e.g. =PATH=, =LIBRARY_PATH=, =CC=) *before* native compilation is triggered.
+- Disables classic backups and auto-save early; higher-level modules may enable
+  =auto-save-visited-mode= later in a controlled way.
+- Applies early UI defaults (no menu/tool/scroll bars, stable frame parameters)
+  to avoid startup flicker.
+- Bootstraps *straight.el* robustly, with guarded network access and explicit
+  error reporting.
+- Initializes *leaf* and its keywords, and enables conservative performance
+  helpers (e.g. GCMH, =read-process-output-max=).
+- Sets URL-related state paths *before* =url.el= loads, so downstream consumers
+  (including *straight*) inherit them.
+- Provides two stable entrypoints:
+  - a per-user personal override file (=personal/<login-name>.el=)
+  - a shared module loader (=lisp/modules.el=)
+
+**** Reproducibility Note (Personal Tangling)
+
+This configuration prioritizes reproducibility for all *shared* layers:
+
+- =early-init.el=
+- =init.el=
+- =lisp/=
+
+Personal files are intentionally tangled to user-specific paths:
+
+: personal/<login-name>.el
+
+This design explicitly trades strict reproducibility for:
+- Per-user isolation
+- Safe multi-user sharing of the same repository
+- Zero-conflict personal overrides
+
+This behavior is intentional and by design.
+
+**** Module map (where things live)
+
+| File            | Role |
+|-----------------+------|
+| =early-init.el= | Pre-init bootstrap (dirs, performance guards, package.el off, macOS toolchain, early UI) |
+| =init.el=       | Main init (URL state, straight bootstrap, env import, runtime knobs, module loader) |
+
+**** How it works (boot flow)
+
+1. Emacs loads =early-init.el=:
+   - Directory paths are established.
+   - =package.el= is disabled.
+   - GC and file-handler pressure is relaxed.
+   - Early UI defaults are applied.
+   - macOS toolchain variables are prepared when applicable.
+
+2. Emacs loads =init.el=:
+   - URL state directories are set *before* =url.el=.
+   - *straight.el* is bootstrapped.
+   - On macOS GUI/daemon sessions, the login environment is imported.
+   - *leaf* is initialized and a minimal base of packages is ensured.
+   - Runtime performance knobs (GCMH, IO buffers) are applied.
+   - A per-user personal file is loaded safely.
+   - =modules.el= is required as the canonical feature entrypoint.
+
+3. After initialization completes, a concise startup summary
+   (elapsed time and GC count) is printed.
+
+**** Key settings (reference)
+
+- =package-enable-at-startup= :: =nil= — rely exclusively on *straight.el*.
+- =straight-base-dir= :: Located under =.cache/= to keep the config root clean.
+- =native-comp-eln-load-path= :: Centralized under =.cache/eln-cache=.
+- =read-process-output-max= :: Temporarily raised (4 MiB) for better LSP/IO throughput.
+- =gcmh-high-cons-threshold= :: 16 MiB; =gcmh-mode= enabled for smoother long sessions.
+
+**** Usage tips
+
+- Treat =early-init.el= as infrastructure only; avoid user behavior or feature logic.
+- Put shared behavior in modules loaded via =modules.el=.
+- Put identity, device-specific glue, and workflow integrations in
+  =personal/<login-name>.el= or related personal modules.
+- After installing or upgrading Homebrew toolchains, restart Emacs so native
+  compilation sees updated paths.
+- To relocate the entire setup, move the config directory; Emacs will regenerate
+  =.cache/=, =.etc/=, and =.var/= automatically.
+
+**** Troubleshooting
+
+- *“Native compilation can’t find libgccjit on macOS”* →
+  Ensure Homebrew’s =libgccjit= is installed and visible. The early bootstrap
+  prepares =LIBRARY_PATH= when possible.
+- *“Straight bootstrap failed”* →
+  A transient network issue during =url-retrieve-synchronously=.
+  Re-run; failures are reported with a clear =[straight] bootstrap failed= message.
+- *“Inhibit startup echo warning”* →
+  =inhibit-startup-echo-area-message= is set to the actual user name string
+  to satisfy Emacs’ type requirements.
+
+*** early-init.el
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle early-init.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; early-init.el --- Early initialization (core) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;;; Commentary:
+  ;; Early bootstrap executed before regular init.el.
+  ;;
+  ;; - Disable package.el
+  ;; - Startup optimization (GC / file-name-handlers)
+  ;; - Define base directories (.cache / .etc / .var)
+  ;; - Native compilation cache setup
+  ;; - macOS Homebrew toolchain environment
+  ;; - Early UI defaults
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (require 'seq)
+
+
+  ;;; Internal utilities ----------------------------------------------------------
+
+  (defun core--ensure-directory (dir)
+    "Ensure DIR exists, creating it recursively if needed."
+    (unless (file-directory-p dir)
+      (condition-case err
+          (make-directory dir t)
+        (error
+         (warn "early-init: failed to create %s (%s)"
+               dir (error-message-string err))))))
+
+  (defun core--login-username ()
+    "Return login username or nil."
+    (ignore-errors (user-login-name)))
+
+  (defvar core--orig-file-name-handler-alist nil
+    "Original `file-name-handler-alist' saved for restoration.")
+
+  (defun core--restore-startup-state ()
+    "Restore GC and file handler settings after startup."
+    (setq file-name-handler-alist core--orig-file-name-handler-alist
+          gc-cons-threshold 16777216
+          gc-cons-percentage 0.1))
+
+  (defalias 'my/ensure-directory-exists #'core--ensure-directory)
+
+
+  ;;; Disable package.el ----------------------------------------------------------
+
+  (setq package-enable-at-startup nil
+        package-quickstart nil)
+
+
+  ;;; Base directories ------------------------------------------------------------
+
+  (defvar my:d
+    (file-name-as-directory
+     (or (and load-file-name
+              (file-name-directory (file-chase-links load-file-name)))
+         user-emacs-directory))
+    "Root directory of this Emacs configuration.")
+
+  (setq user-emacs-directory my:d)
+
+  (defconst my:d:var       (expand-file-name ".var/" my:d))
+  (defconst my:d:etc       (expand-file-name ".etc/" my:d))
+  (defconst my:d:lisp      (expand-file-name "lisp/" my:d))
+  ;; Populate load-path with all lisp subdirectories
+  (when (and (boundp 'my:d:lisp)
+             (file-directory-p my:d:lisp))
+    (dolist (dir (directory-files my:d:lisp t "\\`[^.]"))
+      (when (file-directory-p dir)
+        (add-to-list 'load-path dir))))
+
+  (defconst my:d:cache
+    (expand-file-name
+     "emacs/"
+     (or (getenv "XDG_CACHE_HOME")
+         (expand-file-name ".cache/" my:d))))
+  (defconst my:d:eln-cache
+    (expand-file-name "eln-cache/" my:d:cache))
+
+  ;; Tree-sitter grammar directory
+  (defconst my:d:treesit
+    (expand-file-name "tree-sitter/" my:d:var))
+  (setq treesit-install-dir my:d:treesit)
+  (setq treesit-extra-load-path (list my:d:treesit))
+  (unless (file-directory-p treesit-install-dir)
+    (make-directory treesit-install-dir t))
+
+  (defconst my:d:url       (expand-file-name "url/" my:d:var))
+  (defconst my:d:eww       (expand-file-name "eww/" my:d:var))
+
+  (dolist (dir (list my:d:var my:d:etc my:d:lisp my:d:cache
+                     my:d:eln-cache my:d:treesit my:d:url my:d:eww))
+    (core--ensure-directory dir))
+
+
+  ;;; macOS Homebrew toolchain ----------------------------------------------------
+
+  (when (eq system-type 'darwin)
+    (when-let* ((brew (or (getenv "HOMEBREW_PREFIX")
+                          (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
+                          (and (file-directory-p "/usr/local")   "/usr/local")))
+                (bin  (expand-file-name "bin" brew)))
+      ;; PATH
+      (when (file-directory-p bin)
+        (let* ((path  (or (getenv "PATH") ""))
+               (parts (split-string path ":" t)))
+          (unless (member bin parts)
+            (setenv "PATH" (concat bin ":" path)))))
+
+      ;; LIBRARY_PATH (libgccjit)
+      (let* ((libgccjit (expand-file-name "opt/libgccjit" brew))
+             (gcc       (expand-file-name "opt/gcc" brew))
+             (candidates
+              (seq-filter
+               #'file-directory-p
+               (list (expand-file-name "lib/gcc/current" libgccjit)
+                     (expand-file-name "lib" libgccjit)
+                     (expand-file-name "lib/gcc/current" gcc)))))
+        (when candidates
+          (setenv "LIBRARY_PATH"
+                  (string-join
+                   (delete-dups
+                    (append candidates
+                            (when-let* ((old (getenv "LIBRARY_PATH")))
+                              (split-string old ":" t))))
+                   ":"))))
+
+      ;; CC
+      (when-let* ((gcc-bin
+                   (seq-find
+                    #'file-exists-p
+                    (mapcar
+                     (lambda (n)
+                       (expand-file-name (format "gcc-%d" n) bin))
+                     (number-sequence 20 10 -1)))))
+        (setenv "CC" gcc-bin))))
+
+
+  ;;; Native compilation ----------------------------------------------------------
+
+  (when (and (boundp 'native-comp-eln-load-path)
+             (listp native-comp-eln-load-path))
+    (setopt native-comp-eln-load-path
+            (cons my:d:eln-cache
+                  (delq my:d:eln-cache native-comp-eln-load-path))
+            native-comp-async-report-warnings-errors 'silent))
+
+
+  ;;; no-littering compatibility -------------------------------------------------
+
+  (defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
+  (defvar no-littering-var-directory (file-name-as-directory my:d:var))
+
+
+  ;;; straight.el base ------------------------------------------------------------
+
+  (setopt straight-base-dir my:d:cache
+          straight-use-package-by-default t
+          straight-vc-git-default-clone-depth 1
+          straight-build-dir
+          (format "build-%d.%d" emacs-major-version emacs-minor-version)
+          straight-profiles '((nil . "default.el")))
+
+
+  ;;; Startup performance --------------------------------------------------------
+
+  (setq core--orig-file-name-handler-alist file-name-handler-alist)
+
+  (setq file-name-handler-alist
+        (seq-remove
+         (lambda (h)
+           (let ((fn (cdr h)))
+             (and (symbolp fn)
+                  (string-match-p "\\`\\(tramp\\|jka-compr\\)"
+                                  (symbol-name fn)))))
+         file-name-handler-alist))
+
+  (setq gc-cons-threshold most-positive-fixnum
+        gc-cons-percentage 0.6)
+
+  (add-hook 'emacs-startup-hook #'core--restore-startup-state)
+
+
+  ;;; Backups / auto-save --------------------------------------------------------
+
+  (setq make-backup-files nil
+        version-control nil
+        delete-old-versions nil
+        backup-by-copying nil
+        auto-save-default nil
+        auto-save-list-file-prefix nil)
+
+
+  ;;; Early UI defaults ----------------------------------------------------------
+
+  (setopt frame-resize-pixelwise t
+          frame-inhibit-implied-resize t
+          cursor-in-non-selected-windows nil
+          x-underline-at-descent-line t
+          window-divider-default-right-width 16
+          window-divider-default-places 'right-only)
+
+  (dolist (it '((fullscreen . fullboth)
+                (internal-border-width . 8)
+                (tool-bar-lines . 0)))
+    (add-to-list 'default-frame-alist it)
+    (add-to-list 'initial-frame-alist it))
+
+  (when (fboundp 'menu-bar-mode)   (menu-bar-mode -1))
+  (when (fboundp 'tool-bar-mode)   (tool-bar-mode -1))
+  (when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))
+
+
+  ;;; Startup echo ---------------------------------------------------------------
+
+  (when-let* ((u (core--login-username)))
+    (setq inhibit-startup-echo-area-message u))
+
+  (provide 'early-init)
+  ;;; early-init.el ends here
+#+end_src
+
+*** init.el
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle init.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; init.el --- Main initialization (core) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;;; Commentary:
+  ;; Entry point for Emacs 30+ configuration.
+  ;;
+  ;;; Code:
+
+  (require 'subr-x)
+  (require 'seq)
+  (require 'cl-lib)
+
+  ;; ;; Enable debugger on error (temporary)
+  ;; (setq debug-on-error t)
+
+  ;;; Internal helpers -----------------------------------------------------------
+
+  (defun utils--safe-load-file (file &optional noerror)
+    "Load FILE safely.
+  If NOERROR is non-nil, log instead of raising."
+    (when (and (stringp file) (file-exists-p file))
+      (condition-case err
+          (load file nil 'nomessage)
+        (error
+         (funcall (if noerror #'message #'user-error)
+                  "[load] failed: %s (%s)"
+                  file (error-message-string err))))))
+
+  (defalias 'my/safe-load-file #'utils--safe-load-file)
+
+
+  ;;; 0) URL state BEFORE url.el -------------------------------------------------
+
+  (defvar core--url-state-dir
+    (file-name-as-directory
+     (or (bound-and-true-p my:d:url)
+         (expand-file-name "url/" user-emacs-directory))))
+
+  (setopt url-configuration-directory core--url-state-dir
+          url-cookie-file (expand-file-name "cookies" core--url-state-dir)
+          url-history-file (expand-file-name "history" core--url-state-dir)
+          url-cache-directory (expand-file-name "cache/" core--url-state-dir))
+
+  (dolist (d (list url-configuration-directory url-cache-directory))
+    (make-directory d t))
+
+  (require 'url)
+
+
+  ;;; 1) Bootstrap straight.el ---------------------------------------------------
+
+  (defvar bootstrap-version 7)
+
+  (let* ((base (or (bound-and-true-p straight-base-dir)
+                   user-emacs-directory))
+         (bootstrap-file
+          (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
+    (unless (file-exists-p bootstrap-file)
+      (let ((buf
+             (url-retrieve-synchronously
+              "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+              'silent 'inhibit-cookies)))
+        (unless (buffer-live-p buf)
+          (user-error "[straight] failed to retrieve install.el"))
+        (with-current-buffer buf
+          (goto-char (point-max))
+          (eval-print-last-sexp))))
+    (load bootstrap-file nil 'nomessage))
+
+
+  ;;; 1.1) leaf / org ------------------------------------------------------------
+
+  (dolist (pkg '(leaf leaf-keywords))
+    (straight-use-package pkg))
+
+  (require 'leaf)
+
+  (eval-when-compile
+    (require 'leaf-keywords))
+
+  (when (fboundp 'leaf-keywords-init)
+    (leaf-keywords-init))
+
+  (straight-use-package 'org)
+  (require 'org)
+
+
+  ;;; 1.2) macOS environment -----------------------------------------------------
+
+  (leaf exec-path-from-shell
+    :straight t
+    :when (and (eq system-type 'darwin)
+               (or (daemonp) (memq window-system '(mac ns))))
+    :config
+    (setq exec-path-from-shell-check-startup-files nil
+          exec-path-from-shell-arguments '("-l" "-i"))
+    (exec-path-from-shell-copy-envs
+     '("PATH" "LANG"
+       "PASSWORD_STORE_DIR"
+       "GPG_KEY_ID"
+       "OPENROUTER_API_KEY"
+       "OPENAI_API_KEY"))
+    (exec-path-from-shell-initialize))
+
+
+  ;;; 2) Performance -------------------------------------------------------------
+
+  (defvar core--orig-read-process-output-max
+    (and (boundp 'read-process-output-max)
+         read-process-output-max))
+
+  (when (boundp 'read-process-output-max)
+    (setq read-process-output-max (* 4 1024 1024)))
+
+  (add-hook 'after-init-hook
+            (lambda ()
+              (when (boundp 'read-process-output-max)
+                (setq read-process-output-max
+                      core--orig-read-process-output-max))))
+
+  (leaf gcmh
+    :straight t
+    :custom
+    ((gcmh-idle-delay . 5)
+     (gcmh-high-cons-threshold . 16777216))
+    :config
+    (gcmh-mode 1))
+
+
+  ;;; 3) Core built-ins ----------------------------------------------------------
+
+  (leaf emacs
+    :straight nil
+    :hook
+    ((prog-mode . display-line-numbers-mode))
+    :custom
+    ((inhibit-startup-screen . t)
+     (inhibit-startup-message . t)
+     (initial-scratch-message . nil)
+     (initial-major-mode . 'fundamental-mode)
+     (use-short-answers . t)
+     (create-lockfiles . nil)
+     (idle-update-delay . 0.2)
+     (ring-bell-function . #'ignore)
+     (display-line-numbers-type . 'relative)
+     (frame-title-format . t)
+     (confirm-kill-emacs . #'y-or-n-p))
+    :config
+    (when (fboundp 'window-divider-mode)
+      (window-divider-mode 1))
+    (when (fboundp 'pixel-scroll-precision-mode)
+      (pixel-scroll-precision-mode 1))
+    (when (fboundp 'electric-pair-mode)
+      (electric-pair-mode 1))
+    (dolist (k '("C-z" "C-x C-z" "C-x C-c"))
+      (keymap-global-unset k)))
+
+
+  ;;; 4) Modifier keys -----------------------------------------------------------
+
+  (leaf my:modifier
+    :straight nil
+    :config
+    (pcase system-type
+      ('darwin
+       (setq mac-option-modifier 'meta
+             mac-command-modifier 'super
+             mac-control-modifier 'control))
+      ('windows-nt
+       (setq w32-lwindow-modifier 'super
+             w32-rwindow-modifier 'super))))
+
+
+  ;;; 5) Personal overlay --------------------------------------------------------
+
+  (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
+         (personal (expand-file-name "personal/" root))
+         (user (ignore-errors (user-login-name))))
+    ;; Add personal directory to load-path
+    (when (file-directory-p personal)
+      (add-to-list 'load-path personal))
+    ;; Load personal files
+    (my/safe-load-file (expand-file-name "user.el" personal) t)
+    (when user
+      (my/safe-load-file
+       (expand-file-name (concat user ".el") personal) t)))
+
+
+  ;;; 6) Modules entrypoint ------------------------------------------------------
+
+  (defvar my:modules-extra nil
+    "Extra module list appended by optional layers.")
+
+  (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
+         (lisp-dir (expand-file-name "lisp/" root)))
+    (when (file-directory-p lisp-dir)
+      (add-to-list 'load-path lisp-dir))
+    (require 'core-custom-ui-extras nil t)
+    (require 'modules nil t))
+
+
+  ;;; 7) Startup message ---------------------------------------------------------
+
+  (defun core--announce-startup ()
+    "Report startup time and GC count."
+    (message "Emacs ready in %.2f seconds with %d GCs."
+             (float-time
+              (time-subtract after-init-time before-init-time))
+             gcs-done))
+
+  (add-hook 'after-init-hook
+            (lambda ()
+              (run-with-idle-timer 0 nil #'core--announce-startup)))
+
+
+  (provide 'init)
+  ;;; init.el ends here
+#+end_src
+
+** Modular Loaqder & Core Module Suite
+:PROPERTIES:
+:CUSTOM_ID: modular-loader-core-suite
+:END:
+
+*** Overview
+
+**** Purpose
+Provide a **deterministic, explicit, and auditable module loading architecture**
+for this Emacs configuration.
+
+This layer defines *where feature activation begins* after bootstrap,
+and guarantees that module load order, dependency direction, and extension
+points are fully inspectable and reproducible.
+
+All shared behavior is activated through a single, explicit entry point,
+independent of filesystem traversal or implicit load-path side effects.
+
+**** What this layer defines
+
+This layer establishes:
+
+- =modules.el= as the **only authoritative loader** for shared modules
+- A directory-based responsibility split with clear semantic boundaries
+- An explicit, ordered loading sequence handed off from =init.el=
+
+Modules are grouped by responsibility:
+
+- =core/=        :: fundamental runtime, infrastructure, and global policy
+- =ui/=          :: visual presentation and interaction layer
+- =completion/=  :: completion frameworks and CAPF orchestration
+- =orgx/=        :: Org-mode extensions beyond upstream defaults
+- =dev/=         :: development, build, and language tooling
+- =vcs/=         :: version control systems and repository interaction
+- =utils/=       :: small, domain-specific helpers not yet promoted upward
+
+**** What this layer does *not* do
+
+This layer intentionally does **not**:
+
+- Perform bootstrap or environment preparation (handled by =early-init.el=)
+- Establish runtime foundations (handled by =init.el=)
+- Define configuration logic, advice, hooks, or feature behavior
+- Discover modules via directory scanning or wildcard expansion
+- Encode user-, device-, or host-specific policy
+
+Its sole responsibility is *orchestration*, not implementation.
+
+**** Design principles
+
+- =modules.el= contains **only ordered =require= forms**
+- Each module file:
+  - provides exactly one feature
+  - documents its own assumptions and non-goals
+- Load order is fixed and intentional:
+
+  1. =core=
+  2. =ui=
+  3. =completion=
+  4. =orgx=
+  5. =dev=
+  6. =vcs=
+  7. =utils=
+
+This order reflects dependency direction.
+Changes require explicit documentation and rationale.
+
+All modules are written to be:
+
+- Idempotent (safe to load multiple times)
+- Side-effect conscious
+- Safe under batch, byte-compile, and native-comp contexts
+
+**** Benefits
+
+This architecture enables:
+
+- Fully inspectable and reproducible startup behavior
+- Predictable dependency relationships
+- Selective enable/disable during diagnostics
+- Long-term maintainability across Emacs versions
+- Dependency visualization and auditing from a single file
+
+**** Relationship to bootstrap
+
+- =early-init.el= prepares infrastructure only
+- =init.el= establishes runtime foundations and environment state
+- =modules.el= is the **first and only layer** where shared features are activated
+
+This separation ensures that:
+
+- bootstrap remains minimal, conservative, and side-effect free
+- feature activation is centralized and reviewable
+- personal overlays can remain isolated without influencing global policy
+
+*** modules.el
+:PROPERTIES:
+:CUSTOM_ID: modules-el
+:header-args:emacs-lisp: :tangle lisp/modules.el
+:END:
+
+**** Purpose
+Act as the **single authoritative module loader** for this Emacs configuration.
+
+=modules.el= exists solely to make module loading:
+- explicit
+- ordered
+- inspectable
+
+It intentionally separates *module orchestration* from *module implementation*.
+
+**** What it does
+- Defines the **canonical load order** of all configuration modules
+- Loads modules explicitly via ordered =require= calls
+- Serves as a *readable index* of the entire configuration surface
+- Allows selective commenting-out or reordering for diagnostics
+
+**** Notes
+- =modules.el= **must not contain configuration logic**
+  - no variable customization
+  - no advice
+  - no hooks
+- Its responsibility is limited to *when* modules are loaded, not *how*
+- Any dependency between modules should be:
+  - visible from the order in this file, or
+  - documented explicitly in the dependent module
+- This file is expected to be:
+  - short
+  - boring
+  - stable
+
+If changes here feel “interesting”, they likely belong elsewhere.
+
+**** Implementation
+- Uses only =require= and comments
+- No conditional loading based on environment or features
+- Load order reflects semantic dependency layers:
+  1. core
+  2. ui
+  3. completion
+  4. orgx
+  5. dev
+  6. utils
+- Every required feature must:
+  - be provided by exactly one file
+  - correspond to a clearly named module
+
+#+begin_src emacs-lisp
+  ;;; modules.el --- Modular config loader -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;;; Commentary:
+  ;; Central entry point to load modular configs placed under lisp/.
+  ;; Category: core
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+  (require 'seq)
+  (defgroup my:modules nil
+    "Loader options for modular Emacs configuration."
+    :group 'convenience)
+
+  (defcustom my:modules-verbose t
+    "If non-nil, print per-module load time and a summary."
+    :type 'boolean
+    :group 'my:modules)
+
+  (defcustom my:modules-skip nil
+    "List of module features to skip during loading."
+    :type '(repeat symbol)
+    :group 'my:modules)
+
+  (defcustom my:modules-extra nil
+    "List of extra module features to append after `my:modules'."
+    :type '(repeat symbol)
+    :group 'my:modules)
+
+  (defconst my:modules
+    '(
+      ;; Core
+      core-fixes
+      core-session
+      core-general
+      core-tools
+      core-utils
+      core-treesit
+      core-history
+      core-editing
+      core-switches
+      core-custom
+
+      ;; UI
+      ui-font
+      ui-theme
+      ui-window
+      ui-utils
+      ui-health-modeline
+
+      ;; Completion
+      completion-core
+      completion-vertico
+      completion-consult
+      completion-embark
+      completion-corfu
+      completion-icons
+      completion-capf
+      completion-capf-org-src
+      completion-capf-org-src-lang
+      completion-corfu-org-src
+      completion-orderless-org-src
+
+      ;; Org ecosystem (module namespace = )
+      orgx-core
+      orgx-visual
+      orgx-extensions
+      orgx-export
+      orgx-fold
+
+      ;; VCS (uncomment when needed)
+      vcs-magit
+      vcs-gutter
+      vcs-forge
+
+      ;; Development
+      dev-ai
+      dev-term
+      dev-web-core
+      dev-build
+      dev-format
+      dev-infra-modes
+      dev-docker
+      dev-sql
+      dev-rest
+      dev-tools
+
+      ;; Utils
+      utils-async
+      utils-gc
+      utils-backup
+      utils-buffers
+      utils-dired
+      utils-functions
+      utils-search-nav
+      utils-org-agenda
+      utils-notes-markdown
+      utils-scratch
+      utils-lsp
+      utils-lint
+      utils-diagnostics
+      )
+    "Default set of modules to load in order.")
+
+  (defun my/modules--should-load-p (feature)
+    "Return non-nil if FEATURE should be loaded (i.e., not in skip list)."
+    (not (memq feature my:modules-skip)))
+
+  (defun my/modules--require-safe (feature)
+    "Require FEATURE with error trapping. Return non-nil on success.
+  Errors are reported via `message' but do not abort the whole loader."
+    (condition-case err
+        (progn (require feature) t)
+      (error
+       (message "[modules] Failed to load %s: %s"
+                feature (error-message-string err))
+       nil)))
+
+  (defun my:modules--format-seconds (sec)
+    "Format SEC (float seconds) in a compact human-readable form."
+    (cond
+     ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
+     ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
+     (t             (format "%.2fs"   sec))))
+
+  (defun my/modules-load ()
+    "Load all modules defined by `my:modules', respecting options.
+  - Honors `my:modules-skip' and `my:modules-extra'.
+  - Prints per-module timing when `my:modules-verbose' is non-nil.
+  - Prints a final summary including counts *and* the lists of skipped/failed."
+    (let* ((all (append my:modules my:modules-extra))
+           (final (seq-remove (lambda (m) (not (my/modules--should-load-p m))) all))
+           (skipped (seq-remove (lambda (m) (memq m final)) all))
+           (ok 0) (ng 0)
+           (failed '())
+           (loaded '())
+           (t0 (and my:modules-verbose (current-time))))
+      (dolist (mod final)
+        (let ((m0 (and my:modules-verbose (current-time))))
+          (if (my/modules--require-safe mod)
+              (progn (setq ok (1+ ok)) (push mod loaded))
+            (setq ng (1+ ng)) (push mod failed))
+          (when my:modules-verbose
+            (message "[modules] %-24s %s"
+                     mod (my:modules--format-seconds
+                          (float-time (time-subtract (current-time) m0)))))))
+      (when my:modules-verbose
+        ;; Main summary (backward-compatible)
+        (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
+                 ok (length skipped) ng
+                 (my:modules--format-seconds
+                  (float-time (time-subtract (current-time) t0))))
+        ;; Detail: skipped targets
+        (when skipped
+          (message "[modules] skipped (%d): %s"
+                   (length skipped)
+                   (mapconcat #'symbol-name (nreverse skipped) " ")))
+        ;; Detail: failed targets
+        (when failed
+          (message "[modules] failed  (%d): %s"
+                   (length failed)
+                   (mapconcat #'symbol-name (nreverse failed) " "))))
+      ok))
+
+  (my/modules-load)
+
+  (provide 'modules)
+  ;;; modules.el ends here
+#+end_src
+
+*** core/
+:PROPERTIES:
+:CUSTOM_ID: core-modules
+:END:
+
+**** Purpose
+Provide the **foundational runtime, policy, and infrastructure layer**
+required by all other shared modules.
+
+This layer establishes *hard guarantees* about execution context,
+availability of primitives, and global defaults that higher layers
+may rely on without defensive checks.
+
+**** What this layer does
+
+Core modules are responsible for establishing the **non-negotiable baseline**
+of the configuration.
+
+Specifically, they:
+
+- Define low-level behavior shared across the entire configuration
+- Establish global policy, invariants, and execution guarantees
+- Initialize essential subsystems and long-lived orchestration
+- Provide stable primitives consumed by all higher layers
+
+Typical responsibilities include:
+
+- Compatibility guards and forward-looking fixes
+- Session lifecycle orchestration and health policy
+- Global keybinding infrastructure and command scaffolding
+- Editing, history, and persistence policy
+- Tree-sitter and parsing infrastructure
+- Feature switches controlling downstream activation
+
+**** What this layer does *not* do
+
+Core modules intentionally do **not**:
+
+- Implement visual presentation or theming details
+- Define completion UX or minibuffer interaction
+- Extend Org semantics beyond upstream defaults
+- Configure language servers, build tools, or VCS workflows
+- Encode user-, device-, or host-specific preferences
+
+Those responsibilities are explicitly delegated to higher layers.
+
+**** Design constraints
+
+- Core modules must not depend on:
+  - =ui=
+  - =completion=
+  - =orgx=
+  - =dev=
+  - =vcs=
+  - =utils=
+
+- Side effects must be:
+  - explicit
+  - documented
+  - global in intent
+
+- Failure in this layer is considered **configuration-critical**
+  and must surface early and loudly.
+
+**** Implementation principles
+
+- Loaded **first** by =modules.el=
+- Each file:
+  - provides exactly one feature
+  - documents its scope and non-goals clearly
+- Optional behavior is gated behind explicit customization variables
+- No module here assumes interactive usage or user presence
+
+**** Module map
+
+| File | Responsibility |
+|------+----------------|
+| =core/fixes.el= | Compatibility guards and minimal hotfixes scoped by Emacs version |
+| =core/core-session.el= | Long-running session orchestration and global health policy |
+| =core/general.el= | Global keybinding infrastructure and non-modal leader layout |
+| =core/tools.el= | Cross-cutting helper commands for navigation, inspection, and tooling |
+| =core/utils.el= | Core-level utility helpers and global hooks shared across layers |
+| =core/core-treesit.el= | Centralized Tree-sitter infrastructure and grammar policy |
+| =core/core-history.el= | Session persistence (history, places, recent files) |
+| =core/editing.el= | Editing behavior, UX aids, and filesystem interaction policy |
+| =core/switches.el= | Unified switches controlling UI and LSP activation |
+| =core/custom.el= | Routing and management of Customize output (=custom-file=) |
+| =core/custom-ui-extras.el= | Optional UI-related module extensions appended at runtime |
+
+**** Relationship to bootstrap
+
+- =early-init.el= prepares the physical environment and startup invariants
+- =init.el= establishes runtime foundations and hands control to =modules.el=
+- =core/= is the **first feature layer** activated after bootstrap
+
+This ordering guarantees that all higher layers operate on a
+stable, predictable, and explicitly defined foundation.
+
+**** Implementation
+- Loaded first by =modules.el=
+- Each file provides exactly one core feature
+- No optional or user-facing behavior is introduced
+
+***** core/core-fixes.el
+:PROPERTIES:
+:CUSTOM_ID: core-fixes
+:header-args:emacs-lisp: :tangle lisp/core/core-fixes.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-fixes.el --- Compatibility & hotfix layer -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; This file contains *minimal and conditional fixes* to keep the
+  ;; existing configuration stable across Emacs versions.
+  ;;
+  ;; Design principles:
+  ;; - Do NOT change architecture or module structure
+  ;; - Do NOT refactor existing code
+  ;; - Add guards ONLY where real breakage is observed or expected
+  ;; - Keep fixes version-scoped and explicit
+  ;;
+  ;; This is NOT a dumping ground for tweaks.
+  ;; Everything here must have a concrete reason to exist.
+  ;;
+  ;; Current scope:
+  ;; - Emacs 30.1+ compatibility guards
+  ;; - Advice safety fences (load / require)
+  ;; - Loader stability fixes
+  ;;
+  ;;; Code:
+
+  ;;;; Utilities ---------------------------------------------------------------
+
+  (defun core-fixes--emacs>= (major minor)
+    "Return non-nil if running Emacs version is >= MAJOR.MINOR."
+    (or (> emacs-major-version major)
+        (and (= emacs-major-version major)
+             (>= emacs-minor-version minor))))
+
+  ;;;; Version-scoped fixes ----------------------------------------------------
+  ;; All fixes below MUST be guarded by explicit version checks.
+  ;; Never widen a guard range casually.
+
+  ;;;; Advice guards -----------------------------------------------------------
+  ;;
+  ;; Emacs 30.1+:
+  ;; Guard against unsafe or duplicated advice application during
+  ;; early bootstrap and module reload.
+  ;;
+  ;; Observed issues motivating this guard:
+  ;; - Re-entrancy during nested `load'
+  ;; - Duplicate advice when modules are reloaded
+  ;; - Unstable behavior when advice is applied before helper functions exist
+  ;;
+
+  (when (core-fixes--emacs>= 30 1)
+
+    ;; Defensive checks:
+    ;; - Only apply advice if *all* required functions exist
+    ;; - Keep this block reload-safe
+    (when (and (fboundp 'load)
+               (fboundp 'require)
+               (fboundp 'my:with-thisfile--load)
+               (fboundp 'my:with-thisfile--require))
+
+      ;; Avoid duplicate advice on `load'
+      (unless (advice-member-p #'my:with-thisfile--load 'load)
+        (advice-add 'load :around #'my:with-thisfile--load))
+
+      ;; Avoid duplicate advice on `require'
+      (unless (advice-member-p #'my:with-thisfile--require 'require)
+        (advice-add 'require :around #'my:with-thisfile--require))))
+
+  ;;;; Disabled / retired fixes -----------------------------------------------
+  ;;
+  ;; Keep removed fixes here *temporarily* with comments explaining:
+  ;; - Why they were added
+  ;; - Which Emacs version fixed the root cause
+  ;;
+  ;; Safe to delete once the minimum supported Emacs version
+  ;; moves beyond the affected range.
+  ;;
+
+  ;;;; Forward-compatibility notes --------------------------------------------
+  ;;
+  ;; - If Emacs 30.2+ resolves the underlying issues guarded above,
+  ;;   this module should be narrowed or partially removed.
+  ;; - Do NOT expand version ranges without a concrete regression.
+  ;; - Prefer deleting fixes over accumulating them.
+  ;;
+
+  (provide 'core-fixes)
+  ;;; core/core-fixes.el ends here
+#+end_src
+
+***** core/core-session.el
+:PROPERTIES:
+:CUSTOM_ID: core-session
+:header-args:emacs-lisp: :tangle lisp/core/core-session.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core-session.el --- Long-running session orchestration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;; Central policy and orchestration layer for long-running Emacs sessions.
+  ;;
+  ;; This module coordinates:
+  ;; - Safe garbage collection
+  ;; - Periodic buffer housekeeping
+  ;; - LSP lifecycle cleanup
+  ;;
+  ;; Actual implementations are delegated to utils modules.
+  ;; This file defines *when* and *under what conditions* they run.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Customization
+  ;; ---------------------------------------------------------------------------
+
+  (defgroup core-session nil
+    "Long-running Emacs session orchestration."
+    :group 'convenience)
+
+  (defcustom core-session-enable-p t
+    "Enable long-running session orchestration."
+    :type 'boolean
+    :group 'core-session)
+
+  (defcustom core-session-idle-delay
+    (* 30 60)
+    "Seconds of idle time before running lightweight maintenance."
+    :type 'integer
+    :group 'core-session)
+
+  (defcustom core-session-periodic-interval
+    600
+    "Interval in seconds for periodic maintenance tasks."
+    :type 'integer
+    :group 'core-session)
+
+  (defcustom core-session-buffer-threshold
+    300
+    "Soft threshold for number of live buffers considered risky."
+    :type 'integer
+    :group 'core-session)
+
+  (defcustom core-session-process-threshold
+    8
+    "Soft threshold for number of live processes considered risky."
+    :type 'integer
+    :group 'core-session)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Internal helpers
+  ;; ---------------------------------------------------------------------------
+
+  (defvar core-session--idle-timer nil
+    "Idle timer for lightweight session maintenance.")
+
+  (defvar core-session--periodic-timer nil
+    "Periodic timer for session health checks.")
+
+  (defun core-session--buffers-count ()
+    "Return the number of live buffers."
+    (length (buffer-list)))
+
+  (defun core-session--processes-count ()
+    "Return the number of live processes."
+    (length (process-list)))
+
+  (defun core-session--risky-state-p ()
+    "Return non-nil if the current session looks risky."
+    (or (> (core-session--buffers-count)
+           core-session-buffer-threshold)
+        (> (core-session--processes-count)
+           core-session-process-threshold)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Maintenance actions (delegation only)
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-session--lightweight-maintenance ()
+    "Run lightweight maintenance tasks.
+
+  This function delegates actual work to utils modules and must remain safe."
+    (when core-session-enable-p
+      ;; GC helpers
+      (when (fboundp 'utils-gc--collect)
+        (utils-gc--collect))
+
+      ;; Buffer housekeeping
+      (when (fboundp 'utils-buffers-cleanup)
+        (utils-buffers-cleanup))))
+
+  (defun core-session--periodic-check ()
+    "Run periodic session health checks.
+
+  Currently this only performs maintenance when the session looks risky."
+    (when (and core-session-enable-p
+               (core-session--risky-state-p))
+      (core-session--lightweight-maintenance)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Public commands
+  ;; ---------------------------------------------------------------------------
+
+  ;;;###autoload
+  (defun core-session-run-health-check ()
+    "Run a manual session health check."
+    (interactive)
+    (core-session--lightweight-maintenance)
+    (message "Core session health check completed"))
+
+  ;;;###autoload
+  (defun core-session-lightweight-restart ()
+    "Perform a safe lightweight restart of the current Emacs session.
+
+  This shuts down obsolete LSP servers, cleans buffers, and runs GC.
+  No buffers with unsaved changes are touched."
+    (interactive)
+    ;; LSP lifecycle cleanup
+    (when (and core-session-enable-p
+               (fboundp 'utils-lsp-on-project-switch))
+      (ignore-errors
+        (utils-lsp-on-project-switch)))
+
+    ;; Buffers and GC
+    (core-session--lightweight-maintenance)
+
+    (clear-image-cache)
+    (message "Core session lightweight restart completed"))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Activation
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-session--enable ()
+    "Enable core session orchestration."
+    ;; Idle maintenance
+    (setq core-session--idle-timer
+          (run-with-idle-timer
+           core-session-idle-delay
+           t
+           #'core-session--lightweight-maintenance))
+
+    ;; Periodic checks
+    (setq core-session--periodic-timer
+          (run-with-timer
+           core-session-periodic-interval
+           core-session-periodic-interval
+           #'core-session--periodic-check)))
+
+  (defun core-session--disable ()
+    "Disable core session orchestration."
+    (when (timerp core-session--idle-timer)
+      (cancel-timer core-session--idle-timer))
+    (when (timerp core-session--periodic-timer)
+      (cancel-timer core-session--periodic-timer))
+    (setq core-session--idle-timer nil
+          core-session--periodic-timer nil))
+
+  (when core-session-enable-p
+    (core-session--enable))
+
+  (provide 'core-session)
+  ;;; core/core-session.el ends here
+#+end_src
+
+***** core/core-general.el
+:PROPERTIES:
+:CUSTOM_ID: core-general
+:header-args:emacs-lisp: :tangle lisp/core/core-general.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-general.el --- General settings & keybindings (NO Meow) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;; - Drop Meow: provide a non-modal, global leader-key layout.
+  ;; - Keep useful global bindings for macOS-like shortcuts and muscle memory.
+  ;; - Provide LSP-agnostic helpers (code actions, rename, format).
+  ;; - Authentication helpers (GPG + pass) remain as-is.
+  ;;
+  ;; Design notes:
+  ;; - We define a global leader key (C-c SPC).
+  ;; - Under the leader, we expose groups: b(buffers), w(windows), p(project), g(git),
+  ;; c(code), e(errors), t(toggles), o(org/roam), m(mode-specific), a(ai), q(session), h(help).
+  ;; - "m" is reserved as a local leader prefix for major-mode specific commands.
+  ;; - Which-Key labels reflect the chosen leader key at runtime.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'leaf-keywords)
+    (require 'subr-x))
+
+  (defvar plstore-secret-keys)
+  (defvar plstore-encrypt-to)
+
+  (autoload 'magit-status "magit")
+  (autoload 'magit-blame-addition "magit")
+  (autoload 'magit-log-current "magit")
+  (autoload 'magit-diff-buffer-file "magit")
+  (autoload 'magit-commit "magit")
+
+  (autoload 'flymake-goto-next-error "flymake")
+  (autoload 'flymake-goto-prev-error "flymake")
+  (autoload 'flymake-show-buffer-diagnostics "flymake")
+
+  (autoload 'project-roots "project")
+
+  ;;;; Text scaling hydra --------------------------------------------------------
+  (leaf hydra
+    :straight t
+    :config
+    (defhydra core-hydra-text-scale (:hint nil :color red)
+      "
+  ^Text Scaling^
+  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
+  "
+      ("+" text-scale-increase)
+      ("-" text-scale-decrease)
+      ("0" (text-scale-set 0) :color blue)
+      ("q" nil "quit" :color blue)))
+
+  ;;;; Small utilities -----------------------------------------------------------
+  (leaf my:utils
+    :straight nil
+    :init
+    (defun my/new-frame-with-scratch ()
+      "Create a new frame and switch to a fresh buffer."
+      (interactive)
+      (let ((frame (make-frame)))
+        (with-selected-frame frame
+          (switch-to-buffer (generate-new-buffer "untitled")))))
+
+    (defun my/restart-or-exit ()
+      "Restart Emacs if `restart-emacs' exists; otherwise save & exit."
+      (interactive)
+      (if (fboundp 'restart-emacs)
+          (restart-emacs)
+        (save-buffers-kill-emacs)))
+
+    ;; Arrow-based window motions (keeps default muscle memory).
+    (windmove-default-keybindings))
+
+  ;;;; IDE-agnostic helpers (Eglot / lsp-mode) -----------------------------------
+  (defun my/code-actions ()
+    "Run code actions via Eglot or lsp-mode."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-code-actions) (eglot-code-actions))
+     ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
+     (t (user-error "No code action backend (Eglot/LSP) available"))))
+
+  (defun my/rename-symbol ()
+    "Rename symbol via Eglot or lsp-mode."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-rename) (eglot-rename))
+     ((fboundp 'lsp-rename) (lsp-rename))
+     (t (user-error "No rename backend (Eglot/LSP) available"))))
+
+  (defun my/format-buffer ()
+    "Format buffer via Eglot/LSP; fallback to `indent-region'."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-format-buffer) (eglot-format-buffer))
+     ((fboundp 'lsp-format-buffer) (lsp-format-buffer))
+     ((fboundp 'indent-region) (indent-region (point-min) (point-max)))
+     (t (user-error "No formatter available"))))
+
+  (defun my/consult-ripgrep-project ()
+    "Run ripgrep in current project; fallback to prompting."
+    (interactive)
+    (let* ((pr (when (fboundp 'project-current) (project-current)))
+           (root (when pr (car (project-roots pr)))))
+      (if (and root (fboundp 'consult-ripgrep))
+          (consult-ripgrep root)
+        (call-interactively 'consult-ripgrep))))
+
+  (defun my/toggle-transient-line-numbers ()
+    "Toggle line numbers, preserving buffer-local overrides."
+    (interactive)
+    (if (bound-and-true-p display-line-numbers-mode)
+        (display-line-numbers-mode 0)
+      (display-line-numbers-mode 1)))
+
+  ;;;; Global LEADER (non-modal) -------------------------------------------------
+  ;; Define leader keys and prefix maps:
+  (defconst my:leader-key "C-c SPC"
+    "Key sequence used as the global leader key.")
+
+  (defconst my:leader-which-prefix "C-c SPC"
+    "Human-readable leader prefix string for which-key labels.")
+
+  ;; Define a local leader key sequence for major mode commands (contextual).
+  (defconst my:local-leader-key (concat my:leader-key " m")
+    "Key sequence used as the local (major-mode) leader key.")
+
+  ;; Top-level leader prefix map and subgroup prefix maps.
+  (define-prefix-command 'my/leader-map)
+  (define-prefix-command 'my/leader-b-map) ;; buffers
+  (define-prefix-command 'my/leader-w-map) ;; windows
+  (define-prefix-command 'my/leader-p-map) ;; project
+  (define-prefix-command 'my/leader-g-map) ;; git
+  (define-prefix-command 'my/leader-c-map) ;; code
+  (define-prefix-command 'my/leader-e-map) ;; errors/diagnostics
+  (define-prefix-command 'my/leader-t-map) ;; toggles
+  (define-prefix-command 'my/leader-o-map) ;; org/roam
+  (define-prefix-command 'my/leader-m-map) ;; mode-specific (local leader)
+  (define-prefix-command 'my/leader-a-map) ;; ai
+  (define-prefix-command 'my/leader-q-map) ;; session/quit
+  (define-prefix-command 'my/leader-h-map) ;; help
+
+  ;; Bind the global leader key to its prefix map.
+  (when (fboundp 'keymap-global-set)
+    (keymap-global-set my:leader-key 'my/leader-map)
+    ;; In older Emacs, use (global-set-key (kbd my:leader-key) 'my/leader-map)
+    )
+
+  ;; Bind group prefixes under the leader map.
+  (define-key my/leader-map (kbd "b") 'my/leader-b-map)
+  (define-key my/leader-map (kbd "w") 'my/leader-w-map)
+  (define-key my/leader-map (kbd "p") 'my/leader-p-map)
+  (define-key my/leader-map (kbd "g") 'my/leader-g-map)
+  (define-key my/leader-map (kbd "c") 'my/leader-c-map)
+  (define-key my/leader-map (kbd "e") 'my/leader-e-map)
+  (define-key my/leader-map (kbd "t") 'my/leader-t-map)
+  (define-key my/leader-map (kbd "o") 'my/leader-o-map)
+  (define-key my/leader-map (kbd "m") 'my/leader-m-map)  ;; "m" for major-mode leader
+  (define-key my/leader-map (kbd "a") 'my/leader-a-map)
+  (define-key my/leader-map (kbd "q") 'my/leader-q-map)
+  (define-key my/leader-map (kbd "h") 'my/leader-h-map)
+
+  ;; 1) Top-level leader bindings (LEADER <key>)
+  (define-key my/leader-map (kbd "SPC") #'execute-extended-command) ;; M-x
+  (define-key my/leader-map (kbd "/")   #'consult-line)
+  (define-key my/leader-map (kbd ";")   #'comment-or-uncomment-region)
+  (define-key my/leader-map (kbd "=")   #'er/expand-region)
+  (define-key my/leader-map (kbd "`")   #'eval-expression)
+  (define-key my/leader-map (kbd "z")   #'core-hydra-text-scale/body)
+  ;; frequent file and buffer helpers
+  (define-key my/leader-map (kbd ".")   #'other-window)
+  (define-key my/leader-map (kbd "f")   #'find-file)
+  (define-key my/leader-map (kbd "F")   #'find-file-other-window)
+  (define-key my/leader-map (kbd "O")   #'find-file-other-frame)
+  (define-key my/leader-map (kbd "r")   #'consult-recent-file)
+
+  ;; 2) Buffers (LEADER b ...)
+  (define-key my/leader-b-map (kbd "b") #'consult-buffer)
+  (define-key my/leader-b-map (kbd "B") #'consult-project-buffer)
+  (define-key my/leader-b-map (kbd "k") #'my/kill-buffer-smart)
+  (define-key my/leader-b-map (kbd "n") #'next-buffer)
+  (define-key my/leader-b-map (kbd "p") #'previous-buffer)
+  (define-key my/leader-b-map (kbd "r") #'revert-buffer)
+
+  ;; 3) Windows (LEADER w ...)
+  (define-key my/leader-w-map (kbd "w") #'ace-window)
+  (define-key my/leader-w-map (kbd "s") #'split-window-below)
+  (define-key my/leader-w-map (kbd "v") #'split-window-right)
+  (define-key my/leader-w-map (kbd "d") #'delete-window)
+  (define-key my/leader-w-map (kbd "o") #'delete-other-windows)
+  (define-key my/leader-w-map (kbd "=") #'balance-windows)
+  (define-key my/leader-w-map (kbd "2") #'my/toggle-window-split)
+
+  ;; 4) Project (LEADER p ...)
+  (define-key my/leader-p-map (kbd "p") #'project-switch-project)
+  (define-key my/leader-p-map (kbd "f") #'project-find-file)
+  (define-key my/leader-p-map (kbd "s") #'my/consult-ripgrep-project)
+  (define-key my/leader-p-map (kbd "b") #'consult-project-buffer)
+  (define-key my/leader-p-map (kbd "r") #'project-query-replace-regexp)
+  (define-key my/leader-p-map (kbd "d") #'project-dired)
+
+  ;; 5) Search (LEADER s ...) – (placed under main map for convenience)
+  (define-key my/leader-map (kbd "s s") #'consult-line)
+  (define-key my/leader-map (kbd "s r") #'consult-ripgrep)
+  (define-key my/leader-map (kbd "s g") #'my/consult-ripgrep-project)
+  (define-key my/leader-map (kbd "s m") #'consult-imenu)
+
+  ;; 6) Git (LEADER g ...)
+  (define-key my/leader-g-map (kbd "s") #'magit-status)
+  (define-key my/leader-g-map (kbd "b") #'magit-blame-addition)
+  (define-key my/leader-g-map (kbd "l") #'magit-log-current)
+  (define-key my/leader-g-map (kbd "d") #'magit-diff-buffer-file)
+  (define-key my/leader-g-map (kbd "c") #'magit-commit)
+
+  ;; 7) Code (LEADER c ...) – LSP-agnostic helpers
+  (define-key my/leader-c-map (kbd "a") #'my/code-actions)
+  (define-key my/leader-c-map (kbd "r") #'my/rename-symbol)
+  (define-key my/leader-c-map (kbd "f") #'my/format-buffer)
+  (define-key my/leader-c-map (kbd "d") #'xref-find-definitions)
+  (define-key my/leader-c-map (kbd "D") #'xref-find-definitions-other-window)
+  (define-key my/leader-c-map (kbd "R") #'xref-find-references)
+  (define-key my/leader-c-map (kbd "i") #'completion-at-point)
+
+  ;; 8) Errors/diagnostics (LEADER e ...)
+  (define-key my/leader-e-map (kbd "n") #'flymake-goto-next-error)
+  (define-key my/leader-e-map (kbd "p") #'flymake-goto-prev-error)
+  (define-key my/leader-e-map (kbd "l") #'flymake-show-buffer-diagnostics)
+
+  ;; 9) Toggles (LEADER t ...)
+  (define-key my/leader-t-map (kbd "l") #'my/toggle-transient-line-numbers)
+  (define-key my/leader-t-map (kbd "w") #'whitespace-mode)
+  (define-key my/leader-t-map (kbd "r") #'read-only-mode)
+  (define-key my/leader-t-map (kbd "z") #'core-hydra-text-scale/body)
+  ;; Removed toggle for images here, as it's specific to EWW (now local leader in eww-mode).
+
+  ;; 10) Org & Roam (LEADER o ...)
+  (define-key my/leader-o-map (kbd "a") #'org-agenda)
+  (define-key my/leader-o-map (kbd "c") #'org-capture)
+  (define-key my/leader-o-map (kbd "i") #'org-roam-node-insert)
+  (define-key my/leader-o-map (kbd "f") #'org-roam-node-find)
+  (define-key my/leader-o-map (kbd "s") #'my/org-sidebar)
+  (define-key my/leader-o-map (kbd "t") #'my/org-sidebar-toggle)
+
+  ;; 11) Misc/Web – **(Moved to local leader or global C-c w)**
+  ;; (LEADER m ...) previously held EWW (web) commands.
+  ;; We leave my/leader-m-map defined for local leader usage, but no global bindings here now.
+  ;; EWW commands are accessible via global "C-c w" prefix or when in eww-mode via local leader.
+
+  ;; 12) AI (LEADER a ...)
+  (define-key my/leader-a-map (kbd "a") #'aidermacs-transient-menu)
+
+  ;; 13) Session/quit (LEADER q ...)
+  (define-key my/leader-q-map (kbd "n") #'my/new-frame-with-scratch)
+  (define-key my/leader-q-map (kbd "r") #'my/restart-or-exit)
+  (define-key my/leader-q-map (kbd "q") #'save-buffers-kill-emacs)
+
+  ;; 14) Help (LEADER h ...)
+  (define-key my/leader-h-map (kbd "k") #'describe-key)
+  (define-key my/leader-h-map (kbd "f") #'describe-function)
+  (define-key my/leader-h-map (kbd "v") #'describe-variable)
+
+  ;;;; Which-Key integration for leader groups -----------------------------------
+  (leaf which-key
+    :straight t
+    :hook (after-init-hook . which-key-mode)
+    :custom ((which-key-idle-delay . 0.4))
+    :config
+    ;; Label leader groups dynamically according to `my:leader-which-prefix`.
+    (dolist (it `((,(concat my:leader-which-prefix " b") . "buffers")
+                  (,(concat my:leader-which-prefix " w") . "windows")
+                  (,(concat my:leader-which-prefix " p") . "project")
+                  (,(concat my:leader-which-prefix " s") . "search")
+                  (,(concat my:leader-which-prefix " g") . "git")
+                  (,(concat my:leader-which-prefix " c") . "code")
+                  (,(concat my:leader-which-prefix " e") . "errors")
+                  (,(concat my:leader-which-prefix " t") . "toggles")
+                  (,(concat my:leader-which-prefix " o") . "org/roam")
+                  (,(concat my:leader-which-prefix " m") . "mode")   ;; updated label
+  		(,(concat my:leader-which-prefix " a") . "ai")
+                  (,(concat my:leader-which-prefix " q") . "session")
+                  (,(concat my:leader-which-prefix " h") . "help")))
+      (which-key-add-key-based-replacements (car it) (cdr it))))
+
+  ;;;; Major-mode specific (local leader) bindings -------------------------------
+  (with-eval-after-load 'dired
+    (require 'dired-filter nil t)
+    (require 'dired-subtree nil t)
+    (add-hook 'dired-mode-hook #'dired-filter-mode)
+    (setq dired-subtree-use-backgrounds t)
+    ;; ---- Dired Local Keybindings ----
+    (define-key dired-mode-map (kbd "TAB") #'dired-subtree-toggle)
+    (define-key dired-mode-map (kbd "i")   #'dired-subtree-insert)
+    (define-key dired-mode-map (kbd ";")   #'dired-subtree-remove)
+    (define-key dired-mode-map (kbd "f")   #'dired-filter-mode)
+    (define-key dired-mode-map (kbd "/")   #'dired-filter-map)
+    (define-key dired-mode-map (kbd "z")   #'my/dired-view-file-other-window)
+    (with-eval-after-load 'which-key
+      (which-key-add-key-based-replacements
+        "C-c SPC m TAB" "toggle subtree"
+        "C-c SPC m i"   "insert subtree"
+        "C-c SPC m ;"   "remove subtree"
+        "C-c SPC m f"   "filter mode"
+        "C-c SPC m /"   "filter map"
+        "C-c SPC m z"   "view in other window")))
+
+  (with-eval-after-load 'vterm
+    (define-key vterm-mode-map (kbd "C-c SPC m c") #'vterm-send-C-c)
+    (define-key vterm-mode-map (kbd "C-c SPC m r") #'vterm-send-return)
+    (define-key vterm-mode-map (kbd "C-c SPC m k") #'vterm-reset-cursor-point)
+    (define-key vterm-mode-map (kbd "C-c SPC m q") #'vterm-quit)
+    (with-eval-after-load 'which-key
+      (which-key-add-key-based-replacements
+        "C-c SPC m c" "send C-c"
+        "C-c SPC m r" "send RET"
+        "C-c SPC m q" "quit vterm")))
+
+  (with-eval-after-load 'eww
+    (define-key eww-mode-map (kbd "s") #'my/eww-search)
+    (define-key eww-mode-map (kbd "o") #'eww-open-file)
+    (define-key eww-mode-map (kbd "b") #'eww-list-bookmarks)
+    (define-key eww-mode-map (kbd "r") #'eww-readable)
+    (define-key eww-mode-map (kbd "u") #'my/eww-toggle-images)
+    (with-eval-after-load 'which-key
+      (which-key-add-key-based-replacements
+        "C-c SPC m s" "search"
+        "C-c SPC m b" "bookmarks"
+        "C-c SPC m u" "toggle images")))
+
+  (with-eval-after-load 'org
+    (define-key org-mode-map (kbd "C-c SPC m t") #'org-todo)
+    (define-key org-mode-map (kbd "C-c SPC m a") #'org-archive-subtree)
+    (define-key org-mode-map (kbd "C-c SPC m s") #'org-schedule)
+    (define-key org-mode-map (kbd "C-c SPC m d") #'org-deadline)
+    (define-key org-mode-map (kbd "C-c SPC m p") #'org-priority)
+    (with-eval-after-load 'which-key
+      (which-key-add-key-based-replacements
+        "C-c SPC m t" "todo"
+        "C-c SPC m s" "schedule"
+        "C-c SPC m d" "deadline"
+        "C-c SPC m p" "priority")))
+
+  (with-eval-after-load 'magit
+    (define-key magit-mode-map (kbd "C-c SPC m c") #'magit-commit)
+    (define-key magit-mode-map (kbd "C-c SPC m p") #'magit-push-current)
+    (define-key magit-mode-map (kbd "C-c SPC m f") #'magit-fetch)
+    (define-key magit-mode-map (kbd "C-c SPC m l") #'magit-log-buffer-file)
+    (define-key magit-mode-map (kbd "C-c SPC m s") #'magit-stage)
+    (define-key magit-mode-map (kbd "C-c SPC m u") #'magit-unstage)
+    (with-eval-after-load 'which-key
+      (which-key-add-key-based-replacements
+        "C-c SPC m c" "commit"
+        "C-c SPC m p" "push"
+        "C-c SPC m f" "fetch"
+        "C-c SPC m s" "stage"
+        "C-c SPC m u" "unstage")))
+
+  ;;;; Notes / Markdown knowledge (C-c n ...) ------------------------------------
+  ;;
+  ;; Markdown-based personal notes (Inkdrop-like workflow).
+  ;;
+  ;; Design:
+  ;; - Kept outside the global leader (C-c SPC)
+  ;; - Lightweight, prose-oriented notes (not tasks)
+  ;; - notes/ is excluded from org-agenda-files (see orgx/org-core.el)
+  ;; - Never override existing user/global bindings
+
+  (with-eval-after-load 'utils/utils-notes-markdown
+    ;; Define prefix only if it is free
+    (unless (lookup-key global-map (kbd "C-c n"))
+      (define-prefix-command 'my/notes-prefix)
+      (global-set-key (kbd "C-c n") 'my/notes-prefix))
+
+    ;; Sub bindings (guarded)
+    (unless (lookup-key global-map (kbd "C-c n f"))
+      (define-key my/notes-prefix (kbd "f") #'consult-notes))
+    (unless (lookup-key global-map (kbd "C-c n r"))
+      (define-key my/notes-prefix (kbd "r") #'my/notes-consult-ripgrep))
+    (unless (lookup-key global-map (kbd "C-c n n"))
+      (define-key my/notes-prefix (kbd "n") #'my/notes-new-note))
+    (unless (lookup-key global-map (kbd "C-c n d"))
+      (define-key my/notes-prefix (kbd "d") #'my/notes-open-root)))
+
+  ;; which-key label (optional, non-fatal)
+  (with-eval-after-load 'which-key
+    (which-key-add-key-based-replacements
+      "C-c n" "notes / markdown"))
+
+  ;;;; Global keybindings (outside leader) ---------------------------------------
+  ;; Define global keys (macOS-like shortcuts, function keys, etc.)
+  (global-set-key (kbd "<f1>") #'help-command)
+  (global-set-key (kbd "<f5>") #'my/revert-buffer-quick)   ;; quick revert buffer (if defined elsewhere)
+  (global-set-key (kbd "<f8>") #'treemacs)
+  (global-set-key (kbd "C-.") #'other-window)
+  (global-set-key (kbd "C-/") #'undo-fu-only-undo)
+  (global-set-key (kbd "C-=") #'er/expand-region)
+  (global-set-key (kbd "C-?") #'undo-fu-only-redo)
+  (global-set-key (kbd "C-c 0") #'delete-window)
+  (global-set-key (kbd "C-c 1") #'delete-other-windows)
+  (global-set-key (kbd "C-c 2") #'my/toggle-window-split)
+  (global-set-key (kbd "C-c ;") #'comment-or-uncomment-region)
+  (global-set-key (kbd "C-c M-a") #'align-regexp)
+  (global-set-key (kbd "C-c V") #'view-file-other-window)
+  (global-set-key (kbd "C-c a a") #'aidermacs-transient-menu)   ;; global AI menu (duplicate of LEADER a a)
+  (global-set-key (kbd "C-c b") #'consult-buffer)
+  ;; "C-c d ..." org/roam bindings (these may be redundant with leader o):
+  (global-set-key (kbd "C-c d a") #'org-agenda)
+  (global-set-key (kbd "C-c d c") #'org-capture)
+  (global-set-key (kbd "C-c d f") #'org-roam-node-find)
+  (global-set-key (kbd "C-c d i") #'org-roam-node-insert)
+  (global-set-key (kbd "C-c d s") #'my/org-sidebar)
+  (global-set-key (kbd "C-c d t") #'my/org-sidebar-toggle)
+  (global-set-key (kbd "C-c k") #'my/kill-buffer-smart)
+  (global-set-key (kbd "C-c l") #'display-line-numbers-mode)    ;; quick toggle line numbers
+  (global-set-key (kbd "C-c o") #'find-file)
+  (global-set-key (kbd "C-c r") #'consult-ripgrep)
+  (global-set-key (kbd "C-c v") #'find-file-read-only)
+  ;; Web/EWW global prefix keys:
+  (global-set-key (kbd "C-c w b") #'eww-list-bookmarks)
+  (global-set-key (kbd "C-c w o") #'eww-open-file)
+  (global-set-key (kbd "C-c w r") #'eww-readable)
+  (global-set-key (kbd "C-c w s") #'my/eww-search)
+  (global-set-key (kbd "C-c w u") #'my/eww-toggle-images)
+  (global-set-key (kbd "C-c w w") #'eww)
+  (global-set-key (kbd "C-c z") #'core-hydra-text-scale/body)
+  ;; macOS-like Super (s-) keys:
+  (global-set-key (kbd "C-h") #'backward-delete-char)   ;; Make C-h backspace (like in terminals/mac)
+  (global-set-key (kbd "C-s") #'consult-line)           ;; Search in buffer (override isearch)
+  (global-set-key (kbd "s-.") #'ace-window)
+  (global-set-key (kbd "s-<down>") #'end-of-buffer)
+  (global-set-key (kbd "s-<left>") #'previous-buffer)
+  (global-set-key (kbd "s-<right>") #'next-buffer)
+  (global-set-key (kbd "s-<up>") #'beginning-of-buffer)
+  (global-set-key (kbd "s-b") #'consult-buffer)
+  (global-set-key (kbd "s-j") #'find-file-other-window)
+  (global-set-key (kbd "s-m") #'my/new-frame-with-scratch)
+  (global-set-key (kbd "s-o") #'find-file-other-frame)
+  (global-set-key (kbd "s-r") #'my/restart-or-exit)
+  (global-set-key (kbd "s-w") #'ace-swap-window)
+  (global-set-key (kbd "M-x") #'execute-extended-command)
+
+  ;;;; Auth / secrets ------------------------------------------------------------
+  (defvar my:d:password-store
+    (or (getenv "PASSWORD_STORE_DIR")
+        (concat no-littering-var-directory "password-store/"))
+    "Path to the password store.")
+
+  (defun my/auth-check-env ()
+    "Validate authentication environment and warn if misconfigured."
+    (unless (getenv "GPG_KEY_ID")
+      (display-warning 'auth "GPG_KEY_ID is not set." :level 'debug))
+    (unless (file-directory-p my:d:password-store)
+      (display-warning 'auth
+                       (format "Password store directory does not exist: %s"
+                               my:d:password-store)
+                       :level 'warning)))
+
+  (leaf *authentication
+    :straight nil
+    :init
+    (my/auth-check-env)
+
+    (leaf epa-file
+      :straight nil
+      :commands (epa-file-enable)
+      :init
+      (setq epa-pinentry-mode
+            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
+      (add-hook 'emacs-startup-hook #'epa-file-enable))
+
+    (leaf auth-source
+      :straight nil
+      :init
+      (with-eval-after-load 'auth-source
+        (let ((key (getenv "GPG_KEY_ID")))
+          (if key
+              (setq auth-source-gpg-encrypt-to key)
+            (display-warning 'auth-source
+                             "GPG_KEY_ID is not set. Authentication backends may be limited.")))))
+
+    (leaf password-store :straight t)
+
+    (leaf auth-source-pass
+      :straight t
+      :commands (auth-source-pass-enable)
+      :hook (emacs-startup-hook . (lambda ()
+                                    (when (executable-find "pass")
+                                      (auth-source-pass-enable)))))
+
+    (leaf plstore
+      :straight nil
+      :init
+      (with-eval-after-load 'plstore
+        (setq plstore-secret-keys 'silent
+              plstore-encrypt-to (getenv "GPG_KEY_ID")))))
+
+  (provide 'core-general)
+  ;;; core/core-general.el ends here
+#+end_src
+
+***** core/core-tools.el
+:PROPERTIES:
+:CUSTOM_ID: core-tools
+:header-args:emacs-lisp: :tangle lisp/core/core-tools.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-tools.el --- Internal core helper utilities -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; This module provides *small, non-interactive helper utilities*
+  ;; used internally by core modules.
+  ;;
+  ;; Design constraints:
+  ;; - No interactive commands
+  ;; - No hooks or keybindings
+  ;; - No UI / Org / Tree-sitter / external tool logic
+  ;; - Safe to load at any time
+  ;;
+  ;; This is NOT a utils replacement.
+  ;; Everything here must justify why it belongs to *core*.
+  ;;
+  ;;; Code:
+
+  ;;;; Version helpers ----------------------------------------------------------
+
+  (defun core-tools-emacs>= (major minor)
+    "Return non-nil if running Emacs version is >= MAJOR.MINOR."
+    (or (> emacs-major-version major)
+        (and (= emacs-major-version major)
+             (>= emacs-minor-version minor))))
+
+  ;;;; Filesystem helpers -------------------------------------------------------
+
+  (defun core-tools-ensure-directory (dir)
+    "Ensure directory DIR exists.
+  Create it recursively if necessary."
+    (when (and (stringp dir)
+               (not (file-directory-p dir)))
+      (make-directory dir t)))
+
+  ;;;; Feature / function probes ------------------------------------------------
+
+  (defun core-tools-feature-present-p (feature)
+    "Return non-nil if FEATURE can be safely required."
+    (or (featurep feature)
+        (locate-library (symbol-name feature))))
+
+  (defun core-tools-function-present-p (fn)
+    "Return non-nil if FN is a callable function."
+    (and (symbolp fn) (fboundp fn)))
+
+  ;;;; Safe require / call -------------------------------------------------------
+
+  (defun core-tools-require-if-present (feature)
+    "Require FEATURE only if it is present.
+  Return non-nil if successfully loaded."
+    (when (core-tools-feature-present-p feature)
+      (require feature nil t)))
+
+  (defun core-tools-call-if-present (fn &rest args)
+    "Call FN with ARGS if FN is defined.
+  Return the result, or nil if FN is unavailable."
+    (when (core-tools-function-present-p fn)
+      (apply fn args)))
+
+  ;;;; Diagnostics helpers ------------------------------------------------------
+
+  (defun core-tools-check-provide (feature file)
+    "Warn if FILE does not provide FEATURE.
+  Intended for use from `after-load-functions'."
+    (when (and feature file)
+      (unless (featurep feature)
+        (warn "[core-tools] %s loaded from %s but did not provide `%s`"
+              feature file feature))))
+
+  ;;;; Internal policy helpers --------------------------------------------------
+
+  (defun core-tools-user-file-p (file)
+    "Return non-nil if FILE belongs to the user configuration."
+    (and (stringp file)
+         (string-prefix-p
+          (expand-file-name user-emacs-directory)
+          (expand-file-name file))))
+
+  (provide 'core-tools)
+  ;;; core/core-tools.el ends here
+
+#+end_src
