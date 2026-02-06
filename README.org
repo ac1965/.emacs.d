@@ -1694,7 +1694,6 @@ This layer exists to make everything above it **boring, stable, and trustworthy*
 This ordering guarantees that all higher layers operate on a
 stable, predictable, and explicitly defined foundation.
 
-
 ***** core/core-fixes.el
 :PROPERTIES:
 :CUSTOM_ID: core-fixes
@@ -2924,10 +2923,14 @@ stable, predictable, and explicitly defined foundation.
   ;; Startup behavior
   ;; ---------------------------------------------------------------------------
 
-  (when (core-treesit--available-p)
-    (core-treesit-apply-remap)
-    (when core-treesit-auto-install-p
-      (ignore-errors (core-treesit-install-all))))
+  (defun core-treesit--startup-init ()
+    "Apply Tree-sitter remapping and optional installation after startup."
+    (when (core-treesit--available-p)
+      (core-treesit-apply-remap)
+      (when core-treesit-auto-install-p
+        (ignore-errors (core-treesit-install-all)))))
+
+  (add-hook 'emacs-startup-hook #'core-treesit--startup-init)
 
   (provide 'core-treesit)
   ;;; core/core-treesit.el ends here
@@ -2959,24 +2962,49 @@ stable, predictable, and explicitly defined foundation.
 
   (eval-when-compile (require 'leaf))
 
+  ;; ---------------------------------------------------------------------------
+  ;; saveplace
+  ;; ---------------------------------------------------------------------------
+
   (leaf saveplace :straight nil
     :init
-    (setq save-place-file (concat no-littering-var-directory "saveplace"))
-    (save-place-mode +1))
+    (setq save-place-file (concat no-littering-var-directory "saveplace")))
+
+  ;; ---------------------------------------------------------------------------
+  ;; recentf
+  ;; ---------------------------------------------------------------------------
 
   (leaf recentf :straight nil
     :init
     (setq recentf-max-saved-items 100
-          recentf-save-file (concat no-littering-var-directory "recentf"))
-    (recentf-mode +1))
+          recentf-save-file (concat no-littering-var-directory "recentf")))
+
+  ;; ---------------------------------------------------------------------------
+  ;; savehist
+  ;; ---------------------------------------------------------------------------
 
   (leaf savehist
     :straight nil
-    :global-minor-mode savehist-mode
     :config
     (setq savehist-file (concat no-littering-var-directory "history"))
     (my/ensure-directory-exists (file-name-directory savehist-file))
-    (add-to-list 'savehist-additional-variables 'my:desktop-ask-on-restore))
+
+    ;; `savehist-additional-variables' is defined in savehist.el
+    (with-eval-after-load 'savehist
+      (add-to-list 'savehist-additional-variables
+                   'my:desktop-ask-on-restore)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Startup activation
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-history--startup-init ()
+    "Enable history-related minor modes after startup."
+    (save-place-mode +1)
+    (recentf-mode +1)
+    (savehist-mode +1))
+
+  (add-hook 'emacs-startup-hook #'core-history--startup-init)
 
   (provide 'core-history)
   ;;; core/history.el ends here
@@ -3507,24 +3535,51 @@ Completion modules intentionally do **not**:
 
   (eval-when-compile (require 'leaf))
 
+  ;; ---------------------------------------------------------------------------
+  ;; Lazy initialization
+  ;; ---------------------------------------------------------------------------
+
+  (defvar completion-vertico--initialized nil
+    "Non-nil once Vertico, posframe, and Marginalia have been initialized.")
+
+  (defun completion-vertico--init ()
+    "Initialize Vertico-related completion UI on first minibuffer use."
+    (unless completion-vertico--initialized
+      (setq completion-vertico--initialized t)
+
+      (require 'vertico)
+      (vertico-mode 1)
+
+      (when (display-graphic-p)
+        (require 'vertico-posframe)
+        (vertico-posframe-mode 1))
+
+      (require 'marginalia)
+      (marginalia-mode 1)
+
+      (remove-hook 'minibuffer-setup-hook #'completion-vertico--init)))
+
+  (add-hook 'minibuffer-setup-hook #'completion-vertico--init)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Packages
+  ;; ---------------------------------------------------------------------------
+
   (leaf vertico
     :straight t
-    :global-minor-mode vertico-mode
     :custom ((vertico-count . 15)))
 
   (leaf vertico-posframe
     :straight t
     :if (display-graphic-p)
     :after vertico
-    :custom ((vertico-posframe-border-width . 2))
-    :config
-    (vertico-posframe-mode 1))
+    :custom ((vertico-posframe-border-width . 2)))
 
   (leaf marginalia
-    :straight t
-    :global-minor-mode marginalia-mode)
+    :straight t)
 
   (provide 'completion-vertico)
+  ;;; completion/completion-vertico.el ends here
 #+end_src
 
 ***** completion/completion-consult.el
@@ -3626,11 +3681,45 @@ Completion modules intentionally do **not**:
 
   (eval-when-compile (require 'leaf))
 
+  ;; ---------------------------------------------------------------------------
+  ;; Lazy initialization
+  ;; ---------------------------------------------------------------------------
+
+  (defvar completion-corfu--initialized nil
+    "Non-nil once Corfu, kind-icon, and CAPE have been initialized.")
+
+  (defun completion-corfu--init ()
+    "Initialize Corfu completion UI and related backends on first use."
+    (unless completion-corfu--initialized
+      (setq completion-corfu--initialized t)
+
+      ;; corfu
+      (require 'corfu)
+      (setq tab-always-indent 'complete)
+      (global-corfu-mode 1)
+
+      ;; kind-icon
+      (require 'kind-icon)
+      (add-to-list 'corfu-margin-formatters
+                   #'kind-icon-margin-formatter)
+
+      ;; cape
+      (require 'cape)
+      (add-to-list 'completion-at-point-functions #'cape-elisp-symbol)
+      (add-to-list 'completion-at-point-functions #'cape-file)
+      (add-to-list 'completion-at-point-functions #'cape-dabbrev)
+
+      ;; One-shot initialization
+      (remove-hook 'completion-at-point-functions #'completion-corfu--init)))
+
+  (add-hook 'completion-at-point-functions #'completion-corfu--init)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Packages
+  ;; ---------------------------------------------------------------------------
+
   (leaf corfu
     :straight t
-    :init
-    (setq tab-always-indent 'complete)
-    (global-corfu-mode)
     :custom
     ((corfu-auto  . t)
      (corfu-cycle . t)))
@@ -3639,18 +3728,11 @@ Completion modules intentionally do **not**:
     :straight t
     :after corfu
     :require t
-    :custom ((kind-icon-default-face . 'corfu-default))
-    :config
-    (add-to-list 'corfu-margin-formatters
-                 #'kind-icon-margin-formatter))
+    :custom ((kind-icon-default-face . 'corfu-default)))
 
   (leaf cape
     :straight t
-    :after corfu
-    :init
-    (add-to-list 'completion-at-point-functions #'cape-elisp-symbol)
-    (add-to-list 'completion-at-point-functions #'cape-file)
-    (add-to-list 'completion-at-point-functions #'cape-dabbrev))
+    :after corfu)
 
   (provide 'completion-corfu)
   ;;; completion/completion-corfu.el ends here
@@ -4481,46 +4563,42 @@ This layer should remain *boring, predictable, and comfortable*.
 
   (setq-default line-spacing 0.24)
 
-  (defun my/nano--reapply-after-theme (&rest _)
-    "Re-apply nano-style face normalization after a theme change."
-    (when (fboundp 'my/nano-apply-faces)
-      (my/nano-apply-faces)))
+  (defvar ui-theme--initialized nil
+    "Non-nil once the Nano theme and faces have been initialized.")
 
-  (with-eval-after-load 'cus-theme
-    (if (boundp 'enable-theme-functions)
-        (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
-      (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
+  (defun ui-theme--apply ()
+    "Apply Nano theme and related face customizations once."
+    (unless ui-theme--initialized
+      (setq ui-theme--initialized t)
 
-  ;; Dired subtree faces (light green background)
-  (with-eval-after-load 'dired-subtree
-    (set-face-attribute 'dired-subtree-depth-1-face nil
-                        :background "#e6f4ea")
-    (set-face-attribute 'dired-subtree-depth-2-face nil
-                        :background "#dff0e3")
-    (set-face-attribute 'dired-subtree-depth-3-face nil
-                        :background "#d8ecdc")
-    (set-face-attribute 'dired-subtree-depth-4-face nil
-                        :background "#d1e8d5"))
+      ;; Reapply faces after theme change
+      (with-eval-after-load 'cus-theme
+        (if (boundp 'enable-theme-functions)
+            (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
+          (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
 
-  (leaf nano-emacs
-    :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs")
-    :config
-    (require 'nano-layout)
-    (require 'nano-faces)
-    (nano-faces)
+      ;; Dired subtree faces
+      (with-eval-after-load 'dired-subtree
+        (set-face-attribute 'dired-subtree-depth-1-face nil :background "#e6f4ea")
+        (set-face-attribute 'dired-subtree-depth-2-face nil :background "#dff0e3")
+        (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
+        (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
 
-    (set-face-attribute 'nano-face-strong nil
-                        :foreground (face-foreground 'nano-face-default)
-                        :weight 'bold)
+      ;; Nano theme stack
+      (require 'nano-layout)
+      (require 'nano-faces)
+      (nano-faces)
 
-    (leaf nano-theme
-      :straight (nano-theme :type git :host github :repo "rougier/nano-theme")
-      :config
+      (set-face-attribute 'nano-face-strong nil
+                          :foreground (face-foreground 'nano-face-default)
+                          :weight 'bold)
+
       (load-theme 'nano t)
       (my/nano-apply-faces)
 
       (set-face-attribute 'bold nil :weight 'bold)
       (set-face-attribute 'italic nil :slant 'italic)
+
       (with-eval-after-load 'elec-pair
         (custom-set-faces
          '(electric-pair-overlay-face ((t (:background "#e5e7eb"))))
@@ -4529,17 +4607,29 @@ This layer should remain *boring, predictable, and comfortable*.
                                              :weight bold))))
          '(show-paren-mismatch ((t (:background "#dc2626"
                                                 :foreground "white"
-                                                :weight bold))))))))
+                                                :weight bold))))))
+
+      ;; Padding
+      (when (display-graphic-p)
+        (spacious-padding-mode 1)
+        (my/nano-apply-faces))))
+
+  ;; Nano packages (definitions only; no eager work)
+  (leaf nano-emacs
+    :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs"))
+
+  (leaf nano-theme
+    :straight (nano-theme :type git :host github :repo "rougier/nano-theme"))
 
   (leaf spacious-padding
     :straight t
     :if (display-graphic-p)
     :custom
     ((spacious-padding-widths . '((left . 15) (right . 15)))
-     (spacious-padding-subtle-mode-line . t))
-    :config
-    (spacious-padding-mode 1)
-    (my/nano-apply-faces))
+     (spacious-padding-subtle-mode-line . t)))
+
+  ;; Apply theme after first frame is ready
+  (add-hook 'emacs-startup-hook #'ui-theme--apply)
 
   (provide 'ui-theme)
   ;;; ui/ui-theme.el ends here
@@ -5192,37 +5282,53 @@ This layer exists to make Org powerful *without making it fragile*.
 
   (eval-when-compile (require 'leaf))
 
-  (leaf org-modern
-    :straight t
-    :hook (org-mode . org-modern-mode)
-    :custom
-    ((org-startup-indented . t)
-     (org-hide-leading-stars . t)
-     (org-auto-align-tags . nil)
-     (org-tags-column . 0)
-     (org-catch-invisible-edits . 'show-and-error)
-     (org-special-ctrl-a/e . t)
-     (org-insert-heading-respect-content . t)
-     (org-hide-emphasis-markers . t)
-     (org-pretty-entities . t)
-     (org-modern-todo-faces
-      . '(("TODO"     :background "#673AB7" :foreground "#f8f8f2")
-          ("SOMEDAY"  :background "#6b7280" :foreground "#f8f8f2")
-          ("WAITING"  :background "#6272a4" :foreground "#f8f8f2")
-          ("DONE"     :background "#373844" :foreground "#b0b8d1")
-          ("CANCELED" :background "#4b5563" :foreground "#e5e7eb")))
-     (org-modern-list . '((?+ . "◦") (?- . "–") (?* . "•")))
-     (org-modern-checkbox . '((?X . "") (?- . "") (?\s . "")))
-     (org-modern-priority . '((?A . "") (?B . "") (?C . "")))
-     (org-modern-replace-stars . "")
-     (org-agenda-tags-column . 0)
-     (org-agenda-block-separator . ?─)
-     (org-agenda-time-grid
-      . '((daily today require-timed)
-          (800 1000 1200 1400 1600 1800 2000)
-          " ┄┄┄┄┄ " " ┄┄┄┄┄ "))
-     (org-agenda-current-time-string
-      . "⭠ now ─────────────────────────────────────────────────")))
+  (defvar orgx-visual--initialized nil
+    "Non-nil once org-modern visual settings are applied.")
+
+  (defun orgx-visual--apply ()
+    "Apply org-modern visual configuration once."
+    (unless orgx-visual--initialized
+      (setq orgx-visual--initialized t)
+
+      (require 'org-modern)
+
+      (setq
+       org-startup-indented t
+       org-hide-leading-stars t
+       org-auto-align-tags nil
+       org-tags-column 0
+       org-catch-invisible-edits 'show-and-error
+       org-special-ctrl-a/e t
+       org-insert-heading-respect-content t
+       org-hide-emphasis-markers t
+       org-pretty-entities t
+
+       org-modern-todo-faces
+       '(("TODO"     :background "#673AB7" :foreground "#f8f8f2")
+         ("SOMEDAY"  :background "#6b7280" :foreground "#f8f8f2")
+         ("WAITING"  :background "#6272a4" :foreground "#f8f8f2")
+         ("DONE"     :background "#373844" :foreground "#b0b8d1")
+         ("CANCELED" :background "#4b5563" :foreground "#e5e7eb"))
+
+       org-modern-list '((?+ . "◦") (?- . "–") (?* . "•"))
+       org-modern-checkbox '((?X . "") (?- . "") (?\s . ""))
+       org-modern-priority '((?A . "") (?B . "") (?C . ""))
+       org-modern-replace-stars ""
+
+       org-agenda-tags-column 0
+       org-agenda-block-separator ?─
+       org-agenda-time-grid
+       '((daily today require-timed)
+         (800 1000 1200 1400 1600 1800 2000)
+         " ┄┄┄┄┄ " " ┄┄┄┄┄ ")
+       org-agenda-current-time-string
+       "⭠ now ─────────────────────────────────────────────────")
+
+      (org-modern-mode 1)))
+
+  (leaf org-modern :straight t)
+
+  (add-hook 'org-mode-hook #'orgx-visual--apply)
 
   (provide 'orgx-visual)
   ;;; orgx/orgx-visual.el ends here
