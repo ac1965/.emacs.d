@@ -805,21 +805,24 @@ This behavior is intentional and by design.
 :END:
 
 #+begin_src emacs-lisp
-  ;;; early-init.el --- Early initialization (core) -*- lexical-binding: t; -*-
+  ;;; early-init.el --- Early bootstrap and runtime foundations -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
-  ;;; Commentary:
-  ;; Early bootstrap executed before regular init.el.
+  ;; Category: core
   ;;
-  ;; - Disable package.el
-  ;; - Startup optimization (GC / file-name-handlers)
-  ;; - Define base directories (.cache / .etc / .var)
-  ;; - Native compilation cache setup
-  ;; - macOS Homebrew toolchain environment
-  ;; - Early UI defaults
+  ;; Commentary:
+  ;; Early initialization executed before regular init.el.
+  ;;
+  ;; This file:
+  ;; - disables package.el and quickstart
+  ;; - performs startup optimizations (GC, file-name-handlers)
+  ;; - defines base configuration directories (.var / .etc / .cache / lisp)
+  ;; - configures native compilation and Tree-sitter paths
+  ;; - prepares macOS Homebrew toolchain environment
+  ;; - establishes early UI defaults and frame parameters
   ;;
   ;;; Code:
 
@@ -1040,14 +1043,23 @@ This behavior is intentional and by design.
 :END:
 
 #+begin_src emacs-lisp
-  ;;; init.el --- Main initialization (core) -*- lexical-binding: t; -*-
+  ;;; init.el --- Main initialization entry point -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
-  ;;; Commentary:
-  ;; Entry point for Emacs 30+ configuration.
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Primary initialization sequence for Emacs 30+.
+  ;;
+  ;; This file:
+  ;; - bootstraps straight.el, leaf, and Org
+  ;; - establishes core performance and runtime defaults
+  ;; - loads personal overlays safely
+  ;; - invokes the modular configuration loader
+  ;; - reports startup metrics after initialization
   ;;
   ;;; Code:
 
@@ -1270,10 +1282,10 @@ This behavior is intentional and by design.
 *** Overview
 
 **** Purpose
-Provide a **deterministic, explicit, and auditable module loading architecture**
+Provide a *deterministic, explicit, and auditable module loading architecture*
 for this Emacs configuration.
 
-This layer defines *where feature activation begins* after bootstrap,
+This layer defines /where feature activation begins/ after bootstrap,
 and guarantees that module load order, dependency direction, and extension
 points are fully inspectable and reproducible.
 
@@ -1284,7 +1296,7 @@ independent of filesystem traversal or implicit load-path side effects.
 
 This layer establishes:
 
-- =modules.el= as the **only authoritative loader** for shared modules
+- =modules.el= as the *only authoritative loader* for shared modules
 - A directory-based responsibility split with clear semantic boundaries
 - An explicit, ordered loading sequence handed off from =init.el=
 
@@ -1296,14 +1308,16 @@ Modules are grouped by responsibility:
 - =orgx/=        :: Org-mode extensions beyond upstream defaults
 - =dev/=         :: development, build, and language tooling
 - =vcs/=         :: version control systems and repository interaction
-- =utils/=       :: small, domain-specific helpers not yet promoted upward
+- =utils/=       :: small, domain-specific helpers not promoted upward
 
 **** What this layer does *not* do
 
-This layer intentionally does **not**:
+This layer intentionally does *not*:
 
-- Perform bootstrap or environment preparation (handled by =early-init.el=)
-- Establish runtime foundations (handled by =init.el=)
+- Perform bootstrap or environment preparation
+  (handled exclusively by =early-init.el=)
+- Establish runtime foundations
+  (handled by =init.el=)
 - Define configuration logic, advice, hooks, or feature behavior
 - Discover modules via directory scanning or wildcard expansion
 - Encode user-, device-, or host-specific policy
@@ -1312,7 +1326,7 @@ Its sole responsibility is *orchestration*, not implementation.
 
 **** Design principles
 
-- =modules.el= contains **only ordered =require= forms**
+- =modules.el= contains *only ordered =require= forms*
 - Each module file:
   - provides exactly one feature
   - documents its own assumptions and non-goals
@@ -1327,13 +1341,13 @@ Its sole responsibility is *orchestration*, not implementation.
   7. =utils=
 
 This order reflects dependency direction.
-Changes require explicit documentation and rationale.
+Any deviation requires explicit documentation and rationale.
 
 All modules are written to be:
 
 - Idempotent (safe to load multiple times)
 - Side-effect conscious
-- Safe under batch, byte-compile, and native-comp contexts
+- Safe under batch, byte-compilation, and native-comp contexts
 
 **** Benefits
 
@@ -1349,13 +1363,13 @@ This architecture enables:
 
 - =early-init.el= prepares infrastructure only
 - =init.el= establishes runtime foundations and environment state
-- =modules.el= is the **first and only layer** where shared features are activated
+- =modules.el= is the *first and only layer* where shared features are activated
 
 This separation ensures that:
 
 - bootstrap remains minimal, conservative, and side-effect free
 - feature activation is centralized and reviewable
-- personal overlays can remain isolated without influencing global policy
+- personal overlays remain isolated from global policy
 
 *** modules.el
 :PROPERTIES:
@@ -1363,39 +1377,6 @@ This separation ensures that:
 :header-args:emacs-lisp: :tangle lisp/modules.el
 :END:
 
-**** Purpose
-Act as the **single authoritative module loader** for this Emacs configuration.
-
-=modules.el= exists solely to make module loading:
-- explicit
-- ordered
-- inspectable
-
-It intentionally separates *module orchestration* from *module implementation*.
-
-**** What it does
-- Defines the **canonical load order** of all configuration modules
-- Loads modules explicitly via ordered =require= calls
-- Serves as a *readable index* of the entire configuration surface
-- Allows selective commenting-out or reordering for diagnostics
-
-**** Notes
-- =modules.el= **must not contain configuration logic**
-  - no variable customization
-  - no advice
-  - no hooks
-- Its responsibility is limited to *when* modules are loaded, not *how*
-- Any dependency between modules should be:
-  - visible from the order in this file, or
-  - documented explicitly in the dependent module
-- This file is expected to be:
-  - short
-  - boring
-  - stable
-
-If changes here feel “interesting”, they likely belong elsewhere.
-
-**** Implementation
 - Uses only =require= and comments
 - No conditional loading based on environment or features
 - Load order reflects semantic dependency layers:
@@ -1410,15 +1391,21 @@ If changes here feel “interesting”, they likely belong elsewhere.
   - correspond to a clearly named module
 
 #+begin_src emacs-lisp
-  ;;; modules.el --- Modular config loader -*- lexical-binding: t; -*-
+  ;;; modules.el --- Modular configuration loader -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
-  ;;; Commentary:
-  ;; Central entry point to load modular configs placed under lisp/.
   ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Central entry point for loading modular configuration under lisp/.
+  ;;
+  ;; This module:
+  ;; - defines the ordered list of configuration modules
+  ;; - loads modules safely with error isolation
+  ;; - provides timing, skip, and extension mechanisms for startup control
   ;;
   ;;; Code:
 
@@ -1447,10 +1434,13 @@ If changes here feel “interesting”, they likely belong elsewhere.
     '(
       ;; Core
       core-fixes
+      core-policy
       core-session
+      core-gc
+      core-persistence
+      core-buffers
       core-general
       core-tools
-      core-utils
       core-treesit
       core-history
       core-editing
@@ -1476,13 +1466,16 @@ If changes here feel “interesting”, they likely belong elsewhere.
       completion-capf-org-src-lang
       completion-corfu-org-src
       completion-orderless-org-src
+      completion-lsp
 
       ;; Org ecosystem (module namespace = )
       orgx-core
       orgx-visual
       orgx-extensions
-      orgx-export
       orgx-fold
+      orgx-export
+      orgx-notes-markdown
+      orgx-auto-tangle
 
       ;; VCS (uncomment when needed)
       vcs-magit
@@ -1499,20 +1492,17 @@ If changes here feel “interesting”, they likely belong elsewhere.
       dev-docker
       dev-sql
       dev-rest
+      dev-navigation
       dev-tools
 
       ;; Utils
+      utils-path
       utils-async
-      utils-gc
-      utils-backup
       utils-buffers
+      utils-edit
       utils-dired
       utils-functions
-      utils-search-nav
       utils-org-agenda
-      utils-notes-markdown
-      utils-scratch
-      utils-lsp
       utils-lint
       utils-diagnostics
       )
@@ -1595,43 +1585,43 @@ required by all other shared modules.
 
 This layer establishes *hard guarantees* about execution context,
 availability of primitives, and global defaults that higher layers
-may rely on without defensive checks.
+may rely on **without defensive checks or conditional logic**.
+
+Core exists to make the rest of the configuration simpler, safer,
+and more predictable.
 
 **** What this layer does
+Core modules define the **non-negotiable baseline** of the entire configuration.
 
-Core modules are responsible for establishing the **non-negotiable baseline**
-of the configuration.
+This layer is responsible for:
 
-Specifically, they:
-
-- Define low-level behavior shared across the entire configuration
-- Establish global policy, invariants, and execution guarantees
-- Initialize essential subsystems and long-lived orchestration
-- Provide stable primitives consumed by all higher layers
+- Establishing low-level behavior shared globally
+- Defining configuration-wide policy and invariants
+- Initializing essential subsystems with long-lived impact
+- Providing stable primitives consumed by all higher layers
 
 Typical responsibilities include:
 
-- Compatibility guards and forward-looking fixes
-- Session lifecycle orchestration and health policy
+- Compatibility guards and forward-looking fixes across Emacs versions
+- Session lifecycle orchestration and global health thresholds
 - Global keybinding infrastructure and command scaffolding
-- Editing, history, and persistence policy
-- Tree-sitter and parsing infrastructure
-- Feature switches controlling downstream activation
+- Editing, history, persistence, and filesystem interaction policy
+- Tree-sitter and parsing infrastructure with explicit grammar control
+- Feature switches that gate downstream activation (UI, LSP, etc.)
 
 **** What this layer does *not* do
-
 Core modules intentionally do **not**:
 
-- Implement visual presentation or theming details
-- Define completion UX or minibuffer interaction
+- Implement visual presentation, theming, or UI styling
+- Define completion UX or minibuffer interaction patterns
 - Extend Org semantics beyond upstream defaults
 - Configure language servers, build tools, or VCS workflows
 - Encode user-, device-, or host-specific preferences
 
-Those responsibilities are explicitly delegated to higher layers.
+Those responsibilities are explicitly delegated to higher layers
+or to =personal/= overlays.
 
 **** Design constraints
-
 - Core modules must not depend on:
   - =ui=
   - =completion=
@@ -1640,25 +1630,39 @@ Those responsibilities are explicitly delegated to higher layers.
   - =vcs=
   - =utils=
 
-- Side effects must be:
+- All side effects must be:
   - explicit
   - documented
   - global in intent
 
-- Failure in this layer is considered **configuration-critical**
-  and must surface early and loudly.
+- Failure in this layer is **configuration-critical** and must:
+  - surface early
+  - fail loudly
+  - never degrade silently
 
 **** Implementation principles
-
 - Loaded **first** by =modules.el=
 - Each file:
   - provides exactly one feature
-  - documents its scope and non-goals clearly
+  - documents its scope, assumptions, and non-goals
 - Optional behavior is gated behind explicit customization variables
-- No module here assumes interactive usage or user presence
+- No module assumes:
+  - interactive usage
+  - user presence
+  - GUI availability
+
+Core must remain safe under batch, byte-compilation,
+native-compilation, and daemon contexts.
+
+**** Benefits
+This separation ensures that:
+
+- Higher layers can rely on stable, unconditional primitives
+- Debugging starts from a known, deterministic baseline
+- Policy decisions are centralized and reviewable
+- Long-running sessions remain predictable and observable
 
 **** Module map
-
 | File | Responsibility |
 |------+----------------|
 | =core/fixes.el= | Compatibility guards and minimal hotfixes scoped by Emacs version |
@@ -1673,7 +1677,15 @@ Those responsibilities are explicitly delegated to higher layers.
 | =core/custom.el= | Routing and management of Customize output (=custom-file=) |
 | =core/custom-ui-extras.el= | Optional UI-related module extensions appended at runtime |
 
-**** Relationship to bootstrap
+**** Notes
+- Core is the *only* layer allowed to define global invariants.
+- Any logic that depends on UI, completion, or Org semantics is misplaced here.
+- If a change in core feels “convenient” rather than “necessary”,
+  it likely belongs elsewhere.
+
+This layer exists to make everything above it **boring, stable, and trustworthy**.
+
+**** Implementation
 
 - =early-init.el= prepares the physical environment and startup invariants
 - =init.el= establishes runtime foundations and hands control to =modules.el=
@@ -1682,10 +1694,6 @@ Those responsibilities are explicitly delegated to higher layers.
 This ordering guarantees that all higher layers operate on a
 stable, predictable, and explicitly defined foundation.
 
-**** Implementation
-- Loaded first by =modules.el=
-- Each file provides exactly one core feature
-- No optional or user-facing behavior is introduced
 
 ***** core/core-fixes.el
 :PROPERTIES:
@@ -1701,26 +1709,16 @@ stable, predictable, and explicitly defined foundation.
   ;;
   ;; Category: core
   ;;
-  ;;; Commentary:
+  ;; Commentary:
+  ;; Minimal and version-scoped compatibility fixes for Emacs.
   ;;
-  ;; This file contains *minimal and conditional fixes* to keep the
-  ;; existing configuration stable across Emacs versions.
-  ;;
-  ;; Design principles:
-  ;; - Do NOT change architecture or module structure
-  ;; - Do NOT refactor existing code
-  ;; - Add guards ONLY where real breakage is observed or expected
-  ;; - Keep fixes version-scoped and explicit
-  ;;
-  ;; This is NOT a dumping ground for tweaks.
-  ;; Everything here must have a concrete reason to exist.
-  ;;
-  ;; Current scope:
-  ;; - Emacs 30.1+ compatibility guards
-  ;; - Advice safety fences (load / require)
-  ;; - Loader stability fixes
+  ;; This module:
+  ;; - applies guards only for observed or expected breakage
+  ;; - keeps fixes explicitly version-bounded
+  ;; - avoids architectural or behavioral refactoring
   ;;
   ;;; Code:
+
 
   ;;;; Utilities ---------------------------------------------------------------
 
@@ -1786,13 +1784,13 @@ stable, predictable, and explicitly defined foundation.
   ;;; core/core-fixes.el ends here
 #+end_src
 
-***** core/core-session.el
+***** core/core-policy.el
 :PROPERTIES:
-:CUSTOM_ID: core-session
-:header-args:emacs-lisp: :tangle lisp/core/core-session.el
+:CUSTOM_ID: core-policy
+:header-args:emacs-lisp: :tangle lisp/core/core-policy.el
 :END:
 #+begin_src emacs-lisp
-  ;;; core-session.el --- Long-running session orchestration -*- lexical-binding: t; -*-
+  ;;; core/core-policy.el --- Core runtime policy hooks -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1800,16 +1798,62 @@ stable, predictable, and explicitly defined foundation.
   ;;
   ;; Category: core
   ;;
-  ;;; Commentary:
-  ;; Central policy and orchestration layer for long-running Emacs sessions.
+  ;; Commentary:
+  ;; Global runtime policies enforced via core-level hooks.
   ;;
-  ;; This module coordinates:
-  ;; - Safe garbage collection
-  ;; - Periodic buffer housekeeping
-  ;; - LSP lifecycle cleanup
+  ;; This module:
+  ;; - defines editor-wide behavioral guarantees
+  ;; - installs carefully scoped global hooks
+  ;; - centralizes policy that must not live in utils or dev
   ;;
-  ;; Actual implementations are delegated to utils modules.
-  ;; This file defines *when* and *under what conditions* they run.
+  ;;; Code:
+
+  (defun my/auto-insert-lexical-binding ()
+    "Insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
+    (when (and (stringp buffer-file-name)
+               (boundp 'no-littering-var-directory)
+               (string-prefix-p (expand-file-name no-littering-var-directory)
+                                (expand-file-name buffer-file-name))
+               (string-match-p "\\.el\\'" buffer-file-name)
+               (not (save-excursion
+                      (goto-char (point-min))
+                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
+      (save-excursion
+        (goto-char (point-min))
+        (insert ";; -*- lexical-binding: t; -*- \n"))))
+  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
+
+  (defun my/enable-view-mode-on-read-only ()
+    (if buffer-read-only
+        (view-mode 1)
+      (view-mode -1)))
+  (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
+
+  (provide 'core-policy)
+  ;;; core/core-policy.el ends here
+#+end_src
+
+***** core/core-session.el
+:PROPERTIES:
+:CUSTOM_ID: core-session
+:header-args:emacs-lisp: :tangle lisp/core/core-session.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-session.el --- Long-running session orchestration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Central orchestration layer for long-running Emacs sessions.
+  ;;
+  ;; This module:
+  ;; - defines when maintenance tasks run
+  ;; - evaluates session risk heuristics
+  ;; - delegates actual work to utils modules
   ;;
   ;;; Code:
 
@@ -1970,6 +2014,149 @@ stable, predictable, and explicitly defined foundation.
   ;;; core/core-session.el ends here
 #+end_src
 
+***** core/core-gc.el
+:PROPERTIES:
+:CUSTOM_ID: core-gc
+:header-args:emacs-lisp: :tangle lisp/core/core-gc.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-gc.el --- Safe garbage collection helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Safe garbage collection for long-running sessions.
+  ;;
+  ;; This module:
+  ;; - triggers GC only at known-safe moments
+  ;; - avoids synchronous or frequent GC pressure
+  ;; - integrates with session orchestration indirectly
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf nil
+    :straight nil
+    :init
+    (defcustom core-gc-enable-p t
+      "Enable GC hooks for long-running sessions."
+      :type 'boolean
+      :group 'utils)
+
+    (defun core-gc--collect ()
+      "Run garbage collection safely."
+      (when core-gc-enable-p
+        (condition-case _err
+            (garbage-collect)
+          (error nil))))
+
+    (add-hook 'focus-out-hook #'core-gc--collect)
+    (add-hook 'minibuffer-exit-hook #'core-gc--collect))
+
+  (provide 'core-gc)
+  ;;; core/core-gc.el ends here
+#+end_src
+
+***** core/core-buffers.el
+:PROPERTIES:
+:CUSTOM_ID: core-buffers
+:header-args:emacs-lisp: :tangle lisp/core/core-buffers.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-buffers.el --- Persistent *scratch* buffer helper -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Ensure persistence and safety of the *scratch* buffer.
+  ;;
+  ;; This module:
+  ;; - recreates *scratch* deterministically when killed
+  ;; - avoids user data loss
+  ;; - introduces no interactive surface
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf my:scratch-auto-recreate
+    :straight nil
+    :init
+    (defun my/create-scratch-buffer ()
+      "Create or reset a `*scratch*` buffer."
+      (let ((buf (get-buffer-create "*scratch*")))
+        (with-current-buffer buf
+          (lisp-interaction-mode)
+          (erase-buffer)
+          (insert ";; This is a new *scratch* buffer\n\n"))
+        buf))
+
+    (defun my/kill-scratch-buffer-advice (buf)
+      "If BUF is *scratch*, recreate it shortly after kill."
+      (when (string= (buffer-name buf) "*scratch*")
+        (run-at-time 0 nil #'my/create-scratch-buffer)))
+
+    (add-hook 'kill-buffer-hook
+              (lambda ()
+                (my/kill-scratch-buffer-advice (current-buffer)))))
+
+  (provide 'core-buffers)
+  ;;; core/core-buffers.el ends here
+#+end_src
+
+***** core/core-persistence.el
+:PROPERTIES:
+:CUSTOM_ID: core-persistence
+:header-args:emacs-lisp: :tangle lisp/core/core-persistence.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-persistence.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Backup and persistence hygiene helpers.
+  ;;
+  ;; This module:
+  ;; - enforces retention policies for backups
+  ;; - runs cleanup at controlled lifecycle points
+  ;; - avoids background or continuous scanning
+  ;;
+  ;;; Code:
+
+  (defun my/delete-old-backups ()
+    "Delete backup files older than 7 days."
+    (interactive)
+    (let ((backup-dir (concat no-littering-var-directory "backup/"))
+          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
+      (when (file-directory-p backup-dir)
+        (dolist (file (directory-files backup-dir t))
+          (when (and (file-regular-p file)
+                     (< (float-time
+                         (file-attribute-modification-time
+                          (file-attributes file)))
+                        threshold))
+            (delete-file file))))))
+
+  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
+
+  (provide 'core-persistence)
+  ;;; core/core-persistence.el ends here
+#+end_src
+
 ***** core/core-general.el
 :PROPERTIES:
 :CUSTOM_ID: core-general
@@ -1984,18 +2171,13 @@ stable, predictable, and explicitly defined foundation.
   ;;
   ;; Category: core
   ;;
-  ;;; Commentary:
-  ;; - Drop Meow: provide a non-modal, global leader-key layout.
-  ;; - Keep useful global bindings for macOS-like shortcuts and muscle memory.
-  ;; - Provide LSP-agnostic helpers (code actions, rename, format).
-  ;; - Authentication helpers (GPG + pass) remain as-is.
+  ;; Commentary:
+  ;; Global editing defaults and non-modal keybinding infrastructure.
   ;;
-  ;; Design notes:
-  ;; - We define a global leader key (C-c SPC).
-  ;; - Under the leader, we expose groups: b(buffers), w(windows), p(project), g(git),
-  ;; c(code), e(errors), t(toggles), o(org/roam), m(mode-specific), a(ai), q(session), h(help).
-  ;; - "m" is reserved as a local leader prefix for major-mode specific commands.
-  ;; - Which-Key labels reflect the chosen leader key at runtime.
+  ;; This module:
+  ;; - defines a global leader-key system
+  ;; - provides LSP-agnostic editor helpers
+  ;; - centralizes global bindings and authentication helpers
   ;;
   ;;; Code:
 
@@ -2494,19 +2676,13 @@ stable, predictable, and explicitly defined foundation.
   ;;
   ;; Category: core
   ;;
-  ;;; Commentary:
+  ;; Commentary:
+  ;; Internal helper primitives for core modules.
   ;;
-  ;; This module provides *small, non-interactive helper utilities*
-  ;; used internally by core modules.
-  ;;
-  ;; Design constraints:
-  ;; - No interactive commands
-  ;; - No hooks or keybindings
-  ;; - No UI / Org / Tree-sitter / external tool logic
-  ;; - Safe to load at any time
-  ;;
-  ;; This is NOT a utils replacement.
-  ;; Everything here must justify why it belongs to *core*.
+  ;; This module:
+  ;; - provides non-interactive, side-effect-free helpers
+  ;; - avoids hooks, keybindings, and UI concerns
+  ;; - is safe to load at any stage of initialization
   ;;
   ;;; Code:
 
@@ -2576,79 +2752,6 @@ stable, predictable, and explicitly defined foundation.
 
 #+end_src
 
-***** core/core-utils.el
-:PROPERTIES:
-:CUSTOM_ID: core-utils
-:header-args:emacs-lisp: :tangle lisp/core/core-utils.el
-:END:
-#+begin_src emacs-lisp
-  ;;; core/core-utils.el --- Core utility helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;;; Code:
-
-  (unless (fboundp 'my/ensure-directory-exists)
-    (defun my/ensure-directory-exists (dir)
-      "Create DIR if it does not exist."
-      (unless (file-directory-p dir)
-        (make-directory dir t))))
-
-  ;; Insert timestamp on save
-  (defun my/save-buffer-wrapper ()
-    "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
-    (interactive)
-    (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
-      (save-excursion
-        (goto-char (point-min))
-        (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
-          (replace-match timestamp t nil)))))
-  (add-hook 'before-save-hook #'my/save-buffer-wrapper)
-
-  (defun my/auto-tangle-updated-src-blocks ()
-    "Automatically tangle updated Org source blocks when saving `README.org`."
-    (when (and buffer-file-name (string= (file-name-nondirectory buffer-file-name) "README.org"))
-      (let ((org-confirm-babel-evaluate nil)) (org-babel-tangle))))
-
-  (add-hook 'org-mode-hook
-            (lambda ()
-              (add-hook 'after-save-hook
-                        #'my/auto-tangle-updated-src-blocks
-                        nil 'make-it-local)))
-
-  (defun my/revert-buffer-quick ()
-    (interactive)
-    (revert-buffer :ignore-auto :noconfirm))
-
-  (defun my/auto-insert-lexical-binding ()
-    "Insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
-    (when (and (stringp buffer-file-name)
-               (boundp 'no-littering-var-directory)
-               (string-prefix-p (expand-file-name no-littering-var-directory)
-                                (expand-file-name buffer-file-name))
-               (string-match-p "\\.el\\'" buffer-file-name)
-               (not (save-excursion
-                      (goto-char (point-min))
-                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
-      (save-excursion
-        (goto-char (point-min))
-        (insert ";; -*- lexical-binding: t; -*- \n"))))
-  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
-
-  (defun my/enable-view-mode-on-read-only ()
-    (if buffer-read-only
-        (view-mode 1)
-      (view-mode -1)))
-  (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
-
-  (provide 'core-utils)
-  ;;; core/core-utils.el ends here
-#+end_src
-
 ***** core/core-treesit.el
 :PROPERTIES:
 :CUSTOM_ID: core-treesit
@@ -2663,17 +2766,13 @@ stable, predictable, and explicitly defined foundation.
   ;;
   ;; Category: core
   ;;
-  ;;; Commentary:
-  ;; Centralized Tree-sitter integration.
+  ;; Commentary:
+  ;; Centralized Tree-sitter integration and policy.
   ;;
-  ;; Policy:
-  ;; - early-init.el defines directory policy (my:d:treesit) and treesit-extra-load-path.
-  ;; - This module owns:
-  ;;   - availability checks
-  ;;   - major-mode remapping
-  ;;   - grammar source registration
-  ;;   - explicit install commands (interactive)
-  ;;   - optional auto-install at startup
+  ;; This module:
+  ;; - owns Tree-sitter availability and configuration
+  ;; - defines grammar sources and remapping rules
+  ;; - guarantees explicit and non-implicit installation behavior
   ;;
   ;;; Code:
 
@@ -2840,12 +2939,21 @@ stable, predictable, and explicitly defined foundation.
 :header-args:emacs-lisp: :tangle lisp/core/core-history.el
 :END:
 #+begin_src emacs-lisp
-  ;;; core/history.el --- Session persistence & autorevert -*- lexical-binding: t; -*-
+  ;;; core/core-history.el --- Session persistence & autorevert -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Persistence of navigation and buffer history.
+  ;;
+  ;; This module:
+  ;; - enables saveplace, recentf, and savehist
+  ;; - stores history under controlled directories
+  ;; - avoids aggressive or implicit restoration
   ;;
   ;;; Code:
 
@@ -2980,8 +3088,13 @@ stable, predictable, and explicitly defined foundation.
   ;;
   ;; Category: core
   ;;
-  ;;; Commentary:
-  ;; Switcher for UI bundles (doom/nano) and LSP backends (eglot/lsp).
+  ;; Commentary:
+  ;; Centralized feature switches for UI bundles and LSP backends.
+  ;;
+  ;; This module:
+  ;; - defines mutually exclusive feature choices
+  ;; - resolves availability at runtime
+  ;; - avoids hard dependencies on optional subsystems
   ;;
   ;;; Code:
 
@@ -3087,11 +3200,21 @@ stable, predictable, and explicitly defined foundation.
 #+begin_src emacs-lisp
   ;;; core/core-custom.el --- custom-file helpers -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
   ;; Category: core
   ;;
-  ;;; Commentary:
-  ;; - Route customize output to .etc/custom.el
-  ;; - Provide helpers to open and (optionally) dump current values/faces.
+  ;; Commentary:
+  ;; Centralized handling of Customize output and helpers.
+  ;;
+  ;; This module:
+  ;; - routes customize output to a controlled location
+  ;; - provides explicit commands to inspect or dump state
+  ;; - never applies automatic or implicit persistence
+  ;;
+  ;;; Code:
 
   (eval-when-compile (require 'subr-x))
 
@@ -3185,7 +3308,23 @@ stable, predictable, and explicitly defined foundation.
 :header-args:emacs-lisp: :tangle lisp/core/core-custom-ui-extras.el
 :END:
 #+begin_src emacs-lisp
-  ;;; core/core-custom-ui-extras.el --- user extras -*- lexical-binding: t; -*-
+  ;;; core/core-custom-ui-extras.el --- User UI module extensions -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Append user-specific UI extension modules.
+  ;;
+  ;; This module:
+  ;; - extends the active module list without mutation
+  ;; - remains optional and non-intrusive
+  ;; - performs no configuration itself
+  ;;
+  ;;; Code:
 
   ;; Append without touching your default module list.
   (setq my:modules-extra
@@ -3208,38 +3347,41 @@ stable, predictable, and explicitly defined foundation.
 Provide a **coherent, explicit, and debuggable completion architecture**
 for this Emacs configuration.
 
-This layer centralizes completion behavior to prevent fragmentation
-across modes and subsystems, and to make completion flow fully inspectable.
+This layer centralizes completion behavior to avoid fragmentation across
+modes and subsystems, and to keep completion flow *fully inspectable* via
+standard Emacs mechanisms (CAPFs, completion categories, minibuffer UI).
 
 **** What this layer does
+Completion modules are responsible for defining and wiring together the
+completion stack used by this configuration.
 
-Completion modules are responsible for:
+Specifically, this layer:
 
-- Defining the primary completion frameworks and UI components
-- Orchestrating completion-at-point functions (CAPFs)
-- Managing precedence, fallback, and composition rules
-- Establishing a consistent completion experience across major modes
+- Defines the minibuffer completion UI and navigation/search commands
+- Defines in-buffer completion UI and its default behavior
+- Establishes matching policy and completion category overrides
+- Orchestrates `completion-at-point-functions` (CAPFs) per major mode
+- Provides targeted, buffer-local tweaks for Org SRC edit buffers
+- Provides optional session hygiene around project switches (Eglot lifecycle)
 
 Typical responsibilities include:
 
-- Minibuffer completion (selection, narrowing, annotations)
-- In-buffer completion UI and popup behavior
-- Matching styles, sorting, and filtering policy
-- Explicit wiring between completion frontends and backends
+- Minibuffer completion (selection UI, narrowing, annotations)
+- In-buffer completion (popup UI, auto completion defaults)
+- Matching styles (orderless vs basic, file partial completion)
+- CAPF ordering and safe fallbacks across editing contexts
 
 **** What this layer does *not* do
-
 Completion modules intentionally do **not**:
 
 - Define global keybinding schemes or leader layouts
-- Introduce language- or domain-specific semantics
-- Configure language servers or external tooling
-- Extend Org-specific workflows or capture logic
-
-Those responsibilities belong to other layers.
+- Implement UI themes or palette policy (owned by =ui=)
+- Introduce language- or project-specific semantics
+- Own LSP configuration or server selection policy (owned by =dev=)
+- Extend Org workflows beyond completion mechanics (owned by =orgx=)
+- Provide VCS features (owned by =vcs=) or general utilities (owned by =utils=)
 
 **** Design constraints
-
 - Completion modules may depend on:
   - =core=
   - =ui=
@@ -3253,27 +3395,44 @@ Those responsibilities belong to other layers.
 - Completion behavior must be:
   - deterministic
   - composable
-  - debuggable through standard Emacs facilities
-    (e.g. inspecting CAPFs and completion tables)
+  - debuggable using standard Emacs facilities
+    (e.g. inspecting CAPFs, `completion-category-overrides`,
+     and the active minibuffer frontend)
 
 **** Design principles
+- There is a **single completion flow** per context:
+  - minibuffer completion (Vertico + Marginalia + Consult)
+  - in-buffer completion (CAPF + Corfu)
 
-- There is a **single completion flow** per context
-  (minibuffer vs in-buffer), not multiple competing systems
 - CAPF order and fallback rules are explicit and reviewable
-- Frontend (UI) and backend (sources) are clearly separated
-- Reasonable defaults are preferred over aggressive heuristics
+- Frontend (UI) and backend (sources/CAPFs) are clearly separated
+- Category-based policy is preferred over mode-specific special cases
+- Org SRC edit buffers are treated as a controlled exception:
+  buffer-local overrides apply, without changing global policy
 
 **** Module map
-
 | File | Responsibility |
 |------+----------------|
-| =completion/completion-core.el= | Core completion policy and shared primitives |
-| =completion/completion-minibuffer.el= | Minibuffer completion framework and UX |
-| =completion/completion-capf.el= | CAPF composition, ordering, and fallback rules |
-| =completion/completion-in-buffer.el= | In-buffer completion UI (popups, previews) |
-| =completion/completion-matching.el= | Matching styles, filtering, and sorting policy |
-| =completion/completion-annotations.el= | Metadata, annotations, and candidate enrichment |
+| =completion/completion-core.el= | Global completion policy: `completion-styles` and `completion-category-overrides` |
+| =completion/completion-vertico.el= | Minibuffer completion UI (Vertico) and annotations (Marginalia) |
+| =completion/completion-consult.el= | Search/navigation integration, including xref display via Consult |
+| =completion/completion-embark.el= | Contextual actions and prefix help integration (Embark + Embark-Consult) |
+| =completion/completion-corfu.el= | In-buffer completion UI (Corfu) + candidate visuals (kind-icon) + CAPF providers (Cape) |
+| =completion/completion-icons.el= | Nerd icons integration for minibuffer annotations (Marginalia) |
+| =completion/completion-capf.el= | Mode-specific CAPF presets and shared category overrides for CAPF-based completion |
+| =completion/completion-capf-org-src.el= | CAPF switching when entering Org SRC edit buffers (`org-src-mode`) |
+| =completion/completion-capf-org-src-lang.el= | Language-specific CAPF presets inside Org SRC edit buffers (sh/sql/python) |
+| =completion/completion-corfu-org-src.el= | Buffer-local Corfu behavior tuned for Org SRC edit buffers |
+| =completion/completion-orderless-org-src.el= | Buffer-local category overrides for permissive Orderless matching in Org SRC |
+| =completion/completion-lsp.el= | Optional cleanup helper: shut down obsolete Eglot servers on project switch |
+
+**** Notes
+- Matching policy is defined centrally via `completion-styles` and
+  `completion-category-overrides`; Org SRC overrides are buffer-local only.
+- CAPF presets are applied via major-mode hooks; exceptions are limited to
+  Org SRC edit buffers where `org-src-mode-hook` controls local overrides.
+- LSP server lifecycle policy is not implemented here; only safe cleanup
+  is provided, and only when Eglot is present and enabled.
 
 **** Implementation
 
@@ -3290,10 +3449,24 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-core.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
+  ;;; completion/completion-core.el --- Completion core settings -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: completion
   ;;
+  ;; Commentary:
+  ;; Core completion style and category configuration.
+  ;;
+  ;; This module:
+  ;; - defines global completion styles
+  ;; - sets category overrides for common symbols
+  ;; - serves as the foundation for Corfu/CAPE
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (leaf orderless
@@ -3314,10 +3487,24 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-vertico.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
+  ;;; completion/completion-vertico.el --- Vertico minibuffer UI -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: completion
   ;;
+  ;; Commentary:
+  ;; Vertico-based minibuffer completion UI.
+  ;;
+  ;; This module:
+  ;; - enables Vertico globally
+  ;; - optionally activates posframe integration
+  ;; - augments minibuffer metadata with Marginalia
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (leaf vertico
@@ -3346,10 +3533,24 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-consult.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion-consult.el --- Consult search/navigation -*- lexical-binding: t; -*-
+  ;;; completion/completion-consult.el --- Consult search and navigation -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: completion
   ;;
+  ;; Commentary:
+  ;; Consult integration for xref-based navigation.
+  ;;
+  ;; This module:
+  ;; - routes xref UI through Consult
+  ;; - avoids redefining navigation commands
+  ;; - remains backend-agnostic
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (leaf consult
@@ -3367,10 +3568,24 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-embark.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
+  ;;; completion/completion-embark.el --- Embark actions -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: completion
   ;;
+  ;; Commentary:
+  ;; Embark integration for contextual actions and previews.
+  ;;
+  ;; This module:
+  ;; - enables Embark as the primary action framework
+  ;; - integrates Embark collections with Consult previews
+  ;; - introduces no global keybindings or policy
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (leaf embark
@@ -3399,8 +3614,13 @@ Those responsibilities belong to other layers.
   ;;
   ;; Category: completion
   ;;
-  ;;; Commentary:
+  ;; Commentary:
   ;; Corfu-based in-buffer completion with sensible defaults.
+  ;;
+  ;; This module:
+  ;; - enables global Corfu completion
+  ;; - integrates icon margins and CAPE backends
+  ;; - provides a lightweight, non-intrusive UI
   ;;
   ;;; Code:
 
@@ -3442,11 +3662,25 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-icons.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion-icons.el --- Nerd icons for completion -*- lexical-binding: t; -*-
+  ;;; completion/completion-icons.el --- Icons for completion UI -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: completion
   ;;
-  (eval-when-compile (require 'leaf))
+  ;; Commentary:
+  ;; Icon integration for completion and buffer lists.
+  ;;
+  ;; This module:
+  ;; - decorates completion candidates with Nerd Icons
+  ;; - integrates with Marginalia and Ibuffer
+  ;; - avoids altering completion behavior itself
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require  'leaf))
 
   (leaf nerd-icons-ibuffer
     :straight t
@@ -3470,17 +3704,22 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-capf.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion/capf.el --- Mode-specific CAPF & category configuration -*- lexical-binding: t; -*-
+  ;;; completion/completion-capf.el --- Mode-specific CAPF configuration -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Configure `completion-at-point-functions` per major mode and
-  ;; `completion-category-overrides` for Corfu + Cape.
+  ;;
   ;; Category: completion
-  ;;;
+  ;;
+  ;; Commentary:
+  ;; Central definition of completion-at-point-functions by major mode.
+  ;;
+  ;; This module:
+  ;; - defines CAPF presets for code, text, Org, and REPL buffers
+  ;; - installs mode hooks to activate presets
+  ;; - configures completion-category-overrides for Corfu/CAPE
+  ;;
   ;;; Code:
 
   ;;;; Utilities
@@ -3571,12 +3810,17 @@ Those responsibilities belong to other layers.
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Switch completion-at-point-functions automatically when entering
-  ;; Org Babel source edit buffers.
+  ;;
   ;; Category: completion
-  ;;;
+  ;;
+  ;; Commentary:
+  ;; Automatic CAPF selection inside Org Babel source edit buffers.
+  ;;
+  ;; This module:
+  ;; - switches CAPFs based on detected source block major mode
+  ;; - runs only in org-src-mode buffers
+  ;; - delegates actual CAPF definitions to completion-capf
+  ;;
   ;;; Code:
 
   (defun completion--org-src-capfs ()
@@ -3614,11 +3858,17 @@ Those responsibilities belong to other layers.
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Apply language-specific CAPF presets inside Org Babel SRC edit buffers.
+  ;;
   ;; Category: completion
-  ;;;
+  ;;
+  ;; Commentary:
+  ;; Language-aware CAPF dispatch inside Org Babel SRC buffers.
+  ;;
+  ;; This module:
+  ;; - applies shell, SQL, and Python-specific CAPFs
+  ;; - runs after generic Org SRC CAPF setup
+  ;; - preserves fallback behavior when no match exists
+  ;;
   ;;; Code:
 
   (defun completion--org-src-shell-capfs ()
@@ -3670,16 +3920,22 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-corfu-org-src.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion/completion-corfu-org-src.el --- Corfu UI tweaks for Org SRC -*- lexical-binding: t; -*-
+  ;;; completion/completion-corfu-org-src.el --- Corfu tweaks for Org SRC -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Adjust Corfu popup behavior specifically for Org Babel SRC edit buffers.
+  ;;
   ;; Category: completion
-  ;;;
+  ;;
+  ;; Commentary:
+  ;; Buffer-local Corfu behavior adjustments for Org SRC edit buffers.
+  ;;
+  ;; This module:
+  ;; - enables aggressive auto completion in SRC buffers
+  ;; - keeps settings strictly buffer-local
+  ;; - never affects normal Org or code buffers
+  ;;
   ;;; Code:
 
   (defun completion--org-src-corfu-setup ()
@@ -3701,17 +3957,22 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/completion/completion-orderless-org-src.el
 :END:
 #+begin_src emacs-lisp
-  ;;; completion/completion-orderless-org-src.el --- Orderless style tweaks for Org SRC -*- lexical-binding: t; -*-
+  ;;; completion/completion-orderless-org-src.el --- Orderless tweaks for Org SRC -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Override completion-category-overrides buffer-locally
-  ;; for Org Babel SRC edit buffers.
+  ;;
   ;; Category: completion
-  ;;;
+  ;;
+  ;; Commentary:
+  ;; Buffer-local Orderless matching rules for Org SRC edit buffers.
+  ;;
+  ;; This module:
+  ;; - overrides completion-category-overrides locally
+  ;; - relaxes matching for code-oriented categories
+  ;; - never affects non-Org buffers
+  ;;
   ;;; Code:
 
   (defun completion--org-src-orderless-setup ()
@@ -3733,6 +3994,69 @@ Those responsibilities belong to other layers.
   ;;; completion/completion-orderless-org-src.el ends here
 #+end_src
 
+***** completion/completion-lsp.el
+:PROPERTIES:
+:CUSTOM_ID: completion-lsp
+:header-args:emacs-lisp: :tangle lisp/completion/completion-lsp.el
+:END:
+#+begin_src emacs-lisp
+  ;;; completion/completion-lsp.el --- LSP lifecycle cleanup helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;; Commentary:
+  ;; Defensive cleanup of obsolete Eglot servers on project switches.
+  ;;
+  ;; This module:
+  ;; - tracks project root transitions
+  ;; - shuts down stale LSP servers safely
+  ;; - integrates with project.el hooks only
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf nil
+    :straight nil
+    :init
+    (defcustom completion-lsp-enable-p t
+      "Enable LSP lifecycle cleanup."
+      :type 'boolean
+      :group 'utils)
+
+    (defvar completion-lsp--current-project-root nil)
+
+    (defun completion-lsp--project-root ()
+      (when-let* ((project (project-current nil))
+  		(roots (project-roots project)))
+        (car roots)))
+
+    (defun completion-lsp-on-project-switch ()
+      "Shutdown obsolete eglot servers on project switch."
+      (when completion-lsp-enable-p
+        (let ((new-root (completion-lsp--project-root)))
+          (when (and completion-lsp--current-project-root
+                     new-root
+                     (not (string-equal completion-lsp--current-project-root new-root))
+                     (featurep 'eglot))
+            (dolist (server eglot--servers)
+              (when (string-prefix-p completion-lsp--current-project-root
+                                     (eglot--project-root (cdr server)))
+                (ignore-errors
+                  (eglot-shutdown (cdr server))))))
+          (setq completion-lsp--current-project-root new-root))))
+
+    (add-hook 'find-file-hook #'completion-lsp-on-project-switch)
+    (add-hook 'project-switch-project-hook #'completion-lsp-on-project-switch))
+
+  (provide 'completion-lsp)
+  ;;; completion/completion-lsp.el ends here
+#+end_src
+
 *** ui/
 :PROPERTIES:
 :CUSTOM_ID: ui-modules
@@ -3741,60 +4065,106 @@ Those responsibilities belong to other layers.
 **** Purpose
 Define the **visual presentation and interaction layer** of this Emacs configuration.
 
-This category controls *how Emacs looks and feels* while deliberately avoiding
-changes to semantic behavior, data flow, or feature logic.
+This layer governs *how Emacs looks and feels*—colors, spacing, typography,
+and visual feedback—while deliberately avoiding any influence on semantic
+behavior, data flow, or feature logic.
 
-**** What it does
+UI modules exist to improve *clarity, comfort, and legibility*, never correctness.
+
+**** What this layer does
+UI modules are responsible for presentation-only concerns that shape the
+day-to-day user experience without altering functional meaning.
+
+Specifically, this layer:
+
 - Configures visual appearance:
-  - themes and color palettes
-  - faces and typography
-  - spacing, margins, and layout hints
+  - theme selection and palette coordination
+  - face definitions and typography (fixed / variable pitch)
+  - line spacing, margins, and window layout hints
 - Adjusts interaction-related presentation:
   - cursor style and visibility
-  - modeline content and density
-  - visual feedback for focus and state
+  - modeline content, density, and signaling
+  - subtle visual feedback for focus, state, and context
 - Applies UI customizations that are:
   - orthogonal to functionality
-  - safe to enable or disable independently
-
-**** What it does *not* do
-- Define keybinding schemes or leader layouts
-  - handled by =core/general.el=
-- Select or configure functional backends
-  - completion, LSP, VCS, Org logic, etc.
-- Introduce workflow logic or mode-specific behavior
-
-**** Notes
-- ui modules must not introduce *functional dependencies*
-  - they may depend on =core=, but never on =completion=, =orgx=, =dev=, or =utils=
-- All changes must be:
+  - safe to toggle or replace independently
   - reversible at runtime
-  - localized to presentation concerns
-  - safe in terminal, GUI, daemon, and batch contexts
-- UI bundles (e.g. doom / nano) are treated as **optional overlays**
-  selected and activated via =core/switches.el=
 
-**** Design rationale
-Separating UI concerns ensures that:
-- visual experimentation does not destabilize core behavior
-- alternative UI bundles can be compared or disabled safely
+**** What this layer does *not* do
+UI modules intentionally do **not**:
+
+- Define global keybinding schemes or leader layouts
+  (handled by =core/general.el=)
+- Select, configure, or orchestrate functional backends
+  (completion, LSP, VCS, Org logic, etc.)
+- Introduce workflow logic or mode-specific behavior
+- Encode user-, device-, or host-specific policy
+  (handled by =personal/= overlays)
+
+Those responsibilities belong to other layers.
+
+**** Design constraints
+- UI modules may depend on:
+  - =core=
+
+- UI modules must not depend on:
+  - =completion=
+  - =orgx=
+  - =dev=
+  - =vcs=
+  - =utils=
+
+- All UI changes must be:
+  - presentation-only (no semantic side effects)
+  - reversible at runtime
+  - safe in GUI, terminal, daemon, and batch contexts
+  - tolerant of partial availability (fonts, icons, faces)
+
+**** Design principles
+- Presentation and behavior are strictly separated
+- UI modules must be safe to disable wholesale for debugging
+- Defaults favor readability and low visual noise
+- Visual signaling should be subtle, not distracting
+- Optional UI bundles are treated as *overlays*, not foundations
+
+**** Optional UI bundles
+Theme and modeline bundles (e.g. Doom-style or Nano-style) are treated as
+**optional overlays**.
+
+Selection and activation are controlled exclusively via
+=core/switches.el=, ensuring that:
+
+- the base UI remains minimal and stable
+- bundles can be compared or disabled safely
+- UI experimentation never destabilizes core behavior
+
+**** Benefits
+This separation ensures that:
+
+- visual experimentation does not affect correctness
+- alternative UI styles can be swapped without refactoring logic
 - debugging can be performed with a minimal, presentation-free setup
-
-This layer exists to improve *clarity and comfort*, never correctness.
+- long-running sessions remain visually predictable
 
 **** Module map
-
 | File | Responsibility |
 |------+----------------|
+| =ui/ui-font.el= | Font family, size, and typography defaults |
 | =ui/ui-theme.el= | Theme selection and color palette coordination |
-| =ui/ui-faces.el= | Face definitions and typography adjustments |
-| =ui/ui-modeline.el= | Modeline layout, density, and visual signaling |
-| =ui/ui-visual-aids.el= | Minor visual helpers (highlighting, focus, indicators) |
-| =ui/ui-layout.el= | Frame, window, margin, and spacing presentation rules |
+| =ui/ui-window.el= | Frame, window, margin, and spacing presentation rules |
+| =ui/ui-utils.el= | Small visual helpers and UI-safe conveniences |
+| =ui/ui-health-modeline.el= | Session health indicators and visual status signaling |
 | =ui/ui-icons.el= | Icon and glyph integration (GUI-safe, optional) |
 | =ui/ui-macos.el= | macOS-specific visual tuning (fonts, frames, rendering) |
-| =ui/ui-doom-modeline.el= | Doom-style UI bundle (optional overlay) |
-| =ui/ui-nano-modeline.el= | Nano-style UI bundle (optional overlay) |
+| =ui/ui-doom-modeline.el= | Doom-style modeline bundle (optional overlay) |
+| =ui/ui-nano-modeline.el= | Nano-style modeline bundle (optional overlay) |
+
+**** Notes
+- UI modules must never introduce functional dependencies.
+- Any visual adjustment that affects behavior belongs elsewhere.
+- If a UI change feels “clever” or “opinionated”, it is likely misplaced.
+
+This layer should remain *boring, predictable, and comfortable*.
 
 **** Implementation
 - ui modules are loaded **after =core= and before functional layers**
@@ -3813,17 +4183,22 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-font.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui-font.el --- Font configuration -*- lexical-binding: t; -*-
+  ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2025
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
-  ;;;
-  ;;; Commentary:
-  ;; Font configuration for UI (ui category).
-  ;; This module sets default, variable-pitch, and emoji fonts
-  ;; with OS-aware fallbacks and optional ligature support.
-  ;;;
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Font configuration for graphical UI frames.
+  ;;
+  ;; This module:
+  ;; - configures default, variable-pitch, and emoji fonts
+  ;; - applies OS-aware fallbacks and daemon-safe hooks
+  ;; - optionally enables programming ligatures
+  ;;
   ;;; Code:
 
   (eval-when-compile
@@ -3961,18 +4336,21 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-nano-palette.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui-nano-palette.el --- Nano-style palette -*- lexical-binding: t; -*-
+  ;;; ui/ui-nano-palette.el --- Nano-style color palette -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
   ;;
   ;; Commentary:
-  ;; One source of truth:
-  ;; - Define the palette once (defcustom → easy to tweak via M-x customize)
-  ;; - Apply all faces from a single function
-  ;; - No duplicated literal colors scattered around
+  ;; Single source of truth for Nano-style UI colors.
+  ;;
+  ;; This module:
+  ;; - defines all palette entries as defcustom variables
+  ;; - applies faces through a single normalization function
+  ;; - avoids duplicated literal colors across the UI layer
   ;;
   ;;; Code:
 
@@ -4081,8 +4459,22 @@ This layer exists to improve *clarity and comfort*, never correctness.
 #+begin_src emacs-lisp
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
   ;; Category: ui
   ;;
+  ;; Commentary:
+  ;; Theme orchestration and face normalization.
+  ;;
+  ;; This module:
+  ;; - applies Nano-based themes and palettes
+  ;; - re-normalizes faces after theme changes
+  ;; - adjusts UI faces for dired-subtree and padding
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (require 'ui-nano-palette)
@@ -4159,10 +4551,24 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-doom-modeline.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui-doom-modeline.el --- Doom UI bundle entry -*- lexical-binding: t; -*-
+  ;;; ui/ui-doom-modeline.el --- Doom modeline UI bundle -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
   ;;
+  ;; Commentary:
+  ;; Doom-modeline based mode-line UI bundle.
+  ;;
+  ;; This module:
+  ;; - configures and enables doom-modeline
+  ;; - integrates Nerd Icons for the mode-line
+  ;; - exposes an explicit interactive enable command
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
   (declare-function doom-modeline-mode "doom-modeline")
 
@@ -4195,10 +4601,24 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-nano-modeline.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui-nano-modeline.el --- Nano UI bundle entry -*- lexical-binding: t; -*-
+  ;;; ui/ui-nano-modeline.el --- Nano modeline UI bundle -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
   ;;
+  ;; Commentary:
+  ;; Nano-modeline based lightweight mode-line bundle.
+  ;;
+  ;; This module:
+  ;; - initializes nano-modeline lazily and safely
+  ;; - activates mode-specific modeline hooks
+  ;; - exposes an explicit interactive enable command
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (defvar ui--nano-modeline-initialized nil)
@@ -4238,7 +4658,7 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-health-modeline.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui-health-modeline.el --- Session health indicators -*- lexical-binding: t; -*-
+  ;;; ui/ui-health-modeline.el --- Session health indicators -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -4246,8 +4666,13 @@ This layer exists to improve *clarity and comfort*, never correctness.
   ;;
   ;; Category: ui
   ;;
-  ;;; Commentary:
+  ;; Commentary:
   ;; Mode-line indicators for Emacs session health.
+  ;;
+  ;; This module:
+  ;; - displays buffer, process, and LSP counts
+  ;; - updates indicators reactively via lightweight hooks
+  ;; - introduces no control or policy decisions
   ;;
   ;;; Code:
 
@@ -4327,10 +4752,24 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-window.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui/ui-window.el --- Window management -*- lexical-binding: t; -*-
+  ;;; ui/ui-window.el --- Window management helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
   ;;
+  ;; Commentary:
+  ;; Window and layout management helpers.
+  ;;
+  ;; This module:
+  ;; - enables zoom, winner, and desktop persistence
+  ;; - provides interactive window layout save/restore
+  ;; - avoids enforcing rigid window policies
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (leaf zoom
@@ -4386,12 +4825,21 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-utils.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui/ui-utils.el --- Treemacs configuration & UI utils -*- lexical-binding: t; -*-
+  ;;; ui/ui-utils.el --- UI utilities and Treemacs configuration -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Assorted UI-related utilities and panels.
+  ;;
+  ;; This module:
+  ;; - configures mode-line helpers and system indicators
+  ;; - integrates Treemacs and Dired icon helpers
+  ;; - provides platform-specific clipboard support
   ;;
   ;;; Code:
 
@@ -4432,8 +4880,22 @@ This layer exists to improve *clarity and comfort*, never correctness.
 #+begin_src emacs-lisp
   ;;; ui/ui-visual-aids.el --- Subtle visual helpers -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
   ;; Category: ui
   ;;
+  ;; Commentary:
+  ;; Non-intrusive visual aids for editing and navigation.
+  ;;
+  ;; This module:
+  ;; - highlights cursor movement and TODO keywords
+  ;; - adds rainbow delimiters and indent guides
+  ;; - avoids persistent or disruptive visual effects
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (leaf pulsar
@@ -4481,10 +4943,23 @@ This layer exists to improve *clarity and comfort*, never correctness.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-macos.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui/ui-macos.el --- macOS niceties -*- lexical-binding: t; -*-
+  ;;; ui/ui-macos.el --- macOS-specific UI niceties -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: ui
   ;;
+  ;; Commentary:
+  ;; Small macOS-specific UI adjustments.
+  ;;
+  ;; This module:
+  ;; - enables native title-bar integration on macOS
+  ;; - avoids any effect on non-darwin systems
+  ;;
+  ;;; Code:
+
   (eval-when-compile (require 'leaf))
 
   (when (eq system-type 'darwin)
@@ -4504,40 +4979,46 @@ This layer exists to improve *clarity and comfort*, never correctness.
 
 **** Purpose
 Extend Org-mode **beyond upstream defaults** while preserving its
-core semantics and data model.
+core semantics, file format, and data model.
 
 This layer encapsulates all Org-specific customization, workflows,
-and assumptions, keeping them isolated from non-Org contexts.
+and assumptions, ensuring that Org behavior remains isolated from
+non-Org contexts and other subsystems.
+
+Orgx exists to make Org usage *explicit, auditable, and modular*,
+without turning Org into a bespoke or opaque system.
 
 **** What this layer does
+Orgx modules are responsible for **Org-mode–scoped behavior only**.
 
-Orgx modules are responsible for:
+This layer:
 
-- Extending Org-mode behavior in a structured and non-invasive way
-- Providing Org-specific utilities, commands, and workflows
-- Integrating Org with other subsystems (completion, UI, search)
-- Defining agenda, capture, and navigation policy
+- Extends Org-mode in a structured, non-invasive manner
+- Defines Org-specific workflows, commands, and helper utilities
+- Integrates Org with other subsystems *only at explicit boundaries*
+- Centralizes agenda, capture, and navigation policy
 
 Typical responsibilities include:
 
-- Agenda file discovery and scoping
-- Capture templates and inbox workflows
-- Org-specific navigation, folding, and visual aids
-- Integration with roam-like or graph-based note systems
+- Agenda file discovery, scoping rules, and caching
+- Capture templates, inbox flows, and refiling strategy
+- Org-specific navigation, folding, and structural helpers
+- Visual and UX enhancements limited strictly to Org buffers
+- Optional integration with roam-style or graph-based note systems
 
 **** What this layer does *not* do
-
 Orgx modules intentionally do **not**:
 
-- Reimplement or fork core Org functionality
+- Reimplement, fork, or override core Org internals
 - Affect behavior in non-Org buffers
-- Define global editing or completion policy
-- Encode user- or device-specific paths directly
+- Define global editing, completion, or UI policy
+- Introduce development, VCS, or infrastructure concerns
+- Encode user-, device-, or host-specific paths directly
 
-Those responsibilities belong to other layers.
+Those responsibilities belong to other layers or to
+=personal/= overlays.
 
 **** Design constraints
-
 - Orgx modules may depend on:
   - =core=
   - =ui=
@@ -4550,19 +5031,26 @@ Those responsibilities belong to other layers.
 
 - All Org-specific assumptions must be:
   - confined to Org buffers
-  - discoverable via module boundaries
-  - safe to disable as a group
+  - discoverable through module boundaries
+  - safe to disable as a group without data loss
 
 **** Design principles
-
 - Org remains **plain Org** on disk
-  (no proprietary formats or irreversible transforms)
-- Extensions are additive and reversible
-- Agenda and capture behavior is explicit and auditable
+  (no proprietary formats, sidecar metadata, or irreversible transforms)
+- Extensions are additive, reversible, and optional
+- Agenda and capture behavior is explicit and reviewable
 - Org-specific UX must degrade gracefully when extensions are disabled
+- Configuration favors transparency over clever automation
+
+**** Benefits
+This separation ensures that:
+
+- Org files remain portable and future-proof
+- Non-Org workflows are unaffected by Org customization
+- Debugging Org behavior is localized and predictable
+- Org extensions can evolve without destabilizing the rest of Emacs
 
 **** Module map
-
 | File | Responsibility |
 |------+----------------|
 | =orgx/org-core.el= | Core Org defaults and shared Org policy |
@@ -4571,7 +5059,14 @@ Those responsibilities belong to other layers.
 | =orgx/org-navigation.el= | Navigation, folding, and structural helpers |
 | =orgx/org-roam.el= | Roam-style linking and graph-based notes |
 | =orgx/org-export.el= | Export configuration and backends |
-| =orgx/org-ui.el= | Org-specific visual enhancements |
+| =orgx/org-ui.el= | Org-specific visual and UX enhancements |
+
+**** Notes
+- Orgx is the *only* layer allowed to assume Org semantics.
+- Any logic that could apply outside Org likely belongs elsewhere.
+- If an Org change affects global behavior, it is misplaced.
+
+This layer exists to make Org powerful *without making it fragile*.
 
 **** Implementation
 
@@ -4592,9 +5087,18 @@ Those responsibilities belong to other layers.
   ;;; orgx/orgx-core.el --- Org Mode core configuration -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: org
+  ;;
+  ;; Commentary:
+  ;; Core Org Mode configuration and directory layout.
+  ;;
+  ;; This module:
+  ;; - defines canonical Org directory structure
+  ;; - configures agenda, capture, refile, and TODO workflows
+  ;; - avoids UI presentation or export concerns
   ;;
   ;;; Code:
 
@@ -4668,9 +5172,21 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/orgx/orgx-visual.el
 :END:
 #+begin_src emacs-lisp
-  ;;; orgx/orgx-visual.el --- Org Mode visual enhancements -*- lexical-binding: t; -*-
+  ;;; orgx/orgx-visual.el --- Org visual enhancements -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: org
+  ;;
+  ;; Commentary:
+  ;; Visual enhancements for Org buffers and agenda views.
+  ;;
+  ;; This module:
+  ;; - enables org-modern for improved Org visuals
+  ;; - customizes headings, lists, TODO states, and priorities
+  ;; - adjusts Org Agenda visual presentation only
   ;;
   ;;; Code:
 
@@ -4720,7 +5236,19 @@ Those responsibilities belong to other layers.
 #+begin_src emacs-lisp
   ;;; orgx/orgx-extensions.el --- Org Mode extensions -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
   ;; Category: org
+  ;;
+  ;; Commentary:
+  ;; Optional but production-safe Org extensions.
+  ;;
+  ;; This module:
+  ;; - enables org-journal and org-roam with defensive guards
+  ;; - delays org-roam autosync to avoid IO races
+  ;; - integrates org-download, TOC, and link helpers
   ;;
   ;;; Code:
 
@@ -4779,9 +5307,21 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/orgx/orgx-fold.el
 :END:
 #+begin_src emacs-lisp
-  ;;; org/orgx-fold.el --- Extra Org helpers -*- lexical-binding: t; -*-
+  ;;; orgx/orgx-fold.el --- Extra Org folding helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: org
+  ;;
+  ;; Commentary:
+  ;; Convenience helpers for Org subtree folding.
+  ;;
+  ;; This module:
+  ;; - wraps org-fold primitives with interactive helpers
+  ;; - installs local keybindings in org-mode only
+  ;; - avoids global keybinding pollution
   ;;
   ;;; Code:
 
@@ -4823,7 +5363,19 @@ Those responsibilities belong to other layers.
 #+begin_src emacs-lisp
   ;;; orgx/orgx-export.el --- Org export configuration -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
   ;; Category: org
+  ;;
+  ;; Commentary:
+  ;; Export and publishing helpers for Org documents.
+  ;;
+  ;; This module:
+  ;; - configures Hugo, Markdown, and preview exporters
+  ;; - enables Org Babel languages for diagrams
+  ;; - avoids altering core Org editing behavior
   ;;
   ;;; Code:
 
@@ -4860,1533 +5412,27 @@ Those responsibilities belong to other layers.
   ;;; orgx/orgx-export.el ends here
 #+end_src
 
-***** orgx/orgx-typography.el
+***** orgx/orgx-notes-markdown.el
 :PROPERTIES:
-:CUSTOM_ID: orgx-typography
-:header-args:emacs-lisp: :tangle lisp/orgx/orgx-typography.el
+:CUSTOM_ID: orgx-notes-markdown
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-notes-markdown.el
 :END:
 #+begin_src emacs-lisp
-  ;;; orgx/orgx-typography.el --- Org modern typography extras -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: org
-  ;;
-  ;;; Commentary:
-  ;; Complements orgx/org-visual.el (org-modern) without overlap.
-  ;; Focuses on typography and prose readability.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'leaf))
-
-  ;; Optional prose setting:
-  ;; Use variable-pitch for text while keeping code blocks monospaced.
-  ;; Disabled by default to avoid surprising font changes.
-  ;;
-  ;; (leaf org
-  ;;   :straight nil
-  ;;   :hook (org-mode-hook . variable-pitch-mode))
-
-  ;; Align tables and inline images for better visual flow
-  (leaf valign
-    :straight t
-    :hook (org-mode-hook . valign-mode))
-
-  ;; Contextual reveal of emphasis, links, and markers
-  (leaf org-appear
-    :straight t
-    :hook (org-mode-hook . org-appear-mode)
-    :init
-    (setq org-appear-autoemphasis t
-          org-appear-autolinks t
-          org-appear-autosubmarkers t))
-
-  (provide 'orgx-typography)
-  ;;; orgx/orgx-typography.el ends here
-#+end_src
-
-*** dev/
-:PROPERTIES:
-:CUSTOM_ID: dev-modules
-:END:
-
-**** Purpose
-Support **development, diagnostics, and build-related workflows**
-for this Emacs configuration.
-
-This layer exists primarily for maintainers and power users,
-not for routine day-to-day editing.
-
-**** What this layer does
-
-Dev modules are responsible for:
-
-- Providing tooling for configuration development and inspection
-- Supporting build, compile, and debug workflows
-- Enabling diagnostics and introspection of the running Emacs instance
-- Assisting with maintenance of the configuration itself
-
-Typical responsibilities include:
-
-- Language Server Protocol (LSP) client configuration
-- Debugging, profiling, and tracing helpers
-- Compilation, test, and build orchestration
-- Developer-facing inspection commands and reports
-
-**** What this layer does *not* do
-
-Dev modules intentionally do **not**:
-
-- Define global editing behavior or keybinding policy
-- Affect startup correctness or core invariants
-- Introduce visual presentation concerns
-- Encode user- or device-specific preferences
-
-Those responsibilities belong to other layers.
-
-**** Design constraints
-
-- Dev modules may depend on:
-  - =core=
-  - =ui=
-  - =completion=
-
-- Dev modules must not depend on:
-  - =orgx=
-  - =vcs=
-  - =utils=
-
-- All side effects must be:
-  - explicit
-  - opt-in via customization or switches
-  - safe to disable as a group
-
-**** Design principles
-
-- Dev tooling is **additive**, never required
-- Failure in this layer must degrade gracefully
-- Disabling this layer must not affect:
-  - startup success
-  - basic editing
-  - Org workflows
-
-**** Module map
-
-| File | Responsibility |
-|------+----------------|
-| =dev/dev-lsp-eglot.el= | Eglot-based LSP configuration |
-| =dev/dev-lsp-mode.el= | lsp-mode based LSP configuration |
-| =dev/dev-dap.el= | Debug Adapter Protocol integration |
-| =dev/dev-compile.el= | Compile, build, and task helpers |
-| =dev/dev-profile.el= | Profiling and performance diagnostics |
-| =dev/dev-inspect.el= | Runtime inspection and debug utilities |
-
-**** Implementation
-
-- Loaded after =orgx=
-- Activation is controlled via:
-  - =core/switches.el=
-  - explicit user or maintainer intent
-- Each file:
-  - provides exactly one dev-oriented feature
-  - documents activation conditions and non-goals
-
-***** dev/dev-lsp-eglot.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-eglot
-:header-args:emacs-lisp: :tangle lisp/dev/dev-lsp-eglot.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev-lsp-eglot.el --- Eglot setup -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: dev
-  ;;
-  ;;; Commentary:
-  ;; Eglot baseline with safe auto-enable.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (defun my/eglot-guessable-p ()
-    "Return non-nil if current buffer seems to have an LSP server we can start."
-    (cond
-     ((fboundp 'eglot--guess-contact)
-      (ignore-errors (eglot--guess-contact)))
-     ((fboundp 'eglot-guess-contact)
-      (ignore-errors (eglot-guess-contact)))
-     (t nil)))
-
-  (leaf eglot
-    :straight t
-    :commands (eglot eglot-ensure)
-    :custom ((eglot-autoreconnect . t))
-    :hook ((prog-mode . (lambda ()
-                          (when (my/eglot-guessable-p)
-                            (eglot-ensure))))))
-
-  ;;;###autoload
-  (defun my/lsp-enable-eglot ()
-    "Enable Eglot-based LSP setup."
-    (interactive)
-    (add-hook 'prog-mode-hook
-              (lambda ()
-                (when (my/eglot-guessable-p)
-                  (eglot-ensure))))
-    (message "[lsp] Eglot enabled."))
-
-  (provide 'dev-lsp-eglot)
-  ;;; dev-lsp-eglot.el ends here
-#+end_src
-
-***** dev/dev-lsp-mode.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-mode
-:header-args:emacs-lisp: :tangle lisp/dev/dev-lsp-mode.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev-lsp-mode.el --- lsp-mode setup -*- lexical-binding: t; -*-
+  ;;; orgx/orgx-notes-markdown.el --- Markdown notes under Org -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
-  ;; Category: dev
-  ;;
-  ;;; Commentary:
-  ;; lsp-mode baseline + lsp-ui. Completion is delegated to Corfu.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf lsp-mode
-    :straight t
-    :commands (lsp lsp-deferred)
-    :custom ((lsp-keymap-prefix . "C-c l")
-             (lsp-enable-file-watchers . t)
-             (lsp-file-watch-threshold . 5000)
-             (lsp-response-timeout . 5)
-             (lsp-diagnostics-provider . :auto)
-             (lsp-completion-provider . :none))
-    :hook ((prog-mode . lsp-deferred)))
-
-  (leaf lsp-ui
-    :straight t
-    :after lsp-mode
-    :custom ((lsp-ui-doc-enable . t)
-             (lsp-ui-doc-delay . 0.2)
-             (lsp-ui-sideline-enable . t)))
-
-  ;;;###autoload
-  (defun my/lsp-enable-lspmode ()
-    "Enable lsp-mode-based LSP setup."
-    (interactive)
-    (add-hook 'prog-mode-hook #'lsp-deferred)
-    (message "[lsp] lsp-mode enabled."))
-
-  (provide 'dev-lsp-mode)
-  ;;; dev-lsp-mode.el ends here
-#+end_src
-
-***** dev/dev-ai.el
-:PROPERTIES:
-:CUSTOM_ID: dev-ai
-:header-args:emacs-lisp: :tangle lisp/dev/dev-ai.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev/dev-ai.el --- AI-assisted development -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
+  ;; Category: orgx
   ;;
   ;; Commentary:
-  ;; AI-assisted coding via Aidermacs.
-  ;;
-  ;; Purpose: Centralize aider/Aidermacs runtime files into ~/.var/aideremacs
-  ;; Notes:
-  ;; - Uses official AIDER_* env vars so both CLI and Aidermacs obey.
-  ;; - Safe to load early (e.g. in personal/user.el or core/general.el).
-  ;; - pip3 install aider-ce
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf)
-  		   (require 'subr-x))
-
-  ;; 1) Decide base directory: ~/.var/aideremacs
-  (defvar my:d:aider
-    (expand-file-name "aideremacs/" (or (bound-and-true-p my:d:var)
-                                        (expand-file-name "~/.var/")))
-    "Base directory to store aider runtime files.")
-
-  ;; 2) Ensure directory exists
-  (my/ensure-directory-exists my:d:aider)
-
-  ;; 3) Point aider history files to this directory via env vars
-  ;;    (aider recognizes these officially)
-  (setenv "AIDER_INPUT_HISTORY_FILE" (expand-file-name "input.history" my:d:aider))
-  (setenv "AIDER_CHAT_HISTORY_FILE"  (expand-file-name "chat.history.md" my:d:aider))
-  (setenv "AIDER_LLM_HISTORY_FILE"   (expand-file-name "llm.history" my:d:aider))
-  ;; Optional: analytics log location if you enable analytics logging
-  (setenv "AIDER_ANALYTICS_LOG"      (expand-file-name "analytics.log" my:d:aider))
-
-  ;; 4) [Optional] Keep a per-user .env here and make aider load it.
-  ;;    You can create ~/.var/aideremacs/.env and put API keys / options there.
-  ;;    If you use Aidermacs, pass --env-file via its extra args.
-  (with-eval-after-load 'aidermacs
-    ;; Aidermacs exposes an extra-args variable in recent builds
-    ;; (see NonGNU ELPA diffs mentioning `aidermacs-extra-args`).
-    ;; If your installed version still uses `aidermacs-args`, switch the name.
-    (defvar aidermacs-extra-args nil)
-    (let ((env-file (expand-file-name ".env" my:d:aider)))
-      (when (file-exists-p env-file)
-        (setq aidermacs-extra-args
-              (append aidermacs-extra-args
-                      (list "--env-file" env-file)))))
-
-    ;; Redundancy is harmless: also force the same files via CLI flags,
-    ;; in case your shell environment overrides Emacs' setenv.
-    (setq aidermacs-extra-args
-          (append aidermacs-extra-args
-                  (list "--input-history-file" (getenv "AIDER_INPUT_HISTORY_FILE")
-                        "--chat-history-file"  (getenv "AIDER_CHAT_HISTORY_FILE")
-                        "--llm-history-file"   (getenv "AIDER_LLM_HISTORY_FILE")))))
-
-  (leaf aidermacs :straight t
-    :init
-    (cond
-     ((getenv "OPENROUTER_API_KEY")
-      (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-      (setenv "OPENAI_API_KEY"  (getenv "OPENROUTER_API_KEY"))
-      (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
-     ((getenv "OPENAI_API_KEY")
-      (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-      (setopt aidermacs-default-model "gpt-4o-mini"))
-     (t
-      (display-warning 'aidermacs
-                       "No API keys set. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")))
-    (setopt aidermacs-retry-attempts 3
-            aidermacs-retry-delay   2.0
-            aidermacs-backend       'vterm))
-
-  (provide 'dev-ai)
-  ;;; dev/dev-ai.el ends here
-#+end_src
-
-***** dev/dev-term.el
-:PROPERTIES:
-:CUSTOM_ID: dev-term
-:header-args:emacs-lisp: :tangle lisp/dev/dev-term.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev/dev-term.el --- Terminal integration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; Uses ui/ui-nano-palette as the single source of truth for colors.
-  ;; Avoid :custom-face (can trigger “Attempt modify constant …” with leaf).
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'leaf)
-    (require 'cl-lib))
-
-  ;; Palette is provided by the caller's load-path setup.
-  (require 'ui-nano-palette)
-
-  (defun my/vterm-apply-palette ()
-    "Apply nano-style palette to vterm faces safely and compatibly.
-  Some vterm builds don't define `vterm-color-default`; use `vterm` face instead."
-    ;; Fallbacks (in case palette wasn't set yet)
-    (defvar nano-color-foreground "#374151")
-    (defvar nano-color-background "#fafafa")
-    (defvar nano-color-salient    "#2563eb")
-    (defvar nano-color-popout     "#6b7280")
-    (defvar nano-color-critical   "#dc2626")
-    (defvar nano-color-strong     "#111827")
-    (defvar nano-color-faded      "#9ca3af")
-    (defvar nano-color-subtle     "#e5e7eb")
-
-    (cl-labels
-        ((safe-face-set (face &rest props)
-           (when (facep face)
-             (apply #'set-face-attribute face nil props))))
-
-      ;; Default fg/bg: prefer vterm-color-default; fall back to vterm
-      (if (facep 'vterm-color-default)
-          (safe-face-set 'vterm-color-default
-                         :foreground nano-color-foreground
-                         :background nano-color-background)
-        (safe-face-set 'vterm
-                       :foreground nano-color-foreground
-                       :background nano-color-background))
-
-      ;; 8-color palette (keep backgrounds unobtrusive)
-      (safe-face-set 'vterm-color-black   :foreground nano-color-strong   :background 'unspecified)
-      (safe-face-set 'vterm-color-red     :foreground nano-color-critical :background 'unspecified)
-      (safe-face-set 'vterm-color-green   :foreground "#10b981"           :background 'unspecified) ; emerald-500
-      (safe-face-set 'vterm-color-yellow  :foreground nano-color-popout   :background 'unspecified)
-      (safe-face-set 'vterm-color-blue    :foreground nano-color-salient  :background 'unspecified)
-      (safe-face-set 'vterm-color-magenta :foreground "#a21caf"           :background 'unspecified) ; fuchsia-700
-      (safe-face-set 'vterm-color-cyan    :foreground "#0891b2"           :background 'unspecified) ; cyan-600
-      (safe-face-set 'vterm-color-white   :foreground nano-color-subtle   :background 'unspecified)))
-
-  (defun my/vterm-buffer-p (buf)
-    "Return non-nil if BUF is a vterm buffer."
-    (with-current-buffer buf
-      (or (eq major-mode 'vterm-mode)
-          (string-prefix-p "*vterm" (buffer-name buf)))))
-
-  (leaf vterm
-    :doc  "Emacs libvterm integration"
-    :url  "https://github.com/akermu/emacs-libvterm"
-    :straight t
-    :config
-    ;; Apply once vterm is loaded
-    (my/vterm-apply-palette)
-    ;; Re-apply after theme activation to keep colors consistent
-    (with-eval-after-load 'cus-theme
-      (if (boundp 'enable-theme-functions)
-          (add-hook 'enable-theme-functions #'my/vterm-apply-palette)
-        (advice-add 'enable-theme :after (lambda (&rest _) (my/vterm-apply-palette))))))
-
-  (leaf vterm-toggle
-    :doc  "Toggle between vterm and the current buffer"
-    :url  "https://github.com/jixiuf/vterm-toggle"
-    :straight t
-    :custom
-    (vterm-toggle-cd-auto-create-buffer . t)
-    (vterm-toggle-fullscreen-p          . nil)
-    (vterm-toggle-scope                 . 'project))
-
-  ;; Buffer display rule must be set after vterm is available
-  (with-eval-after-load 'vterm
-    (add-to-list 'display-buffer-alist
-                 `(my/vterm-buffer-p
-                   (display-buffer-reuse-window display-buffer-in-direction)
-                   (direction       . bottom)
-                   (dedicated       . t)
-                   (reusable-frames . visible)
-                   (window-height   . 0.3))))
-
-  (provide 'dev-term)
-  ;;; dev/dev-term.el ends here
-#+end_src
-
-***** dev/dev-web-core.el
-:PROPERTIES:
-:CUSTOM_ID: dev-web-core
-:header-args:emacs-lisp: :tangle lisp/dev/dev-web-core.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev-web-core.el --- Treesit & project core -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; Core configuration for project management and modern syntax highlighting.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf project :straight nil)
-  (leaf files   :straight nil
-    :custom ((require-final-newline . t)
-             (delete-trailing-lines . t))
-    :hook ((before-save-hook . delete-trailing-whitespace)))
-
-  (leaf editorconfig
-    :straight t
-    :global-minor-mode t)
-
-  (leaf treesit
-    :straight nil
-    :custom ((major-mode-remap-alist
-              . '((typescript-mode . typescript-ts-mode)
-                  (js-mode         . js-ts-mode)
-                  (json-mode       . json-ts-mode)
-                  (css-mode        . css-ts-mode)
-                  (yaml-mode       . yaml-ts-mode)
-                  (sh-mode         . bash-ts-mode)))))
-
-  (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.ts\\'"  . typescript-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.json\\'" . json-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode))
-
-  (provide 'dev-web-core)
-  ;;; dev-web-core.el ends here
-#+end_src
-
-***** dev/dev-build.el
-:PROPERTIES:
-:CUSTOM_ID: dev-build
-:header-args:emacs-lisp: :tangle lisp/dev/dev-build.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev/dev-build.el --- Build & Makefile tools -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; Build system integration.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf make-mode :straight nil
-    :mode (("\\`Makefile\\'"    . makefile-gmake-mode)
-           ("\\`GNUmakefile\\'" . makefile-gmake-mode)
-           ("\\`makefile\\'"    . makefile-gmake-mode))
-    :hook ((makefile-mode . (lambda ()
-                              (setq-local indent-tabs-mode t
-                                          tab-width 8
-                                          show-trailing-whitespace t))))
-    :config
-    (leaf compile :straight nil
-      :custom ((compilation-scroll-output . t)
-               (compilation-skip-threshold . 2))
-      :init
-      (defun my/set-make-compile-command ()
-        "Use `make -k` when Makefile is present."
-        (when (or (derived-mode-p 'makefile-mode)
-                  (locate-dominating-file default-directory "Makefile")
-                  (locate-dominating-file default-directory "GNUmakefile"))
-          (setq-local compile-command "make -k")))
-      (add-hook 'after-change-major-mode-hook #'my/set-make-compile-command))
-    (leaf ansi-color :straight nil
-      :hook (compilation-filter . (lambda ()
-                                    (let ((inhibit-read-only t))
-                                      (ansi-color-apply-on-region compilation-filter-start (point-max)))))))
-
-  (provide 'dev-build)
-  ;;; dev/dev-build.el ends here
-#+end_src
-
-***** dev/dev-format.el
-:PROPERTIES:
-:CUSTOM_ID: dev-format
-:header-args:emacs-lisp: :tangle lisp/dev/dev-format.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev-format.el --- Prettier formatting via Apheleia -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;;; Commentary:
-  ;; Automatic code formatting for web-centric modes.
-  ;; Uses Apheleia with prettierd/prettier backends.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf apheleia
-    :straight t
-    :require t
-    :config
-    (setf (alist-get 'prettierd apheleia-formatters)
-          '("prettierd" filepath))
-    (setf (alist-get 'prettier apheleia-formatters)
-          '("npx" "prettier" "--stdin-filepath" filepath))
-    (dolist (pair '((typescript-ts-mode . prettierd)
-                    (tsx-ts-mode        . prettierd)
-                    (json-ts-mode       . prettierd)
-                    (css-ts-mode        . prettierd)
-                    (markdown-mode      . prettierd)))
-      (add-to-list 'apheleia-mode-alist pair))
-    (apheleia-global-mode +1))
-
-  (provide 'dev-format)
-  ;;; dev-format.el ends here
-#+end_src
-
-***** dev/dev-infra-modes.el
-:PROPERTIES:
-:CUSTOM_ID: dev-infra-modes
-:header-args:emacs-lisp: :tangle lisp/dev/dev-infra-modes.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev-infra-modes.el --- Infra modes (.env / Compose / TOML / Make) -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; Syntax support for infra files such as Docker Compose, .env, TOML, and Makefiles.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf docker-compose-mode :straight t :mode ("docker-compose\\.*ya?ml\\'"))
-  (leaf dotenv-mode :straight t
-    :mode (("\\.env\\..*\\'" . dotenv-mode)
-           ("\\.env\\'"     . dotenv-mode)))
-  (leaf toml-mode :straight t :mode ("\\.toml\\'" . toml-mode))
-
-  (provide 'dev-infra-modes)
-  ;;; dev/dev-infra-modes.el ends here
-#+end_src
-
-***** dev/dev-docker.el
-:PROPERTIES:
-:CUSTOM_ID: dev-docker
-:header-args:emacs-lisp: :tangle lisp/dev/dev-docker.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev/dev-docker.el --- Docker integration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; Docker development support.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf dockerfile-mode :straight t
-    :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
-           ("\\.dockerfile\\'"         . dockerfile-mode))
-    :custom ((dockerfile-mode-command . "docker")))
-
-  (leaf yaml-mode :straight t
-    :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode)
-           ("\\.ya?ml\\'"                   . yaml-mode)))
-
-  (leaf docker :straight t
-    :commands (docker docker-containers docker-images docker-volumes docker-networks))
-
-  (leaf tramp-container :straight nil
-    :after tramp
-    :init
-    (setq tramp-container-method "docker"))
-
-  (leaf tempel :straight t
-    :commands (tempel-insert)
-    :init
-    (with-eval-after-load 'tempel
-      (defvar my:tempel-docker-templates
-        '((dockerfile "FROM " p n
-                      "WORKDIR /app" n
-                      "COPY . /app" n
-                      "RUN " p n
-                      "CMD [" p "]" n)))
-      (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
-
-  (provide 'dev-docker)
-  ;;; dev/dev-docker.el ends here
-#+end_src
-
-***** dev/dev-sql.el
-:PROPERTIES:
-:CUSTOM_ID: dev-sql
-:header-args:emacs-lisp: :tangle lisp/dev/dev-sql.el
-:END:
-#+begin_src emacs-lisp
-  ;;; lisp/dev/dev-sql.el --- SQL/PostgreSQL helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  (eval-when-compile (require 'leaf))
-
-  (leaf sql :straight nil
-    :custom ((sql-product . 'postgres)))
-
-  (leaf sql-indent :straight t
-    :hook (sql-mode . sqlind-minor-mode))
-
-  (leaf sqlformat
-    :straight t
-    :custom ((sqlformat-command . 'pgformatter)
-             (sqlformat-args . '("--nostyle")))
-    :hook (sql-mode . sqlformat-on-save-mode)
-    :hook (sql-ts-mode . sqlformat-on-save-mode))
-
-  (provide 'dev-sql)
-  ;;; dev-sql.el ends here
-#+end_src
-
-***** dev/dev-rest.el
-:PROPERTIES:
-:CUSTOM_ID: dev-rest
-:header-args:emacs-lisp: :tangle lisp/dev/dev-rest.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev-rest.el --- REST client helpers (Next.js / Ollama / Qdrant) -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;; Commentary:
-  ;; REST client integration for testing HTTP requests inside Emacs.
-  ;; Supports JSON parsing with jq.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
-  (leaf restclient-jq :straight t :after restclient)
-
-  (provide 'dev-rest)
-  ;;; dev/dev-rest.el ends here
-#+end_src
-
-***** dev/dev-tools.el
-:PROPERTIES:
-:CUSTOM_ID: dev-tools
-:header-args:emacs-lisp: :tangle lisp/dev/dev-tools.el
-:END:
-#+begin_src emacs-lisp
-  ;;; dev/dev-tools.el --- Development helper tools -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: dev
-  ;;
-  ;;; Code:
-
-  (defun my/open-by-vscode ()
-    "Open current file at point in VS Code."
-    (interactive)
-    (when (buffer-file-name)
-      (async-shell-command
-       (format "code -r -g %s:%d:%d"
-               (buffer-file-name)
-               (line-number-at-pos)
-               (current-column)))))
-
-  (defun my/show-env-variable (var)
-    "Show environment variable VAR."
-    (interactive "sEnvironment variable: ")
-    (message "%s = %s" var (or (getenv var) "Not set")))
-
-  (defun my/print-build-info () (interactive)
-      (let ((buf (get-buffer-create "*Build Info*")))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert (format "- GNU Emacs *%s*\n\n" emacs-version))
-            (insert "|Property|Value|\n|--------|-----|\n")
-            (insert (format "|Commit|%s|\n" (if (fboundp 'emacs-repository-get-version)
-                                                (emacs-repository-get-version) "N/A")))
-            (insert (format "|Branch|%s|\n" (if (fboundp 'emacs-repository-get-branch)
-                                                (emacs-repository-get-branch) "N/A")))
-            (insert (format "|System|%s|\n" system-configuration))
-            (insert (format "|Date|%s|\n" (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
-            (insert (format "|Patch|%s ns-inline.patch|\n" (if (boundp 'mac-ime--cursor-type) "with" "N/A")))
-            (insert (format "|Features|%s|\n" system-configuration-features))
-            (insert (format "|Options|%s|\n" system-configuration-options)))
-          (view-mode 1))
-        (switch-to-buffer buf)))
-
-  (provide 'dev-tools)
-  ;;; dev/dev-tools.el ends here
-#+end_src
-
-*** vcs/
-:PROPERTIES:
-:CUSTOM_ID: vcs-modules
-:END:
-
-**** Purpose
-Provide a **consistent, explicit, and inspectable version control interaction
-layer** within Emacs.
-
-This layer encapsulates all integrations with external version control systems,
-treating those systems as authoritative.
-
-**** What this layer does
-
-VCS modules are responsible for:
-
-- Integrating Emacs with version control backends (primarily Git)
-- Exposing repository state, history, and diffs inside Emacs buffers
-- Providing interactive commands for common VCS workflows
-- Bridging external VCS tools into the Emacs UI without reimplementing them
-
-Typical responsibilities include:
-
-- Repository status and change inspection
-- Commit, blame, diff, and log navigation
-- File- and project-scoped VCS operations
-- Lightweight review and history browsing
-
-**** What this layer does *not* do
-
-VCS modules intentionally do **not**:
-
-- Define global editing or keybinding policy
-- Enforce a specific branching or commit workflow
-- Replace or fork external VCS tooling
-- Assume the presence of a repository
-
-Those responsibilities belong to other layers or external tools.
-
-**** Design constraints
-
-- VCS modules may depend on:
-  - =core=
-  - =ui=
-  - =completion=
-
-- VCS modules must not depend on:
-  - =orgx=
-  - =dev=
-  - =utils=
-
-- Interaction with external VCS tools must be:
-  - explicit
-  - inspectable
-  - resilient to tool absence or failure
-
-**** Design principles
-
-- External VCS tools are the **source of truth**
-- Emacs acts as an interface, not a reimplementation
-- Commands must degrade gracefully when:
-  - no repository is present
-  - required binaries are unavailable
-- User workflow decisions remain opt-in and reversible
-
-**** Module map
-
-| File | Responsibility |
-|------+----------------|
-| =vcs/vcs-core.el= | Core VCS integration and shared helpers |
-| =vcs/vcs-git.el= | Git backend integration |
-| =vcs/vcs-magit.el= | Magit-based interactive workflows |
-| =vcs/vcs-diff.el= | Diff, hunk, and change navigation |
-| =vcs/vcs-history.el= | Log, blame, and history inspection |
-
-**** Implementation
-
-- Loaded after =dev=
-- Each file:
-  - provides exactly one VCS-related feature
-  - documents backend assumptions and failure modes
-- Disabling this layer must leave Emacs fully usable for
-  non-version-controlled files
-
-***** vcs/vcs-magit.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-magit
-:header-args:emacs-lisp: :tangle lisp/vcs/vcs-magit.el
-:END:
-#+begin_src emacs-lisp
-  ;;; vcs/vcs-magit.el --- Git integration with Magit -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: vcs
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf magit
-    :straight t
-    :commands (magit-status magit-dispatch)
-    :init
-    (setq magit-auto-revert-mode nil)
-    :config
-    (setq magit-refresh-status-buffer nil
-          magit-diff-refine-hunk 'all))
-
-  (provide 'vcs-magit)
-  ;;; vcs/vcs-magit.el ends here
-#+end_src
-
-***** vcs/vcs-gutter.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-gutter
-:header-args:emacs-lisp: :tangle lisp/vcs/vcs-gutter.el
-:END:
-#+begin_src emacs-lisp
-  ;;; vcs/vcs-gutter.el --- Show Git changes in fringe -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: vcs
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf diff-hl
-    :straight t
-    :commands (diff-hl-mode diff-hl-dired-mode diff-hl-magit-post-refresh)
-    :hook ((prog-mode . diff-hl-mode)
-           (text-mode . diff-hl-mode)
-           (dired-mode . diff-hl-dired-mode))
-    :config
-    (with-eval-after-load 'magit
-      (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
-    (customize-set-variable 'diff-hl-draw-borders nil))
-
-  (provide 'vcs-gutter)
-  ;;; vcs/vcs-gutter.el ends here
-#+end_src
-
-***** vcs/vcs-forge.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-forge
-:header-args:emacs-lisp: :tangle lisp/vcs/vcs-forge.el
-:END:
-#+begin_src emacs-lisp
-  ;;; vcs/vcs-forge.el --- GitHub/GitLab integration via Forge -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: vcs
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (require 'core-utils nil t) ;; my/ensure-directory-exists
-
-  (leaf forge
-    :straight t
-    :after magit
-    :init
-    (with-eval-after-load 'emacsql
-      (when (boundp 'emacsql-sqlite3-executable)
-        (setq emacsql-sqlite3-executable nil)))
-    :config
-    (let* ((db-dir (expand-file-name "forge" no-littering-var-directory))
-           (db (expand-file-name "forge-database.sqlite" db-dir)))
-      (my/ensure-directory-exists db-dir)
-      (setq forge-database-file db)))
-
-  (provide 'vcs-forge)
-  ;;; vcs/vcs-forge.el ends here
-#+end_src
-
-*** utils/
-:PROPERTIES:
-:CUSTOM_ID: utils-modules
-:END:
-
-**** Purpose
-Host **small, domain-specific utilities** that do not justify
-a dedicated architectural layer.
-
-This layer exists as a pragmatic escape hatch for narrowly scoped helpers,
-without polluting core abstractions.
-
-**** What this layer does
-
-Utils modules are responsible for:
-
-- Providing small, focused helper functions and commands
-- Solving localized or cross-cutting problems
-- Complementing higher-level modules without owning workflows or policy
-
-Typical responsibilities include:
-
-- Buffer and window housekeeping helpers
-- Lightweight automation and glue code
-- One-off integrations with external tools
-- Quality-of-life helpers that do not belong elsewhere
-
-**** What this layer does *not* do
-
-Utils modules intentionally do **not**:
-
-- Define global policy or long-lived orchestration
-- Introduce new architectural concepts
-- Replace or override behavior from higher layers
-- Encode user-, device-, or environment-specific configuration
-
-Those responsibilities belong to other layers.
-
-**** Design constraints
-
-- Utils modules may depend on:
-  - =core=
-  - =ui=
-  - =completion=
-  - =orgx=
-  - =dev=
-  - =vcs=
-
-- Utils modules must not be depended on by:
-  - =core=
-  - =ui=
-  - =completion=
-  - =orgx=
-  - =dev=
-  - =vcs=
-
-- Dependencies must be:
-  - minimal
-  - explicit
-  - non-circular
-
-**** Design principles
-
-- Keep modules **small and focused**
-- Avoid accumulation of unrelated responsibilities
-- Prefer promotion to a dedicated layer when scope grows
-- Deletion should always be a valid refactoring option
-
-**** Module map
-
-| File | Responsibility |
-|------+----------------|
-| =utils/utils-gc.el= | Garbage collection helpers |
-| =utils/utils-buffers.el= | Buffer lifecycle and cleanup helpers |
-| =utils/utils-lsp.el= | LSP lifecycle cleanup utilities |
-| =utils/utils-lint.el= | Static lint helpers for Emacs Lisp |
-| =utils/utils-scratch.el= | Persistent scratch buffer helpers |
-| =utils/utils-notes-markdown.el= | Prose-oriented Markdown notes utilities |
-
-**** Implementation
-
-- Loaded last by =modules.el=
-- Each file:
-  - provides exactly one utility feature
-  - remains safe to load in isolation
-- Removing this layer must not break
-  any higher-level architectural guarantees
-
-***** utils/utils-functions.el
-:PROPERTIES:
-:CUSTOM_ID: utils-functions
-:header-args:emacs-lisp: :tangle lisp/utils/utils-functions.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils/utils-functions.el --- General utility functions -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;; Small, safe utilities loaded across the configuration.
-  ;; - Org helpers: indirect subtree view, quick sidebar (imenu-list)
-  ;; - Editing helpers: smart buffer/window killing
-  ;; Notes:
-  ;; - Avoid compile warnings by declaring optional deps and vars.
-  ;; - Prefer modern Org APIs when available.
-  ;;
-  ;;; Code:
-
-  ;;;; Built-ins ------------------------------------------------------------------
-
-  (require 'imenu) ;; built-in
-
-  ;;;; Optional deps & vars (for byte-compiler) -----------------------------------
-
-  (eval-when-compile
-    (declare-function imenu-list-minor-mode  "imenu-list")
-    (declare-function imenu-list-stop-timer  "imenu-list")
-    (declare-function imenu-list-display-dwim "imenu-list")
-    (declare-function nano-modeline-render   "nano-modeline"))
-
-  (defvar imenu-list-after-jump-hook nil)
-  (defvar imenu-list-position 'left)
-  (defvar imenu-list-size 30)
-  (defvar imenu-list-focus-after-activation t)
-  (defvar imenu-list--displayed-buffer nil)
-
-  ;;;; Editing helpers -------------------------------------------------------------
-
-  (defun my/kill-buffer-smart ()
-    "Kill buffer and window when there are multiple windows; otherwise kill buffer."
-    (interactive)
-    (if (one-window-p)
-        (kill-buffer)
-      (kill-buffer-and-window)))
-
-  (defalias 'my/smart-kill-buffer #'my/kill-buffer-smart)
-
-  ;;;; Nano/Modeline helper --------------------------------------------------------
-
-  (defun my/nano-headerline (buf subtitle)
-    "Return a header-line string; prefer nano-modeline when available."
-    (let* ((name (if (and buf (buffer-live-p buf))
-                     (buffer-name buf)
-                   (buffer-name)))
-           (extra ""))
-      (if (fboundp 'nano-modeline-render)
-          (nano-modeline-render nil name subtitle extra)
-        (concat "  "
-                (propertize name 'face 'mode-line-buffer-id)
-                "  " subtitle))))
-
-  ;;;; Org helpers ----------------------------------------------------------------
-
-  (defun my/org-tree-to-indirect-buffer ()
-    "Show current Org subtree in an indirect buffer and reveal its content."
-    (interactive)
-    (when (derived-mode-p 'org-mode)
-      (cond
-       ((fboundp 'org-fold-show-all) (org-fold-show-all))
-       ((fboundp 'org-show-all)      (org-show-all))))
-    (org-tree-to-indirect-buffer))
-
-  (defun my/org-sidebar ()
-    "Open an imenu-list sidebar with safe fallbacks."
-    (interactive)
-    (unless (locate-library "imenu-list")
-      (user-error "imenu-list is not installed"))
-    (autoload 'imenu-list-minor-mode  "imenu-list" nil t)
-    (autoload 'imenu-list-stop-timer  "imenu-list" nil t)
-    (autoload 'imenu-list-display-dwim "imenu-list" nil t)
-
-    (setq imenu-list-after-jump-hook #'recenter
-          imenu-list-position 'left
-          imenu-list-size 36
-          imenu-list-focus-after-activation t)
-
-    (when (buffer-base-buffer)
-      (switch-to-buffer (buffer-base-buffer)))
-
-    (imenu-list-minor-mode 1)
-    (when (fboundp 'imenu-list-stop-timer)
-      (imenu-list-stop-timer))
-
-    (hl-line-mode 1)
-    (when (facep 'nano-subtle)
-      (face-remap-add-relative 'hl-line :inherit 'nano-subtle))
-
-    (setq header-line-format
-          `(:eval
-            (my/nano-headerline
-             ,(when (boundp 'imenu-list--displayed-buffer)
-                'imenu-list--displayed-buffer)
-             "(outline)")))
-    (setq-local cursor-type nil)
-
-    (when (fboundp 'imenu-list-display-dwim)
-      (imenu-list-display-dwim)))
-
-  (defun my/org-sidebar-toggle ()
-    "Toggle the imenu-list sidebar."
-    (interactive)
-    (let ((win (get-buffer-window "*Ilist*")))
-      (if win
-          (progn
-            (quit-window nil win)
-            (when (buffer-base-buffer)
-              (switch-to-buffer (buffer-base-buffer))))
-        (my/org-sidebar))))
-
-  (provide 'utils-functions)
-  ;;; utils/utils-functions.el ends here
-#+end_src
-
-***** utils/utils-async.el
-:PROPERTIES:
-:CUSTOM_ID: utils-async
-:header-args:emacs-lisp: :tangle lisp/utils/utils-async.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils-async.el --- Safe async task helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;; Provide a minimal helper for running asynchronous tasks safely.
-  ;; Errors are caught and reported without affecting Emacs stability.
-  ;;
-  ;;; Code:
-
-  (defun my/safe-run-async (task)
-    "Run TASK asynchronously, catching and reporting any errors."
-    (run-at-time 0 nil
-                 (lambda ()
-                   (condition-case err
-                       (funcall task)
-                     (error (message "[async] error: %s" err))))))
-
-  (provide 'utils-async)
-  ;;; utils/utils-async.el ends here
-#+end_src
-
-***** utils/utils-gc.el
-:PROPERTIES:
-:CUSTOM_ID: utils-gc
-:header-args:emacs-lisp: :tangle lisp/utils/utils-gc.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils-gc.el --- Safe garbage collection helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;; Run garbage collection at safe moments during long-running sessions.
-  ;; Triggered on focus-out and minibuffer exit only.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf nil
-    :straight nil
-    :init
-    (defcustom utils-gc-enable-p t
-      "Enable GC hooks for long-running sessions."
-      :type 'boolean
-      :group 'utils)
-
-    (defun utils-gc--collect ()
-      "Run garbage collection safely."
-      (when utils-gc-enable-p
-        (condition-case _err
-            (garbage-collect)
-          (error nil))))
-
-    (add-hook 'focus-out-hook #'utils-gc--collect)
-    (add-hook 'minibuffer-exit-hook #'utils-gc--collect))
-
-  (provide 'utils-gc)
-  ;;; utils/utils-gc.el ends here
-#+end_src
-
-***** utils/utils-backup.el
-:PROPERTIES:
-:CUSTOM_ID: utils-backup
-:header-args:emacs-lisp: :tangle lisp/utils/utils-backup.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils/utils-backup.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Code:
-
-  (defun my/delete-old-backups ()
-    "Delete backup files older than 7 days."
-    (interactive)
-    (let ((backup-dir (concat no-littering-var-directory "backup/"))
-          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
-      (when (file-directory-p backup-dir)
-        (dolist (file (directory-files backup-dir t))
-          (when (and (file-regular-p file)
-                     (< (float-time
-                         (file-attribute-modification-time
-                          (file-attributes file)))
-                        threshold))
-            (delete-file file))))))
-
-  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
-
-  (provide 'utils-backup)
-  ;;; utils/utils-backup.el ends here
-#+end_src
-
-***** utils/utils-dired.el
-:PROPERTIES:
-:CUSTOM_ID: utils-dired
-:header-args:emacs-lisp: :tangle lisp/utils/utils-dired.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils/utils-dired.el --- Dired helper utilities -*- lexical-binding: t; -*-
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Code:
-
-  (declare-function dired-get-file-for-visit "dired")
-  (declare-function dired-goto-subdir "dired")
-
-  (defun my/dired-view-file-other-window ()
-    "Open Dired file or directory in another window."
-    (interactive)
-    (let ((file (dired-get-file-for-visit)))
-      (if (file-directory-p file)
-          (or (and (cdr dired-subdir-alist)
-                   (dired-goto-subdir file))
-              (dired file))
-        (view-file-other-window file))))
-
-  (provide 'utils-dired)
-  ;;; utils/utils-dired.el ends here
-#+end_src
-
-***** utils/utils-buffers.el
-:PROPERTIES:
-:CUSTOM_ID: utils-buffers
-:header-args:emacs-lisp: :tangle lisp/utils/utils-buffers.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils-buffers.el --- Automatic buffer housekeeping -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;; Automatically clean up temporary and dead-process buffers.
-  ;; Visible or modified buffers are never touched.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf nil
-    :straight nil
-    :init
-    (defcustom utils-buffers-enable-p t
-      "Enable automatic buffer housekeeping."
-      :type 'boolean
-      :group 'utils)
-
-    (defvar utils-buffers--temporary-regexp
-      (rx string-start "*"
-          (or "Help" "Warnings" "Compile-Log" "Backtrace"
-              "Async-native-compile-log" "eglot-events")
-          (* any) string-end))
-
-    (defun utils-buffers--temporary-p (buffer)
-      (with-current-buffer buffer
-        (and (string-match-p utils-buffers--temporary-regexp (buffer-name))
-             (not (buffer-file-name))
-             (not (buffer-modified-p))
-             (not (get-buffer-window buffer 'visible)))))
-
-    (defun utils-buffers--dead-process-p (buffer)
-      (let ((proc (get-buffer-process buffer)))
-        (and proc
-             (memq (process-status proc) '(exit signal)))))
-
-    (defun utils-buffers-cleanup ()
-      "Clean up temporary and dead-process buffers."
-      (interactive)
-      (when utils-buffers-enable-p
-        (dolist (buf (buffer-list))
-          (when (or (utils-buffers--temporary-p buf)
-                    (utils-buffers--dead-process-p buf))
-            (ignore-errors
-  	    (kill-buffer buf))))))
-
-    (run-with-timer 900 900 #'utils-buffers-cleanup))
-
-  (provide 'utils-buffers)
-  ;;; utils/utils-buffers.el ends here
-#+end_src
-
-***** utils/utils-org-agenda.el
-:PROPERTIES:
-:CUSTOM_ID: utils-org-agenda
-:header-args:emacs-lisp: :tangle lisp/utils/utils-org-agenda.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils-org-agenda.el --- Cached org-agenda-files builder -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;; Build org-agenda-files using a persistent on-disk cache.
-  ;; Avoids expensive recursive scans on every startup.
-  ;;
-  ;;; Code:
-
-  (require 'subr-x)
-  (require 'seq)
-
-  (defgroup utils-org-agenda nil
-    "Cached org-agenda-files builder."
-    :group 'org)
-
-  (defcustom utils-org-agenda-cache-file
-    (expand-file-name "org-agenda-files.cache"
-                      (or (bound-and-true-p no-littering-var-directory)
-                          user-emacs-directory))
-    "Cache file for org-agenda-files."
-    :type 'file
-    :group 'utils-org-agenda)
-
-  (defcustom utils-org-agenda-exclude-regexp
-    "archives"
-    "Regexp used to exclude files from org-agenda."
-    :type 'regexp
-    :group 'utils-org-agenda)
-
-  (defun utils-org-agenda--scan (org-directory)
-    "Recursively scan ORG-DIRECTORY and return a list of agenda files."
-    (seq-filter
-     (lambda (file)
-       (and (string-match-p "\\.org\\'" file)
-            (not (file-symlink-p file))
-            (not (string-match-p utils-org-agenda-exclude-regexp file))))
-     (directory-files-recursively
-      org-directory "\\.org\\'" nil nil)))
-
-  (defun utils-org-agenda--load-cache ()
-    "Load cached agenda files from disk."
-    (when (file-readable-p utils-org-agenda-cache-file)
-      (with-temp-buffer
-        (insert-file-contents utils-org-agenda-cache-file)
-        (read (current-buffer)))))
-
-  (defun utils-org-agenda--save-cache (files)
-    "Save FILES to the agenda cache."
-    (with-temp-file utils-org-agenda-cache-file
-      (prin1 files (current-buffer))))
-
-  ;;;###autoload
-  (defun utils-org-agenda-build (&optional force)
-    "Return agenda files using the cache.
-  If FORCE is non-nil, rebuild the cache."
-    (let ((cached (and (not force)
-                       (utils-org-agenda--load-cache))))
-      (if (and cached (listp cached))
-          cached
-        (let ((files (utils-org-agenda--scan org-directory)))
-          (utils-org-agenda--save-cache files)
-          files))))
-
-  ;;;###autoload
-  (defun utils-org-agenda-rebuild ()
-    "Force a rebuild of the org-agenda-files cache."
-    (interactive)
-    (setq org-agenda-files (utils-org-agenda-build t))
-    (message "org-agenda-files cache rebuilt (%d files)"
-             (length org-agenda-files)))
-
-  (provide 'utils-org-agenda)
-  ;;; utils-org-agenda.el ends here
-#+end_src
-
-***** utils/utils-search-nav.el
-:PROPERTIES:
-:CUSTOM_ID: search-nav
-:header-args:emacs-lisp: :tangle lisp/utils/utils-search-nav.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils-search-nav.el --- Search and navigation helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;; Project-wide search and navigation helpers.
-  ;; Built on ripgrep, dumb-jump, and lightweight EWW integration.
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'leaf)
-    (require 'subr-x))
-
-  (leaf dumb-jump
-    :straight t
-    :hook (xref-backend-functions . dumb-jump-xref-activate)
-    :custom ((dumb-jump-force-searcher  . 'rg)
-             (dumb-jump-prefer-searcher . 'rg)))
-
-  (leaf multiple-cursors :straight t)
-
-  (leaf eww
-    :straight nil
-    :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
-             (eww-download-directory . "~/Downloads"))
-    :init
-    (defvar my:d:eww
-      (expand-file-name "eww/"
-                        (or (bound-and-true-p my:d:var)
-                            user-emacs-directory)))
-    (setopt eww-cache-directory (expand-file-name "cache/" my:d:eww))
-    (unless (file-directory-p eww-cache-directory)
-      (make-directory eww-cache-directory t))
-    (setq eww-history-limit 200)
-
-    (defvar eww-hl-search-word nil)
-
-    (defun my/eww-search (term)
-      "Search TERM with EWW and start isearch."
-      (interactive "sSearch terms: ")
-      (setq eww-hl-search-word term)
-      (eww-browse-url (concat eww-search-prefix term)))
-
-    (add-hook 'eww-after-render-hook
-              (lambda ()
-                (when eww-hl-search-word
-                  (isearch-mode t)
-                  (isearch-yank-string eww-hl-search-word)
-                  (setq eww-hl-search-word nil))))
-
-    (defun my/eww-toggle-images ()
-      (interactive)
-      (setq shr-inhibit-images (not shr-inhibit-images))
-      (eww-reload)))
-
-  (provide 'utils-search-nav)
-  ;;; utils-search-nav.el ends here
-#+end_src
-
-***** utils/utils-notes-markdown.el
-:PROPERTIES:
-:CUSTOM_ID: utils-notes-markdown
-:header-args:emacs-lisp: :tangle lisp/utils/utils-notes-markdown.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils/utils-notes-markdown.el --- Prose-oriented Markdown notes under Org -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; This module provides a prose-oriented Markdown notes system,
-  ;; implemented as a sibling domain under `my:d:org`.
+  ;; Prose-oriented Markdown notes as a sibling domain under Org.
+  ;;
+  ;; This module:
+  ;; - manages a Markdown notes directory outside agenda scope
+  ;; - provides note creation, navigation, and search helpers
+  ;; - configures Markdown UX optimized for prose
   ;;
   ;;; Code:
 
@@ -6541,64 +5587,1303 @@ Those responsibilities belong to other layers.
     (add-hook 'markdown-mode-hook
               #'my/notes-markdown-org-download-setup))
 
-  (provide 'utils-notes-markdown)
-  ;;; utils/utils-notes-markdown.el ends here
+  (provide 'orgx-notes-markdown)
+  ;;; orgx/orgx-notes-markdown.el ends here
 #+end_src
 
-***** utils/utils-scratch.el
+***** orgx/orgx-auto-tangle.el
 :PROPERTIES:
-:CUSTOM_ID: utils-scratch
-:header-args:emacs-lisp: :tangle lisp/utils/utils-scratch.el
+:CUSTOM_ID: orgx-typography
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-auto-tangle.el
 :END:
 #+begin_src emacs-lisp
-  ;;; utils-scratch.el --- Persistent *scratch* buffer helper -*- lexical-binding: t; -*-
+  ;;; orgx/orgx-auto-tangle.el --- Automatic tangling helpers -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
   ;;
-  ;; Category: utils
+  ;; Category: org
   ;;
-  ;;; Commentary:
-  ;; Ensure that *scratch* buffer always exists.
-  ;; Automatically recreated when killed.
+  ;; Commentary:
+  ;; Automatic tangling of updated source blocks in README.org.
+  ;;
+  ;; This module:
+  ;; - tangles only when saving README.org
+  ;; - disables confirmation prompts during tangling
+  ;; - scopes hooks locally to org-mode buffers
+  ;;
+  ;;; Code:
+
+  (defun my/auto-tangle-updated-src-blocks ()
+    "Automatically tangle updated Org source blocks when saving `README.org`."
+    (when (and buffer-file-name (string= (file-name-nondirectory buffer-file-name) "README.org"))
+      (let ((org-confirm-babel-evaluate nil)) (org-babel-tangle))))
+
+  (add-hook 'org-mode-hook
+            (lambda ()
+              (add-hook 'after-save-hook
+                        #'my/auto-tangle-updated-src-blocks
+                        nil 'make-it-local)))
+
+  (provide 'orgx-auto-tangle)
+  ;;; orgx/orgx-auto-tangle.el ends here
+#+end_src
+
+***** orgx/orgx-typography.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-typography
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-typography.el
+:END:
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-typography.el --- Org typography enhancements -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;; Commentary:
+  ;; Typography and prose readability helpers for Org buffers.
+  ;;
+  ;; This module:
+  ;; - complements orgx-visual without overlapping responsibilities
+  ;; - improves table alignment and emphasis visibility
+  ;; - focuses on long-form prose readability
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf))
+
+  ;; Optional prose setting:
+  ;; Use variable-pitch for text while keeping code blocks monospaced.
+  ;; Disabled by default to avoid surprising font changes.
+  ;;
+  ;; (leaf org
+  ;;   :straight nil
+  ;;   :hook (org-mode-hook . variable-pitch-mode))
+
+  ;; Align tables and inline images for better visual flow
+  (leaf valign
+    :straight t
+    :hook (org-mode-hook . valign-mode))
+
+  ;; Contextual reveal of emphasis, links, and markers
+  (leaf org-appear
+    :straight t
+    :hook (org-mode-hook . org-appear-mode)
+    :init
+    (setq org-appear-autoemphasis t
+          org-appear-autolinks t
+          org-appear-autosubmarkers t))
+
+  (provide 'orgx-typography)
+  ;;; orgx/orgx-typography.el ends here
+#+end_src
+
+*** dev/
+:PROPERTIES:
+:CUSTOM_ID: dev-modules
+:END:
+
+**** Purpose
+Support **development, diagnostics, and build-oriented workflows**
+for this Emacs configuration.
+
+This layer exists primarily for maintainers and advanced users who
+develop, inspect, or evolve the configuration itself, rather than
+for routine day-to-day editing.
+
+Dev modules are strictly *auxiliary*: useful when needed, invisible
+when not.
+
+**** What this layer does
+Dev modules provide tooling that helps *understand, debug, and extend*
+the running Emacs environment and its configuration.
+
+This layer is responsible for:
+
+- Tooling for configuration development and internal inspection
+- Support for build, compile, and debug workflows
+- Diagnostics and introspection of the live Emacs instance
+- Maintenance-oriented helpers for evolving the configuration safely
+
+Typical responsibilities include:
+
+- Language Server Protocol (LSP) client wiring and toggles
+- Debugging, profiling, tracing, and performance analysis helpers
+- Compilation, test execution, and task orchestration
+- Developer-facing inspection commands and reports
+
+**** What this layer does *not* do
+Dev modules intentionally do **not**:
+
+- Define global editing behavior or keybinding policy
+- Establish startup-critical behavior or core invariants
+- Introduce visual presentation or theming concerns
+- Encode user-, device-, or host-specific preferences
+- Affect Org workflows or semantic editing behavior
+
+Those responsibilities belong to other layers.
+
+**** Design constraints
+- Dev modules may depend on:
+  - =core=
+  - =ui=
+  - =completion=
+
+- Dev modules must not depend on:
+  - =orgx=
+  - =vcs=
+  - =utils=
+
+- All side effects must be:
+  - explicit
+  - opt-in via customization variables or switches
+  - safe to disable as a group
+
+**** Design principles
+- Dev tooling is **additive**, never required for normal operation
+- Failure in this layer must degrade gracefully
+- Disabling this layer must not affect:
+  - startup success
+  - baseline editing behavior
+  - Org workflows or persistence
+- Debugging aids should favor observability over automation
+
+**** Benefits
+This separation ensures that:
+
+- Development aids never compromise configuration stability
+- Power-user tooling can evolve rapidly without risk
+- Production usage remains lightweight and predictable
+- Debugging can be enabled surgically when needed
+
+**** Module map
+| File | Responsibility |
+|------+----------------|
+| =dev/dev-lsp-eglot.el= | Eglot-based LSP configuration and integration |
+| =dev/dev-lsp-mode.el= | lsp-mode–based LSP configuration (alternative backend) |
+| =dev/dev-dap.el= | Debug Adapter Protocol integration |
+| =dev/dev-compile.el= | Compile, build, and task helpers |
+| =dev/dev-profile.el= | Profiling and performance diagnostics |
+| =dev/dev-inspect.el= | Runtime inspection and developer-facing debug utilities |
+
+**** Notes
+- Dev is the *only* layer allowed to assume a maintainer mindset.
+- Any tool required for basic usage does not belong here.
+- If disabling this layer breaks normal editing, it is misplaced.
+
+This layer exists to make the configuration *easier to evolve*,
+not harder to use.
+
+**** Implementation
+
+- Loaded after =orgx=
+- Activation is controlled via:
+  - =core/switches.el=
+  - explicit user or maintainer intent
+- Each file:
+  - provides exactly one dev-oriented feature
+  - documents activation conditions and non-goals
+
+***** dev/dev-lsp-eglot.el
+:PROPERTIES:
+:CUSTOM_ID: dev-lsp-eglot
+:header-args:emacs-lisp: :tangle lisp/dev/dev-lsp-eglot.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-lsp-eglot.el --- Eglot LSP setup -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Baseline Eglot configuration with safe auto-enable.
+  ;;
+  ;; This module:
+  ;; - detects whether an LSP server is applicable
+  ;; - enables Eglot lazily in programming buffers
+  ;; - exposes an explicit interactive enable command
   ;;
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
-  (leaf my:scratch-auto-recreate
-    :straight nil
-    :init
-    (defun my/create-scratch-buffer ()
-      "Create or reset a `*scratch*` buffer."
-      (let ((buf (get-buffer-create "*scratch*")))
-        (with-current-buffer buf
-          (lisp-interaction-mode)
-          (erase-buffer)
-          (insert ";; This is a new *scratch* buffer\n\n"))
-        buf))
+  (defun my/eglot-guessable-p ()
+    "Return non-nil if current buffer seems to have an LSP server we can start."
+    (cond
+     ((fboundp 'eglot--guess-contact)
+      (ignore-errors (eglot--guess-contact)))
+     ((fboundp 'eglot-guess-contact)
+      (ignore-errors (eglot-guess-contact)))
+     (t nil)))
 
-    (defun my/kill-scratch-buffer-advice (buf)
-      "If BUF is *scratch*, recreate it shortly after kill."
-      (when (string= (buffer-name buf) "*scratch*")
-        (run-at-time 0 nil #'my/create-scratch-buffer)))
+  (leaf eglot
+    :straight t
+    :commands (eglot eglot-ensure)
+    :custom ((eglot-autoreconnect . t))
+    :hook ((prog-mode . (lambda ()
+                          (when (my/eglot-guessable-p)
+                            (eglot-ensure))))))
 
-    (add-hook 'kill-buffer-hook
+  ;;;###autoload
+  (defun my/lsp-enable-eglot ()
+    "Enable Eglot-based LSP setup."
+    (interactive)
+    (add-hook 'prog-mode-hook
               (lambda ()
-                (my/kill-scratch-buffer-advice (current-buffer)))))
+                (when (my/eglot-guessable-p)
+                  (eglot-ensure))))
+    (message "[lsp] Eglot enabled."))
 
-  (provide 'utils-scratch)
-  ;;; utils/utils-scratch.el ends here
+  (provide 'dev-lsp-eglot)
+  ;;; dev-lsp-eglot.el ends here
 #+end_src
 
-***** utils/utils-lsp.el
+***** dev/dev-lsp-mode.el
 :PROPERTIES:
-:CUSTOM_ID: utils-lsp
-:header-args:emacs-lisp: :tangle lisp/utils/utils-lsp.el
+:CUSTOM_ID: dev-lsp-mode
+:header-args:emacs-lisp: :tangle lisp/dev/dev-lsp-mode.el
 :END:
 #+begin_src emacs-lisp
-  ;;; utils-lsp.el --- LSP lifecycle cleanup helpers -*- lexical-binding: t; -*-
+  ;;; dev/dev-lsp-mode.el --- lsp-mode setup -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; lsp-mode baseline with optional lsp-ui integration.
+  ;;
+  ;; This module:
+  ;; - enables lsp-mode with deferred startup
+  ;; - delegates completion to Corfu
+  ;; - provides an explicit interactive enable command
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf lsp-mode
+    :straight t
+    :commands (lsp lsp-deferred)
+    :custom ((lsp-keymap-prefix . "C-c l")
+             (lsp-enable-file-watchers . t)
+             (lsp-file-watch-threshold . 5000)
+             (lsp-response-timeout . 5)
+             (lsp-diagnostics-provider . :auto)
+             (lsp-completion-provider . :none))
+    :hook ((prog-mode . lsp-deferred)))
+
+  (leaf lsp-ui
+    :straight t
+    :after lsp-mode
+    :custom ((lsp-ui-doc-enable . t)
+             (lsp-ui-doc-delay . 0.2)
+             (lsp-ui-sideline-enable . t)))
+
+  ;;;###autoload
+  (defun my/lsp-enable-lspmode ()
+    "Enable lsp-mode-based LSP setup."
+    (interactive)
+    (add-hook 'prog-mode-hook #'lsp-deferred)
+    (message "[lsp] lsp-mode enabled."))
+
+  (provide 'dev-lsp-mode)
+  ;;; dev-lsp-mode.el ends here
+#+end_src
+
+***** dev/dev-ai.el
+:PROPERTIES:
+:CUSTOM_ID: dev-ai
+:header-args:emacs-lisp: :tangle lisp/dev/dev-ai.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-ai.el --- AI-assisted development helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; AI-assisted coding via Aider / Aidermacs.
+  ;;
+  ;; This module:
+  ;; - centralizes Aider runtime files and history
+  ;; - configures environment variables consistently
+  ;; - supports OpenRouter and OpenAI backends
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf)
+  		   (require 'subr-x))
+
+  ;; 1) Decide base directory: ~/.var/aideremacs
+  (defvar my:d:aider
+    (expand-file-name "aideremacs/" (or (bound-and-true-p my:d:var)
+                                        (expand-file-name "~/.var/")))
+    "Base directory to store aider runtime files.")
+
+  ;; 2) Ensure directory exists
+  (my/ensure-directory-exists my:d:aider)
+
+  ;; 3) Point aider history files to this directory via env vars
+  ;;    (aider recognizes these officially)
+  (setenv "AIDER_INPUT_HISTORY_FILE" (expand-file-name "input.history" my:d:aider))
+  (setenv "AIDER_CHAT_HISTORY_FILE"  (expand-file-name "chat.history.md" my:d:aider))
+  (setenv "AIDER_LLM_HISTORY_FILE"   (expand-file-name "llm.history" my:d:aider))
+  ;; Optional: analytics log location if you enable analytics logging
+  (setenv "AIDER_ANALYTICS_LOG"      (expand-file-name "analytics.log" my:d:aider))
+
+  ;; 4) [Optional] Keep a per-user .env here and make aider load it.
+  ;;    You can create ~/.var/aideremacs/.env and put API keys / options there.
+  ;;    If you use Aidermacs, pass --env-file via its extra args.
+  (with-eval-after-load 'aidermacs
+    ;; Aidermacs exposes an extra-args variable in recent builds
+    ;; (see NonGNU ELPA diffs mentioning `aidermacs-extra-args`).
+    ;; If your installed version still uses `aidermacs-args`, switch the name.
+    (defvar aidermacs-extra-args nil)
+    (let ((env-file (expand-file-name ".env" my:d:aider)))
+      (when (file-exists-p env-file)
+        (setq aidermacs-extra-args
+              (append aidermacs-extra-args
+                      (list "--env-file" env-file)))))
+
+    ;; Redundancy is harmless: also force the same files via CLI flags,
+    ;; in case your shell environment overrides Emacs' setenv.
+    (setq aidermacs-extra-args
+          (append aidermacs-extra-args
+                  (list "--input-history-file" (getenv "AIDER_INPUT_HISTORY_FILE")
+                        "--chat-history-file"  (getenv "AIDER_CHAT_HISTORY_FILE")
+                        "--llm-history-file"   (getenv "AIDER_LLM_HISTORY_FILE")))))
+
+  (leaf aidermacs :straight t
+    :init
+    (cond
+     ((getenv "OPENROUTER_API_KEY")
+      (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
+      (setenv "OPENAI_API_KEY"  (getenv "OPENROUTER_API_KEY"))
+      (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
+     ((getenv "OPENAI_API_KEY")
+      (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
+      (setopt aidermacs-default-model "gpt-4o-mini"))
+     (t
+      (display-warning 'aidermacs
+                       "No API keys set. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")))
+    (setopt aidermacs-retry-attempts 3
+            aidermacs-retry-delay   2.0
+            aidermacs-backend       'vterm))
+
+  (provide 'dev-ai)
+  ;;; dev/dev-ai.el ends here
+#+end_src
+
+***** dev/dev-term.el
+:PROPERTIES:
+:CUSTOM_ID: dev-term
+:header-args:emacs-lisp: :tangle lisp/dev/dev-term.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-term.el --- Terminal integration helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Terminal and shell workflow integration.
+  ;;
+  ;; This module:
+  ;; - configures vterm and vterm-toggle
+  ;; - applies UI palette consistently to terminal faces
+  ;; - defines window display rules for terminal buffers
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'cl-lib))
+
+  ;; Palette is provided by the caller's load-path setup.
+  (require 'ui-nano-palette)
+
+  (defun my/vterm-apply-palette ()
+    "Apply nano-style palette to vterm faces safely and compatibly.
+  Some vterm builds don't define `vterm-color-default`; use `vterm` face instead."
+    ;; Fallbacks (in case palette wasn't set yet)
+    (defvar nano-color-foreground "#374151")
+    (defvar nano-color-background "#fafafa")
+    (defvar nano-color-salient    "#2563eb")
+    (defvar nano-color-popout     "#6b7280")
+    (defvar nano-color-critical   "#dc2626")
+    (defvar nano-color-strong     "#111827")
+    (defvar nano-color-faded      "#9ca3af")
+    (defvar nano-color-subtle     "#e5e7eb")
+
+    (cl-labels
+        ((safe-face-set (face &rest props)
+           (when (facep face)
+             (apply #'set-face-attribute face nil props))))
+
+      ;; Default fg/bg: prefer vterm-color-default; fall back to vterm
+      (if (facep 'vterm-color-default)
+          (safe-face-set 'vterm-color-default
+                         :foreground nano-color-foreground
+                         :background nano-color-background)
+        (safe-face-set 'vterm
+                       :foreground nano-color-foreground
+                       :background nano-color-background))
+
+      ;; 8-color palette (keep backgrounds unobtrusive)
+      (safe-face-set 'vterm-color-black   :foreground nano-color-strong   :background 'unspecified)
+      (safe-face-set 'vterm-color-red     :foreground nano-color-critical :background 'unspecified)
+      (safe-face-set 'vterm-color-green   :foreground "#10b981"           :background 'unspecified) ; emerald-500
+      (safe-face-set 'vterm-color-yellow  :foreground nano-color-popout   :background 'unspecified)
+      (safe-face-set 'vterm-color-blue    :foreground nano-color-salient  :background 'unspecified)
+      (safe-face-set 'vterm-color-magenta :foreground "#a21caf"           :background 'unspecified) ; fuchsia-700
+      (safe-face-set 'vterm-color-cyan    :foreground "#0891b2"           :background 'unspecified) ; cyan-600
+      (safe-face-set 'vterm-color-white   :foreground nano-color-subtle   :background 'unspecified)))
+
+  (defun my/vterm-buffer-p (buf)
+    "Return non-nil if BUF is a vterm buffer."
+    (with-current-buffer buf
+      (or (eq major-mode 'vterm-mode)
+          (string-prefix-p "*vterm" (buffer-name buf)))))
+
+  (leaf vterm
+    :doc  "Emacs libvterm integration"
+    :url  "https://github.com/akermu/emacs-libvterm"
+    :straight t
+    :config
+    ;; Apply once vterm is loaded
+    (my/vterm-apply-palette)
+    ;; Re-apply after theme activation to keep colors consistent
+    (with-eval-after-load 'cus-theme
+      (if (boundp 'enable-theme-functions)
+          (add-hook 'enable-theme-functions #'my/vterm-apply-palette)
+        (advice-add 'enable-theme :after (lambda (&rest _) (my/vterm-apply-palette))))))
+
+  (leaf vterm-toggle
+    :doc  "Toggle between vterm and the current buffer"
+    :url  "https://github.com/jixiuf/vterm-toggle"
+    :straight t
+    :custom
+    (vterm-toggle-cd-auto-create-buffer . t)
+    (vterm-toggle-fullscreen-p          . nil)
+    (vterm-toggle-scope                 . 'project))
+
+  ;; Buffer display rule must be set after vterm is available
+  (with-eval-after-load 'vterm
+    (add-to-list 'display-buffer-alist
+                 `(my/vterm-buffer-p
+                   (display-buffer-reuse-window display-buffer-in-direction)
+                   (direction       . bottom)
+                   (dedicated       . t)
+                   (reusable-frames . visible)
+                   (window-height   . 0.3))))
+
+  (provide 'dev-term)
+  ;;; dev/dev-term.el ends here
+#+end_src
+
+***** dev/dev-web-core.el
+:PROPERTIES:
+:CUSTOM_ID: dev-web-core
+:header-args:emacs-lisp: :tangle lisp/dev/dev-web-core.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-web-core.el --- Project core helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Core project configuration and editor hygiene.
+  ;;
+  ;; This module:
+  ;; - configures project.el and editor defaults
+  ;; - enforces trailing whitespace and newline policy
+  ;; - explicitly excludes Tree-sitter policy ownership
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf project :straight nil)
+
+  (leaf files :straight nil
+    :custom ((require-final-newline . t)
+             (delete-trailing-lines . t))
+    :hook ((before-save-hook . delete-trailing-whitespace)))
+
+  (leaf editorconfig
+    :straight t
+    :global-minor-mode t)
+
+  (provide 'dev-web-core)
+  ;;; dev/dev-web-core.el ends here
+#+end_src
+
+***** dev/dev-build.el
+:PROPERTIES:
+:CUSTOM_ID: dev-build
+:header-args:emacs-lisp: :tangle lisp/dev/dev-build.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-build.el --- Build and Makefile tooling -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Build system helpers focused on Makefile workflows.
+  ;;
+  ;; This module:
+  ;; - configures Makefile editing modes
+  ;; - sets sane defaults for compilation buffers
+  ;; - preserves minimal global impact
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf make-mode :straight nil
+    :mode (("\\`Makefile\\'"    . makefile-gmake-mode)
+           ("\\`GNUmakefile\\'" . makefile-gmake-mode)
+           ("\\`makefile\\'"    . makefile-gmake-mode))
+    :hook
+    ((makefile-mode . my/set-make-compile-command)
+     (makefile-mode . (lambda ()
+                        (setq-local indent-tabs-mode t
+                                    tab-width 8
+                                    show-trailing-whitespace t))))
+    :config
+
+    (leaf compile :straight nil
+      :custom ((compilation-scroll-output . t)
+               (compilation-skip-threshold . 2)))
+
+    (leaf ansi-color :straight nil
+      :hook
+      (compilation-filter . (lambda ()
+                              (let ((inhibit-read-only t))
+                                (ansi-color-apply-on-region
+                                 compilation-filter-start
+                                 (point-max)))))))
+
+  (defun my/set-make-compile-command ()
+    "Set `compile-command' to `make -k' in Makefile buffers."
+    (setq-local compile-command "make -k"))
+
+  (provide 'dev-build)
+  ;;; dev/dev-build.el ends here
+#+end_src
+
+***** dev/dev-format.el
+:PROPERTIES:
+:CUSTOM_ID: dev-format
+:header-args:emacs-lisp: :tangle lisp/dev/dev-format.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-format.el --- Code formatting via Apheleia -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Automatic code formatting for web-centric development.
+  ;;
+  ;; This module:
+  ;; - enables Apheleia globally
+  ;; - configures Prettier / prettierd formatters
+  ;; - applies formatting to common web and markup modes
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf apheleia
+    :straight t
+    :require t
+    :config
+    (setf (alist-get 'prettierd apheleia-formatters)
+          '("prettierd" filepath))
+    (setf (alist-get 'prettier apheleia-formatters)
+          '("npx" "prettier" "--stdin-filepath" filepath))
+    (dolist (pair '((typescript-ts-mode . prettierd)
+                    (tsx-ts-mode        . prettierd)
+                    (json-ts-mode       . prettierd)
+                    (css-ts-mode        . prettierd)
+                    (markdown-mode      . prettierd)))
+      (add-to-list 'apheleia-mode-alist pair))
+    (apheleia-global-mode +1))
+
+  (provide 'dev-format)
+  ;;; dev-format.el ends here
+#+end_src
+
+***** dev/dev-infra-modes.el
+:PROPERTIES:
+:CUSTOM_ID: dev-infra-modes
+:header-args:emacs-lisp: :tangle lisp/dev/dev-infra-modes.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-infra-modes.el --- Infrastructure file modes -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Syntax support for infrastructure-related files.
+  ;;
+  ;; This module:
+  ;; - enables modes for Docker Compose, .env, TOML, and Makefiles
+  ;; - focuses purely on syntax and editing support
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf docker-compose-mode :straight t :mode ("docker-compose\\.*ya?ml\\'"))
+  (leaf dotenv-mode :straight t
+    :mode (("\\.env\\..*\\'" . dotenv-mode)
+           ("\\.env\\'"     . dotenv-mode)))
+  (leaf toml-mode :straight t :mode ("\\.toml\\'" . toml-mode))
+
+  (provide 'dev-infra-modes)
+  ;;; dev/dev-infra-modes.el ends here
+#+end_src
+
+***** dev/dev-docker.el
+:PROPERTIES:
+:CUSTOM_ID: dev-docker
+:header-args:emacs-lisp: :tangle lisp/dev/dev-docker.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-docker.el --- Docker integration helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Docker and container-oriented development helpers.
+  ;;
+  ;; This module:
+  ;; - provides major modes for Dockerfile and Compose files
+  ;; - integrates Docker CLI management commands
+  ;; - configures TRAMP container access
+  ;; - supplies Dockerfile templates via Tempel
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf dockerfile-mode :straight t
+    :mode (("Dockerfile\\(\\..*\\)?\\'" . dockerfile-mode)
+           ("\\.dockerfile\\'"         . dockerfile-mode))
+    :custom ((dockerfile-mode-command . "docker")))
+
+  (leaf yaml-mode :straight t
+    :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode)
+           ("\\.ya?ml\\'"                   . yaml-mode)))
+
+  (leaf docker :straight t
+    :commands (docker docker-containers docker-images docker-volumes docker-networks))
+
+  (leaf tramp-container :straight nil
+    :after tramp
+    :init
+    (setq tramp-container-method "docker"))
+
+  (leaf tempel :straight t
+    :commands (tempel-insert)
+    :init
+    (with-eval-after-load 'tempel
+      (defvar my:tempel-docker-templates
+        '((dockerfile "FROM " p n
+                      "WORKDIR /app" n
+                      "COPY . /app" n
+                      "RUN " p n
+                      "CMD [" p "]" n)))
+      (add-to-list 'tempel-user-elements my:tempel-docker-templates)))
+
+  (provide 'dev-docker)
+  ;;; dev/dev-docker.el ends here
+#+end_src
+
+***** dev/dev-sql.el
+:PROPERTIES:
+:CUSTOM_ID: dev-sql
+:header-args:emacs-lisp: :tangle lisp/dev/dev-sql.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-sql.el --- SQL and PostgreSQL helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; SQL editing and formatting helpers.
+  ;;
+  ;; This module:
+  ;; - configures SQL modes for PostgreSQL
+  ;; - enables indentation and formatting helpers
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf sql :straight nil
+    :custom ((sql-product . 'postgres)))
+
+  (leaf sql-indent :straight t
+    :hook (sql-mode . sqlind-minor-mode))
+
+  (leaf sqlformat
+    :straight t
+    :custom ((sqlformat-command . 'pgformatter)
+             (sqlformat-args . '("--nostyle")))
+    :hook (sql-mode . sqlformat-on-save-mode)
+    :hook (sql-ts-mode . sqlformat-on-save-mode))
+
+  (provide 'dev-sql)
+  ;;; dev-sql.el ends here
+#+end_src
+
+***** dev/dev-rest.el
+:PROPERTIES:
+:CUSTOM_ID: dev-rest
+:header-args:emacs-lisp: :tangle lisp/dev/dev-rest.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-rest.el --- REST client helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; REST client integration for testing HTTP APIs inside Emacs.
+  ;;
+  ;; This module:
+  ;; - enables restclient for .http files
+  ;; - integrates jq-based JSON inspection
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf restclient :straight t :mode ("\\.http\\'" . restclient-mode))
+  (leaf restclient-jq :straight t :after restclient)
+
+  (provide 'dev-rest)
+  ;;; dev/dev-rest.el ends here
+#+end_src
+
+***** dev/dev-navigation.el
+:PROPERTIES:
+:CUSTOM_ID: dev-navigation
+:header-args:emacs-lisp: :tangle lisp/dev/dev-navigation.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-navigation.el --- Search and navigation helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;; Commentary:
+  ;; Project-wide search and navigation helpers.
+  ;;
+  ;; This module:
+  ;; - integrates ripgrep-based jumping via dumb-jump
+  ;; - provides lightweight EWW search helpers
+  ;; - avoids intrusive global navigation policy
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
+
+  (leaf dumb-jump
+    :straight t
+    :hook (xref-backend-functions . dumb-jump-xref-activate)
+    :custom ((dumb-jump-force-searcher  . 'rg)
+  	   (dumb-jump-prefer-searcher . 'rg)))
+
+  (leaf multiple-cursors :straight t)
+
+  (leaf eww
+    :straight nil
+    :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
+             (eww-download-directory . "~/Downloads"))
+    :init
+    (defvar my:d:eww
+      (expand-file-name "eww/"
+                        (or (bound-and-true-p my:d:var)
+                            user-emacs-directory)))
+    (setopt eww-cache-directory (expand-file-name "cache/" my:d:eww))
+    (unless (file-directory-p eww-cache-directory)
+      (make-directory eww-cache-directory t))
+    (setq eww-history-limit 200)
+
+    (defvar eww-hl-search-word nil)
+
+    (defun my/eww-search (term)
+      "Search TERM with EWW and start isearch."
+      (interactive "sSearch terms: ")
+      (setq eww-hl-search-word term)
+      (eww-browse-url (concat eww-search-prefix term)))
+
+    (add-hook 'eww-after-render-hook
+              (lambda ()
+                (when eww-hl-search-word
+                  (isearch-mode t)
+                  (isearch-yank-string eww-hl-search-word)
+                  (setq eww-hl-search-word nil))))
+
+    (defun my/eww-toggle-images ()
+      (interactive)
+      (setq shr-inhibit-images (not shr-inhibit-images))
+      (eww-reload)))
+
+  (provide 'dev-navigation)
+  ;;; dev/dev-navigation.el ends here
+#+end_src
+
+***** dev/dev-tools.el
+:PROPERTIES:
+:CUSTOM_ID: dev-tools
+:header-args:emacs-lisp: :tangle lisp/dev/dev-tools.el
+:END:
+#+begin_src emacs-lisp
+  ;;; dev/dev-tools.el --- Development helper tools -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: dev
+  ;;
+  ;;; Code:
+
+  (defun my/open-by-vscode ()
+    "Open current file at point in VS Code."
+    (interactive)
+    (when (buffer-file-name)
+      (async-shell-command
+       (format "code -r -g %s:%d:%d"
+               (buffer-file-name)
+               (line-number-at-pos)
+               (current-column)))))
+
+  (defun my/show-env-variable (var)
+    "Show environment variable VAR."
+    (interactive "sEnvironment variable: ")
+    (message "%s = %s" var (or (getenv var) "Not set")))
+
+  (defun my/print-build-info () (interactive)
+      (let ((buf (get-buffer-create "*Build Info*")))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (format "- GNU Emacs *%s*\n\n" emacs-version))
+            (insert "|Property|Value|\n|--------|-----|\n")
+            (insert (format "|Commit|%s|\n" (if (fboundp 'emacs-repository-get-version)
+                                                (emacs-repository-get-version) "N/A")))
+            (insert (format "|Branch|%s|\n" (if (fboundp 'emacs-repository-get-branch)
+                                                (emacs-repository-get-branch) "N/A")))
+            (insert (format "|System|%s|\n" system-configuration))
+            (insert (format "|Date|%s|\n" (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
+            (insert (format "|Patch|%s ns-inline.patch|\n" (if (boundp 'mac-ime--cursor-type) "with" "N/A")))
+            (insert (format "|Features|%s|\n" system-configuration-features))
+            (insert (format "|Options|%s|\n" system-configuration-options)))
+          (view-mode 1))
+        (switch-to-buffer buf)))
+
+  (provide 'dev-tools)
+  ;;; dev/dev-tools.el ends here
+#+end_src
+
+*** vcs/
+:PROPERTIES:
+:CUSTOM_ID: vcs-modules
+:END:
+
+**** Purpose
+Provide a **consistent, explicit, and inspectable version control interaction
+layer** within Emacs.
+
+This layer encapsulates all interaction with external version control systems
+— primarily Git — while treating those systems as the authoritative source
+of truth.
+
+Emacs is used as a *control surface*, not as a replacement for VCS tooling.
+
+**** What this layer does
+VCS modules integrate Emacs with external version control systems in a way that
+is observable, reversible, and failure-tolerant.
+
+Specifically, this layer is responsible for:
+
+- Bridging Emacs with VCS backends (primarily Git)
+- Exposing repository state, history, and diffs inside Emacs buffers
+- Providing interactive commands for common VCS workflows
+- Surfacing VCS information in buffers without mutating editing semantics
+
+Typical responsibilities include:
+
+- Repository status inspection and change overview
+- Commit, diff, hunk, and blame navigation
+- File- and project-scoped VCS operations
+- Lightweight review, history browsing, and annotation
+
+**** What this layer does *not* do
+VCS modules intentionally do **not**:
+
+- Define global editing behavior or keybinding policy
+- Enforce a specific branching, commit, or review workflow
+- Replace, fork, or reimplement external VCS tools
+- Assume the presence of a repository or remote
+
+Those responsibilities belong to user workflows or external tooling.
+
+**** Design constraints
+- VCS modules may depend on:
+  - =core=
+  - =ui=
+  - =completion=
+
+- VCS modules must not depend on:
+  - =orgx=
+  - =dev=
+  - =utils=
+
+- Interaction with external tools must be:
+  - explicit
+  - inspectable
+  - resilient to tool absence or failure
+
+**** Design principles
+- External VCS tools are the **source of truth**
+- Emacs acts as an interface layer, not an abstraction leak
+- All commands must degrade gracefully when:
+  - no repository is present
+  - required binaries are missing
+  - network access is unavailable
+- User workflow choices remain:
+  - opt-in
+  - reversible
+  - discoverable
+
+**** Observed implementation characteristics
+Based on the current configuration:
+
+- Git integration is centered on *Magit* for interactive workflows
+- Change visualization relies on lightweight gutter-style indicators
+- No assumptions are made about:
+  - hosting provider
+  - branching model
+  - collaboration workflow
+- VCS features can be enabled or disabled independently
+
+**** Module map
+| File | Responsibility |
+|------+----------------|
+| =vcs/vcs-magit.el= | Magit-based interactive Git workflows |
+| =vcs/vcs-gutter.el= | In-buffer change indicators (diff-hl) |
+| =vcs/vcs-forge.el= | Optional GitHub / GitLab integration via Forge |
+
+**** Notes
+- This layer is intentionally thin and compositional.
+- Any logic that *depends* on VCS state belongs elsewhere.
+- If disabling this layer breaks core editing, the dependency is misplaced.
+
+This layer exists to make version control *visible and accessible*,
+not opinionated or mandatory.
+
+**** Implementation
+
+- Loaded after =dev=
+- Each file:
+  - provides exactly one VCS-related feature
+  - documents backend assumptions and failure modes
+- Disabling this layer must leave Emacs fully usable for
+  non-version-controlled files
+
+***** vcs/vcs-magit.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-magit
+:header-args:emacs-lisp: :tangle lisp/vcs/vcs-magit.el
+:END:
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-magit.el --- Magit Git integration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;; Commentary:
+  ;; Core Magit configuration for Git operations.
+  ;;
+  ;; This module:
+  ;; - enables Magit commands and status buffers
+  ;; - adjusts refresh and revert behavior conservatively
+  ;; - keeps Git interaction explicit and user-driven
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf magit
+    :straight t
+    :commands (magit-status magit-dispatch)
+    :init
+    (setq magit-auto-revert-mode nil)
+    :config
+    (setq magit-refresh-status-buffer nil
+          magit-diff-refine-hunk 'all))
+
+  (provide 'vcs-magit)
+  ;;; vcs/vcs-magit.el ends here
+#+end_src
+
+***** vcs/vcs-gutter.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-gutter
+:header-args:emacs-lisp: :tangle lisp/vcs/vcs-gutter.el
+:END:
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-gutter.el --- Git change indicators -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;; Commentary:
+  ;; Visual indicators for Git working tree changes.
+  ;;
+  ;; This module:
+  ;; - shows added, modified, and deleted lines in the fringe
+  ;; - integrates diff-hl with dired and magit buffers
+  ;; - avoids altering Git workflows or commands
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf diff-hl
+    :straight t
+    :commands (diff-hl-mode diff-hl-dired-mode diff-hl-magit-post-refresh)
+    :hook ((prog-mode . diff-hl-mode)
+           (text-mode . diff-hl-mode)
+           (dired-mode . diff-hl-dired-mode))
+    :config
+    (with-eval-after-load 'magit
+      (add-hook 'magit-post-refresh #'diff-hl-magit-post-refresh))
+    (customize-set-variable 'diff-hl-draw-borders nil))
+
+  (provide 'vcs-gutter)
+  ;;; vcs/vcs-gutter.el ends here
+#+end_src
+
+***** vcs/vcs-forge.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-forge
+:header-args:emacs-lisp: :tangle lisp/vcs/vcs-forge.el
+:END:
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-forge.el --- Forge integration for Git forges -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;; Commentary:
+  ;; GitHub and GitLab integration via Forge.
+  ;;
+  ;; This module:
+  ;; - enables issue and pull/merge request workflows
+  ;; - configures Forge database location explicitly
+  ;; - avoids implicit database or network side effects
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (require 'core-utils nil t) ;; my/ensure-directory-exists
+
+  (leaf forge
+    :straight t
+    :after magit
+    :init
+    (with-eval-after-load 'emacsql
+      (when (boundp 'emacsql-sqlite3-executable)
+        (setq emacsql-sqlite3-executable nil)))
+    :config
+    (let* ((db-dir (expand-file-name "forge" no-littering-var-directory))
+           (db (expand-file-name "forge-database.sqlite" db-dir)))
+      (my/ensure-directory-exists db-dir)
+      (setq forge-database-file db)))
+
+  (provide 'vcs-forge)
+  ;;; vcs/vcs-forge.el ends here
+#+end_src
+
+*** utils/
+:PROPERTIES:
+:CUSTOM_ID: utils-modules
+:END:
+
+**** Purpose
+Host **small, domain-specific utilities** that do not justify
+a dedicated architectural layer.
+
+This layer exists as a *pragmatic utility shelf*: narrowly scoped helpers
+live here to avoid contaminating core abstractions, while remaining easy
+to audit, extract, or delete.
+
+**** What this layer does
+Utils modules provide *localized assistance* to other layers without
+owning workflows, policy, or long-lived behavior.
+
+They are responsible for:
+
+- Small, focused helper functions and interactive commands
+- Solving localized or cross-cutting problems that span layers
+- Supplying glue code that would be inappropriate in higher layers
+
+Typical responsibilities include:
+
+- Buffer, window, and process housekeeping helpers
+- Lightweight automation and defensive cleanup logic
+- One-off integrations with external tools or Emacs internals
+- Quality-of-life helpers that do not define behavior on their own
+
+**** What this layer does *not* do
+Utils modules intentionally do **not**:
+
+- Define global policy, defaults, or invariants
+- Perform orchestration or lifecycle management
+- Introduce new architectural concepts or abstractions
+- Replace, override, or shadow behavior from higher layers
+- Encode user-, device-, or environment-specific configuration
+
+Those responsibilities are explicitly owned by other layers.
+
+**** Design constraints
+- Utils modules may depend on:
+  - =core=
+  - =ui=
+  - =completion=
+  - =orgx=
+  - =dev=
+  - =vcs=
+
+- Utils modules must **not** be depended on by:
+  - =core=
+  - =ui=
+  - =completion=
+  - =orgx=
+  - =dev=
+  - =vcs=
+
+- All dependencies must be:
+  - minimal
+  - explicit
+  - non-circular
+
+This makes utils a *leaf layer* in the dependency graph.
+
+**** Design principles
+- Keep modules **small, single-purpose, and disposable**
+- Avoid accumulation of loosely related helpers in one file
+- Prefer promotion to a dedicated layer if scope or importance grows
+- Deletion must always remain a valid and low-risk refactoring option
+- Utilities should be easy to reason about in isolation
+
+**** Observed implementation characteristics
+Based on the current configuration:
+
+- Utilities are defensive and side-effect conscious
+- Many helpers are interactive diagnostics or maintenance tools
+- No utils module is required for startup correctness
+- Disabling the entire utils layer should degrade convenience,
+  not correctness
+
+**** Module map
+| File | Responsibility |
+|------+----------------|
+| =utils/utils-path.el= | Safe directory and path helpers |
+| =utils/utils-async.el= | Minimal asynchronous task helpers |
+| =utils/utils-buffers.el= | Buffer lifecycle and cleanup helpers |
+| =utils/utils-edit.el= | Editing and save-time helper utilities |
+| =utils/utils-dired.el= | Dired convenience helpers |
+| =utils/utils-org-agenda.el= | Cached org-agenda file discovery |
+| =utils/utils-lint.el= | Static lint helpers for Emacs Lisp |
+| =utils/utils-diagnostics.el= | Configuration and runtime diagnostics |
+| =utils/utils-functions.el= | Small general-purpose helper functions |
+
+**** Notes
+- This layer is intentionally heterogeneous and low-ceremony.
+- Utilities should *never* become implicit dependencies.
+- If a utils module feels “important”, it likely belongs elsewhere.
+
+This layer exists to make the rest of the system *simpler*, not smarter.
+
+**** Implementation
+
+- Loaded last by =modules.el=
+- Each file:
+  - provides exactly one utility feature
+  - remains safe to load in isolation
+- Removing this layer must not break
+  any higher-level architectural guarantees
+
+***** utils/utils-functions.el
+:PROPERTIES:
+:CUSTOM_ID: utils-functions
+:header-args:emacs-lisp: :tangle lisp/utils/utils-functions.el
+:END:
+#+begin_src emacs-lisp
+  ;;; utils/utils-functions.el --- General-purpose small utilities -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -6606,9 +6891,253 @@ Those responsibilities belong to other layers.
   ;;
   ;; Category: utils
   ;;
-  ;;; Commentary:
-  ;; Manage Eglot server lifecycle when switching projects.
-  ;; Obsolete servers are shut down defensively.
+  ;; Commentary:
+  ;; Small, safe utility functions shared across the configuration.
+  ;;
+  ;; This module:
+  ;; - provides lightweight editing and navigation helpers
+  ;; - includes optional Org and UI convenience functions
+  ;; - avoids owning long-lived workflows or global policy
+  ;;
+  ;;; Code:
+
+  ;;;; Built-ins ------------------------------------------------------------------
+
+  (require 'imenu) ;; built-in
+
+  ;;;; Optional deps & vars (for byte-compiler) -----------------------------------
+
+  (eval-when-compile
+    (declare-function imenu-list-minor-mode  "imenu-list")
+    (declare-function imenu-list-stop-timer  "imenu-list")
+    (declare-function imenu-list-display-dwim "imenu-list")
+    (declare-function nano-modeline-render   "nano-modeline"))
+
+  (defvar imenu-list-after-jump-hook nil)
+  (defvar imenu-list-position 'left)
+  (defvar imenu-list-size 30)
+  (defvar imenu-list-focus-after-activation t)
+  (defvar imenu-list--displayed-buffer nil)
+
+  ;;;; Editing helpers -------------------------------------------------------------
+
+  (defun my/kill-buffer-smart ()
+    "Kill buffer and window when there are multiple windows; otherwise kill buffer."
+    (interactive)
+    (if (one-window-p)
+        (kill-buffer)
+      (kill-buffer-and-window)))
+
+  (defalias 'my/smart-kill-buffer #'my/kill-buffer-smart)
+
+  ;;;; Nano/Modeline helper --------------------------------------------------------
+
+  (defun my/nano-headerline (buf subtitle)
+    "Return a header-line string; prefer nano-modeline when available."
+    (let* ((name (if (and buf (buffer-live-p buf))
+                     (buffer-name buf)
+                   (buffer-name)))
+           (extra ""))
+      (if (fboundp 'nano-modeline-render)
+          (nano-modeline-render nil name subtitle extra)
+        (concat "  "
+                (propertize name 'face 'mode-line-buffer-id)
+                "  " subtitle))))
+
+  ;;;; Org helpers ----------------------------------------------------------------
+
+  (defun my/org-tree-to-indirect-buffer ()
+    "Show current Org subtree in an indirect buffer and reveal its content."
+    (interactive)
+    (when (derived-mode-p 'org-mode)
+      (cond
+       ((fboundp 'org-fold-show-all) (org-fold-show-all))
+       ((fboundp 'org-show-all)      (org-show-all))))
+    (org-tree-to-indirect-buffer))
+
+  (defun my/org-sidebar ()
+    "Open an imenu-list sidebar with safe fallbacks."
+    (interactive)
+    (unless (locate-library "imenu-list")
+      (user-error "imenu-list is not installed"))
+    (autoload 'imenu-list-minor-mode  "imenu-list" nil t)
+    (autoload 'imenu-list-stop-timer  "imenu-list" nil t)
+    (autoload 'imenu-list-display-dwim "imenu-list" nil t)
+
+    (setq imenu-list-after-jump-hook #'recenter
+          imenu-list-position 'left
+          imenu-list-size 36
+          imenu-list-focus-after-activation t)
+
+    (when (buffer-base-buffer)
+      (switch-to-buffer (buffer-base-buffer)))
+
+    (imenu-list-minor-mode 1)
+    (when (fboundp 'imenu-list-stop-timer)
+      (imenu-list-stop-timer))
+
+    (hl-line-mode 1)
+    (when (facep 'nano-subtle)
+      (face-remap-add-relative 'hl-line :inherit 'nano-subtle))
+
+    (setq header-line-format
+          `(:eval
+            (my/nano-headerline
+             ,(when (boundp 'imenu-list--displayed-buffer)
+                'imenu-list--displayed-buffer)
+             "(outline)")))
+    (setq-local cursor-type nil)
+
+    (when (fboundp 'imenu-list-display-dwim)
+      (imenu-list-display-dwim)))
+
+  (defun my/org-sidebar-toggle ()
+    "Toggle the imenu-list sidebar."
+    (interactive)
+    (let ((win (get-buffer-window "*Ilist*")))
+      (if win
+          (progn
+            (quit-window nil win)
+            (when (buffer-base-buffer)
+              (switch-to-buffer (buffer-base-buffer))))
+        (my/org-sidebar))))
+
+  (provide 'utils-functions)
+  ;;; utils/utils-functions.el ends here
+#+end_src
+
+***** utils/utils-path.el
+:PROPERTIES:
+:CUSTOM_ID: utils-path
+:header-args:emacs-lisp: :tangle lisp/utils/utils-path.el
+:END:
+#+begin_src emacs-lisp
+  ;;; utils/utils-path.el --- Minimal filesystem helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;; Commentary:
+  ;; Small helpers for safe filesystem operations.
+  ;;
+  ;; This module:
+  ;; - provides defensive directory creation utilities
+  ;; - avoids introducing global filesystem policy
+  ;; - acts as a fallback when higher-level helpers are absent
+  ;;
+  ;;; Code:
+
+  (unless (fboundp 'my/ensure-directory-exists)
+    (defun my/ensure-directory-exists (dir)
+      "Create DIR if it does not exist."
+      (unless (file-directory-p dir)
+        (make-directory dir t))))
+
+  (provide 'utils-path)
+  ;;; utils/utils-path.el ends here
+#+end_src
+
+***** utils/utils-async.el
+:PROPERTIES:
+:CUSTOM_ID: utils-async
+:header-args:emacs-lisp: :tangle lisp/utils/utils-async.el
+:END:
+#+begin_src emacs-lisp
+  ;;; utils/utils-async.el --- Safe asynchronous helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;; Commentary:
+  ;; Minimal helpers for running asynchronous tasks safely.
+  ;;
+  ;; This module:
+  ;; - executes tasks asynchronously with error isolation
+  ;; - reports failures without interrupting Emacs
+  ;; - avoids background scheduling policy
+  ;;
+  ;;; Code:
+
+  (defun my/safe-run-async (task)
+    "Run TASK asynchronously, catching and reporting any errors."
+    (run-at-time 0 nil
+                 (lambda ()
+                   (condition-case err
+                       (funcall task)
+                     (error (message "[async] error: %s" err))))))
+
+  (provide 'utils-async)
+  ;;; utils/utils-async.el ends here
+#+end_src
+
+***** utils/utils-dired.el
+:PROPERTIES:
+:CUSTOM_ID: utils-dired
+:header-args:emacs-lisp: :tangle lisp/utils/utils-dired.el
+:END:
+#+begin_src emacs-lisp
+  ;;; utils/utils-dired.el --- Small Dired navigation helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;; Commentary:
+  ;; Minor helper commands extending Dired navigation.
+  ;;
+  ;; This module:
+  ;; - provides convenience commands for file viewing
+  ;; - avoids redefining or overriding core Dired behavior
+  ;; - remains local to interactive use
+  ;;
+  ;;; Code:
+
+  (declare-function dired-get-file-for-visit "dired")
+  (declare-function dired-goto-subdir "dired")
+
+  (defun my/dired-view-file-other-window ()
+    "Open Dired file or directory in another window."
+    (interactive)
+    (let ((file (dired-get-file-for-visit)))
+      (if (file-directory-p file)
+          (or (and (cdr dired-subdir-alist)
+                   (dired-goto-subdir file))
+              (dired file))
+        (view-file-other-window file))))
+
+  (provide 'utils-dired)
+  ;;; utils/utils-dired.el ends here
+#+end_src
+
+***** utils/utils-buffers.el
+:PROPERTIES:
+:CUSTOM_ID: utils-buffers
+:header-args:emacs-lisp: :tangle lisp/utils/utils-buffers.el
+:END:
+#+begin_src emacs-lisp
+  ;;; utils/utils-buffers.el --- Temporary buffer housekeeping -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;; Commentary:
+  ;; Automatic cleanup of temporary and dead-process buffers.
+  ;;
+  ;; This module:
+  ;; - periodically removes unused helper buffers
+  ;; - never touches visible, modified, or file-backed buffers
+  ;; - runs conservatively with explicit opt-in customization
   ;;
   ;;; Code:
 
@@ -6617,38 +7146,186 @@ Those responsibilities belong to other layers.
   (leaf nil
     :straight nil
     :init
-    (defcustom utils-lsp-enable-p t
-      "Enable LSP lifecycle cleanup."
+    (defcustom utils-buffers-enable-p t
+      "Enable automatic buffer housekeeping."
       :type 'boolean
       :group 'utils)
 
-    (defvar utils-lsp--current-project-root nil)
+    (defvar utils-buffers--temporary-regexp
+      (rx string-start "*"
+          (or "Help" "Warnings" "Compile-Log" "Backtrace"
+              "Async-native-compile-log" "eglot-events")
+          (* any) string-end))
 
-    (defun utils-lsp--project-root ()
-      (when-let* ((project (project-current nil))
-  		(roots (project-roots project)))
-        (car roots)))
+    (defun utils-buffers--temporary-p (buffer)
+      (with-current-buffer buffer
+        (and (string-match-p utils-buffers--temporary-regexp (buffer-name))
+             (not (buffer-file-name))
+             (not (buffer-modified-p))
+             (not (get-buffer-window buffer 'visible)))))
 
-    (defun utils-lsp-on-project-switch ()
-      "Shutdown obsolete eglot servers on project switch."
-      (when utils-lsp-enable-p
-        (let ((new-root (utils-lsp--project-root)))
-          (when (and utils-lsp--current-project-root
-                     new-root
-                     (not (string-equal utils-lsp--current-project-root new-root))
-                     (featurep 'eglot))
-            (dolist (server eglot--servers)
-              (when (string-prefix-p utils-lsp--current-project-root
-                                     (eglot--project-root (cdr server)))
-                (ignore-errors
-                  (eglot-shutdown (cdr server))))))
-          (setq utils-lsp--current-project-root new-root))))
+    (defun utils-buffers--dead-process-p (buffer)
+      (let ((proc (get-buffer-process buffer)))
+        (and proc
+             (memq (process-status proc) '(exit signal)))))
 
-    (add-hook 'find-file-hook #'utils-lsp-on-project-switch)
-    (add-hook 'project-switch-project-hook #'utils-lsp-on-project-switch))
+    (defun utils-buffers-cleanup ()
+      "Clean up temporary and dead-process buffers."
+      (interactive)
+      (when utils-buffers-enable-p
+        (dolist (buf (buffer-list))
+          (when (or (utils-buffers--temporary-p buf)
+                    (utils-buffers--dead-process-p buf))
+            (ignore-errors
+  	    (kill-buffer buf))))))
 
-  (provide 'utils-lsp)
-  ;;; utils/utils-lsp.el ends here
+    (run-with-timer 900 900 #'utils-buffers-cleanup))
+
+  (provide 'utils-buffers)
+  ;;; utils/utils-buffers.el ends here
+#+end_src
+
+***** utils/utils-edit.el
+:PROPERTIES:
+:CUSTOM_ID: utils-edit
+:header-args:emacs-lisp: :tangle lisp/utils/utils-edit.el
+:END:
+#+begin_src emacs-lisp
+  ;;; utils/utils-edit.el --- Lightweight editing helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;; Commentary:
+  ;; Small editing-related helpers for day-to-day workflows.
+  ;;
+  ;; This module:
+  ;; - provides quick buffer revert utilities
+  ;; - updates lightweight timestamps on save
+  ;; - avoids altering editing semantics or file structure
+  ;;
+  ;;; Code:
+
+  (defun my/revert-buffer-quick ()
+    (interactive)
+    (revert-buffer :ignore-auto :noconfirm))
+
+  ;; Insert timestamp on save
+  (defun my/save-buffer-wrapper ()
+    "Insert or update a `$Lastupdate` timestamp at the top of the buffer."
+    (interactive)
+    (let ((timestamp (concat "$Lastupdate: " (format-time-string "%Y/%m/%d %H:%M:%S") " $")))
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "\\$Lastupdate: [0-9/: ]*\\$" nil t)
+          (replace-match timestamp t nil)))))
+  (add-hook 'before-save-hook #'my/save-buffer-wrapper)
+
+  (provide 'utils-edit)
+  ;;; utils/utils-edit.el ends here
+#+end_src
+
+***** utils/utils-org-agenda.el
+:PROPERTIES:
+:CUSTOM_ID: utils-org-agenda
+:header-args:emacs-lisp: :tangle lisp/utils/utils-org-agenda.el
+:END:
+#+begin_src emacs-lisp
+  ;;; utils/utils-org-agenda.el --- Cached org-agenda-files builder -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;; Commentary:
+  ;; Build org-agenda-files using a persistent on-disk cache.
+  ;;
+  ;; This module:
+  ;; - scans org-directory defensively
+  ;; - stores agenda file lists in a reusable cache
+  ;; - avoids runtime penalties during startup and agenda refresh
+  ;;
+  ;;; Code:
+
+  (require 'subr-x)
+  (require 'seq)
+
+  (defgroup utils-org-agenda nil
+    "Cached org-agenda-files builder."
+    :group 'org)
+
+  (defcustom utils-org-agenda-cache-file
+    (expand-file-name "org-agenda-files.cache"
+                      (or (bound-and-true-p no-littering-var-directory)
+                          user-emacs-directory))
+    "Cache file for org-agenda-files."
+    :type 'file
+    :group 'utils-org-agenda)
+
+  (defcustom utils-org-agenda-exclude-regexp
+    "archives"
+    "Regexp used to exclude files from org-agenda."
+    :type 'regexp
+    :group 'utils-org-agenda)
+
+  (defun utils-org-agenda--valid-org-directory-p ()
+    "Return non-nil if org-directory is defined and readable."
+    (and (boundp 'org-directory)
+         (stringp org-directory)
+         (file-directory-p org-directory)))
+
+  (defun utils-org-agenda--scan (org-directory)
+    "Recursively scan ORG-DIRECTORY and return a list of agenda files."
+    (when (file-directory-p org-directory)
+      (seq-filter
+       (lambda (file)
+         (and (string-match-p "\\.org\\'" file)
+              (not (file-symlink-p file))
+              (not (string-match-p utils-org-agenda-exclude-regexp file))))
+       (directory-files-recursively
+        org-directory "\\.org\\'" nil nil))))
+
+  (defun utils-org-agenda--load-cache ()
+    "Load cached agenda files from disk."
+    (when (file-readable-p utils-org-agenda-cache-file)
+      (with-temp-buffer
+        (insert-file-contents utils-org-agenda-cache-file)
+        (read (current-buffer)))))
+
+  (defun utils-org-agenda--save-cache (files)
+    "Save FILES to the agenda cache."
+    (with-temp-file utils-org-agenda-cache-file
+      (prin1 files (current-buffer))))
+
+  ;;;###autoload
+  (defun utils-org-agenda-build (&optional force)
+    "Return agenda files using the cache.
+  If FORCE is non-nil, rebuild the cache."
+    (if (not (utils-org-agenda--valid-org-directory-p))
+        nil
+      (let ((cached (and (not force)
+                         (utils-org-agenda--load-cache))))
+        (if (and cached (listp cached))
+            cached
+          (let ((files (utils-org-agenda--scan org-directory)))
+            (utils-org-agenda--save-cache files)
+            files)))))
+
+  ;;;###autoload
+  (defun utils-org-agenda-rebuild ()
+    "Force a rebuild of the org-agenda-files cache."
+    (interactive)
+    (setq org-agenda-files (utils-org-agenda-build t))
+    (message "org-agenda-files cache rebuilt (%d files)"
+             (length org-agenda-files)))
+
+  (provide 'utils-org-agenda)
+  ;;; utils/utils-org-agenda.el ends here
 #+end_src
 
 ***** utils/utils-lint.el
@@ -6657,7 +7334,7 @@ Those responsibilities belong to other layers.
 :header-args:emacs-lisp: :tangle lisp/utils/utils-lint.el
 :END:
 #+begin_src emacs-lisp
-  ;;; utils-lint.el --- Static lint helpers for Emacs Lisp -*- lexical-binding: t; -*-
+  ;;; utils/utils-lint.el --- Static lint helpers for Emacs Lisp -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -6665,14 +7342,13 @@ Those responsibilities belong to other layers.
   ;;
   ;; Category: utils
   ;;
-  ;;; Commentary:
-  ;; Provide static linting helpers for Emacs Lisp modules.
+  ;; Commentary:
+  ;; Interactive static lint helpers for Emacs Lisp buffers.
   ;;
-  ;; This module integrates:
-  ;; - checkdoc: documentation and header/comment conventions
-  ;; - package-lint: package metadata and public API validation
-  ;;
-  ;; All commands are interactive and never modify files.
+  ;; This module:
+  ;; - integrates checkdoc and package-lint when available
+  ;; - provides buffer- and directory-scoped commands
+  ;; - never modifies files or editor state
   ;;
   ;;; Code:
 
@@ -6792,7 +7468,19 @@ Those responsibilities belong to other layers.
 #+begin_src emacs-lisp
   ;;; utils/utils-diagnostics.el --- Diagnostic helpers -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
   ;; Category: utils
+  ;;
+  ;; Commentary:
+  ;; Diagnostic helpers for inspecting configuration consistency.
+  ;;
+  ;; This module:
+  ;; - defines interactive diagnostic commands only
+  ;; - introduces no global hooks
+  ;; - never alters runtime behavior
   ;;
   ;;; Code:
 
@@ -6819,18 +7507,38 @@ Those responsibilities belong to other layers.
         (view-mode 1)
         (pop-to-buffer (current-buffer)))))
 
-  (defun my/check-provide-matches-file (file)
-    "Warn if FILE does not provide its feature."
-    (when (and file
-               (string-prefix-p
-                (expand-file-name "lisp/" user-emacs-directory)
-                (expand-file-name file)))
+  (defun my/check-provide-matches-file (&optional buffer)
+    "Check whether BUFFER provides a feature matching its file name.
+
+  If BUFFER is nil, use the current buffer.
+  This command is purely diagnostic and has no side effects."
+    (interactive)
+    (let* ((buf (or buffer (current-buffer)))
+           (file (buffer-file-name buf)))
+      (unless file
+        (user-error "Current buffer is not visiting a file"))
+      (unless (string-match-p "\\.el\\'" file)
+        (user-error "Not an Emacs Lisp file"))
       (let* ((base (file-name-base file))
              (feat (intern base)))
-        (unless (featurep feat)
-          (warn "[provide] %s did not provide `%s`" base feat)))))
+        (if (featurep feat)
+            (message "[provide] OK: `%s` is provided" feat)
+          (message "[provide] WARNING: `%s` is not provided" feat)))))
 
-  (add-hook 'after-load-functions #'my/check-provide-matches-file)
+  (defun my/check-provide-in-directory (directory)
+    "Check provide/filename consistency for all .el files under DIRECTORY."
+    (interactive "DDirectory: ")
+    (let ((files (directory-files-recursively directory "\\.el\\'")))
+      (dolist (file files)
+        (with-current-buffer (find-file-noselect file)
+          (condition-case err
+              (my/check-provide-matches-file (current-buffer))
+            (error
+             (message "[provide] %s: %s"
+                      (file-name-nondirectory file)
+                      (error-message-string err))))
+          (kill-buffer (current-buffer))))
+      (message "Provide check completed")))
 
   (provide 'utils-diagnostics)
   ;;; utils/utils-diagnostics.el ends here
@@ -6843,171 +7551,209 @@ Those responsibilities belong to other layers.
 
 *** Overview
 
+** Overview
+
 **** Personal Layer Philosophy
+The =personal/= layer provides **user- and device-specific overlays**
+on top of the shared, version-controlled configuration.
 
-The =personal/= layer provides *user- and device-specific overlays* on top of the
-shared, version-controlled configuration.
+Its role is to express *identity, environment, and personal workflow glue*
+without influencing global policy, architectural decisions, or cross-user
+behavior.
 
-It exists to express *identity, environment, and workflow glue* without
-influencing global policy or shared behavior.
+This layer exists explicitly to keep the shared system:
+
+- reproducible
+- auditable
+- portable across machines and users
+
+while still allowing the configuration to feel *native* on a specific device.
+
+**** Scope definition
 
 This layer MAY contain:
-- Identity information (name, email)
-- Feature flags and personal thresholds (UI/LSP selection, timing knobs)
-- Device- and OS-specific glue (input methods, mouse/scroll tuning)
+
+- Identity information (user name, email address)
+- Personal feature flags and thresholds
+  (UI bundle selection, LSP preference, timing knobs)
+- Device- and OS-specific glue
+  (IME behavior, mouse/scroll tuning, platform quirks)
 - Personal keybindings and workflow integrations
+- Optional integrations with external, user-owned services
 
 This layer MUST NOT contain:
-- Core architectural or cross-user decisions
-- Shared defaults or policy
-- Modules that other layers depend on
 
-Hooks and timers are permitted *only when they are strictly local to the user’s
-device or workflow*, degrade safely to no-ops when unavailable, and do not
-affect global behavior.
+- Core architectural or cross-user decisions
+- Shared defaults or global policy
+- Modules that other layers depend on
+- Assumptions that affect startup correctness
+
+Hooks and timers are permitted **only** when they are:
+
+- strictly local to the user’s device or workflow
+- defensive (safe to no-op when unavailable)
+- non-invasive to global behavior
 
 **** Purpose
+Provide *personal overlays* that adapt the configuration to a specific
+user and machine, without compromising the modularity, determinism,
+or reproducibility of shared layers.
 
-Provide *personal overlays* that adapt the configuration to a specific user and
-machine, without compromising modularity or reproducibility of shared layers.
+Concretely, this layer exists to:
 
-Concretely, this layer covers:
-- Identity and safe editor defaults.
-- Preferred fonts and sizes, and *global switches* for UI (=nano=) and LSP (=eglot=).
-- A portable Org directory layout rooted in the user’s cloud path.
-- macOS conveniences:
-  - Input-method auto-switching (English ⇄ Japanese) via =sis=,
-  - Apple Music control via AppleScript and Hydra.
-- Device-specific pointer and scroll tuning (Logitech MX Ergo profile).
-- Small QoL glue (cursor color normalization after theme changes, load-path hygiene).
+- encode identity and safety-related editor defaults
+- select between alternative shared stacks (UI / LSP)
+- bind shared infrastructure to local filesystem layout
+- integrate OS- and device-specific affordances
+- host convenience glue that would be inappropriate elsewhere
 
 **** What this configuration does
 
-- *Identity & safety*
-  - Sets =user-full-name= and =user-mail-address=.
-  - Disables font cache compaction on macOS and enables passphrase caching for
-    =plstore=.
+***** Identity & safety
+- Sets =user-full-name= and =user-mail-address=
+- Applies safety-related editor preferences:
+  - disables font cache compaction on macOS
+  - enables in-memory passphrase caching for =plstore=
 
-- *Look & feel switches*
-  - Declares personal font preferences (=my:font-*=) and default size.
-  - Selects UI and LSP stacks via =my:use-ui= and =my:use-lsp=.
+***** Look & feel switches
+- Declares personal font preferences and default size
+- Selects UI and LSP stacks explicitly:
+  - =my:use-ui= (e.g. =nano=)
+  - =my:use-lsp= (e.g. =eglot=)
+- Delegates actual behavior to shared UI and dev layers
 
-- *Directories & Org wiring*
-  - Defines a cloud root at =~/Documents= and derives =my:d:org= and =my:d:blog=.
-  - Ensures required directories exist.
-  - Sets =org-directory= and computes =org-agenda-files= by scanning non-archive
-    =.org= files.
-  - Removes sensitive paths from =load-path=.
+***** Directories & Org wiring
+- Defines a cloud-rooted workspace (default: =~/Documents=)
+- Derives:
+  - =my:d:org=
+  - =my:d:blog=
+- Ensures required directories exist
+- Sets =org-directory=
+- Computes =org-agenda-files= dynamically by scanning
+  non-archive =.org= files
+- Removes sensitive or excluded paths from =load-path=
 
-- *macOS input method (=sis=)*
-  - Configures ABC ⇄ Kotoeri (Romaji) via =macism= at startup.
-  - Enables cursor-color, respect, and inline modes when available.
+***** macOS input method integration (=sis=)
+- Configures ABC ⇄ Kotoeri (Romaji) switching via =macism=
+- Enables cursor-color, respect, and inline modes when available
+- All functionality is guarded with =fboundp= checks
 
-- *Cursor color keep-alive*
-  - Re-applies the frame cursor color to the =cursor= face after theme reloads.
+***** Cursor color keep-alive
+- Reapplies the frame’s cursor color to the =cursor= face
+  after theme reloads
+- Prevents cursor desynchronization across theme switches
 
-- *Device profile (MX Ergo S)*
-  - Smooth scrolling, conservative movement, margin preservation, tilt scrolling.
-  - Mouse bindings:
-    - =mouse-2= → =yank=
-    - =mouse-4/5= → previous/next buffer
+***** Device profile (MX Ergo S)
+- Applies conservative, smooth scrolling defaults
+- Preserves screen position and margins
+- Enables tilt scrolling
+- Mouse bindings:
+  - =mouse-2= → yank
+  - =mouse-4/5= → previous / next buffer
 
-- *Apple Music integration (macOS)*
-  - Async and sync AppleScript helpers.
-  - Interactive commands for play/pause, next/previous track, playlist playback,
-    and current track info.
-  - A Hydra bound to =C-c M=, with optional Meow leader integration.
+***** Apple Music integration (macOS)
+- Defines asynchronous and synchronous AppleScript helpers
+- Exposes interactive commands:
+  - play / pause
+  - next / previous track
+  - playlist selection
+  - current track info
+- Provides a Hydra bound to =C-c M=
+- Optionally integrates with Meow leader keys when available
 
-**** Module map (where things live)
-
+**** Module map
 | Module file | Role |
 |-------------+------|
-| =personal/user.el= | Personal overlays: identity, fonts, UI/LSP switches, Org paths |
-| =personal/device-darwin.el= | macOS-only device and IME glue |
-| =personal/apple-music.el= | Apple Music integration (AppleScript + Hydra) |
+| =personal/user.el= | Identity, fonts, UI/LSP switches, Org paths |
+| =personal/device-darwin.el= | macOS-specific device and IME glue |
+| =personal/apple-music.el= | Apple Music control (AppleScript + Hydra) |
 
-**** How it works (flow)
+**** Execution flow
 
-1. *Personal bootstrap*:
-   - Identity, fonts, and UI/LSP switches are set.
-   - Cloud, Org, and blog paths are defined and ensured.
+1. *Personal bootstrap*
+   - Identity, fonts, and UI/LSP switches are established
+   - Cloud, Org, and blog directories are defined and ensured
 
-2. *Org wiring*:
-   - =org-directory= is set.
-   - =org-agenda-files= is computed by filtering non-archive Org files.
+2. *Org wiring*
+   - =org-directory= is set
+   - =org-agenda-files= is derived by filtering non-archive Org files
 
-3. *Hygiene*:
-   - Sensitive directories are removed from =load-path=.
+3. *Hygiene*
+   - Sensitive or excluded directories are removed from =load-path=
 
-4. *macOS-only glue*:
-   - =sis= is configured defensively (only if functions exist).
-   - An =after-load-theme= hook keeps the cursor face in sync.
+4. *macOS-only glue*
+   - =sis= is configured defensively
+   - Cursor color synchronization hook is installed
 
-5. *Device profile*:
-   - Mouse and scroll tuning is applied for the MX Ergo S.
+5. *Device profile*
+   - Mouse and scroll tuning for MX Ergo S is applied
 
-6. *Apple Music integration*:
-   - AppleScript runners are defined.
-   - Interactive commands and =my/hydra-apple-music= are exposed.
+6. *Apple Music integration*
+   - AppleScript runners are defined
+   - Interactive commands and Hydra are exposed
 
 **** Key settings (reference)
 
-- =my:font-default= :: ="JetBrains Mono NL"=
-- =my:font-alt= :: ="Noto Sans JP"=
-- =my:emoji-font= :: ="Apple Color Emoji"=
-- =my:font-size= :: =18=
-- =my:use-ui= :: ='nano=
-- =my:use-lsp= :: ='eglot=
+- =my:font-default= :: "JetBrains Mono"
+- =my:font-variable-pitch= :: "Noto Sans JP"
+- =my:font-size= :: 18
+- =my:use-ui= :: 'nano
+- =my:use-lsp= :: 'eglot
 - =org-directory= :: =~/Documents/org=
-- =org-agenda-files= :: All =*.org= under =org-directory=, excluding =archives=
-- =MX Ergo scroll profile= ::
-  =mouse-wheel-scroll-amount='(1 ((shift) . 5) ((control) . 10))=,
-  =scroll-conservatively=10000=,
-  =scroll-margin=2=,
-  =scroll-preserve-screen-position=t=
-- =Cursor color keep-alive= ::
-  Re-apply =(set-face-background 'cursor (frame-parameter nil 'cursor-color))=
+- =org-agenda-files= ::
+  all =*.org= under =org-directory=, excluding =archives=
+- MX Ergo scroll profile ::
+  - =mouse-wheel-scroll-amount='(1 ((shift) . 5) ((control) . 10))=
+  - =scroll-conservatively=10000=
+  - =scroll-margin=2=
+  - =scroll-preserve-screen-position=t=
+- Cursor color keep-alive ::
+  reapply =(set-face-background 'cursor (frame-parameter nil 'cursor-color))=
   on =after-load-theme=
 
 **** Usage tips
 
-- *Switch UI or LSP quickly*:
-  - Set =my:use-ui= to ='nano=, ='doom=, or ='none=.
-  - Set =my:use-lsp= to ='eglot= or ='lsp=.
+- *Switch UI or LSP stacks*
+  - Change =my:use-ui= to ='nano=, ='doom=, or ='none=
+  - Change =my:use-lsp= to ='eglot= or ='lsp=
 
-- *Change fonts*:
-  - Adjust =my:font-*= and =my:font-size= here.
-  - The UI font module picks them up automatically.
+- *Change fonts*
+  - Adjust font variables here
+  - Shared UI modules consume them automatically
 
-- *Apple Music control*:
-  - =C-c M= opens the Hydra.
-  - Keys: =p= (play/pause), =n= (next), =b= (back),
-    =l= (playlist), =i= (track info).
+- *Apple Music control*
+  - =C-c M= opens the Hydra
+  - Keys:
+    - =p= play/pause
+    - =n= next
+    - =b= back
+    - =l= playlist
+    - =i= track info
 
-- *Agenda scope*:
-  - Use an =archives/= directory or include “archives” in filenames to exclude
-    files from =org-agenda-files=.
+- *Agenda scope control*
+  - Place files under an =archives/= directory
+  - Or include “archives” in filenames to exclude them
 
 **** Troubleshooting
 
-- *sis does not switch input methods on macOS* →
-  Ensure the input source IDs match:
-  ="com.apple.keylayout.ABC"= and
-  ="com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"=.
-  Missing functions are guarded with =fboundp=.
+- *sis does not switch input methods*
+  - Verify input source IDs:
+    - "com.apple.keylayout.ABC"
+    - "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+  - All calls are guarded; missing functions will no-op
 
-- *Cursor color looks wrong after a theme change* →
-  Verify the theme sets the frame’s =cursor-color= parameter; the hook reapplies it.
+- *Cursor color incorrect after theme change*
+  - Ensure the theme sets the frame’s =cursor-color= parameter
 
-- *Hydra key not found* →
-  Confirm =hydra= is installed and loaded; the binding is added inside
-  =with-eval-after-load=.
+- *Hydra key missing*
+  - Confirm =hydra= is installed and loaded
+  - Binding is added via =with-eval-after-load=
 
-- *Meow leader binding missing* →
-  Requires both =meow= and =hydra= to be loaded; the binding is added defensively.
+- *Meow leader binding missing*
+  - Requires both =meow= and =hydra=
+  - Binding is added defensively
 
 **** Related source blocks
-
 #+begin_src emacs-lisp :tangle no
   ;; See:
   ;; - personal/user.el
@@ -7029,21 +7775,13 @@ Concretely, this layer covers:
   ;;
   ;; Category: personal
   ;;
-  ;;; Commentary:
+  ;; Commentary:
   ;; Personal configuration overrides.
   ;;
-  ;; This file intentionally contains:
-  ;; - Identity information
-  ;; - Feature enable/disable flags
-  ;; - Threshold and interval overrides
-  ;;
-  ;; This file intentionally does NOT contain:
-  ;; - Timers
-  ;; - Hooks
-  ;; - Operational logic
-  ;; - UI rendering code
-  ;;
-  ;; All behavior is implemented in core/, ui/, and utils/.
+  ;; This module:
+  ;; - defines user identity and safety-related variables
+  ;; - provides personal feature toggles and threshold overrides
+  ;; - supplies directory paths and exclusions for runtime hygiene
   ;;
   ;;; Code:
 
@@ -7117,6 +7855,12 @@ Concretely, this layer covers:
            load-path)))
 
   ;; ---------------------------------------------------------------------------
+  ;; Personal editing preferences
+  ;; ---------------------------------------------------------------------------
+
+  (add-hook 'before-save-hook #'my/save-buffer-wrapper)
+
+  ;; ---------------------------------------------------------------------------
   ;; Core session orchestration knobs
   ;; ---------------------------------------------------------------------------
 
@@ -7173,7 +7917,7 @@ Concretely, this layer covers:
 :header-args:emacs-lisp: :tangle personal/device-darwin.el
 :END:
 #+begin_src emacs-lisp
-  ;;; device-darwin.el --- macOS device profile -*- lexical-binding: t; -*-
+  ;;; personal/device-darwin.el --- macOS device profile -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -7181,8 +7925,13 @@ Concretely, this layer covers:
   ;;
   ;; Category: personal
   ;;
-  ;;; Commentary:
+  ;; Commentary:
   ;; macOS-specific device and input configuration.
+  ;;
+  ;; This module:
+  ;; - configures macOS IME integration and cursor behavior
+  ;; - defines mouse and scroll characteristics for a specific device profile
+  ;; - applies device-local settings without affecting global policy
   ;;
   ;;; Code:
 
@@ -7270,7 +8019,7 @@ Notes:
 - No core/session or utils logic is used here.
 
 #+begin_src emacs-lisp
-  ;;; apple-music.el --- Apple Music integration -*- lexical-binding: t; -*-
+  ;;; personal/apple-music.el --- Apple Music integration -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -7278,8 +8027,13 @@ Notes:
   ;;
   ;; Category: personal
   ;;
-  ;;; Commentary:
+  ;; Commentary:
   ;; Control Apple Music using AppleScript.
+  ;;
+  ;; This module:
+  ;; - provides asynchronous and synchronous AppleScript helpers
+  ;; - defines interactive commands to control Apple Music playback
+  ;; - integrates playback control with hydra and modal key systems
   ;;
   ;;; Code:
 
