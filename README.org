@@ -879,7 +879,7 @@ This behavior is intentional and by design.
   (defconst my:d:var       (expand-file-name ".var/" my:d))
   (defconst my:d:etc       (expand-file-name ".etc/" my:d))
   (defconst my:d:lisp      (expand-file-name "lisp/" my:d))
-  ;; Populate load-path with all lisp subdirectories
+
   (when (and (boundp 'my:d:lisp)
              (file-directory-p my:d:lisp))
     (dolist (dir (directory-files my:d:lisp t "\\`[^.]"))
@@ -894,7 +894,6 @@ This behavior is intentional and by design.
   (defconst my:d:eln-cache
     (expand-file-name "eln-cache/" my:d:cache))
 
-  ;; Tree-sitter grammar directory
   (defconst my:d:treesit
     (expand-file-name "tree-sitter/" my:d:var))
   (setq treesit-install-dir my:d:treesit)
@@ -917,14 +916,12 @@ This behavior is intentional and by design.
                           (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
                           (and (file-directory-p "/usr/local")   "/usr/local")))
                 (bin  (expand-file-name "bin" brew)))
-      ;; PATH
       (when (file-directory-p bin)
         (let* ((path  (or (getenv "PATH") ""))
                (parts (split-string path ":" t)))
           (unless (member bin parts)
             (setenv "PATH" (concat bin ":" path)))))
 
-      ;; LIBRARY_PATH (libgccjit)
       (let* ((libgccjit (expand-file-name "opt/libgccjit" brew))
              (gcc       (expand-file-name "opt/gcc" brew))
              (candidates
@@ -942,7 +939,6 @@ This behavior is intentional and by design.
                               (split-string old ":" t))))
                    ":"))))
 
-      ;; CC
       (when-let* ((gcc-bin
                    (seq-find
                     #'file-exists-p
@@ -1017,11 +1013,27 @@ This behavior is intentional and by design.
           window-divider-default-right-width 16
           window-divider-default-places 'right-only)
 
-  (dolist (it '((fullscreen . fullboth)
-                (internal-border-width . 8)
+  ;; NOTE:
+  ;; fullscreen is intentionally NOT set via frame alists.
+  ;; It is applied once via `window-setup-hook` to avoid double resize/repaint.
+  (dolist (it '((internal-border-width . 8)
                 (tool-bar-lines . 0)))
     (add-to-list 'default-frame-alist it)
     (add-to-list 'initial-frame-alist it))
+
+  (setq default-frame-alist
+        (assq-delete-all 'fullscreen default-frame-alist))
+  (setq initial-frame-alist
+        (assq-delete-all 'fullscreen initial-frame-alist))
+
+  (defvar core--did-fullscreen nil
+    "Non-nil once fullscreen is applied to the initial frame.")
+
+  (add-hook 'window-setup-hook
+            (lambda ()
+              (unless core--did-fullscreen
+                (setq core--did-fullscreen t)
+                (set-frame-parameter nil 'fullscreen 'fullboth))))
 
   (when (fboundp 'menu-bar-mode)   (menu-bar-mode -1))
   (when (fboundp 'tool-bar-mode)   (tool-bar-mode -1))
@@ -1032,6 +1044,7 @@ This behavior is intentional and by design.
 
   (when-let* ((u (core--login-username)))
     (setq inhibit-startup-echo-area-message u))
+
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -3527,36 +3540,52 @@ Completion modules intentionally do **not**:
   ;; Vertico-based minibuffer completion UI.
   ;;
   ;; This module:
-  ;; - enables Vertico globally
-  ;; - optionally activates posframe integration
-  ;; - augments minibuffer metadata with Marginalia
+  ;; - enables Vertico and Marginalia on first minibuffer use
+  ;; - activates vertico-posframe immediately after Vertico initialization
+  ;;   to ensure posframe is effective from the very first completion
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf))
 
   ;; ---------------------------------------------------------------------------
-  ;; Lazy initialization
+  ;; Initialization state
   ;; ---------------------------------------------------------------------------
 
   (defvar completion-vertico--initialized nil
-    "Non-nil once Vertico, posframe, and Marginalia have been initialized.")
+    "Non-nil once Vertico and Marginalia have been initialized.")
+
+  (defvar completion-vertico--posframe-initialized nil
+    "Non-nil once vertico-posframe has been initialized.")
+
+  ;; ---------------------------------------------------------------------------
+  ;; Vertico / Marginalia / posframe initialization
+  ;; ---------------------------------------------------------------------------
 
   (defun completion-vertico--init ()
-    "Initialize Vertico-related completion UI on first minibuffer use."
+    "Initialize Vertico, Marginalia, and vertico-posframe on first minibuffer use."
     (unless completion-vertico--initialized
       (setq completion-vertico--initialized t)
 
+      ;; Core completion UI
       (require 'vertico)
       (vertico-mode 1)
-
-      (when (display-graphic-p)
-        (require 'vertico-posframe)
-        (vertico-posframe-mode 1))
 
       (require 'marginalia)
       (marginalia-mode 1)
 
+      ;; Enable posframe *after* Vertico is active and geometry is stable
+      (when (and (display-graphic-p)
+                 (not completion-vertico--posframe-initialized))
+        (setq completion-vertico--posframe-initialized t)
+        (run-with-idle-timer
+         0 nil
+         (lambda ()
+           (require 'vertico-posframe)
+           (vertico-posframe-mode 1))))
+
+      ;; Remove self after initialization
       (remove-hook 'minibuffer-setup-hook #'completion-vertico--init)))
 
   (add-hook 'minibuffer-setup-hook #'completion-vertico--init)
@@ -3567,13 +3596,15 @@ Completion modules intentionally do **not**:
 
   (leaf vertico
     :straight t
-    :custom ((vertico-count . 15)))
+    :custom
+    ((vertico-count . 15)))
 
   (leaf vertico-posframe
     :straight t
     :if (display-graphic-p)
     :after vertico
-    :custom ((vertico-posframe-border-width . 2)))
+    :custom
+    ((vertico-posframe-border-width . 2)))
 
   (leaf marginalia
     :straight t)
