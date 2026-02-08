@@ -1466,6 +1466,7 @@ This separation ensures that:
       ui-window
       ui-utils
       ui-health-modeline
+      ui-imenu
 
       ;; Completion
       completion-core
@@ -4980,6 +4981,61 @@ This layer should remain *boring, predictable, and comfortable*.
   ;;; ui/ui-utils.el ends here
 #+end_src
 
+***** ui/ui-imenu.el
+:PROPERTIES:
+:CUSTOM_ID: ui-imenu
+:header-args:emacs-lisp: :tangle lisp/ui/ui-imenu.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-imenu.el --- Imenu / outline UI integration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; UI-level integration for Imenu-based navigation.
+  ;;
+  ;; This module:
+  ;; - installs and autoloads imenu-list as an optional UI component
+  ;; - does NOT define commands or workflows itself
+  ;; - provides a stable dependency surface for utils-layer helpers
+  ;;
+  ;; Design notes:
+  ;; - utils may opportunistically (require 'imenu-list nil 'noerror)
+  ;; - this module owns the decision to install the package
+  ;; - loading is deferred until explicitly used
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf))
+
+  ;;;; Built-in -------------------------------------------------------------------
+
+  (require 'imenu)
+
+  ;;;; imenu-list -----------------------------------------------------------------
+  ;; Optional sidebar-style Imenu UI.
+  ;; Loaded only on demand via commands.
+
+  (leaf imenu-list
+    :straight t
+    :commands
+    (imenu-list-minor-mode
+     imenu-list-display-dwim
+     imenu-list-stop-timer)
+    :custom
+    ((imenu-list-position . 'left)
+     (imenu-list-size . 36)
+     (imenu-list-focus-after-activation . t)))
+
+  (provide 'ui-imenu)
+  ;;; ui/ui-imenu.el ends here
+#+end_src
+
 ***** ui/ui-visual-aids.el
 :PROPERTIES:
 :CUSTOM_ID: ui-visual-aids
@@ -7026,7 +7082,8 @@ This layer exists to make the rest of the system *simpler*, not smarter.
 
   ;;;; Built-ins ------------------------------------------------------------------
 
-  (require 'imenu) ;; built-in
+  (require 'cl-lib) ;; built-in
+  (require 'imenu) ;; built-in2
 
   ;;;; Optional deps & vars (for byte-compiler) -----------------------------------
 
@@ -7081,38 +7138,36 @@ This layer exists to make the rest of the system *simpler*, not smarter.
   (defun my/org-sidebar ()
     "Open an imenu-list sidebar with safe fallbacks."
     (interactive)
-    (unless (locate-library "imenu-list")
-      (user-error "imenu-list is not installed"))
-    (autoload 'imenu-list-minor-mode  "imenu-list" nil t)
-    (autoload 'imenu-list-stop-timer  "imenu-list" nil t)
-    (autoload 'imenu-list-display-dwim "imenu-list" nil t)
 
-    (setq imenu-list-after-jump-hook #'recenter
-          imenu-list-position 'left
-          imenu-list-size 36
-          imenu-list-focus-after-activation t)
+    (when (require 'imenu-list nil 'noerror)
+      (setq imenu-list-after-jump-hook #'recenter
+            imenu-list-position 'left
+            imenu-list-size 36
+            imenu-list-focus-after-activation t)
 
-    (when (buffer-base-buffer)
-      (switch-to-buffer (buffer-base-buffer)))
+      (when (buffer-base-buffer)
+        (switch-to-buffer (buffer-base-buffer)))
 
-    (imenu-list-minor-mode 1)
-    (when (fboundp 'imenu-list-stop-timer)
-      (imenu-list-stop-timer))
+      (imenu-list-minor-mode 1)
 
-    (hl-line-mode 1)
-    (when (facep 'nano-subtle)
-      (face-remap-add-relative 'hl-line :inherit 'nano-subtle))
+      (when (fboundp 'imenu-list-stop-timer)
+        (imenu-list-stop-timer))
 
-    (setq header-line-format
-          `(:eval
-            (my/nano-headerline
-             ,(when (boundp 'imenu-list--displayed-buffer)
-                'imenu-list--displayed-buffer)
-             "(outline)")))
-    (setq-local cursor-type nil)
+      (hl-line-mode 1)
+      (when (facep 'nano-subtle)
+        (face-remap-add-relative 'hl-line :inherit 'nano-subtle))
 
-    (when (fboundp 'imenu-list-display-dwim)
-      (imenu-list-display-dwim)))
+      (setq header-line-format
+            `(:eval
+              (my/nano-headerline
+               ,(when (boundp 'imenu-list--displayed-buffer)
+                  'imenu-list--displayed-buffer)
+               "(outline)")))
+
+      (setq-local cursor-type nil)
+
+      (when (fboundp 'imenu-list-display-dwim)
+        (imenu-list-display-dwim))))
 
   (defun my/org-sidebar-toggle ()
     "Toggle the imenu-list sidebar."
