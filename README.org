@@ -8270,6 +8270,13 @@ Concretely, this layer exists to:
     (require 'device-darwin nil t)
     (require 'apple-music nil t))
 
+  (leaf personal-messages
+    :require t
+    :commands (personal-messages-archive)
+    :init
+    (run-with-timer 0 (* 10 60)
+                    #'personal-messages-archive))
+
   (provide 'user)
   ;;; personal/user.el ends here
 #+end_src
@@ -8368,7 +8375,6 @@ Concretely, this layer exists to:
 :CUSTOM_ID: personal-apple-music
 :header-args:emacs-lisp: :tangle personal/apple-music.el
 :END:
-
 Purpose:
 Control Apple Music from Emacs on macOS.
 
@@ -8511,10 +8517,152 @@ Notes:
           (meow-leader-define-key
            '("M" . my/hydra-apple-music/body))))))
 
-  (provide 'apple-music)
-  ;;; personal/apple-music.el ends here
+      (provide 'apple-music)
+      ;;; personal/apple-music.el ends here
+    #+end_src
+
+*** personal-messages.el
+:PROPERTIES:
+:CUSTOM_ID: personal-messages
+:header-args:emacs-lisp: :tangle personal/personal-messages.el
+:END:
+#+begin_src emacs-lisp
+  ;;; personal/personal-messages.el --- Messages archive integration -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: personal
+  ;;
+
+  (eval-when-compile (require 'leaf))
+
+  (require 'org)
+  (require 'subr-x)
+
+  (defgroup personal-messages nil
+    "macOS Messages archiver."
+    :group 'personal)
+
+  (defcustom personal-messages-db
+    (expand-file-name "~/Library/Messages/chat.db")
+    "Path to macOS Messages database."
+    :type 'string)
+
+  (defcustom personal-messages-dir
+    (expand-file-name "~/org/messages/")
+    "Root directory for archived messages."
+    :type 'string)
+
+  (defcustom personal-messages-last-ts-file
+    (expand-file-name "~/.emacs.d/messages-last-ts")
+    "File storing last archived unix timestamp."
+    :type 'string)
+
+  (defun personal-messages--ensure-dir (dir)
+    (unless (file-directory-p dir)
+      (make-directory dir t)))
+
+  (defun personal-messages--sanitize (name)
+    (replace-regexp-in-string "[/:*?\"<>|]" "_" name))
+
+  (defun personal-messages--ns-to-unix (ns)
+    "Convert macOS nanosecond timestamp (since 2001-01-01) to Unix time."
+    (+ (/ ns 1000000000) 978307200))
+
+  (defun personal-messages--get-last-ts ()
+    (if (file-exists-p personal-messages-last-ts-file)
+        (string-to-number
+         (string-trim
+          (with-temp-buffer
+            (insert-file-contents personal-messages-last-ts-file)
+            (buffer-string))))
+      0))
+
+  (defun personal-messages--set-last-ts (ts)
+    (with-temp-file personal-messages-last-ts-file
+      (insert (number-to-string ts))))
+
+  (defun personal-messages--target-file (handle ts)
+    (let* ((time (seconds-to-time ts))
+           (year (format-time-string "%Y" time))
+           (month (format-time-string "%Y-%m" time))
+           (base (expand-file-name
+                  (personal-messages--sanitize handle)
+                  personal-messages-dir))
+           (year-dir (expand-file-name year base)))
+      (personal-messages--ensure-dir year-dir)
+      (expand-file-name (concat month ".org") year-dir)))
+
+  (defun personal-messages--ensure-roam-header (file handle)
+    (with-current-buffer (find-file-noselect file)
+      (goto-char (point-min))
+      (unless (re-search-forward "^#\\+title:" nil t)
+        (insert
+         (format "#+title: Conversation with %s\n#+filetags: :message:person:\n\n"
+                 handle))
+        (save-buffer))))
+
+  (defun personal-messages--fetch-new ()
+    (let* ((last-ts (personal-messages--get-last-ts))
+           (sep "|")
+           (sql (format
+                 "SELECT h.id || '|' || m.date || '|' || m.is_from_me || '|' || replace(m.text, char(10), ' ') FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID WHERE m.text IS NOT NULL AND m.date > %d ORDER BY h.id, m.date ASC;"
+                 last-ts))
+           raw)
+
+      (with-temp-buffer
+        (call-process "sqlite3" nil t nil
+                      "-batch"
+                      "-noheader"
+                      personal-messages-db
+                      sql)
+        (setq raw (buffer-string)))
+
+      (let ((lines (split-string raw "\n" t))
+            results)
+        (dolist (line lines)
+          (let ((parts (split-string line sep)))
+            (when (= (length parts) 4)
+              (push
+               (list
+                (nth 0 parts)
+                (string-to-number (nth 1 parts)) ;; raw date
+                (string-to-number (nth 2 parts))
+                (nth 3 parts))
+               results))))
+        (nreverse results))))
+
+  (defun personal-messages--write-entry (handle ts is-from-me text)
+    (let* ((unix-ts (personal-messages--ns-to-unix ts))
+           (file (personal-messages--target-file handle unix-ts))
+           (time-str (format-time-string "%Y-%m-%d %H:%M"
+                                         (seconds-to-time unix-ts)))
+           (from (if (= is-from-me 1) "me" handle)))
+
+      (personal-messages--ensure-roam-header file handle)
+
+      (with-current-buffer (find-file-noselect file)
+        (goto-char (point-max))
+        (insert
+         (format "* %s\n:PROPERTIES:\n:RAW_NS: %d\n:FROM: %s\n:END:\n%s\n\n"
+                 time-str ts from text))
+        (save-buffer))))
+
+  (defun personal-messages-archive ()
+    "Archive new messages by handle."
+    (interactive)
+    (personal-messages--ensure-dir personal-messages-dir)
+    (let ((msgs (personal-messages--fetch-new))
+          (max-ts 0))
+      (dolist (m msgs)
+        (let ((handle (nth 0 m))
+              (ts (nth 1 m))
+              (is-from-me (nth 2 m))
+              (text (nth 3 m)))
+          (personal-messages--write-entry
+           handle ts is-from-me text)
+          (setq max-ts (max max-ts ts))))
+      (when (> max-ts 0)
+        (personal-messages--set-last-ts max-ts))))
+
+  (provide 'personal-messages)
+  ;;; personal/personal-messages.el ends here
 #+end_src
-
-(provide 'README)
-
-;;; README.org ends here
