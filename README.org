@@ -32,6 +32,110 @@ This project focuses on extensibility \emojifont{🚀 🧩 🤖 🎨 🗂️ ✅
 - *Observable state* — prefer inspectable behavior over opaque automation.
 - *Deletion-friendly* — removing a layer reduces convenience, not correctness.
 
+** Configuration Philosophy
+
+This configuration is not a collection of tweaks.
+It is a deliberately layered system designed around
+predictability, isolation, and long-term maintainability.
+
+The guiding philosophy is summarized below.
+
+*** 1. Determinism over Convenience
+
+Startup must be reproducible.
+
+- No implicit directory scanning
+- No conditional auto-loading based on environment state
+- No automatic installation of external components
+- No hidden side effects during bootstrap
+
+Every loaded module is explicitly declared.
+Every dependency is intentional.
+
+If something changes, it should be explainable.
+
+*** 2. Isolation by Layer
+
+Each layer owns a specific responsibility:
+
+- early-init  → process-level invariants
+- core        → global policy and infrastructure
+- ui          → visual presentation
+- completion  → minibuffer UX
+- orgx        → Org extensions only
+- dev         → development tooling
+- utils       → narrow helper functions
+- personal    → user- and device-specific overlays
+
+Higher layers may depend on lower layers.
+Lower layers must never depend on higher layers.
+
+This directionality is strictly enforced.
+
+*** 3. Explicit over Implicit
+
+Implicit behavior is avoided whenever possible.
+
+Examples:
+
+- Tree-sitter grammars are never auto-installed.
+- Native compilation warnings are intentionally configured.
+- Module loading is fully enumerated.
+- Global hooks are added only with documented intent.
+
+Nothing activates itself silently.
+
+*** 4. Safe Deletion
+
+Any layer can be removed without breaking the system.
+
+This implies:
+
+- No circular dependencies
+- No hidden cross-layer coupling
+- No dynamic feature injection from outside the module graph
+
+A removed module should fail cleanly.
+
+*** 5. Observable State
+
+State transitions must be inspectable.
+
+- Module load timing can be reported.
+- Failure to load a module is explicit.
+- Directory creation failures emit warnings.
+- Maintenance tasks are threshold-based and predictable.
+
+Silence is intentional.
+Noise is actionable.
+
+*** 6. Forward Compatibility
+
+The configuration anticipates future Emacs versions.
+
+- Version guards protect compatibility fixes.
+- Experimental features are opt-in.
+- Native compilation and Tree-sitter are centrally controlled.
+- Paths and caches follow XDG-like structure.
+
+Upgrading Emacs should not require rewriting architecture.
+
+*** 7. Policy vs. Preference
+
+Core defines policy.
+Personal defines preference.
+
+Global invariants live in `core/`.
+User taste and device specifics live in `personal/`.
+
+This prevents accidental drift of shared behavior.
+
+---
+
+This philosophy ensures that the configuration
+remains stable, debuggable, and maintainable
+even as Emacs evolves.
+
 ** Features
 :PROPERTIES:
 :CUSTOM_ID: features
@@ -1023,7 +1127,6 @@ Its role is orchestration only.
 :CUSTOM_ID: core-modules
 :END:
 
-
 **** core/core-fixes.el
 :PROPERTIES:
 :CUSTOM_ID: core-fixes
@@ -1111,6 +1214,313 @@ Its role is orchestration only.
 
   (provide 'core-fixes)
   ;;; core/core-fixes.el ends here
+#+end_src
+
+**** core/core-native.el
+:PROPERTIES:
+:CUSTOM_ID: core-native
+:header-args:emacs-lisp: :tangle lisp/core/core-native.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; core/core-native.el --- Native compilation diagnostics & reporting -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Native compilation diagnostics and reporting policy for Emacs 30+.
+  ;;
+  ;; Goals:
+  ;; - Keep default startup quiet (no noisy echoes).
+  ;; - Optionally collect native-comp warnings for later inspection.
+  ;; - Allow verbose mode for debugging/CI.
+  ;; - Remain delete-safe: removing this module should not break correctness.
+  ;;
+  ;; This module:
+  ;; - defines a 3-mode policy: silent / collect / verbose
+  ;; - supports both async warning collection and explicit inspection commands
+  ;; - integrates with CI via environment variables (optional and non-invasive)
+  ;;
+  ;; Notes:
+  ;; - This module does not change native-comp directory layout. That belongs to
+  ;;   early-init.el (eln-cache, load path).
+  ;; - Collection is best-effort and should never abort startup.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup core-native nil
+    "Native compilation diagnostics and reporting policy."
+    :group 'convenience)
+
+  (defcustom core-native-comp-report-mode 'collect
+    "Native compilation reporting mode.
+
+  - silent  : do not display or collect warnings (quiet baseline).
+  - collect : display nothing, but collect warnings for later inspection.
+  - verbose : display warnings (standard Emacs behavior).
+
+  This module tries to implement these modes using the best available APIs
+  for the running Emacs version (targeting Emacs 30+)."
+    :type '(choice (const silent)
+                   (const collect)
+                   (const verbose))
+    :group 'core-native)
+
+  (defcustom core-native-comp-ci-force-verbose t
+    "If non-nil, force verbose mode when running under CI.
+
+  CI detection uses environment variable \"CI\" being set to a non-empty value."
+    :type 'boolean
+    :group 'core-native)
+
+  (defcustom core-native-comp-collect-limit 2000
+    "Maximum number of collected native-comp warning entries.
+
+  When the limit is reached, oldest entries are dropped."
+    :type 'integer
+    :group 'core-native)
+
+  (defcustom core-native-comp-warn-threshold 25
+    "If collected warnings exceed this number, print a one-line notice.
+
+  This never spams: it only emits once per session."
+    :type 'integer
+    :group 'core-native)
+
+  (defcustom core-native-comp-auto-save-file nil
+    "If non-nil, auto-save collected warnings to this file at Emacs exit.
+
+  - nil: do not auto-save
+  - string: path to a file (directories will be created)
+
+  Saved format is plain text, append-safe is NOT used (the file is overwritten)."
+    :type '(choice (const :tag "Disabled" nil)
+                   (file  :tag "Path"))
+    :group 'core-native)
+
+  (defvar core-native--warnings nil
+    "List of collected native-comp warning entries (newest first).")
+
+  (defvar core-native--warned-threshold nil
+    "Non-nil once the threshold notice has been emitted for this session.")
+
+  (defvar core-native--installed-hook nil
+    "Non-nil once we installed collection hooks for this session.")
+
+  (defvar core-native--last-collect-at 0.0
+    "Last time (float seconds) we collected warnings. Used for coarse throttling.")
+
+  (defcustom core-native-comp-collect-min-interval 0.0
+    "Minimum interval in seconds between successive collection runs.
+
+  0 means no throttling. Non-zero can reduce overhead if Emacs emits many events."
+    :type 'number
+    :group 'core-native)
+
+  (defun core-native--ci-p ()
+    "Return non-nil if running under CI."
+    (and core-native-comp-ci-force-verbose
+         (let ((v (getenv "CI")))
+           (and (stringp v) (not (string-empty-p v))))))
+
+  (defun core-native--mode-effective ()
+    "Return the effective report mode, considering CI forcing."
+    (if (core-native--ci-p) 'verbose core-native-comp-report-mode))
+
+  (defun core-native--cap-collect ()
+    "Enforce `core-native-comp-collect-limit` on `core-native--warnings`."
+    (when (and (integerp core-native-comp-collect-limit)
+               (> core-native-comp-collect-limit 0))
+      (when (> (length core-native--warnings) core-native-comp-collect-limit)
+        (setcdr (nthcdr (1- core-native-comp-collect-limit) core-native--warnings) nil))))
+
+  (defun core-native--maybe-notice-threshold ()
+    "Emit a one-line notice if warning count exceeds threshold (once)."
+    (when (and (not core-native--warned-threshold)
+               (integerp core-native-comp-warn-threshold)
+               (> core-native-comp-warn-threshold 0)
+               (>= (length core-native--warnings) core-native-comp-warn-threshold))
+      (setq core-native--warned-threshold t)
+      (message "[core-native] collected %d native-comp warnings; use M-x core-native-show-warnings"
+               (length core-native--warnings))))
+
+  (defun core-native--normalize-entry (x)
+    "Normalize X into a printable entry.
+
+  We avoid strict assumptions about warning structure; we store what we got.
+  Return a string."
+    (cond
+     ((stringp x) x)
+     ((and (consp x) (stringp (car x)))
+      ;; Some hooks may provide (MESSAGE . MORE) or (FILE . MESSAGE) etc.
+      (format "%S" x))
+     (t
+      (format "%S" x))))
+
+  (defun core-native--collect (warnings)
+    "Collect native compilation WARNINGS (best-effort).
+
+  WARNINGS may be:
+  - list of strings
+  - list of structured objects
+  - a single string/object (depending on Emacs internals)
+
+  We never throw; this must be safe in startup and hooks."
+    (condition-case _err
+        (let* ((now (float-time))
+               (min-iv core-native-comp-collect-min-interval))
+          (when (or (<= min-iv 0.0)
+                    (>= (- now core-native--last-collect-at) min-iv))
+            (setq core-native--last-collect-at now)
+            (cond
+             ((null warnings) nil)
+             ((listp warnings)
+              (dolist (w warnings)
+                (push (core-native--normalize-entry w) core-native--warnings)))
+             (t
+              (push (core-native--normalize-entry warnings) core-native--warnings)))
+            (core-native--cap-collect)
+            (core-native--maybe-notice-threshold)))
+      (error nil)))
+
+  (defun core-native--install-collector ()
+    "Install hooks/advice to collect async native-comp warnings when available."
+    (unless core-native--installed-hook
+      (setq core-native--installed-hook t)
+      ;; Prefer official hook if present.
+      (when (boundp 'comp-async-report-warnings-errors-hook)
+        (add-hook 'comp-async-report-warnings-errors-hook #'core-native--collect))
+      ;; Some builds may have alternative hooks; keep it conservative and optional.
+      ;; If neither exists, collection mode becomes a no-op (delete-safe).
+      ))
+
+  (defun core-native--apply-report-setting (mode)
+    "Apply MODE to native-comp reporting behavior."
+    (pcase mode
+      ('silent
+       ;; Quiet: do not show.
+       (when (boundp 'native-comp-async-report-warnings-errors)
+         (setq native-comp-async-report-warnings-errors 'silent)))
+      ('collect
+       ;; Collect: we want warnings produced but not necessarily echoed.
+       ;; Emacs uses `native-comp-async-report-warnings-errors` to control reporting.
+       ;; Setting it to 'silent would suppress hook pathways in some cases, so we
+       ;; keep it enabled (t) and ensure we collect via hook when available.
+       (when (boundp 'native-comp-async-report-warnings-errors)
+         (setq native-comp-async-report-warnings-errors t))
+       (core-native--install-collector))
+      ('verbose
+       (when (boundp 'native-comp-async-report-warnings-errors)
+         (setq native-comp-async-report-warnings-errors t)))
+      (_
+       ;; Unknown -> fall back to collect (safe, observable).
+       (when (boundp 'native-comp-async-report-warnings-errors)
+         (setq native-comp-async-report-warnings-errors t))
+       (core-native--install-collector))))
+
+  (defun core-native--save-to-file (path)
+    "Save collected warnings to PATH (overwrite), creating directories as needed."
+    (when (and (stringp path) (not (string-empty-p path)))
+      (let ((dir (file-name-directory path)))
+        (when (and dir (not (file-directory-p dir)))
+          (make-directory dir t)))
+      (with-temp-file path
+        (insert ";; Native compilation warnings (collected)\n"
+                ";; Generated by core/core-native.el\n\n")
+        (if core-native--warnings
+            (dolist (w (reverse core-native--warnings))
+              (insert w "\n\n"))
+          (insert "No warnings collected.\n")))))
+
+  (defun core-native--maybe-auto-save ()
+    "Auto-save collected warnings on exit if configured."
+    (when (and core-native-comp-auto-save-file
+               (stringp core-native-comp-auto-save-file))
+      (condition-case err
+          (core-native--save-to-file core-native-comp-auto-save-file)
+        (error
+         (message "[core-native] failed to save warnings: %s"
+                  (error-message-string err))))))
+
+  ;;;###autoload
+  (defun core-native-clear-warnings ()
+    "Clear collected native-comp warnings."
+    (interactive)
+    (setq core-native--warnings nil
+          core-native--warned-threshold nil)
+    (message "[core-native] cleared"))
+
+  ;;;###autoload
+  (defun core-native-warnings-count ()
+    "Return the number of collected native-comp warning entries."
+    (interactive)
+    (message "[core-native] warnings=%d" (length core-native--warnings))
+    (length core-native--warnings))
+
+  ;;;###autoload
+  (defun core-native-show-warnings ()
+    "Display collected native-comp warnings in a dedicated buffer."
+    (interactive)
+    (if (null core-native--warnings)
+        (message "[core-native] no native-comp warnings recorded")
+      (with-current-buffer (get-buffer-create "*native-comp-warnings*")
+        (setq buffer-read-only nil)
+        (erase-buffer)
+        (insert (format "Native compilation warnings (count=%d)\n\n"
+                        (length core-native--warnings)))
+        (dolist (w (reverse core-native--warnings))
+          (insert w "\n\n"))
+        (goto-char (point-min))
+        (view-mode 1)
+        (display-buffer (current-buffer)))))
+
+  ;;;###autoload
+  (defun core-native-save-warnings (path)
+    "Save collected native-comp warnings to PATH (overwrite)."
+    (interactive "FSave native-comp warnings to file: ")
+    (core-native--save-to-file path)
+    (message "[core-native] wrote %d warnings to %s"
+             (length core-native--warnings)
+             (expand-file-name path)))
+
+  ;;;###autoload
+  (defun core-native-set-mode (mode)
+    "Set native-comp report MODE for this session.
+
+  MODE is one of: silent, collect, verbose.
+
+  This updates `core-native-comp-report-mode` and applies immediately."
+    (interactive
+     (list
+      (intern
+       (completing-read
+        "core-native mode: "
+        '("silent" "collect" "verbose")
+        nil t nil nil (symbol-name (core-native--mode-effective))))))
+    (setq core-native-comp-report-mode mode)
+    (core-native--apply-report-setting (core-native--mode-effective))
+    (message "[core-native] mode=%s (effective=%s)"
+             core-native-comp-report-mode
+             (core-native--mode-effective)))
+
+  (defun core-native--startup-init ()
+    "Apply native-comp diagnostics policy after init."
+    (core-native--apply-report-setting (core-native--mode-effective))
+    ;; Auto-save at exit (optional).
+    (add-hook 'kill-emacs-hook #'core-native--maybe-auto-save))
+
+  ;; Activate after init to avoid touching early-init bootstrap.
+  (add-hook 'after-init-hook #'core-native--startup-init)
+
+  (provide 'core-native)
+  ;;; core/core-native.el ends here
 #+end_src
 
 **** core/core-policy.el
