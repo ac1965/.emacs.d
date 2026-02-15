@@ -45,29 +45,47 @@ This project focuses on extensibility \emojifont{🚀 🧩 🤖 🎨 🗂️ ✅
 
 [[file:demo.png]]
 
+** Design Tenets
+
+- *Deterministic startup* — no implicit installs or hidden side effects.
+- *Layered ownership* — each layer owns its policy; dependencies flow downward.
+- *Opt-in power* — advanced tooling never required for baseline use.
+- *Observable state* — prefer inspectable behavior over opaque automation.
+- *Deletion-friendly* — removing a layer reduces convenience, not correctness.
+
+** Features
+:PROPERTIES:
+:CUSTOM_ID: features
+:END:
+
+- 🚀 *Performance* — Native compilation, ELN under `.cache/`, optimized GC with runtime restoration, GCMH for idle collection.
+- 🧩 *LSP* — Backend-agnostic helpers; switch between *Eglot* and *lsp-mode* via `core/switches.el`.
+- 🤖 *AI* — Aidermacs (vterm). Uses `OPENROUTER_API_KEY` or falls back to `OPENAI_API_KEY`.
+- 🎨 *UI & Editing* — Tree-sitter remaps, ef-themes + spacious-padding, Nerd Icons, Vertico/Orderless/Corfu/CAPE/Embark/Consult, Doom/Nano modelines.
+- 🗂️ *Workflow* — Curated Org stack, Magit + diff-hl/Forge, REST client, Docker/dev helpers, controlled persistence.
+
+[[file:demo.png]]
+
 ** Coding Rules
 :PROPERTIES:
 :CUSTOM_ID: conventions
 :END:
 
-- `lexical-binding: t` is mandatory in all files.
-- `(provide 'FEATURE)` must match the logical feature name.
-- Built-in packages explicitly declare `:straight nil`.
-- `leaf` forms follow a consistent order:
-  `:straight` → `:bind` → `:hook` → `:custom` → `:config`
-- Only documented public APIs are used.
+- `lexical-binding: t` is mandatory.
+- `(provide 'FEATURE)` must match the file’s feature name.
+- Built-ins declare `:straight nil`.
+- `leaf` order: `:straight` → `:bind` → `:hook` → `:custom` → `:config`.
+- Use only documented public APIs.
 
 *Compatibility & Forward Safety*
 
 - Target: **Emacs 30+** (written with **31+** in mind).
-- Obsolete APIs are avoided.
-  - Prefer `if-let*`, `when-let*`, `and-let*`.
-- New compiler/runtime warnings are treated as actionable.
-- The codebase aims to remain warning-free under default
-  `byte-compile-warnings` on current stable Emacs.
+- Avoid obsolete APIs (`if-let*`, `when-let*`, `and-let*` preferred).
+- Treat new compiler/runtime warnings as actionable.
+- Remain warning-free under default `byte-compile-warnings`.
 
 See [[#modular-loader-and-core-suite][Modular Loader & Core/Utils design]]
-for structural enforcement of these rules.
+for structural enforcement.
 
 ** Installation
 :PROPERTIES:
@@ -80,22 +98,24 @@ for structural enforcement of these rules.
 :END:
 
 *Required*
-
-- Emacs 30.0+ with native compilation (`--with-native-compilation`)
+- Emacs 30+ with native compilation (`--with-native-compilation`)
 - Git
 - GNU Make
-- GCC 10+ with `libgccjit`
+- GCC 10+ (`libgccjit`)
 
 *Recommended*
-
 - ripgrep (`rg`)
 - aspell or hunspell
 - pass + GnuPG
 - Homebrew (macOS)
 
-*** Building Emacs
+*** Building Emacs (macOS / Apple Silicon)
 
-Use the provided script:
+This build script targets:
+
+- macOS
+- Apple Silicon (arm64)
+- Homebrew installed under `/opt/homebrew`
 
 [[https://github.com/ac1965/dotfiles/blob/master/.local/bin/build-emacs.sh][build-emacs.sh]]
 
@@ -103,18 +123,22 @@ Use the provided script:
   build-emacs.sh
 #+end_src
 
+Notes:
+
+- Requires Homebrew toolchain (`gcc`, `libgccjit`, etc.) under `/opt/homebrew`.
+- Assumes native compilation (`--with-native-compilation`).
+- Not intended for Intel macOS or Linux environments.
+
 *** Quick Start
 
 1. Clone:
-
 #+begin_src shell
-  git clone --depth 1 https://github.com/ac1965/.emacs.d ~/.emacs.d/
+git clone --depth 1 https://github.com/ac1965/.emacs.d ~/.emacs.d/
 #+end_src
 
 2. Tangle:
-
 #+begin_src shell
-  EMACS=/Applications/Emacs.app/Contents/MacOS/Emacs make -C ~/.emacs.d/ tangle
+EMACS=/Applications/Emacs.app/Contents/MacOS/Emacs make -C ~/.emacs.d/ tangle
 #+end_src
 
 * Configuration Files
@@ -139,120 +163,99 @@ UI replaceable, and personal customizations isolated.
 *** Overview
 
 **** Purpose
-Provide a *clean, fast, and conservative* bootstrap sequence that prepares
-Emacs before regular initialization.
 
-The bootstrap is split into two explicit stages:
+Provide a clean, fast bootstrap that prepares Emacs before feature activation.
 
-- =early-init.el= runs **before package initialization** and establishes
-  directories, performance guards, and flicker-free UI defaults.
-- =init.el= completes package bootstrapping (*straight.el + leaf*), imports
-  the login environment on macOS, applies runtime performance knobs, and
-  exposes a deterministic module loader entrypoint.
+Initialization is split into two stages:
 
-This separation keeps early startup minimal and infrastructure-focused,
-while deferring all feature logic to later stages.
+- =early-init.el= — pre-package bootstrap (directories, performance guards, early UI).
+- =init.el= — package bootstrap (*straight.el + leaf*), runtime setup, and module entrypoint.
 
-**** What this configuration does
+Infrastructure is established first; feature logic is activated later.
 
-- Disables =package.el= early; *straight.el* and *leaf* are the only package managers.
-- Speeds up startup by temporarily widening GC limits and clearing
-  =file-name-handler-alist=, then restoring sane runtime values.
-- Normalizes all state under predictable directories:
-  =.cache/=, =.etc/=, and =.var/= (including native-comp artifacts).
-- On macOS, prefers the Homebrew toolchain by preparing PATH-related variables
-  (e.g. =PATH=, =LIBRARY_PATH=, =CC=) *before* native compilation is triggered.
-- Disables classic backups and auto-save early; higher-level modules may enable
-  =auto-save-visited-mode= later in a controlled way.
-- Applies early UI defaults (no menu/tool/scroll bars, stable frame parameters)
-  to avoid startup flicker.
-- Bootstraps *straight.el* robustly, with guarded network access and explicit
-  error reporting.
-- Initializes *leaf* and its keywords, and enables conservative performance
-  helpers (e.g. GCMH, =read-process-output-max=).
-- Sets URL-related state paths *before* =url.el= loads, so downstream consumers
-  (including *straight*) inherit them.
-- Provides two stable entrypoints:
-  - a per-user personal override file (=personal/<login-name>.el=)
-  - a shared module loader (=lisp/modules.el=)
+**** Responsibilities
 
-**** Reproducibility Note (Personal Tangling)
+This bootstrap layer:
 
-This configuration prioritizes reproducibility for all *shared* layers:
+- Disables =package.el=; uses *straight.el* exclusively.
+- Optimizes startup (temporary GC/file-handler relaxation with safe restoration).
+- Normalizes state under =.cache/=, =.etc/=, =.var/= (including native-comp artifacts).
+- Prepares Homebrew toolchain variables on macOS before native compilation.
+- Applies early UI defaults to avoid flicker.
+- Configures URL state paths before =url.el= loads.
+- Initializes *leaf* and conservative runtime helpers (GCMH, IO buffers).
+- Provides two entrypoints:
+  - =personal/<login-name>.el=
+  - =lisp/modules.el=
+
+**** Reproducibility
+
+Shared layers are reproducible:
 
 - =early-init.el=
 - =init.el=
 - =lisp/=
 
-Personal files are intentionally tangled to user-specific paths:
+Personal overlays are intentionally user-scoped:
 
 : personal/<login-name>.el
 
-This design explicitly trades strict reproducibility for:
-- Per-user isolation
-- Safe multi-user sharing of the same repository
-- Zero-conflict personal overrides
+This favors isolation and multi-user safety over strict byte-for-byte reproducibility.
 
-This behavior is intentional and by design.
-
-**** Module map (where things live)
+**** Module Map
 
 | File            | Role |
-|-----------------+------|
-| =early-init.el= | Pre-init bootstrap (dirs, performance guards, package.el off, macOS toolchain, early UI) |
-| =init.el=       | Main init (URL state, straight bootstrap, env import, runtime knobs, module loader) |
+|-----------------+--------------------------------------------|
+| =early-init.el= | Pre-init infrastructure & performance guards |
+| =init.el=       | Package bootstrap & module activation      |
 
-**** How it works (boot flow)
+**** Boot Flow
 
-1. Emacs loads =early-init.el=:
-   - Directory paths are established.
-   - =package.el= is disabled.
-   - GC and file-handler pressure is relaxed.
-   - Early UI defaults are applied.
-   - macOS toolchain variables are prepared when applicable.
+1. =early-init.el=
+   - Establish directories
+   - Disable =package.el=
+   - Relax GC/file handlers
+   - Apply early UI defaults
+   - Prepare macOS toolchain (if applicable)
 
-2. Emacs loads =init.el=:
-   - URL state directories are set *before* =url.el=.
-   - *straight.el* is bootstrapped.
-   - On macOS GUI/daemon sessions, the login environment is imported.
-   - *leaf* is initialized and a minimal base of packages is ensured.
-   - Runtime performance knobs (GCMH, IO buffers) are applied.
-   - A per-user personal file is loaded safely.
-   - =modules.el= is required as the canonical feature entrypoint.
+2. =init.el=
+   - Configure URL state
+   - Bootstrap *straight.el*
+   - Import macOS login environment (GUI/daemon)
+   - Initialize *leaf*
+   - Apply runtime performance knobs
+   - Load personal overlay
+   - Require =modules.el=
 
-3. After initialization completes, a concise startup summary
-   (elapsed time and GC count) is printed.
+3. After startup:
+   - Print elapsed time and GC count.
 
-**** Key settings (reference)
+**** Key Settings
 
-- =package-enable-at-startup= :: =nil= — rely exclusively on *straight.el*.
-- =straight-base-dir= :: Located under =.cache/= to keep the config root clean.
-- =native-comp-eln-load-path= :: Centralized under =.cache/eln-cache=.
-- =read-process-output-max= :: Temporarily raised (4 MiB) for better LSP/IO throughput.
-- =gcmh-high-cons-threshold= :: 16 MiB; =gcmh-mode= enabled for smoother long sessions.
+- =package-enable-at-startup= :: =nil=
+- =straight-base-dir= :: under =.cache/=
+- =native-comp-eln-load-path= :: =.cache/eln-cache=
+- =read-process-output-max= :: 4 MiB (temporary)
+- =gcmh-high-cons-threshold= :: 16 MiB
 
-**** Usage tips
+**** Usage Guidelines
 
-- Treat =early-init.el= as infrastructure only; avoid user behavior or feature logic.
-- Put shared behavior in modules loaded via =modules.el=.
-- Put identity, device-specific glue, and workflow integrations in
-  =personal/<login-name>.el= or related personal modules.
-- After installing or upgrading Homebrew toolchains, restart Emacs so native
-  compilation sees updated paths.
-- To relocate the entire setup, move the config directory; Emacs will regenerate
-  =.cache/=, =.etc/=, and =.var/= automatically.
+- Keep =early-init.el= infrastructure-only.
+- Put shared behavior in modules via =modules.el=.
+- Put user/device glue in =personal/=.
+- Restart Emacs after toolchain upgrades.
+- The configuration root is relocatable; state directories regenerate automatically.
 
 **** Troubleshooting
 
-- *“Native compilation can’t find libgccjit on macOS”* →
-  Ensure Homebrew’s =libgccjit= is installed and visible. The early bootstrap
-  prepares =LIBRARY_PATH= when possible.
-- *“Straight bootstrap failed”* →
-  A transient network issue during =url-retrieve-synchronously=.
-  Re-run; failures are reported with a clear =[straight] bootstrap failed= message.
-- *“Inhibit startup echo warning”* →
-  =inhibit-startup-echo-area-message= is set to the actual user name string
-  to satisfy Emacs’ type requirements.
+- Native compilation fails on macOS →
+  Ensure Homebrew =libgccjit= is installed and visible.
+
+- Straight bootstrap fails →
+  Usually a transient network issue; retry.
+
+- Startup echo warning →
+  =inhibit-startup-echo-area-message= must be a string.
 
 *** early-init.el
 :PROPERTIES:
@@ -749,73 +752,55 @@ This behavior is intentional and by design.
 
 *** Overview
 
-This configuration uses a strictly layered, explicitly orchestrated
+This configuration uses a strictly layered, explicitly ordered
 module loading architecture.
 
-Feature activation is:
-
-- deterministic
-- reproducible
-- inspectable
-- independent of filesystem side effects
-
-All shared behavior is activated from a centralized entry point.
+Shared behavior is activated only from a centralized entry point.
 Modules are never discovered implicitly or loaded via directory scanning.
 
-This section describes the design intent and constraints of the loader.
+The goal is deterministic, reproducible, and inspectable startup.
 
-**** Architectural Objective
+**** Architecture
 
-The modular loader establishes a clear boundary between:
+Initialization is segmented into three stages:
 
-1. Infrastructure bootstrap
-2. Runtime foundation
-3. Feature activation
+1. Infrastructure — =early-init.el=
+2. Runtime setup   — =init.el=
+3. Feature activation — =modules.el=
 
-Feature activation begins in =modules.el=.
-Earlier stages prepare the environment but do not enable shared behavior.
-
-This separation ensures that:
-
-- Bootstrap remains minimal
-- Runtime preparation remains infrastructure-focused
-- Feature activation remains centralized and reviewable
+Only =modules.el= enables shared configuration modules.
+Earlier stages prepare the environment but do not activate features.
 
 **** Responsibility Model
 
-The loader defines a directory-based partition of responsibilities:
+Directories define bounded responsibility domains:
 
 | Directory     | Responsibility |
 |---------------+----------------|
 | =core/=       | Runtime invariants and global policy |
 | =ui/=         | Visual presentation and interaction |
-| =completion/= | Completion frameworks and CAPF orchestration |
-| =orgx/=       | Org extensions beyond upstream defaults |
-| =dev/=        | Development and language tooling |
-| =vcs/=        | Version control integration |
-| =utils/=      | Narrow, domain-specific helpers |
+| =completion/= | Completion frameworks |
+| =orgx/=       | Org extensions |
+| =dev/=        | Development tooling |
+| =vcs/=        | Version control |
+| =utils/=      | Narrow helpers |
 
-Each directory represents a bounded responsibility domain.
 Dependencies flow strictly downward.
+Higher layers may depend on lower layers; the reverse is prohibited.
 
 **** Authoritative Entry Point
 
-=modules.el= is the authoritative activation point
-for shared configuration modules.
+=modules.el= defines:
 
-It:
+- The ordered module list
+- Error-isolated loading
+- Skip and extension mechanisms
+- Load timing diagnostics
 
-- Defines the ordered module list
-- Requires modules with error isolation
-- Supports skip and extension mechanisms
-- Reports load timing and failures
+It contains orchestration only.
+Feature logic resides inside module files.
 
-It may contain minimal loader logic, but no feature behavior.
-All feature logic resides inside module files.
-
-**** Load Order Contract
-
-Load order is fixed:
+**** Load Order
 
 1. =core=
 2. =ui=
@@ -825,19 +810,16 @@ Load order is fixed:
 6. =vcs=
 7. =utils=
 
-This sequence encodes dependency direction.
-Higher layers may depend on lower layers; the reverse is prohibited.
+This order encodes dependency direction.
 
-Any deviation requires explicit documentation and justification.
-
-**** Implementation Constraints
+**** Module Constraints
 
 To preserve determinism:
 
-- Modules are not discovered via directory scanning
-- Wildcard expansion is not used
-- Environment-based conditionals are excluded from the loader
-- Personal or host-specific logic is excluded from shared layers
+- No directory scanning
+- No wildcard expansion
+- No environment-based conditionals
+- No personal or host-specific logic
 
 Each module must:
 
@@ -846,46 +828,24 @@ Each module must:
 - Avoid uncontrolled global side effects
 - Remain safe under batch, byte-compilation, native-comp, and daemon contexts
 
-The loader contains no business logic.
+**** Non-Responsibilities
 
-**** Explicit Non-Responsibilities
-
-This layer does not:
+The loader does not:
 
 - Perform bootstrap or package initialization
-  (handled by =early-init.el=)
 - Establish runtime foundations
-  (handled by =init.el=)
 - Define hooks, advice, keybindings, or UI behavior
 - Encode user- or host-specific policy
 
-Its responsibility is orchestration only.
+Its role is orchestration only.
 
-**** Operational Benefits
+**** Benefits
 
-This design provides:
-
-- Inspectable startup behavior
-- Predictable dependency relationships
-- Controlled enable/disable during diagnostics
-- Stable compilation flows
-- Long-term maintainability
-- Safe layer removal without cascading failure
-
-Removing a module reduces convenience, not correctness.
-
-**** Relationship to Bootstrap
-
-Initialization is segmented:
-
-1. =early-init.el= — infrastructure preparation
-2. =init.el=       — runtime and environment setup
-3. =modules.el=    — shared feature activation
-
-This segmentation keeps infrastructure and behavior separate,
-centralizes activation, and isolates personal overlays from global policy.
-
-The modular loader forms the structural backbone of the configuration.
+- Inspectable startup
+- Predictable dependency flow
+- Controlled diagnostics
+- Stable compilation
+- Safe layer removal (convenience lost, correctness preserved)
 
 *** modules.el
 :PROPERTIES:
@@ -1096,117 +1056,7 @@ The modular loader forms the structural backbone of the configuration.
 :CUSTOM_ID: core-modules
 :END:
 
-**** Overview
 
-- =early-init.el= prepares startup invariants and environment state
-- =init.el= establishes runtime foundations and transfers control to =modules.el=
-- =core/= is the first feature layer activated after bootstrap
-
-This ordering ensures that all higher layers operate on a stable,
-explicitly defined foundation.
-
-***** Purpose
-
-Provide the foundational runtime, policy, and infrastructure layer
-required by all shared modules.
-
-Core establishes execution guarantees, primitive availability,
-and global defaults that higher layers may rely on without
-defensive checks.
-
-Its role is to reduce complexity elsewhere by centralizing invariants.
-
-***** What this layer does
-
-Core defines the baseline behavior of the configuration.
-
-Responsibilities include:
-
-- Establishing globally shared low-level behavior
-- Defining configuration-wide policy and invariants
-- Initializing subsystems with long-lived impact
-- Providing primitives consumed by higher layers
-
-Typical scope:
-
-- Compatibility guards and version-scoped fixes
-- Session lifecycle orchestration and global thresholds
-- Global keybinding infrastructure
-- Editing, persistence, and filesystem policy
-- Tree-sitter infrastructure with explicit grammar control
-- Feature switches gating downstream activation (UI, LSP, etc.)
-
-***** What this layer does *not* do
-
-Core does not:
-
-- Implement visual presentation or theming
-- Define completion UX or minibuffer behavior
-- Extend Org semantics
-- Configure language servers, build tools, or VCS workflows
-- Encode user-, device-, or host-specific preferences
-
-These concerns belong to higher layers or =personal/= overlays.
-
-***** Design constraints
-
-- Core must not depend on:
-  - =ui=
-  - =completion=
-  - =orgx=
-  - =dev=
-  - =vcs=
-  - =utils=
-
-- Side effects must be explicit, documented, and global in intent.
-
-- Failure in this layer is configuration-critical and must surface early.
-  Silent degradation is not acceptable.
-
-***** Implementation principles
-
-- Loaded first by =modules.el=
-- Each file:
-  - Provides exactly one feature
-  - Documents scope and non-goals
-- Optional behavior is gated by explicit customization variables
-- No module assumes interactive usage, GUI presence, or user input
-
-Core must remain safe under batch, byte-compilation,
-native compilation, and daemon contexts.
-
-***** Benefits
-
-This separation allows:
-
-- Higher layers to rely on unconditional primitives
-- Debugging from a deterministic baseline
-- Centralized, reviewable policy
-- Predictable long-running sessions
-
-***** Module map
-
-| File | Responsibility |
-|------+----------------|
-| =core/fixes.el= | Version-scoped compatibility guards |
-| =core/core-session.el= | Session orchestration and global health policy |
-| =core/general.el= | Global keybinding infrastructure |
-| =core/tools.el= | Cross-cutting navigation and inspection helpers |
-| =core/utils.el= | Core-level shared utilities |
-| =core/core-treesit.el= | Tree-sitter infrastructure and grammar policy |
-| =core/core-history.el= | Session persistence (history, places, recent files) |
-| =core/editing.el= | Editing and filesystem interaction policy |
-| =core/switches.el= | Switches controlling UI and LSP activation |
-| =core/custom.el= | Customize routing and =custom-file= management |
-| =core/custom-ui-extras.el= | Optional UI extensions appended at runtime |
-
-***** Notes
-
-- Core is the only layer allowed to define global invariants.
-- Logic dependent on UI, completion, or Org semantics does not belong here.
-- If a change feels convenient rather than necessary, it likely belongs elsewhere.
-
-This layer exists to make everything above it stable and predictable.
 **** core/core-fixes.el
 :PROPERTIES:
 :CUSTOM_ID: core-fixes
@@ -2884,105 +2734,6 @@ This layer exists to make everything above it stable and predictable.
 :CUSTOM_ID: completion-modules
 :END:
 
-**** Overview
-
-- Loaded after =core= and =ui=
-- Each file:
-  - provides exactly one completion feature
-  - documents its assumptions and non-goals
-- Disabling this entire layer must leave Emacs functional,
-  with only basic `completion-at-point` behavior
-
-***** Purpose
-Provide a **coherent, explicit, and debuggable completion architecture**
-for this Emacs configuration.
-
-This layer centralizes completion behavior to avoid fragmentation across
-modes and subsystems, and to keep completion flow *fully inspectable* via
-standard Emacs mechanisms (CAPFs, completion categories, minibuffer UI).
-
-***** What this layer does
-Completion modules are responsible for defining and wiring together the
-completion stack used by this configuration.
-
-Specifically, this layer:
-
-- Defines the minibuffer completion UI and navigation/search commands
-- Defines in-buffer completion UI and its default behavior
-- Establishes matching policy and completion category overrides
-- Orchestrates `completion-at-point-functions` (CAPFs) per major mode
-- Provides targeted, buffer-local tweaks for Org SRC edit buffers
-- Provides optional session hygiene around project switches (Eglot lifecycle)
-
-Typical responsibilities include:
-
-- Minibuffer completion (selection UI, narrowing, annotations)
-- In-buffer completion (popup UI, auto completion defaults)
-- Matching styles (orderless vs basic, file partial completion)
-- CAPF ordering and safe fallbacks across editing contexts
-
-***** What this layer does *not* do
-Completion modules intentionally do **not**:
-
-- Define global keybinding schemes or leader layouts
-- Implement UI themes or palette policy (owned by =ui=)
-- Introduce language- or project-specific semantics
-- Own LSP configuration or server selection policy (owned by =dev=)
-- Extend Org workflows beyond completion mechanics (owned by =orgx=)
-- Provide VCS features (owned by =vcs=) or general utilities (owned by =utils=)
-
-***** Design constraints
-- Completion modules may depend on:
-  - =core=
-  - =ui=
-
-- Completion modules must not depend on:
-  - =orgx=
-  - =dev=
-  - =vcs=
-  - =utils=
-
-- Completion behavior must be:
-  - deterministic
-  - composable
-  - debuggable using standard Emacs facilities
-    (e.g. inspecting CAPFs, `completion-category-overrides`,
-     and the active minibuffer frontend)
-
-***** Design principles
-- There is a **single completion flow** per context:
-  - minibuffer completion (Vertico + Marginalia + Consult)
-  - in-buffer completion (CAPF + Corfu)
-
-- CAPF order and fallback rules are explicit and reviewable
-- Frontend (UI) and backend (sources/CAPFs) are clearly separated
-- Category-based policy is preferred over mode-specific special cases
-- Org SRC edit buffers are treated as a controlled exception:
-  buffer-local overrides apply, without changing global policy
-
-***** Module map
-| File | Responsibility |
-|------+----------------|
-| =completion/completion-core.el= | Global completion policy: `completion-styles` and `completion-category-overrides` |
-| =completion/completion-vertico.el= | Minibuffer completion UI (Vertico) and annotations (Marginalia) |
-| =completion/completion-consult.el= | Search/navigation integration, including xref display via Consult |
-| =completion/completion-embark.el= | Contextual actions and prefix help integration (Embark + Embark-Consult) |
-| =completion/completion-corfu.el= | In-buffer completion UI (Corfu) + candidate visuals (kind-icon) + CAPF providers (Cape) |
-| =completion/completion-icons.el= | Nerd icons integration for minibuffer annotations (Marginalia) |
-| =completion/completion-capf.el= | Mode-specific CAPF presets and shared category overrides for CAPF-based completion |
-| =completion/completion-capf-org-src.el= | CAPF switching when entering Org SRC edit buffers (`org-src-mode`) |
-| =completion/completion-capf-org-src-lang.el= | Language-specific CAPF presets inside Org SRC edit buffers (sh/sql/python) |
-| =completion/completion-corfu-org-src.el= | Buffer-local Corfu behavior tuned for Org SRC edit buffers |
-| =completion/completion-orderless-org-src.el= | Buffer-local category overrides for permissive Orderless matching in Org SRC |
-| =completion/completion-lsp.el= | Optional cleanup helper: shut down obsolete Eglot servers on project switch |
-
-***** Notes
-- Matching policy is defined centrally via `completion-styles` and
-  `completion-category-overrides`; Org SRC overrides are buffer-local only.
-- CAPF presets are applied via major-mode hooks; exceptions are limited to
-  Org SRC edit buffers where `org-src-mode-hook` controls local overrides.
-- LSP server lifecycle policy is not implemented here; only safe cleanup
-  is provided, and only when Eglot is present and enabled.
 
 **** completion/completion-core.el
 :PROPERTIES:
@@ -3662,121 +3413,6 @@ Completion modules intentionally do **not**:
 :CUSTOM_ID: ui-modules
 :END:
 
-**** Overview
-
-- ui modules are loaded **after =core= and before functional layers**
-- Each file:
-  - provides exactly one feature
-  - contains no non-visual side effects
-- UI bundle modules:
-  - are never loaded implicitly
-  - are activated explicitly through =core/switches.el=
-- Removing or disabling all ui modules must leave Emacs fully functional,
-  albeit visually minimal
-
-***** Purpose
-Define the **visual presentation and interaction layer** of this Emacs configuration.
-
-This layer governs *how Emacs looks and feels*—colors, spacing, typography,
-and visual feedback—while deliberately avoiding any influence on semantic
-behavior, data flow, or feature logic.
-
-UI modules exist to improve *clarity, comfort, and legibility*, never correctness.
-
-***** What this layer does
-UI modules are responsible for presentation-only concerns that shape the
-day-to-day user experience without altering functional meaning.
-
-Specifically, this layer:
-
-- Configures visual appearance:
-  - theme selection and palette coordination
-  - face definitions and typography (fixed / variable pitch)
-  - line spacing, margins, and window layout hints
-- Adjusts interaction-related presentation:
-  - cursor style and visibility
-  - modeline content, density, and signaling
-  - subtle visual feedback for focus, state, and context
-- Applies UI customizations that are:
-  - orthogonal to functionality
-  - safe to toggle or replace independently
-  - reversible at runtime
-
-***** What this layer does *not* do
-UI modules intentionally do **not**:
-
-- Define global keybinding schemes or leader layouts
-  (handled by =core/general.el=)
-- Select, configure, or orchestrate functional backends
-  (completion, LSP, VCS, Org logic, etc.)
-- Introduce workflow logic or mode-specific behavior
-- Encode user-, device-, or host-specific policy
-  (handled by =personal/= overlays)
-
-Those responsibilities belong to other layers.
-
-***** Design constraints
-- UI modules may depend on:
-  - =core=
-
-- UI modules must not depend on:
-  - =completion=
-  - =orgx=
-  - =dev=
-  - =vcs=
-  - =utils=
-
-- All UI changes must be:
-  - presentation-only (no semantic side effects)
-  - reversible at runtime
-  - safe in GUI, terminal, daemon, and batch contexts
-  - tolerant of partial availability (fonts, icons, faces)
-
-***** Design principles
-- Presentation and behavior are strictly separated
-- UI modules must be safe to disable wholesale for debugging
-- Defaults favor readability and low visual noise
-- Visual signaling should be subtle, not distracting
-- Optional UI bundles are treated as *overlays*, not foundations
-
-***** Optional UI bundles
-Theme and modeline bundles (e.g. Doom-style or Nano-style) are treated as
-**optional overlays**.
-
-Selection and activation are controlled exclusively via
-=core/switches.el=, ensuring that:
-
-- the base UI remains minimal and stable
-- bundles can be compared or disabled safely
-- UI experimentation never destabilizes core behavior
-
-***** Benefits
-This separation ensures that:
-
-- visual experimentation does not affect correctness
-- alternative UI styles can be swapped without refactoring logic
-- debugging can be performed with a minimal, presentation-free setup
-- long-running sessions remain visually predictable
-
-***** Module map
-| File | Responsibility |
-|------+----------------|
-| =ui/ui-font.el= | Font family, size, and typography defaults |
-| =ui/ui-theme.el= | Theme selection and color palette coordination |
-| =ui/ui-window.el= | Frame, window, margin, and spacing presentation rules |
-| =ui/ui-utils.el= | Small visual helpers and UI-safe conveniences |
-| =ui/ui-health-modeline.el= | Session health indicators and visual status signaling |
-| =ui/ui-icons.el= | Icon and glyph integration (GUI-safe, optional) |
-| =ui/ui-macos.el= | macOS-specific visual tuning (fonts, frames, rendering) |
-| =ui/ui-doom-modeline.el= | Doom-style modeline bundle (optional overlay) |
-| =ui/ui-nano-modeline.el= | Nano-style modeline bundle (optional overlay) |
-
-***** Notes
-- UI modules must never introduce functional dependencies.
-- Any visual adjustment that affects behavior belongs elsewhere.
-- If a UI change feels “clever” or “opinionated”, it is likely misplaced.
-
-This layer should remain *boring, predictable, and comfortable*.
 
 **** ui/ui-font.el
 :PROPERTIES:
@@ -4641,106 +4277,6 @@ This layer should remain *boring, predictable, and comfortable*.
 :CUSTOM_ID: orgx-modules
 :END:
 
-**** Overview
-
-- Loaded after =completion= and before =dev=
-- Each file:
-  - provides exactly one Org-related feature
-  - documents its scope and assumptions clearly
-- Disabling this layer must leave:
-  - basic Org editing functional
-  - Org files readable and editable without loss
-
-***** Purpose
-Extend Org-mode **beyond upstream defaults** while preserving its
-core semantics, file format, and data model.
-
-This layer encapsulates all Org-specific customization, workflows,
-and assumptions, ensuring that Org behavior remains isolated from
-non-Org contexts and other subsystems.
-
-Orgx exists to make Org usage *explicit, auditable, and modular*,
-without turning Org into a bespoke or opaque system.
-
-***** What this layer does
-Orgx modules are responsible for **Org-mode–scoped behavior only**.
-
-This layer:
-
-- Extends Org-mode in a structured, non-invasive manner
-- Defines Org-specific workflows, commands, and helper utilities
-- Integrates Org with other subsystems *only at explicit boundaries*
-- Centralizes agenda, capture, and navigation policy
-
-Typical responsibilities include:
-
-- Agenda file discovery, scoping rules, and caching
-- Capture templates, inbox flows, and refiling strategy
-- Org-specific navigation, folding, and structural helpers
-- Visual and UX enhancements limited strictly to Org buffers
-- Optional integration with roam-style or graph-based note systems
-
-***** What this layer does *not* do
-Orgx modules intentionally do **not**:
-
-- Reimplement, fork, or override core Org internals
-- Affect behavior in non-Org buffers
-- Define global editing, completion, or UI policy
-- Introduce development, VCS, or infrastructure concerns
-- Encode user-, device-, or host-specific paths directly
-
-Those responsibilities belong to other layers or to
-=personal/= overlays.
-
-***** Design constraints
-- Orgx modules may depend on:
-  - =core=
-  - =ui=
-  - =completion=
-
-- Orgx modules must not depend on:
-  - =dev=
-  - =vcs=
-  - =utils=
-
-- All Org-specific assumptions must be:
-  - confined to Org buffers
-  - discoverable through module boundaries
-  - safe to disable as a group without data loss
-
-***** Design principles
-- Org remains **plain Org** on disk
-  (no proprietary formats, sidecar metadata, or irreversible transforms)
-- Extensions are additive, reversible, and optional
-- Agenda and capture behavior is explicit and reviewable
-- Org-specific UX must degrade gracefully when extensions are disabled
-- Configuration favors transparency over clever automation
-
-***** Benefits
-This separation ensures that:
-
-- Org files remain portable and future-proof
-- Non-Org workflows are unaffected by Org customization
-- Debugging Org behavior is localized and predictable
-- Org extensions can evolve without destabilizing the rest of Emacs
-
-***** Module map
-| File | Responsibility |
-|------+----------------|
-| =orgx/org-core.el= | Core Org defaults and shared Org policy |
-| =orgx/org-agenda.el= | Agenda discovery, scoping, and views |
-| =orgx/org-capture.el= | Capture templates and inbox workflows |
-| =orgx/org-navigation.el= | Navigation, folding, and structural helpers |
-| =orgx/org-roam.el= | Roam-style linking and graph-based notes |
-| =orgx/org-export.el= | Export configuration and backends |
-| =orgx/org-ui.el= | Org-specific visual and UX enhancements |
-
-***** Notes
-- Orgx is the *only* layer allowed to assume Org semantics.
-- Any logic that could apply outside Org likely belongs elsewhere.
-- If an Org change affects global behavior, it is misplaced.
-
-This layer exists to make Org powerful *without making it fragile*.
 
 **** orgx/orgx-core.el
 :PROPERTIES:
@@ -5403,106 +4939,6 @@ This layer exists to make Org powerful *without making it fragile*.
 :CUSTOM_ID: dev-modules
 :END:
 
-**** Overview
-
-- Loaded after =orgx=
-- Activation is controlled via:
-  - =core/switches.el=
-  - explicit user or maintainer intent
-- Each file:
-  - provides exactly one dev-oriented feature
-  - documents activation conditions and non-goals
-
-***** Purpose
-Support **development, diagnostics, and build-oriented workflows**
-for this Emacs configuration.
-
-This layer exists primarily for maintainers and advanced users who
-develop, inspect, or evolve the configuration itself, rather than
-for routine day-to-day editing.
-
-Dev modules are strictly *auxiliary*: useful when needed, invisible
-when not.
-
-***** What this layer does
-Dev modules provide tooling that helps *understand, debug, and extend*
-the running Emacs environment and its configuration.
-
-This layer is responsible for:
-
-- Tooling for configuration development and internal inspection
-- Support for build, compile, and debug workflows
-- Diagnostics and introspection of the live Emacs instance
-- Maintenance-oriented helpers for evolving the configuration safely
-
-Typical responsibilities include:
-
-- Language Server Protocol (LSP) client wiring and toggles
-- Debugging, profiling, tracing, and performance analysis helpers
-- Compilation, test execution, and task orchestration
-- Developer-facing inspection commands and reports
-
-***** What this layer does *not* do
-Dev modules intentionally do **not**:
-
-- Define global editing behavior or keybinding policy
-- Establish startup-critical behavior or core invariants
-- Introduce visual presentation or theming concerns
-- Encode user-, device-, or host-specific preferences
-- Affect Org workflows or semantic editing behavior
-
-Those responsibilities belong to other layers.
-
-***** Design constraints
-- Dev modules may depend on:
-  - =core=
-  - =ui=
-  - =completion=
-
-- Dev modules must not depend on:
-  - =orgx=
-  - =vcs=
-  - =utils=
-
-- All side effects must be:
-  - explicit
-  - opt-in via customization variables or switches
-  - safe to disable as a group
-
-***** Design principles
-- Dev tooling is **additive**, never required for normal operation
-- Failure in this layer must degrade gracefully
-- Disabling this layer must not affect:
-  - startup success
-  - baseline editing behavior
-  - Org workflows or persistence
-- Debugging aids should favor observability over automation
-
-***** Benefits
-This separation ensures that:
-
-- Development aids never compromise configuration stability
-- Power-user tooling can evolve rapidly without risk
-- Production usage remains lightweight and predictable
-- Debugging can be enabled surgically when needed
-
-***** Module map
-| File | Responsibility |
-|------+----------------|
-| =dev/dev-lsp-eglot.el= | Eglot-based LSP configuration and integration |
-| =dev/dev-lsp-mode.el= | lsp-mode–based LSP configuration (alternative backend) |
-| =dev/dev-dap.el= | Debug Adapter Protocol integration |
-| =dev/dev-compile.el= | Compile, build, and task helpers |
-| =dev/dev-profile.el= | Profiling and performance diagnostics |
-| =dev/dev-inspect.el= | Runtime inspection and developer-facing debug utilities |
-
-***** Notes
-- Dev is the *only* layer allowed to assume a maintainer mindset.
-- Any tool required for basic usage does not belong here.
-- If disabling this layer breaks normal editing, it is misplaced.
-
-This layer exists to make the configuration *easier to evolve*,
-not harder to use.
 
 **** dev/dev-lsp-eglot.el
 :PROPERTIES:
@@ -6300,107 +5736,6 @@ not harder to use.
 :CUSTOM_ID: vcs-modules
 :END:
 
-**** Overview
-
-- Loaded after =dev=
-- Each file:
-  - provides exactly one VCS-related feature
-  - documents backend assumptions and failure modes
-- Disabling this layer must leave Emacs fully usable for
-  non-version-controlled files
-
-***** Purpose
-Provide a **consistent, explicit, and inspectable version control interaction
-layer** within Emacs.
-
-This layer encapsulates all interaction with external version control systems
-— primarily Git — while treating those systems as the authoritative source
-of truth.
-
-Emacs is used as a *control surface*, not as a replacement for VCS tooling.
-
-***** What this layer does
-VCS modules integrate Emacs with external version control systems in a way that
-is observable, reversible, and failure-tolerant.
-
-Specifically, this layer is responsible for:
-
-- Bridging Emacs with VCS backends (primarily Git)
-- Exposing repository state, history, and diffs inside Emacs buffers
-- Providing interactive commands for common VCS workflows
-- Surfacing VCS information in buffers without mutating editing semantics
-
-Typical responsibilities include:
-
-- Repository status inspection and change overview
-- Commit, diff, hunk, and blame navigation
-- File- and project-scoped VCS operations
-- Lightweight review, history browsing, and annotation
-
-***** What this layer does *not* do
-VCS modules intentionally do **not**:
-
-- Define global editing behavior or keybinding policy
-- Enforce a specific branching, commit, or review workflow
-- Replace, fork, or reimplement external VCS tools
-- Assume the presence of a repository or remote
-
-Those responsibilities belong to user workflows or external tooling.
-
-***** Design constraints
-- VCS modules may depend on:
-  - =core=
-  - =ui=
-  - =completion=
-
-- VCS modules must not depend on:
-  - =orgx=
-  - =dev=
-  - =utils=
-
-- Interaction with external tools must be:
-  - explicit
-  - inspectable
-  - resilient to tool absence or failure
-
-***** Design principles
-- External VCS tools are the **source of truth**
-- Emacs acts as an interface layer, not an abstraction leak
-- All commands must degrade gracefully when:
-  - no repository is present
-  - required binaries are missing
-  - network access is unavailable
-- User workflow choices remain:
-  - opt-in
-  - reversible
-  - discoverable
-
-***** Observed implementation characteristics
-Based on the current configuration:
-
-- Git integration is centered on *Magit* for interactive workflows
-- Change visualization relies on lightweight gutter-style indicators
-- No assumptions are made about:
-  - hosting provider
-  - branching model
-  - collaboration workflow
-- VCS features can be enabled or disabled independently
-
-***** Module map
-| File | Responsibility |
-|------+----------------|
-| =vcs/vcs-magit.el= | Magit-based interactive Git workflows |
-| =vcs/vcs-gutter.el= | In-buffer change indicators (diff-hl) |
-| =vcs/vcs-forge.el= | Optional GitHub / GitLab integration via Forge |
-
-***** Notes
-- This layer is intentionally thin and compositional.
-- Any logic that *depends* on VCS state belongs elsewhere.
-- If disabling this layer breaks core editing, the dependency is misplaced.
-
-This layer exists to make version control *visible and accessible*,
-not opinionated or mandatory.
-
 **** vcs/vcs-magit.el
 :PROPERTIES:
 :CUSTOM_ID: vcs-magit
@@ -6530,111 +5865,6 @@ not opinionated or mandatory.
 :PROPERTIES:
 :CUSTOM_ID: utils-modules
 :END:
-
-**** Overview
-
-- Loaded last by =modules.el=
-- Each file:
-  - provides exactly one utility feature
-  - remains safe to load in isolation
-- Removing this layer must not break
-  any higher-level architectural guarantees
-
-***** Purpose
-Host **small, domain-specific utilities** that do not justify
-a dedicated architectural layer.
-
-This layer exists as a *pragmatic utility shelf*: narrowly scoped helpers
-live here to avoid contaminating core abstractions, while remaining easy
-to audit, extract, or delete.
-
-***** What this layer does
-Utils modules provide *localized assistance* to other layers without
-owning workflows, policy, or long-lived behavior.
-
-They are responsible for:
-
-- Small, focused helper functions and interactive commands
-- Solving localized or cross-cutting problems that span layers
-- Supplying glue code that would be inappropriate in higher layers
-
-Typical responsibilities include:
-
-- Buffer, window, and process housekeeping helpers
-- Lightweight automation and defensive cleanup logic
-- One-off integrations with external tools or Emacs internals
-- Quality-of-life helpers that do not define behavior on their own
-
-***** What this layer does *not* do
-Utils modules intentionally do **not**:
-
-- Define global policy, defaults, or invariants
-- Perform orchestration or lifecycle management
-- Introduce new architectural concepts or abstractions
-- Replace, override, or shadow behavior from higher layers
-- Encode user-, device-, or environment-specific configuration
-
-Those responsibilities are explicitly owned by other layers.
-
-***** Design constraints
-- Utils modules may depend on:
-  - =core=
-  - =ui=
-  - =completion=
-  - =orgx=
-  - =dev=
-  - =vcs=
-
-- Utils modules must **not** be depended on by:
-  - =core=
-  - =ui=
-  - =completion=
-  - =orgx=
-  - =dev=
-  - =vcs=
-
-- All dependencies must be:
-  - minimal
-  - explicit
-  - non-circular
-
-This makes utils a *leaf layer* in the dependency graph.
-
-***** Design principles
-- Keep modules **small, single-purpose, and disposable**
-- Avoid accumulation of loosely related helpers in one file
-- Prefer promotion to a dedicated layer if scope or importance grows
-- Deletion must always remain a valid and low-risk refactoring option
-- Utilities should be easy to reason about in isolation
-
-***** Observed implementation characteristics
-Based on the current configuration:
-
-- Utilities are defensive and side-effect conscious
-- Many helpers are interactive diagnostics or maintenance tools
-- No utils module is required for startup correctness
-- Disabling the entire utils layer should degrade convenience,
-  not correctness
-
-***** Module map
-| File | Responsibility |
-|------+----------------|
-| =utils/utils-path.el= | Safe directory and path helpers |
-| =utils/utils-async.el= | Minimal asynchronous task helpers |
-| =utils/utils-buffers.el= | Buffer lifecycle and cleanup helpers |
-| =utils/utils-edit.el= | Editing and save-time helper utilities |
-| =utils/utils-dired.el= | Dired convenience helpers |
-| =utils/utils-org-agenda.el= | Cached org-agenda file discovery |
-| =utils/utils-lint.el= | Static lint helpers for Emacs Lisp |
-| =utils/utils-diagnostics.el= | Configuration and runtime diagnostics |
-| =utils/utils-functions.el= | Small general-purpose helper functions |
-
-***** Notes
-- This layer is intentionally heterogeneous and low-ceremony.
-- Utilities should *never* become implicit dependencies.
-- If a utils module feels “important”, it likely belongs elsewhere.
-
-This layer exists to make the rest of the system *simpler*, not smarter.
 
 **** utils/utils-functions.el
 :PROPERTIES:
@@ -7363,145 +6593,76 @@ This layer exists to make the rest of the system *simpler*, not smarter.
 *** Overview
 
 **** Personal Layer Philosophy
-The =personal/= layer provides **user- and device-specific overlays**
-on top of the shared, version-controlled configuration.
 
-Its role is to express *identity, environment, and personal workflow glue*
-without influencing global policy, architectural decisions, or cross-user
-behavior.
+The =personal/= layer provides user- and device-specific overlays
+on top of the shared configuration.
 
-This layer exists explicitly to keep the shared system:
+It encodes identity, environment, and workflow glue
+without altering global policy or architectural boundaries.
+
+Its purpose is to keep shared layers:
 
 - reproducible
 - auditable
-- portable across machines and users
+- portable
 
-while still allowing the configuration to feel *native* on a specific device.
+while allowing the system to feel native on a specific device.
 
-**** Scope definition
+**** Scope
 
 This layer MAY contain:
 
-- Identity information (user name, email address)
-- Personal feature flags and thresholds
-  (UI bundle selection, LSP preference, timing knobs)
-- Device- and OS-specific glue
-  (IME behavior, mouse/scroll tuning, platform quirks)
-- Personal keybindings and workflow integrations
-- Optional integrations with external, user-owned services
+- Identity (name, email)
+- Personal feature switches (UI, LSP, thresholds)
+- OS/device glue (IME, scrolling, platform quirks)
+- Personal keybindings
+- Optional integrations with user-owned services
 
 This layer MUST NOT contain:
 
-- Core architectural or cross-user decisions
-- Shared defaults or global policy
-- Modules that other layers depend on
-- Assumptions that affect startup correctness
+- Cross-user policy
+- Shared defaults
+- Modules depended on by other layers
+- Startup-critical logic
 
-Hooks and timers are permitted **only** when they are:
+Hooks/timers are allowed only if:
 
-- strictly local to the user’s device or workflow
-- defensive (safe to no-op when unavailable)
-- non-invasive to global behavior
+- device-local
+- defensive (safe to no-op)
+- non-invasive
 
-**** Purpose
-Provide *personal overlays* that adapt the configuration to a specific
-user and machine, without compromising the modularity, determinism,
-or reproducibility of shared layers.
+**** Responsibilities
 
-Concretely, this layer exists to:
+Concretely, this layer:
 
-- encode identity and safety-related editor defaults
-- select between alternative shared stacks (UI / LSP)
-- bind shared infrastructure to local filesystem layout
-- integrate OS- and device-specific affordances
-- host convenience glue that would be inappropriate elsewhere
+- Defines identity and safety preferences
+- Selects UI/LSP stacks (=my:use-ui=, =my:use-lsp=)
+- Binds shared infrastructure to local filesystem layout
+- Wires Org directories and agenda scope
+- Applies macOS-specific input and cursor behavior
+- Tunes device-specific mouse/scroll behavior
+- Exposes optional Apple Music controls (macOS)
 
-**** What this configuration does
+**** Module Map
 
-***** Identity & safety
-- Sets =user-full-name= and =user-mail-address=
-- Applies safety-related editor preferences:
-  - disables font cache compaction on macOS
-  - enables in-memory passphrase caching for =plstore=
-
-***** Look & feel switches
-- Declares personal font preferences and default size
-- Selects UI and LSP stacks explicitly:
-  - =my:use-ui= (e.g. =nano=)
-  - =my:use-lsp= (e.g. =eglot=)
-- Delegates actual behavior to shared UI and dev layers
-
-***** Directories & Org wiring
-- Defines a cloud-rooted workspace (default: =~/Documents=)
-- Derives:
-  - =my:d:org=
-  - =my:d:blog=
-- Ensures required directories exist
-- Sets =org-directory=
-- Computes =org-agenda-files= dynamically by scanning
-  non-archive =.org= files
-- Removes sensitive or excluded paths from =load-path=
-
-***** macOS input method integration (=sis=)
-- Configures ABC ⇄ Kotoeri (Romaji) switching via =macism=
-- Enables cursor-color, respect, and inline modes when available
-- All functionality is guarded with =fboundp= checks
-
-***** Cursor color keep-alive
-- Reapplies the frame’s cursor color to the =cursor= face
-  after theme reloads
-- Prevents cursor desynchronization across theme switches
-
-***** Device profile (MX Ergo S)
-- Applies conservative, smooth scrolling defaults
-- Preserves screen position and margins
-- Enables tilt scrolling
-- Mouse bindings:
-  - =mouse-2= → yank
-  - =mouse-4/5= → previous / next buffer
-
-***** Apple Music integration (macOS)
-- Defines asynchronous and synchronous AppleScript helpers
-- Exposes interactive commands:
-  - play / pause
-  - next / previous track
-  - playlist selection
-  - current track info
-- Provides a Hydra bound to =C-c M=
-- Optionally integrates with Meow leader keys when available
-
-**** Module map
 | Module file | Role |
-|-------------+------|
-| =personal/user.el= | Identity, fonts, UI/LSP switches, Org paths |
-| =personal/device-darwin.el= | macOS-specific device and IME glue |
-| =personal/apple-music.el= | Apple Music control (AppleScript + Hydra) |
+|-------------+--------------------------------|
+| =personal/user.el=          | Identity, fonts, UI/LSP switches, Org paths |
+| =personal/device-darwin.el= | macOS device & IME glue |
+| =personal/apple-music.el=   | Apple Music control (AppleScript + Hydra) |
 
-**** Execution flow
+**** Execution Model
 
-1. *Personal bootstrap*
-   - Identity, fonts, and UI/LSP switches are established
-   - Cloud, Org, and blog directories are defined and ensured
+1. Establish identity, fonts, and stack switches
+2. Configure Org directories and agenda scope
+3. Apply hygiene (load-path filtering)
+4. Install macOS glue (IME, cursor sync)
+5. Apply device profile (scroll/mouse tuning)
+6. Register optional Apple Music commands
 
-2. *Org wiring*
-   - =org-directory= is set
-   - =org-agenda-files= is derived by filtering non-archive Org files
+All macOS integrations are guarded via =fboundp= checks.
 
-3. *Hygiene*
-   - Sensitive or excluded directories are removed from =load-path=
-
-4. *macOS-only glue*
-   - =sis= is configured defensively
-   - Cursor color synchronization hook is installed
-
-5. *Device profile*
-   - Mouse and scroll tuning for MX Ergo S is applied
-
-6. *Apple Music integration*
-   - AppleScript runners are defined
-   - Interactive commands and Hydra are exposed
-
-**** Key settings (reference)
+**** Key Settings
 
 - =my:font-default= :: "JetBrains Mono"
 - =my:font-variable-pitch= :: "Noto Sans JP"
@@ -7509,66 +6670,27 @@ Concretely, this layer exists to:
 - =my:use-ui= :: 'nano
 - =my:use-lsp= :: 'eglot
 - =org-directory= :: =~/Documents/org=
-- =org-agenda-files= ::
-  all =*.org= under =org-directory=, excluding =archives=
-- MX Ergo scroll profile ::
-  - =mouse-wheel-scroll-amount='(1 ((shift) . 5) ((control) . 10))=
+- =org-agenda-files= :: all non-archive =*.org= under =org-directory=
+- MX Ergo profile ::
   - =scroll-conservatively=10000=
   - =scroll-margin=2=
   - =scroll-preserve-screen-position=t=
-- Cursor color keep-alive ::
-  reapply =(set-face-background 'cursor (frame-parameter nil 'cursor-color))=
-  on =after-load-theme=
 
-**** Usage tips
+**** Usage
 
-- *Switch UI or LSP stacks*
-  - Change =my:use-ui= to ='nano=, ='doom=, or ='none=
-  - Change =my:use-lsp= to ='eglot= or ='lsp=
-
-- *Change fonts*
-  - Adjust font variables here
-  - Shared UI modules consume them automatically
-
-- *Apple Music control*
-  - =C-c M= opens the Hydra
-  - Keys:
-    - =p= play/pause
-    - =n= next
-    - =b= back
-    - =l= playlist
-    - =i= track info
-
-- *Agenda scope control*
-  - Place files under an =archives/= directory
-  - Or include “archives” in filenames to exclude them
+- Switch UI/LSP by changing =my:use-ui= / =my:use-lsp=
+- Adjust fonts via personal variables
+- Control Apple Music with =C-c M=
+- Exclude agenda files via =archives/= or filename pattern
 
 **** Troubleshooting
 
-- *sis does not switch input methods*
-  - Verify input source IDs:
-    - "com.apple.keylayout.ABC"
-    - "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
-  - All calls are guarded; missing functions will no-op
-
-- *Cursor color incorrect after theme change*
-  - Ensure the theme sets the frame’s =cursor-color= parameter
-
-- *Hydra key missing*
-  - Confirm =hydra= is installed and loaded
-  - Binding is added via =with-eval-after-load=
-
-- *Meow leader binding missing*
-  - Requires both =meow= and =hydra=
-  - Binding is added defensively
-
-**** Related source blocks
-#+begin_src emacs-lisp :tangle no
-  ;; See:
-  ;; - personal/user.el
-  ;; - personal/device-darwin.el
-  ;; - personal/apple-music.el
-#+end_src
+- IME switching fails →
+  Verify macOS input source IDs.
+- Cursor color incorrect →
+  Ensure theme sets frame =cursor-color=.
+- Apple Music Hydra missing →
+  Confirm =hydra= is installed.
 
 *** user.el
 :PROPERTIES:
