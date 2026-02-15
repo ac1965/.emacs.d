@@ -354,7 +354,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Early initialization executed before regular init.el.
   ;;
   ;; This file:
@@ -388,15 +388,6 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (defun core--login-username ()
     "Return login username or nil."
     (ignore-errors (user-login-name)))
-
-  (defvar core--orig-file-name-handler-alist nil
-    "Original `file-name-handler-alist' saved for restoration.")
-
-  (defun core--restore-startup-state ()
-    "Restore GC and file handler settings after startup."
-    (setq file-name-handler-alist core--orig-file-name-handler-alist
-          gc-cons-threshold 16777216
-          gc-cons-percentage 0.1))
 
   (defalias 'my/ensure-directory-exists #'core--ensure-directory)
 
@@ -452,12 +443,11 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                      my:d:eln-cache my:d:treesit my:d:url my:d:eww))
     (core--ensure-directory dir))
 
-  ;; Tree-sitter install + load paths must be set early.
   (setq treesit-install-dir my:d:treesit)
   (setq treesit-extra-load-path (list my:d:treesit))
 
   ;; ---------------------------------------------------------------------------
-  ;; 4) straight.el base (kept early, deterministic)
+  ;; 4) straight.el base
   ;; ---------------------------------------------------------------------------
 
   (setopt straight-base-dir my:d:cache
@@ -468,7 +458,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
           straight-profiles '((nil . "default.el")))
 
   ;; ---------------------------------------------------------------------------
-  ;; 5) macOS Homebrew toolchain (best-effort, forward-safe)
+  ;; 5) macOS Homebrew toolchain
   ;; ---------------------------------------------------------------------------
 
   (when-let* ((brew (or (getenv "HOMEBREW_PREFIX")
@@ -476,16 +466,11 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                         (and (file-directory-p "/usr/local")   "/usr/local")))
               (bin  (expand-file-name "bin" brew)))
     (when (file-directory-p bin)
-
-      ;; Ensure Homebrew bin is in PATH
       (let* ((path  (or (getenv "PATH") ""))
              (parts (split-string path ":" t)))
         (unless (member bin parts)
           (setenv "PATH" (concat bin ":" path))))
-
-      ;; -------- Forward-safe GCC detection --------
-      (let* ((gcc-candidates
-              (directory-files bin t "^gcc-[0-9]+$"))
+      (let* ((gcc-candidates (directory-files bin t "^gcc-[0-9]+$"))
              (gcc-pairs
               (mapcar (lambda (path)
                         (when (string-match "gcc-\\([0-9]+\\)$" path)
@@ -499,7 +484,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
           (setenv "CC" latest)))))
 
   ;; ---------------------------------------------------------------------------
-  ;; 6) Native compilation (ELN path + async warning reporting)
+  ;; 6) Native compilation
   ;; ---------------------------------------------------------------------------
 
   (when (and (boundp 'native-comp-eln-load-path)
@@ -510,34 +495,33 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
             native-comp-async-report-warnings-errors 'silent))
 
   ;; ---------------------------------------------------------------------------
-  ;; 7) no-littering compatibility (directories owned by early-init)
+  ;; 7) no-littering compatibility
   ;; ---------------------------------------------------------------------------
 
   (defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
   (defvar no-littering-var-directory (file-name-as-directory my:d:var))
 
   ;; ---------------------------------------------------------------------------
-  ;; 8) Startup performance (GC + file-name-handler filtering, restore on startup)
+  ;; 8) Startup performance (GC + file-name-handler deferral)
   ;; ---------------------------------------------------------------------------
 
-  (setq core--orig-file-name-handler-alist file-name-handler-alist)
+  (defvar core--orig-file-name-handler-alist file-name-handler-alist
+    "Original `file-name-handler-alist' saved for restoration.")
 
-  (setq file-name-handler-alist
-        (seq-remove
-         (lambda (h)
-           (let ((fn (cdr h)))
-             (and (symbolp fn)
-                  (string-match-p "\\`\\(tramp\\|jka-compr\\)"
-                                  (symbol-name fn)))))
-         file-name-handler-alist))
+  (defun core--restore-startup-state ()
+    "Restore GC and file handler settings after startup."
+    (setq file-name-handler-alist core--orig-file-name-handler-alist
+          gc-cons-threshold 16777216
+          gc-cons-percentage 0.1))
 
-  (setq gc-cons-threshold most-positive-fixnum
+  (setq file-name-handler-alist nil
+        gc-cons-threshold most-positive-fixnum
         gc-cons-percentage 0.6)
 
   (add-hook 'emacs-startup-hook #'core--restore-startup-state)
 
   ;; ---------------------------------------------------------------------------
-  ;; 9) Backups / auto-save (disabled in this configuration)
+  ;; 9) Backups / auto-save
   ;; ---------------------------------------------------------------------------
 
   (setq make-backup-files nil
@@ -548,7 +532,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
         auto-save-list-file-prefix nil)
 
   ;; ---------------------------------------------------------------------------
-  ;; 10) Early UI defaults (avoid flicker; fullscreen applied once post-setup)
+  ;; 10) Early UI defaults
   ;; ---------------------------------------------------------------------------
 
   (setopt frame-resize-pixelwise t
@@ -558,9 +542,6 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
           window-divider-default-right-width 16
           window-divider-default-places 'right-only)
 
-  ;; NOTE:
-  ;; fullscreen is intentionally NOT set via frame alists.
-  ;; It is applied once via `window-setup-hook` to avoid double resize/repaint.
   (dolist (it '((internal-border-width . 8)
                 (tool-bar-lines . 0)))
     (add-to-list 'default-frame-alist it)
@@ -571,8 +552,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (setq initial-frame-alist
         (assq-delete-all 'fullscreen initial-frame-alist))
 
-  (defvar core--did-fullscreen nil
-    "Non-nil once fullscreen is applied to the initial frame.")
+  (defvar core--did-fullscreen nil)
 
   (add-hook 'window-setup-hook
             (lambda ()
@@ -585,7 +565,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))
 
   ;; ---------------------------------------------------------------------------
-  ;; 11) Startup echo (quiet by default; keep standard behavior)
+  ;; 11) Startup echo
   ;; ---------------------------------------------------------------------------
 
   (when-let* ((u (core--login-username)))
@@ -961,16 +941,17 @@ Its role is orchestration only.
 - Load order reflects semantic dependency layers:
   1. core
   2. ui
-  3. completion
-  4. orgx
-  5. dev
-  6. utils
+  3. auth
+  4. completion
+  5. orgx
+  6. dev
+  7. utils
 - Every required feature must:
   - be provided by exactly one file
   - correspond to a clearly named module
 
 #+begin_src emacs-lisp
-  ;;; modules.el --- Modular configuration loader -*- lexical-binding: t; -*-
+  ;;; lisp/modules.el --- Modular configuration loader -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -990,6 +971,7 @@ Its role is orchestration only.
 
   (eval-when-compile (require 'subr-x))
   (require 'seq)
+
   (defgroup my:modules nil
     "Loader options for modular Emacs configuration."
     :group 'convenience)
@@ -1005,36 +987,53 @@ Its role is orchestration only.
     :group 'my:modules)
 
   (defcustom my:modules-extra nil
-    "List of extra module features to append after `my:modules'."
+    "List of extra module features to append after `my:modules`."
     :type '(repeat symbol)
     :group 'my:modules)
 
   (defconst my:modules
     '(
-      ;; Core
+      ;; -------------------------------------------------------------------------
+      ;; Core (runtime invariants, infrastructure, policy)
+      ;; -------------------------------------------------------------------------
       core-fixes
       core-policy
       core-session
       core-gc
       core-persistence
       core-buffers
-      core-general
+      core-runtime
       core-tools
       core-treesit
       core-history
       core-editing
       core-switches
       core-custom
+      core-api
 
-      ;; UI
+      ;; -------------------------------------------------------------------------
+      ;; UI (UX only; delete-safe)
+      ;; -------------------------------------------------------------------------
       ui-font
       ui-theme
       ui-window
       ui-utils
       ui-health-modeline
       ui-imenu
+      ui-leader
+      ui-hydra
+      ui-which-key
+      ui-keymap
+      ui-global-keys
 
+      ;; -------------------------------------------------------------------------
+      ;; Auth (secrets, auth-source; delete-safe)
+      ;; -------------------------------------------------------------------------
+      auth-core
+
+      ;; -------------------------------------------------------------------------
       ;; Completion
+      ;; -------------------------------------------------------------------------
       completion-core
       completion-vertico
       completion-consult
@@ -1048,7 +1047,9 @@ Its role is orchestration only.
       completion-orderless-org-src
       completion-lsp
 
-      ;; Org ecosystem (module namespace = )
+      ;; -------------------------------------------------------------------------
+      ;; Org ecosystem
+      ;; -------------------------------------------------------------------------
       orgx-core
       orgx-visual
       orgx-extensions
@@ -1057,12 +1058,17 @@ Its role is orchestration only.
       orgx-notes-markdown
       orgx-auto-tangle
 
-      ;; VCS (uncomment when needed)
+      ;; -------------------------------------------------------------------------
+      ;; VCS
+      ;; -------------------------------------------------------------------------
       vcs-magit
       vcs-gutter
       vcs-forge
 
-      ;; Development
+      ;; -------------------------------------------------------------------------
+      ;; Dev
+      ;; -------------------------------------------------------------------------
+      dev-lsp-bridge
       dev-ai
       dev-term
       dev-web-core
@@ -1075,7 +1081,9 @@ Its role is orchestration only.
       dev-navigation
       dev-tools
 
+      ;; -------------------------------------------------------------------------
       ;; Utils
+      ;; -------------------------------------------------------------------------
       utils-path
       utils-async
       utils-buffers
@@ -1094,7 +1102,7 @@ Its role is orchestration only.
 
   (defun my/modules--require-safe (feature)
     "Require FEATURE with error trapping. Return non-nil on success.
-  Errors are reported via `message' but do not abort the whole loader."
+  Errors are reported via `message` but do not abort the whole loader."
     (condition-case err
         (progn (require feature) t)
       (error
@@ -1110,38 +1118,36 @@ Its role is orchestration only.
      (t             (format "%.2fs"   sec))))
 
   (defun my/modules-load ()
-    "Load all modules defined by `my:modules', respecting options.
-  - Honors `my:modules-skip' and `my:modules-extra'.
-  - Prints per-module timing when `my:modules-verbose' is non-nil.
-  - Prints a final summary including counts *and* the lists of skipped/failed."
+    "Load all modules defined by `my:modules`, respecting options.
+  - Honors `my:modules-skip` and `my:modules-extra`.
+  - Prints per-module timing when `my:modules-verbose` is non-nil.
+  - Prints a final summary including counts and the lists of skipped/failed."
     (let* ((all (append my:modules my:modules-extra))
            (final (seq-remove (lambda (m) (not (my/modules--should-load-p m))) all))
            (skipped (seq-remove (lambda (m) (memq m final)) all))
            (ok 0) (ng 0)
            (failed '())
-           (loaded '())
            (t0 (and my:modules-verbose (current-time))))
       (dolist (mod final)
         (let ((m0 (and my:modules-verbose (current-time))))
           (if (my/modules--require-safe mod)
-              (progn (setq ok (1+ ok)) (push mod loaded))
-            (setq ng (1+ ng)) (push mod failed))
+              (setq ok (1+ ok))
+            (setq ng (1+ ng))
+            (push mod failed))
           (when my:modules-verbose
             (message "[modules] %-24s %s"
-                     mod (my:modules--format-seconds
-                          (float-time (time-subtract (current-time) m0)))))))
+                     mod
+                     (my:modules--format-seconds
+                      (float-time (time-subtract (current-time) m0)))))))
       (when my:modules-verbose
-        ;; Main summary (backward-compatible)
         (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
                  ok (length skipped) ng
                  (my:modules--format-seconds
                   (float-time (time-subtract (current-time) t0))))
-        ;; Detail: skipped targets
         (when skipped
           (message "[modules] skipped (%d): %s"
                    (length skipped)
                    (mapconcat #'symbol-name (nreverse skipped) " ")))
-        ;; Detail: failed targets
         (when failed
           (message "[modules] failed  (%d): %s"
                    (length failed)
@@ -1248,6 +1254,72 @@ Its role is orchestration only.
   ;;; core/core-fixes.el ends here
 #+end_src
 
+**** core/core-policy.el
+:PROPERTIES:
+:CUSTOM_ID: core-policy
+:header-args:emacs-lisp: :tangle lisp/core/core-policy.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-policy.el --- Global editing policy -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Global editing invariants and deterministic policy enforcement.
+  ;;
+  ;; This module may perform limited, scope-bounded mutations when
+  ;; operating strictly inside the internal configuration directory.
+  ;;
+  ;; Policy guarantees:
+  ;;
+  ;; - No mutation of external project files
+  ;; - No mutation outside `no-littering-var-directory`
+  ;; - No hidden side effects during bootstrap
+  ;; - All mutations are deterministic and explainable
+  ;;
+  ;; Current responsibilities:
+  ;;
+  ;; - Ensure lexical-binding header exists in internal Emacs Lisp files
+  ;;
+  ;; Delete-safe:
+  ;; Removing this module disables policy enforcement without
+  ;; breaking core infrastructure.
+  ;;
+  ;;; Code:
+
+  (defgroup core-policy nil
+    "Global editing policy for internal configuration."
+    :group 'convenience)
+
+  (defun my/auto-insert-lexical-binding ()
+    "Insert lexical-binding header in internal configuration files.
+
+  Scope:
+  - Only files inside `no-littering-var-directory`
+  - Only `emacs-lisp-mode` buffers
+  - No effect on external repositories
+
+  This function preserves deterministic configuration hygiene."
+    (when (and buffer-file-name
+               (derived-mode-p 'emacs-lisp-mode)
+               (string-prefix-p
+                (expand-file-name no-littering-var-directory)
+                (expand-file-name buffer-file-name)))
+      (save-excursion
+        (goto-char (point-min))
+        (unless (search-forward "lexical-binding:" nil t)
+          (insert ";;; -*- lexical-binding: t; -*-\n\n")))))
+
+  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
+
+  (provide 'core-policy)
+  ;;; core/core-policy.el ends here
+#+end_src
 **** core/core-native.el
 :PROPERTIES:
 :CUSTOM_ID: core-native
@@ -1555,55 +1627,6 @@ Its role is orchestration only.
   ;;; core/core-native.el ends here
 #+end_src
 
-**** core/core-policy.el
-:PROPERTIES:
-:CUSTOM_ID: core-policy
-:header-args:emacs-lisp: :tangle lisp/core/core-policy.el
-:END:
-#+begin_src emacs-lisp
-  ;;; core/core-policy.el --- Core runtime policy hooks -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;; Commentary:
-  ;; Global runtime policies enforced via core-level hooks.
-  ;;
-  ;; This module:
-  ;; - defines editor-wide behavioral guarantees
-  ;; - installs carefully scoped global hooks
-  ;; - centralizes policy that must not live in utils or dev
-  ;;
-  ;;; Code:
-
-  (defun my/auto-insert-lexical-binding ()
-    "Insert `lexical-binding: t` in Emacs Lisp files under `no-littering-var-directory`."
-    (when (and (stringp buffer-file-name)
-               (boundp 'no-littering-var-directory)
-               (string-prefix-p (expand-file-name no-littering-var-directory)
-                                (expand-file-name buffer-file-name))
-               (string-match-p "\\.el\\'" buffer-file-name)
-               (not (save-excursion
-                      (goto-char (point-min))
-                      (re-search-forward "lexical-binding" (line-end-position 5) t))))
-      (save-excursion
-        (goto-char (point-min))
-        (insert ";; -*- lexical-binding: t; -*- \n"))))
-  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
-
-  (defun my/enable-view-mode-on-read-only ()
-    (if buffer-read-only
-        (view-mode 1)
-      (view-mode -1)))
-  (add-hook 'read-only-mode-hook #'my/enable-view-mode-on-read-only)
-
-  (provide 'core-policy)
-  ;;; core/core-policy.el ends here
-#+end_src
-
 **** core/core-session.el
 :PROPERTIES:
 :CUSTOM_ID: core-session
@@ -1785,11 +1808,7 @@ Its role is orchestration only.
   ;;; core/core-session.el ends here
 #+end_src
 
-**** core/core-gc.el
-:PROPERTIES:
-:CUSTOM_ID: core-gc
-:header-args:emacs-lisp: :tangle lisp/core/core-gc.el
-:END:
+**** core/core-gc.el.
 #+begin_src emacs-lisp
   ;;; core/core-gc.el --- Safe garbage collection helpers -*- lexical-binding: t; -*-
   ;;
@@ -1807,30 +1826,81 @@ Its role is orchestration only.
   ;; - avoids synchronous or frequent GC pressure
   ;; - integrates with session orchestration indirectly
   ;;
+  ;; Design principles:
+  ;; - No timers
+  ;; - No background daemons
+  ;; - Deterministic hook-based triggering
+  ;; - Delete-safe
+  ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (defgroup core-gc nil
+    "Garbage collection helpers."
+    :group 'convenience)
 
-  (leaf nil
-    :straight nil
-    :init
-    (defcustom core-gc-enable-p t
-      "Enable GC hooks for long-running sessions."
-      :type 'boolean
-      :group 'core-gc)
+  (defcustom core-gc-enable-p t
+    "Enable GC hooks for long-running sessions."
+    :type 'boolean
+    :group 'core-gc)
 
-    (defun core-gc--collect ()
-      "Run garbage collection safely."
-      (when core-gc-enable-p
-        (condition-case _err
-            (garbage-collect)
-          (error nil))))
+  (defun core-gc--collect ()
+    "Run garbage collection safely.
 
-    (add-hook 'focus-out-hook #'core-gc--collect)
-    (add-hook 'minibuffer-exit-hook #'core-gc--collect))
+  Errors are suppressed to preserve session stability."
+    (when core-gc-enable-p
+      (condition-case _err
+          (garbage-collect)
+        (error nil))))
+
+  (add-hook 'focus-out-hook #'core-gc--collect)
+  (add-hook 'minibuffer-exit-hook #'core-gc--collect)
 
   (provide 'core-gc)
   ;;; core/core-gc.el ends here
+#+end_src
+
+**** core/core-persistence.el
+:PROPERTIES:
+:CUSTOM_ID: core-persistence
+:header-args:emacs-lisp: :tangle lisp/core/core-persistence.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-persistence.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Backup and persistence hygiene helpers.
+  ;;
+  ;; This module:
+  ;; - enforces retention policies for backups
+  ;; - runs cleanup at controlled lifecycle points
+  ;; - avoids background or continuous scanning
+  ;;
+  ;;; Code:
+
+  (defun my/delete-old-backups ()
+    "Delete backup files older than 7 days."
+    (interactive)
+    (let ((backup-dir (concat no-littering-var-directory "backup/"))
+          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
+      (when (file-directory-p backup-dir)
+        (dolist (file (directory-files backup-dir t))
+          (when (and (file-regular-p file)
+                     (< (float-time
+                         (file-attribute-modification-time
+                          (file-attributes file)))
+                        threshold))
+            (delete-file file))))))
+
+  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
+
+  (provide 'core-persistence)
+  ;;; core/core-persistence.el ends here
 #+end_src
 
 **** core/core-buffers.el
@@ -1884,13 +1954,14 @@ Its role is orchestration only.
   ;;; core/core-buffers.el ends here
 #+end_src
 
-**** core/core-persistence.el
+**** core/core-runtime.el
 :PROPERTIES:
-:CUSTOM_ID: core-persistence
-:header-args:emacs-lisp: :tangle lisp/core/core-persistence.el
+:CUSTOM_ID: core-runtime
+:header-args:emacs-lisp: :tangle lisp/core/core-runtime.el
 :END:
+
 #+begin_src emacs-lisp
-  ;;; core/core-persistence.el --- Backup and auto-save helpers -*- lexical-binding: t; -*-
+  ;;; lisp/core/core-runtime.el --- Core runtime invariants (no UX) -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1899,538 +1970,57 @@ Its role is orchestration only.
   ;; Category: core
   ;;
   ;; Commentary:
-  ;; Backup and persistence hygiene helpers.
+  ;; Runtime invariants and OS-sensitive variables that should remain in core.
   ;;
   ;; This module:
-  ;; - enforces retention policies for backups
-  ;; - runs cleanup at controlled lifecycle points
-  ;; - avoids background or continuous scanning
+  ;; - configures modifier keys (OS-specific, variable-level only)
+  ;; - avoids UX policy (no keybindings, no hydra, no which-key)
+  ;; - remains safe under batch/daemon/native-comp contexts
   ;;
-  ;;; Code:
-
-  (defun my/delete-old-backups ()
-    "Delete backup files older than 7 days."
-    (interactive)
-    (let ((backup-dir (concat no-littering-var-directory "backup/"))
-          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
-      (when (file-directory-p backup-dir)
-        (dolist (file (directory-files backup-dir t))
-          (when (and (file-regular-p file)
-                     (< (float-time
-                         (file-attribute-modification-time
-                          (file-attributes file)))
-                        threshold))
-            (delete-file file))))))
-
-  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
-
-  (provide 'core-persistence)
-  ;;; core/core-persistence.el ends here
-#+end_src
-
-**** core/core-general.el
-:PROPERTIES:
-:CUSTOM_ID: core-general
-:header-args:emacs-lisp: :tangle lisp/core/core-general.el
-:END:
-#+begin_src emacs-lisp
-  ;;; core/core-general.el --- General settings & keybindings (NO Meow) -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;; Commentary:
-  ;; Global editing defaults and non-modal keybinding infrastructure.
-  ;;
-  ;; This module:
-  ;; - defines a global leader-key system
-  ;; - provides LSP-agnostic editor helpers
-  ;; - centralizes global bindings and authentication helpers
+  ;; Notes:
+  ;; - Keymaps and UX belong to ui/ layer.
+  ;; - LSP convenience helpers belong to dev/ layer.
   ;;
   ;;; Code:
 
   (eval-when-compile
-    (require 'leaf)
-    (require 'leaf-keywords)
     (require 'subr-x))
 
-  (defvar plstore-secret-keys)
-  (defvar plstore-encrypt-to)
+  (defgroup core-runtime nil
+    "Runtime invariants and OS-level variable configuration."
+    :group 'convenience)
 
-  (autoload 'magit-status "magit")
-  (autoload 'magit-blame-addition "magit")
-  (autoload 'magit-log-current "magit")
-  (autoload 'magit-diff-buffer-file "magit")
-  (autoload 'magit-commit "magit")
+  (defcustom core-runtime-configure-modifiers-p t
+    "If non-nil, configure modifier key variables for the current OS."
+    :type 'boolean
+    :group 'core-runtime)
 
-  (autoload 'flymake-goto-next-error "flymake")
-  (autoload 'flymake-goto-prev-error "flymake")
-  (autoload 'flymake-show-buffer-diagnostics "flymake")
+  (defun core-runtime--configure-modifiers ()
+    "Configure OS-specific modifier variables (variables only, no bindings)."
+    (when core-runtime-configure-modifiers-p
+      (pcase system-type
+        ('darwin
+         (when (boundp 'mac-option-modifier)
+           (setq mac-option-modifier 'meta))
+         (when (boundp 'mac-command-modifier)
+           (setq mac-command-modifier 'super))
+         (when (boundp 'mac-control-modifier)
+           (setq mac-control-modifier 'control)))
+        ('windows-nt
+         (when (boundp 'w32-lwindow-modifier)
+           (setq w32-lwindow-modifier 'super))
+         (when (boundp 'w32-rwindow-modifier)
+           (setq w32-rwindow-modifier 'super)))
+        (_ nil))))
 
-  (autoload 'project-roots "project")
+  (defun core-runtime--startup-init ()
+    "Apply runtime invariants after init."
+    (core-runtime--configure-modifiers))
 
-  ;;;; Text scaling hydra --------------------------------------------------------
-  (leaf hydra
-    :straight t
-    :config
-    (defhydra core-hydra-text-scale (:hint nil :color red)
-      "
-  ^Text Scaling^
-  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
-  "
-      ("+" text-scale-increase)
-      ("-" text-scale-decrease)
-      ("0" (text-scale-set 0) :color blue)
-      ("q" nil "quit" :color blue)))
+  (add-hook 'after-init-hook #'core-runtime--startup-init)
 
-  ;;;; Small utilities -----------------------------------------------------------
-  (leaf my:utils
-    :straight nil
-    :init
-    (defun my/new-frame-with-scratch ()
-      "Create a new frame and switch to a fresh buffer."
-      (interactive)
-      (let ((frame (make-frame)))
-        (with-selected-frame frame
-          (switch-to-buffer (generate-new-buffer "untitled")))))
-
-    (defun my/restart-or-exit ()
-      "Restart Emacs if `restart-emacs' exists; otherwise save & exit."
-      (interactive)
-      (if (fboundp 'restart-emacs)
-          (restart-emacs)
-        (save-buffers-kill-emacs)))
-
-    ;; Arrow-based window motions (keeps default muscle memory).
-    (windmove-default-keybindings))
-
-  ;;;; IDE-agnostic helpers (Eglot / lsp-mode) -----------------------------------
-  (defun my/code-actions ()
-    "Run code actions via Eglot or lsp-mode."
-    (interactive)
-    (cond
-     ((fboundp 'eglot-code-actions) (eglot-code-actions))
-     ((fboundp 'lsp-execute-code-action) (lsp-execute-code-action))
-     (t (user-error "No code action backend (Eglot/LSP) available"))))
-
-  (defun my/rename-symbol ()
-    "Rename symbol via Eglot or lsp-mode."
-    (interactive)
-    (cond
-     ((fboundp 'eglot-rename) (eglot-rename))
-     ((fboundp 'lsp-rename) (lsp-rename))
-     (t (user-error "No rename backend (Eglot/LSP) available"))))
-
-  (defun my/format-buffer ()
-    "Format buffer via Eglot/LSP; fallback to `indent-region'."
-    (interactive)
-    (cond
-     ((fboundp 'eglot-format-buffer) (eglot-format-buffer))
-     ((fboundp 'lsp-format-buffer) (lsp-format-buffer))
-     ((fboundp 'indent-region) (indent-region (point-min) (point-max)))
-     (t (user-error "No formatter available"))))
-
-  (defun my/consult-ripgrep-project ()
-    "Run ripgrep in current project; fallback to prompting."
-    (interactive)
-    (let* ((pr (when (fboundp 'project-current) (project-current)))
-           (root (when pr (car (project-roots pr)))))
-      (if (and root (fboundp 'consult-ripgrep))
-          (consult-ripgrep root)
-        (call-interactively 'consult-ripgrep))))
-
-  (defun my/toggle-transient-line-numbers ()
-    "Toggle line numbers, preserving buffer-local overrides."
-    (interactive)
-    (if (bound-and-true-p display-line-numbers-mode)
-        (display-line-numbers-mode 0)
-      (display-line-numbers-mode 1)))
-
-  ;;;; Global LEADER (non-modal) -------------------------------------------------
-  ;; Define leader keys and prefix maps:
-  (defconst my:leader-key "C-c SPC"
-    "Key sequence used as the global leader key.")
-
-  (defconst my:leader-which-prefix "C-c SPC"
-    "Human-readable leader prefix string for which-key labels.")
-
-  ;; Define a local leader key sequence for major mode commands (contextual).
-  (defconst my:local-leader-key (concat my:leader-key " m")
-    "Key sequence used as the local (major-mode) leader key.")
-
-  ;; Top-level leader prefix map and subgroup prefix maps.
-  (define-prefix-command 'my/leader-map)
-  (define-prefix-command 'my/leader-b-map) ;; buffers
-  (define-prefix-command 'my/leader-w-map) ;; windows
-  (define-prefix-command 'my/leader-p-map) ;; project
-  (define-prefix-command 'my/leader-g-map) ;; git
-  (define-prefix-command 'my/leader-c-map) ;; code
-  (define-prefix-command 'my/leader-e-map) ;; errors/diagnostics
-  (define-prefix-command 'my/leader-t-map) ;; toggles
-  (define-prefix-command 'my/leader-o-map) ;; org/roam
-  (define-prefix-command 'my/leader-m-map) ;; mode-specific (local leader)
-  (define-prefix-command 'my/leader-a-map) ;; ai
-  (define-prefix-command 'my/leader-q-map) ;; session/quit
-  (define-prefix-command 'my/leader-h-map) ;; help
-
-  ;; Bind the global leader key to its prefix map.
-  (when (fboundp 'keymap-global-set)
-    (keymap-global-set my:leader-key 'my/leader-map)
-    ;; In older Emacs, use (global-set-key (kbd my:leader-key) 'my/leader-map)
-    )
-
-  ;; Bind group prefixes under the leader map.
-  (define-key my/leader-map (kbd "b") 'my/leader-b-map)
-  (define-key my/leader-map (kbd "w") 'my/leader-w-map)
-  (define-key my/leader-map (kbd "p") 'my/leader-p-map)
-  (define-key my/leader-map (kbd "g") 'my/leader-g-map)
-  (define-key my/leader-map (kbd "c") 'my/leader-c-map)
-  (define-key my/leader-map (kbd "e") 'my/leader-e-map)
-  (define-key my/leader-map (kbd "t") 'my/leader-t-map)
-  (define-key my/leader-map (kbd "o") 'my/leader-o-map)
-  (define-key my/leader-map (kbd "m") 'my/leader-m-map)  ;; "m" for major-mode leader
-  (define-key my/leader-map (kbd "a") 'my/leader-a-map)
-  (define-key my/leader-map (kbd "q") 'my/leader-q-map)
-  (define-key my/leader-map (kbd "h") 'my/leader-h-map)
-
-  ;; 1) Top-level leader bindings (LEADER <key>)
-  (define-key my/leader-map (kbd "SPC") #'execute-extended-command) ;; M-x
-  (define-key my/leader-map (kbd "/")   #'consult-line)
-  (define-key my/leader-map (kbd ";")   #'comment-or-uncomment-region)
-  (define-key my/leader-map (kbd "=")   #'er/expand-region)
-  (define-key my/leader-map (kbd "`")   #'eval-expression)
-  (define-key my/leader-map (kbd "z")   #'core-hydra-text-scale/body)
-  ;; frequent file and buffer helpers
-  (define-key my/leader-map (kbd ".")   #'other-window)
-  (define-key my/leader-map (kbd "f")   #'find-file)
-  (define-key my/leader-map (kbd "F")   #'find-file-other-window)
-  (define-key my/leader-map (kbd "O")   #'find-file-other-frame)
-  (define-key my/leader-map (kbd "r")   #'consult-recent-file)
-
-  ;; 2) Buffers (LEADER b ...)
-  (define-key my/leader-b-map (kbd "b") #'consult-buffer)
-  (define-key my/leader-b-map (kbd "B") #'consult-project-buffer)
-  (define-key my/leader-b-map (kbd "k") #'my/kill-buffer-smart)
-  (define-key my/leader-b-map (kbd "n") #'next-buffer)
-  (define-key my/leader-b-map (kbd "p") #'previous-buffer)
-  (define-key my/leader-b-map (kbd "r") #'revert-buffer)
-
-  ;; 3) Windows (LEADER w ...)
-  (define-key my/leader-w-map (kbd "w") #'ace-window)
-  (define-key my/leader-w-map (kbd "s") #'split-window-below)
-  (define-key my/leader-w-map (kbd "v") #'split-window-right)
-  (define-key my/leader-w-map (kbd "d") #'delete-window)
-  (define-key my/leader-w-map (kbd "o") #'delete-other-windows)
-  (define-key my/leader-w-map (kbd "=") #'balance-windows)
-  (define-key my/leader-w-map (kbd "2") #'my/toggle-window-split)
-
-  ;; 4) Project (LEADER p ...)
-  (define-key my/leader-p-map (kbd "p") #'project-switch-project)
-  (define-key my/leader-p-map (kbd "f") #'project-find-file)
-  (define-key my/leader-p-map (kbd "s") #'my/consult-ripgrep-project)
-  (define-key my/leader-p-map (kbd "b") #'consult-project-buffer)
-  (define-key my/leader-p-map (kbd "r") #'project-query-replace-regexp)
-  (define-key my/leader-p-map (kbd "d") #'project-dired)
-
-  ;; 5) Search (LEADER s ...) – (placed under main map for convenience)
-  (define-key my/leader-map (kbd "s s") #'consult-line)
-  (define-key my/leader-map (kbd "s r") #'consult-ripgrep)
-  (define-key my/leader-map (kbd "s g") #'my/consult-ripgrep-project)
-  (define-key my/leader-map (kbd "s m") #'consult-imenu)
-
-  ;; 6) Git (LEADER g ...)
-  (define-key my/leader-g-map (kbd "s") #'magit-status)
-  (define-key my/leader-g-map (kbd "b") #'magit-blame-addition)
-  (define-key my/leader-g-map (kbd "l") #'magit-log-current)
-  (define-key my/leader-g-map (kbd "d") #'magit-diff-buffer-file)
-  (define-key my/leader-g-map (kbd "c") #'magit-commit)
-
-  ;; 7) Code (LEADER c ...) – LSP-agnostic helpers
-  (define-key my/leader-c-map (kbd "a") #'my/code-actions)
-  (define-key my/leader-c-map (kbd "r") #'my/rename-symbol)
-  (define-key my/leader-c-map (kbd "f") #'my/format-buffer)
-  (define-key my/leader-c-map (kbd "d") #'xref-find-definitions)
-  (define-key my/leader-c-map (kbd "D") #'xref-find-definitions-other-window)
-  (define-key my/leader-c-map (kbd "R") #'xref-find-references)
-  (define-key my/leader-c-map (kbd "i") #'completion-at-point)
-
-  ;; 8) Errors/diagnostics (LEADER e ...)
-  (define-key my/leader-e-map (kbd "n") #'flymake-goto-next-error)
-  (define-key my/leader-e-map (kbd "p") #'flymake-goto-prev-error)
-  (define-key my/leader-e-map (kbd "l") #'flymake-show-buffer-diagnostics)
-
-  ;; 9) Toggles (LEADER t ...)
-  (define-key my/leader-t-map (kbd "l") #'my/toggle-transient-line-numbers)
-  (define-key my/leader-t-map (kbd "w") #'whitespace-mode)
-  (define-key my/leader-t-map (kbd "r") #'read-only-mode)
-  (define-key my/leader-t-map (kbd "z") #'core-hydra-text-scale/body)
-  ;; Removed toggle for images here, as it's specific to EWW (now local leader in eww-mode).
-
-  ;; 10) Org & Roam (LEADER o ...)
-  (define-key my/leader-o-map (kbd "a") #'org-agenda)
-  (define-key my/leader-o-map (kbd "c") #'org-capture)
-  (define-key my/leader-o-map (kbd "i") #'org-roam-node-insert)
-  (define-key my/leader-o-map (kbd "f") #'org-roam-node-find)
-  (define-key my/leader-o-map (kbd "s") #'my/org-sidebar)
-  (define-key my/leader-o-map (kbd "t") #'my/org-sidebar-toggle)
-
-  ;; 11) Misc/Web – **(Moved to local leader or global C-c w)**
-  ;; (LEADER m ...) previously held EWW (web) commands.
-  ;; We leave my/leader-m-map defined for local leader usage, but no global bindings here now.
-  ;; EWW commands are accessible via global "C-c w" prefix or when in eww-mode via local leader.
-
-  ;; 12) AI (LEADER a ...)
-  (define-key my/leader-a-map (kbd "a") #'aidermacs-transient-menu)
-
-  ;; 13) Session/quit (LEADER q ...)
-  (define-key my/leader-q-map (kbd "n") #'my/new-frame-with-scratch)
-  (define-key my/leader-q-map (kbd "r") #'my/restart-or-exit)
-  (define-key my/leader-q-map (kbd "q") #'save-buffers-kill-emacs)
-
-  ;; 14) Help (LEADER h ...)
-  (define-key my/leader-h-map (kbd "k") #'describe-key)
-  (define-key my/leader-h-map (kbd "f") #'describe-function)
-  (define-key my/leader-h-map (kbd "v") #'describe-variable)
-
-  ;;;; Which-Key integration for leader groups -----------------------------------
-  (leaf which-key
-    :straight t
-    :hook (after-init-hook . which-key-mode)
-    :custom ((which-key-idle-delay . 0.4))
-    :config
-    ;; Label leader groups dynamically according to `my:leader-which-prefix`.
-    (dolist (it `((,(concat my:leader-which-prefix " b") . "buffers")
-                  (,(concat my:leader-which-prefix " w") . "windows")
-                  (,(concat my:leader-which-prefix " p") . "project")
-                  (,(concat my:leader-which-prefix " s") . "search")
-                  (,(concat my:leader-which-prefix " g") . "git")
-                  (,(concat my:leader-which-prefix " c") . "code")
-                  (,(concat my:leader-which-prefix " e") . "errors")
-                  (,(concat my:leader-which-prefix " t") . "toggles")
-                  (,(concat my:leader-which-prefix " o") . "org/roam")
-                  (,(concat my:leader-which-prefix " m") . "mode")   ;; updated label
-  		(,(concat my:leader-which-prefix " a") . "ai")
-                  (,(concat my:leader-which-prefix " q") . "session")
-                  (,(concat my:leader-which-prefix " h") . "help")))
-      (which-key-add-key-based-replacements (car it) (cdr it))))
-
-  ;;;; Major-mode specific (local leader) bindings -------------------------------
-  (with-eval-after-load 'dired
-    (require 'dired-filter nil t)
-    (require 'dired-subtree nil t)
-    (add-hook 'dired-mode-hook #'dired-filter-mode)
-    (setq dired-subtree-use-backgrounds t)
-    ;; ---- Dired Local Keybindings ----
-    (define-key dired-mode-map (kbd "TAB") #'dired-subtree-toggle)
-    (define-key dired-mode-map (kbd "i")   #'dired-subtree-insert)
-    (define-key dired-mode-map (kbd ";")   #'dired-subtree-remove)
-    (define-key dired-mode-map (kbd "f")   #'dired-filter-mode)
-    (define-key dired-mode-map (kbd "/")   #'dired-filter-map)
-    (define-key dired-mode-map (kbd "z")   #'my/dired-view-file-other-window)
-    (with-eval-after-load 'which-key
-      (which-key-add-key-based-replacements
-        "C-c SPC m TAB" "toggle subtree"
-        "C-c SPC m i"   "insert subtree"
-        "C-c SPC m ;"   "remove subtree"
-        "C-c SPC m f"   "filter mode"
-        "C-c SPC m /"   "filter map"
-        "C-c SPC m z"   "view in other window")))
-
-  (with-eval-after-load 'vterm
-    (define-key vterm-mode-map (kbd "C-c SPC m c") #'vterm-send-C-c)
-    (define-key vterm-mode-map (kbd "C-c SPC m r") #'vterm-send-return)
-    (define-key vterm-mode-map (kbd "C-c SPC m k") #'vterm-reset-cursor-point)
-    (define-key vterm-mode-map (kbd "C-c SPC m q") #'vterm-quit)
-    (with-eval-after-load 'which-key
-      (which-key-add-key-based-replacements
-        "C-c SPC m c" "send C-c"
-        "C-c SPC m r" "send RET"
-        "C-c SPC m q" "quit vterm")))
-
-  (with-eval-after-load 'eww
-    (define-key eww-mode-map (kbd "s") #'my/eww-search)
-    (define-key eww-mode-map (kbd "o") #'eww-open-file)
-    (define-key eww-mode-map (kbd "b") #'eww-list-bookmarks)
-    (define-key eww-mode-map (kbd "r") #'eww-readable)
-    (define-key eww-mode-map (kbd "u") #'my/eww-toggle-images)
-    (with-eval-after-load 'which-key
-      (which-key-add-key-based-replacements
-        "C-c SPC m s" "search"
-        "C-c SPC m b" "bookmarks"
-        "C-c SPC m u" "toggle images")))
-
-  (with-eval-after-load 'org
-    (define-key org-mode-map (kbd "C-c SPC m t") #'org-todo)
-    (define-key org-mode-map (kbd "C-c SPC m a") #'org-archive-subtree)
-    (define-key org-mode-map (kbd "C-c SPC m s") #'org-schedule)
-    (define-key org-mode-map (kbd "C-c SPC m d") #'org-deadline)
-    (define-key org-mode-map (kbd "C-c SPC m p") #'org-priority)
-    (with-eval-after-load 'which-key
-      (which-key-add-key-based-replacements
-        "C-c SPC m t" "todo"
-        "C-c SPC m s" "schedule"
-        "C-c SPC m d" "deadline"
-        "C-c SPC m p" "priority")))
-
-  (with-eval-after-load 'magit
-    (define-key magit-mode-map (kbd "C-c SPC m c") #'magit-commit)
-    (define-key magit-mode-map (kbd "C-c SPC m p") #'magit-push-current)
-    (define-key magit-mode-map (kbd "C-c SPC m f") #'magit-fetch)
-    (define-key magit-mode-map (kbd "C-c SPC m l") #'magit-log-buffer-file)
-    (define-key magit-mode-map (kbd "C-c SPC m s") #'magit-stage)
-    (define-key magit-mode-map (kbd "C-c SPC m u") #'magit-unstage)
-    (with-eval-after-load 'which-key
-      (which-key-add-key-based-replacements
-        "C-c SPC m c" "commit"
-        "C-c SPC m p" "push"
-        "C-c SPC m f" "fetch"
-        "C-c SPC m s" "stage"
-        "C-c SPC m u" "unstage")))
-
-  ;;;; Notes / Markdown knowledge (C-c n ...) ------------------------------------
-  ;;
-  ;; Markdown-based personal notes (Inkdrop-like workflow).
-  ;;
-  ;; Design:
-  ;; - Kept outside the global leader (C-c SPC)
-  ;; - Lightweight, prose-oriented notes (not tasks)
-  ;; - notes/ is excluded from org-agenda-files (see orgx/org-core.el)
-  ;; - Never override existing user/global bindings
-
-  (with-eval-after-load 'utils/utils-notes-markdown
-    ;; Define prefix only if it is free
-    (unless (lookup-key global-map (kbd "C-c n"))
-      (define-prefix-command 'my/notes-prefix)
-      (global-set-key (kbd "C-c n") 'my/notes-prefix))
-
-    ;; Sub bindings (guarded)
-    (unless (lookup-key global-map (kbd "C-c n f"))
-      (define-key my/notes-prefix (kbd "f") #'consult-notes))
-    (unless (lookup-key global-map (kbd "C-c n r"))
-      (define-key my/notes-prefix (kbd "r") #'my/notes-consult-ripgrep))
-    (unless (lookup-key global-map (kbd "C-c n n"))
-      (define-key my/notes-prefix (kbd "n") #'my/notes-new-note))
-    (unless (lookup-key global-map (kbd "C-c n d"))
-      (define-key my/notes-prefix (kbd "d") #'my/notes-open-root)))
-
-  ;; which-key label (optional, non-fatal)
-  (with-eval-after-load 'which-key
-    (which-key-add-key-based-replacements
-      "C-c n" "notes / markdown"))
-
-  ;;;; Global keybindings (outside leader) ---------------------------------------
-  ;; Define global keys (macOS-like shortcuts, function keys, etc.)
-  (global-set-key (kbd "<f1>") #'help-command)
-  (global-set-key (kbd "<f5>") #'my/revert-buffer-quick)   ;; quick revert buffer (if defined elsewhere)
-  (global-set-key (kbd "<f8>") #'treemacs)
-  (global-set-key (kbd "C-.") #'other-window)
-  (global-set-key (kbd "C-/") #'undo-fu-only-undo)
-  (global-set-key (kbd "C-=") #'er/expand-region)
-  (global-set-key (kbd "C-?") #'undo-fu-only-redo)
-  (global-set-key (kbd "C-c 0") #'delete-window)
-  (global-set-key (kbd "C-c 1") #'delete-other-windows)
-  (global-set-key (kbd "C-c 2") #'my/toggle-window-split)
-  (global-set-key (kbd "C-c ;") #'comment-or-uncomment-region)
-  (global-set-key (kbd "C-c M-a") #'align-regexp)
-  (global-set-key (kbd "C-c V") #'view-file-other-window)
-  (global-set-key (kbd "C-c a a") #'aidermacs-transient-menu)   ;; global AI menu (duplicate of LEADER a a)
-  (global-set-key (kbd "C-c b") #'consult-buffer)
-  ;; "C-c d ..." org/roam bindings (these may be redundant with leader o):
-  (global-set-key (kbd "C-c d a") #'org-agenda)
-  (global-set-key (kbd "C-c d c") #'org-capture)
-  (global-set-key (kbd "C-c d f") #'org-roam-node-find)
-  (global-set-key (kbd "C-c d i") #'org-roam-node-insert)
-  (global-set-key (kbd "C-c d s") #'my/org-sidebar)
-  (global-set-key (kbd "C-c d t") #'my/org-sidebar-toggle)
-  (global-set-key (kbd "C-c k") #'my/kill-buffer-smart)
-  (global-set-key (kbd "C-c l") #'display-line-numbers-mode)    ;; quick toggle line numbers
-  (global-set-key (kbd "C-c o") #'find-file)
-  (global-set-key (kbd "C-c r") #'consult-ripgrep)
-  (global-set-key (kbd "C-c v") #'find-file-read-only)
-  ;; Web/EWW global prefix keys:
-  (global-set-key (kbd "C-c w b") #'eww-list-bookmarks)
-  (global-set-key (kbd "C-c w o") #'eww-open-file)
-  (global-set-key (kbd "C-c w r") #'eww-readable)
-  (global-set-key (kbd "C-c w s") #'my/eww-search)
-  (global-set-key (kbd "C-c w u") #'my/eww-toggle-images)
-  (global-set-key (kbd "C-c w w") #'eww)
-  (global-set-key (kbd "C-c z") #'core-hydra-text-scale/body)
-  ;; macOS-like Super (s-) keys:
-  (global-set-key (kbd "C-h") #'backward-delete-char)   ;; Make C-h backspace (like in terminals/mac)
-  (global-set-key (kbd "C-s") #'consult-line)           ;; Search in buffer (override isearch)
-  (global-set-key (kbd "s-.") #'ace-window)
-  (global-set-key (kbd "s-<down>") #'end-of-buffer)
-  (global-set-key (kbd "s-<left>") #'previous-buffer)
-  (global-set-key (kbd "s-<right>") #'next-buffer)
-  (global-set-key (kbd "s-<up>") #'beginning-of-buffer)
-  (global-set-key (kbd "s-b") #'consult-buffer)
-  (global-set-key (kbd "s-j") #'find-file-other-window)
-  (global-set-key (kbd "s-m") #'my/new-frame-with-scratch)
-  (global-set-key (kbd "s-o") #'find-file-other-frame)
-  (global-set-key (kbd "s-r") #'my/restart-or-exit)
-  (global-set-key (kbd "s-w") #'ace-swap-window)
-  (global-set-key (kbd "M-x") #'execute-extended-command)
-
-  ;;;; Auth / secrets ------------------------------------------------------------
-  (defvar my:d:password-store
-    (or (getenv "PASSWORD_STORE_DIR")
-        (concat no-littering-var-directory "password-store/"))
-    "Path to the password store.")
-
-  (defun my/auth-check-env ()
-    "Validate authentication environment and warn if misconfigured."
-    (unless (getenv "GPG_KEY_ID")
-      (display-warning 'auth "GPG_KEY_ID is not set." :level 'debug))
-    (unless (file-directory-p my:d:password-store)
-      (display-warning 'auth
-                       (format "Password store directory does not exist: %s"
-                               my:d:password-store)
-                       :level 'warning)))
-
-  (leaf *authentication
-    :straight nil
-    :init
-    (my/auth-check-env)
-
-    (leaf epa-file
-      :straight nil
-      :commands (epa-file-enable)
-      :init
-      (setq epa-pinentry-mode
-            (if (getenv "USE_GPG_LOOPBACK") 'loopback 'default))
-      (add-hook 'emacs-startup-hook #'epa-file-enable))
-
-    (leaf auth-source
-      :straight nil
-      :init
-      (with-eval-after-load 'auth-source
-        (let ((key (getenv "GPG_KEY_ID")))
-          (if key
-              (setq auth-source-gpg-encrypt-to key)
-            (display-warning 'auth-source
-                             "GPG_KEY_ID is not set. Authentication backends may be limited.")))))
-
-    (leaf password-store :straight t)
-
-    (leaf auth-source-pass
-      :straight t
-      :commands (auth-source-pass-enable)
-      :hook (emacs-startup-hook . (lambda ()
-                                    (when (executable-find "pass")
-                                      (auth-source-pass-enable)))))
-
-    (leaf plstore
-      :straight nil
-      :init
-      (with-eval-after-load 'plstore
-        (setq plstore-secret-keys 'silent
-              plstore-encrypt-to (getenv "GPG_KEY_ID")))))
-
-  (provide 'core-general)
-  ;;; core/core-general.el ends here
+  (provide 'core-runtime)
+  ;;; core-runtime.el ends here
 #+end_src
 
 **** core/core-tools.el
@@ -2779,7 +2369,7 @@ Its role is orchestration only.
   (add-hook 'emacs-startup-hook #'core-history--startup-init)
 
   (provide 'core-history)
-  ;;; core/history.el ends here
+  ;;; core/core-history.el ends here
 #+end_src
 
 **** core/core-editing.el
@@ -2880,7 +2470,7 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/core/core-switches.el
 :END:
 #+begin_src emacs-lisp
-  ;;; core/core-switches.el --- Unified feature switches (UI/LSP) -*- lexical-binding: t; -*-
+  ;;; core/core-switches.el --- Bridge layer for optional subsystems -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -2888,24 +2478,34 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
-  ;; Centralized feature switches for UI bundles and LSP backends.
+  ;;; Commentary:
   ;;
-  ;; This module:
-  ;; - defines mutually exclusive feature choices
-  ;; - resolves availability at runtime
-  ;; - avoids hard dependencies on optional subsystems
+  ;; Bridge layer between core policy and optional subsystems.
+  ;;
+  ;; Responsibilities:
+  ;; - Define mutually exclusive feature selections
+  ;; - Detect availability at runtime
+  ;; - Activate chosen backend in a delete-safe manner
+  ;;
+  ;; Non-responsibilities:
+  ;; - No UI definitions
+  ;; - No LSP implementation
+  ;; - No hard dependency enforcement
+  ;;
+  ;; This file performs controlled side effects:
+  ;; - It may load optional modules
+  ;; - It may emit diagnostic messages
+  ;;
+  ;; Removing this module disables automatic activation
+  ;; but does not break subsystem correctness.
   ;;
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
 
-  (when (boundp 'my:use:modules)
-    (when (or (not (boundp 'my:use-ui)) (eq my:use-ui 'none))
-      (setq my:use-ui my:use:modules)))
-  (define-obsolete-variable-alias 'my:use:modules 'my:use-ui "2025-10-11")
-
-  (defgroup my:switches nil "Unified switches for UI and LSP." :group 'convenience)
+  (defgroup my:switches nil
+    "Unified switches for UI bundles and LSP backends."
+    :group 'convenience)
 
   (defcustom my:use-lsp 'eglot
     "Which LSP client to use. One of: `eglot`, `lsp`."
@@ -2917,76 +2517,127 @@ Its role is orchestration only.
     :type '(choice (const none) (const doom) (const nano))
     :group 'my:switches)
 
+  ;; ---------------------------------------------------------------------------
+  ;; Autoload entry points (bridge only)
+  ;; ---------------------------------------------------------------------------
+
   (autoload 'my/ui-enable-doom  "ui/ui-doom-modeline" "Enable Doom UI bundle." t)
   (autoload 'my/ui-enable-nano  "ui/ui-nano-modeline" "Enable Nano UI bundle." t)
   (autoload 'my/lsp-enable-eglot   "dev/dev-lsp-eglot" "Enable Eglot LSP." t)
   (autoload 'my/lsp-enable-lspmode "dev/dev-lsp-mode"  "Enable lsp-mode LSP." t)
 
+  ;; ---------------------------------------------------------------------------
+  ;; Availability checks (pure detection, no activation)
+  ;; ---------------------------------------------------------------------------
+
   (defun my/sw--present-p (kind choice)
+    "Return non-nil if KIND/CHOICE appears available."
     (pcase kind
-      ('ui (pcase choice
-             ('doom (or (fboundp 'my/ui-enable-doom)
-                        (locate-library "ui/ui-doom-modeline")
-                        (locate-library "doom-modeline")))
-             ('nano (or (fboundp 'my/ui-enable-nano)
-                        (locate-library "ui/ui-nano-modeline")
-                        (locate-library "nano-modeline")))
-             (_ t)))
-      ('lsp (pcase choice
-              ('eglot (or (fboundp 'my/lsp-enable-eglot)
-                          (locate-library "dev/dev-lsp-eglot")
-                          (locate-library "eglot")))
-              ('lsp   (or (fboundp 'my/lsp-enable-lspmode)
-                          (locate-library "dev/dev-lsp-mode")
-                          (locate-library "lsp-mode")))
-              (_ nil)))
+      ('ui
+       (pcase choice
+         ('doom (or (fboundp 'my/ui-enable-doom)
+                    (locate-library "ui/ui-doom-modeline")
+                    (locate-library "doom-modeline")))
+         ('nano (or (fboundp 'my/ui-enable-nano)
+                    (locate-library "ui/ui-nano-modeline")
+                    (locate-library "nano-modeline")))
+         (_ t)))
+      ('lsp
+       (pcase choice
+         ('eglot (or (fboundp 'my/lsp-enable-eglot)
+                     (locate-library "dev/dev-lsp-eglot")
+                     (locate-library "eglot")))
+         ('lsp (or (fboundp 'my/lsp-enable-lspmode)
+                   (locate-library "dev/dev-lsp-mode")
+                   (locate-library "lsp-mode")))
+         (_ nil)))
       (_ nil)))
 
+  ;; ---------------------------------------------------------------------------
+  ;; Activation logic (bridge activation only)
+  ;; ---------------------------------------------------------------------------
+
   (defun my/sw--enable-ui (choice)
+    "Enable UI backend CHOICE."
     (pcase choice
-      ('doom (cond
-              ((fboundp 'my/ui-enable-doom) (my/ui-enable-doom) t)
-              ((locate-library "ui/ui-doom-modeline")
-               (load (locate-library "ui/ui-doom-modeline") nil 'nomessage)
-               (when (fboundp 'my/ui-enable-doom) (my/ui-enable-doom) t))
-              (t (message "[switches] Doom UI not found.") nil)))
-      ('nano (cond
-              ((fboundp 'my/ui-enable-nano) (my/ui-enable-nano) t)
-              ((locate-library "ui/ui-nano-modeline")
-               (load (locate-library "ui/ui-nano-modeline") nil 'nomessage)
-               (when (fboundp 'my/ui-enable-nano) (my/ui-enable-nano) t))
-              (t (message "[switches] Nano UI not found.") nil)))
-      ('none (message "[switches] UI bundle disabled.") t)
-      (_ (message "[switches] Unknown UI choice: %s" choice) nil)))
+      ('doom
+       (cond
+        ((fboundp 'my/ui-enable-doom)
+         (my/ui-enable-doom) t)
+        ((locate-library "ui/ui-doom-modeline")
+         (load (locate-library "ui/ui-doom-modeline") nil 'nomessage)
+         (when (fboundp 'my/ui-enable-doom)
+           (my/ui-enable-doom) t))
+        (t (message "[switches] Doom UI not found.") nil)))
+      ('nano
+       (cond
+        ((fboundp 'my/ui-enable-nano)
+         (my/ui-enable-nano) t)
+        ((locate-library "ui/ui-nano-modeline")
+         (load (locate-library "ui/ui-nano-modeline") nil 'nomessage)
+         (when (fboundp 'my/ui-enable-nano)
+           (my/ui-enable-nano) t))
+        (t (message "[switches] Nano UI not found.") nil)))
+      ('none
+       (message "[switches] UI bundle disabled.")
+       t)
+      (_
+       (message "[switches] Unknown UI choice: %s" choice)
+       nil)))
 
   (defun my/sw--enable-lsp (choice)
+    "Enable LSP backend CHOICE."
     (pcase choice
-      ('eglot (cond
-               ((fboundp 'my/lsp-enable-eglot) (my/lsp-enable-eglot) t)
-               ((locate-library "dev/dev-lsp-eglot")
-                (load (locate-library "dev/dev-lsp-eglot") nil 'nomessage)
-                (when (fboundp 'my/lsp-enable-eglot) (my/lsp-enable-eglot) t))
-               (t (message "[switches] Eglot setup not found.") nil)))
-      ('lsp (cond
-             ((fboundp 'my/lsp-enable-lspmode) (my/lsp-enable-lspmode) t)
-             ((locate-library "dev/dev-lsp-mode")
-              (load (locate-library "dev/dev-lsp-mode") nil 'nomessage)
-              (when (fboundp 'my/lsp-enable-lspmode) (my/lsp-enable-lspmode) t))
-             (t (message "[switches] lsp-mode setup not found.") nil)))
-      (_ (message "[switches] Unknown LSP choice: %s" choice) nil)))
+      ('eglot
+       (cond
+        ((fboundp 'my/lsp-enable-eglot)
+         (my/lsp-enable-eglot) t)
+        ((locate-library "dev/dev-lsp-eglot")
+         (load (locate-library "dev/dev-lsp-eglot") nil 'nomessage)
+         (when (fboundp 'my/lsp-enable-eglot)
+           (my/lsp-enable-eglot) t))
+        (t (message "[switches] Eglot setup not found.") nil)))
+      ('lsp
+       (cond
+        ((fboundp 'my/lsp-enable-lspmode)
+         (my/lsp-enable-lspmode) t)
+        ((locate-library "dev/dev-lsp-mode")
+         (load (locate-library "dev/dev-lsp-mode") nil 'nomessage)
+         (when (fboundp 'my/lsp-enable-lspmode)
+           (my/lsp-enable-lspmode) t))
+        (t (message "[switches] lsp-mode setup not found.") nil)))
+      (_
+       (message "[switches] Unknown LSP choice: %s" choice)
+       nil)))
 
+  ;; ---------------------------------------------------------------------------
+  ;; Startup resolution (identical behavior to original)
+  ;; ---------------------------------------------------------------------------
+
+  ;; UI
   (when (not (eq my:use-ui 'none))
     (let ((present (my/sw--present-p 'ui my:use-ui)))
       (cond
-       ((my/sw--enable-ui my:use-ui) (message "[switches] UI bundle: %s" my:use-ui))
-       (present (message "[switches] UI seems present but could not enable: %s" my:use-ui))
-       (t (message "[switches] UI bundle unavailable: %s" my:use-ui)))))
+       ((my/sw--enable-ui my:use-ui)
+        (message "[switches] UI bundle: %s" my:use-ui))
+       (present
+        (message "[switches] UI seems present but could not enable: %s"
+                 my:use-ui))
+       (t
+        (message "[switches] UI bundle unavailable: %s"
+                 my:use-ui)))))
 
+  ;; LSP
   (let ((present (my/sw--present-p 'lsp my:use-lsp)))
     (cond
-     ((my/sw--enable-lsp my:use-lsp) (message "[switches] LSP backend: %s" my:use-lsp))
-     (present (message "[switches] LSP seems present but could not enable: %s" my:use-lsp))
-     (t (message "[switches] LSP backend unavailable: %s" my:use-lsp))))
+     ((my/sw--enable-lsp my:use-lsp)
+      (message "[switches] LSP backend: %s" my:use-lsp))
+     (present
+      (message "[switches] LSP seems present but could not enable: %s"
+               my:use-lsp))
+     (t
+      (message "[switches] LSP backend unavailable: %s"
+               my:use-lsp))))
 
   (provide 'core-switches)
   ;;; core/core-switches.el ends here
@@ -3102,6 +2753,132 @@ Its role is orchestration only.
   ;;; core/core-custom.el ends here
 #+end_src
 
+**** core/core-api.el
+:PROPERTIES:
+:CUSTOM_ID: core-api
+:header-args:emacs-lisp: :tangle lisp/core/core-api.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; core/core-api.el --- Public Core API surface (single entry point) -*- lexical-binding: t; -*-
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup core-api nil
+    "Stable public API surface of the core layer."
+    :group 'convenience)
+
+  (defcustom core-api-strict-mode nil
+    "If non-nil, warn when non-core layers require core implementation modules directly."
+    :type 'boolean
+    :group 'core-api)
+
+  (defvar core-api--impl-features
+    '(core-tools
+      core-session
+      core-native
+      core-treesit)
+    "Core implementation modules that provide public services.")
+
+  (defun core-api--require-impl ()
+    "Require core implementation modules."
+    (dolist (f core-api--impl-features)
+      (require f nil t)))
+
+  (defun core-api--caller-file ()
+    "Return best-effort caller file path."
+    (or load-file-name
+        (ignore-errors (buffer-file-name))
+        (car-safe (last command-line-args))))
+
+  (defun core-api--warn (fmt &rest args)
+    "Emit a core-api warning message."
+    (apply #'message (concat "[core-api] " fmt) args))
+
+  (defun core-api--maybe-warn-direct-core-require (feature file)
+    "Warn if non-core FILE requires core FEATURE directly."
+    (when (and core-api-strict-mode
+               (symbolp feature)
+               (stringp file)
+               (string-prefix-p "core-" (symbol-name feature)))
+      (let* ((f (expand-file-name file))
+             (is-core (string-match-p "/lisp/core/" f)))
+        (unless is-core
+          (core-api--warn
+           "non-core file requires core impl feature directly: %s <- %s"
+           feature f)))))
+
+  (defun core-api-enable-strict-require-watch ()
+    "Enable best-effort warnings for direct core requires."
+    (interactive)
+    (when (boundp 'after-load-functions)
+      (add-hook 'after-load-functions
+                #'core-api--maybe-warn-direct-core-require)))
+
+  (defun core-api-disable-strict-require-watch ()
+    "Disable strict require warnings."
+    (interactive)
+    (when (boundp 'after-load-functions)
+      (remove-hook 'after-load-functions
+                   #'core-api--maybe-warn-direct-core-require)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Load implementation modules
+  ;; ---------------------------------------------------------------------------
+
+  (core-api--require-impl)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Re-exported Public API
+  ;; ---------------------------------------------------------------------------
+
+  ;; core-tools
+  (defalias 'core-api-emacs>=            #'core-tools-emacs>=)
+  (defalias 'core-api-require-if-present #'core-tools-require-if-present)
+  (defalias 'core-api-call-if-present    #'core-tools-call-if-present)
+
+  ;; core-session
+  (defalias 'core-api-session-health-check
+    #'core-session-run-health-check)
+  (defalias 'core-api-session-lightweight-restart
+    #'core-session-lightweight-restart)
+
+  ;; core-native
+  (defalias 'core-api-native-set-mode
+    #'core-native-set-mode)
+  (defalias 'core-api-native-show-warnings
+    #'core-native-show-warnings)
+  (defalias 'core-api-native-save-warnings
+    #'core-native-save-warnings)
+  (defalias 'core-api-native-clear-warnings
+    #'core-native-clear-warnings)
+  (defalias 'core-api-native-warnings-count
+    #'core-native-warnings-count)
+
+  ;; core-treesit
+  (defalias 'core-api-treesit-install-grammar
+    #'core-treesit-install-grammar)
+  (defalias 'core-api-treesit-install-all
+    #'core-treesit-install-all)
+  (defalias 'core-api-treesit-report
+    #'core-treesit-report)
+  (defalias 'core-api-treesit-apply-remap
+    #'core-treesit-apply-remap)
+  (defalias 'core-api-treesit-register-sources
+    #'core-treesit-register-sources)
+
+  (when core-api-strict-mode
+    (core-api-enable-strict-require-watch))
+
+  (provide 'core-api)
+  ;;; core/core-api.el ends here
+#+end_src
+
 **** core/core-custom-ui-extras.el
 :PROPERTIES:
 :CUSTOM_ID: core-custom-ui-extras
@@ -3138,11 +2915,1340 @@ Its role is orchestration only.
   ;;; core/core-custom-ui-extras.el ends here
 #+end_src
 
+*** ui/
+:PROPERTIES:
+:CUSTOM_ID: ui-modules
+:END:
+
+**** ui/ui-font.el
+:PROPERTIES:
+:CUSTOM_ID: ui-font
+:header-args:emacs-lisp: :tangle lisp/ui/ui-font.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2025
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Font configuration for graphical UI frames.
+  ;;
+  ;; This module:
+  ;; - configures default, variable-pitch, and emoji fonts
+  ;; - applies OS-aware fallbacks and daemon-safe hooks
+  ;; - optionally enables programming ligatures
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf))
+
+  ;;;; Custom variables
+
+  (defgroup ui-font nil
+    "Font configuration for UI."
+    :group 'ui)
+
+  (defcustom ui-font-default nil
+    "Default monospace font family.
+  If nil, an OS-dependent fallback is used."
+    :type '(choice (const :tag "Auto" nil)
+                   (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-variable-pitch nil
+    "Variable-pitch font family.
+  If nil, the default monospace font is reused."
+    :type '(choice (const :tag "Auto" nil)
+                   (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-emoji nil
+    "Emoji font family.
+  If nil, an OS-dependent fallback is used."
+    :type '(choice (const :tag "Auto" nil)
+                   (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-size 18
+    "Default font size in points."
+    :type 'integer
+    :group 'ui-font)
+
+  ;;;; Internal helpers
+
+  (defun ui-font--system-default ()
+    "Return a default monospace font family depending on OS."
+    (cond
+     ((eq system-type 'darwin)     "Menlo")
+     ((eq system-type 'gnu/linux)  "Monospace")
+     ((eq system-type 'windows-nt) "Consolas")
+     (t "Monospace")))
+
+  (defun ui-font--system-emoji ()
+    "Return a default emoji font family depending on OS."
+    (cond
+     ((eq system-type 'darwin)     "Apple Color Emoji")
+     ((eq system-type 'gnu/linux)  "Noto Color Emoji")
+     ((eq system-type 'windows-nt) "Segoe UI Emoji")
+     (t "Noto Color Emoji")))
+
+  ;;;; Core setup
+
+  (defun ui-font-apply ()
+    "Apply font settings to the current frame."
+    (when (display-graphic-p)
+      (set-face-attribute
+       'default nil
+       :family (or ui-font-default (ui-font--system-default))
+       :height (* 10 ui-font-size))
+      (set-face-attribute
+       'variable-pitch nil
+       :family (or ui-font-variable-pitch
+                   ui-font-default
+                   (ui-font--system-default)))
+      (set-fontset-font
+       t 'emoji
+       (font-spec :family
+                  (or ui-font-emoji (ui-font--system-emoji))))
+      (ui-font-describe)))
+
+  ;;;###autoload
+  (defun ui-font-show-current ()
+    "Echo the current default font family and point size."
+    (interactive)
+    (let ((family (face-attribute 'default :family))
+          (height (face-attribute 'default :height)))
+      (message "Current font: %s, %.1f pt"
+               family (/ height 10.0))))
+
+  ;;;###autoload
+  (defun ui-font-describe ()
+    "Display font information applied by `ui-font-apply`."
+    (interactive)
+    (unless (display-graphic-p)
+      (user-error "Fonts are only meaningful in graphical frames"))
+    (let* ((default-family (face-attribute 'default :family))
+           (default-height (face-attribute 'default :height))
+           (variable-family (face-attribute 'variable-pitch :family))
+           (emoji-font (font-get
+                        (font-spec :script 'emoji)
+                        :family)))
+      (message
+       (concat
+        "Fonts applied:\n"
+        "  Default        : %s (%.1f pt)\n"
+        "  Variable-pitch : %s\n"
+        "  Emoji          : %s")
+       default-family
+       (/ default-height 10.0)
+       variable-family
+       (or emoji-font "unknown"))))
+
+  ;;;; Startup handling
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions
+                (lambda (frame)
+                  (with-selected-frame frame
+                    (ui-font-apply))))
+    (add-hook 'after-init-hook #'ui-font-apply))
+
+  ;;;; Optional ligatures
+
+  (leaf ligature
+    :straight (ligature :type git :host github :repo "mickeynp/ligature.el")
+    :when (display-graphic-p)
+    :hook (prog-mode-hook . global-ligature-mode)
+    :config
+    (ligature-set-ligatures
+     'prog-mode
+     '("->" "=>" "::" "===" "!=" "&&" "||")))
+
+  (provide 'ui-font)
+  ;;; ui-font.el ends here
+#+end_src
+
+**** ui/ui-nano-palette.el
+:PROPERTIES:
+:CUSTOM_ID: ui-nano-palette
+:header-args:emacs-lisp: :tangle lisp/ui/ui-nano-palette.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-nano-palette.el --- Nano-style color palette -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Single source of truth for Nano-style UI colors.
+  ;;
+  ;; This module:
+  ;; - defines all palette entries as defcustom variables
+  ;; - applies faces through a single normalization function
+  ;; - avoids duplicated literal colors across the UI layer
+  ;;
+  ;;; Code:
+
+  (defgroup my:nano nil
+    "Minimal nano-style light palette."
+    :group 'faces)
+
+  (defcustom nano-color-background "#fafafa"
+    "UI background for buffers/panels."
+    :type 'string :group 'my:nano)
+
+  (defcustom nano-color-foreground "#374151"
+    "Default body text color."
+    :type 'string :group 'my:nano)
+
+  (defcustom nano-color-salient "#2563eb"
+    "Accent for links/keywords/standout choices."
+    :type 'string :group 'my:nano)
+
+  (defcustom nano-color-popout "#6b7280"
+    "Neutral notice / muted highlight."
+    :type 'string :group 'my:nano)
+
+  (defcustom nano-color-critical "#dc2626"
+    "Critical error / danger color."
+    :type 'string :group 'my:nano)
+
+  (defcustom nano-color-strong "#111827"
+    "Strong emphasis (headings, key mode-line parts)."
+    :type 'string :group 'my:nano)
+
+  (defcustom nano-color-faded "#9ca3af"
+    "De-emphasized info (comments/secondary/disabled)."
+    :type 'string :group 'my:nano)
+
+  (defcustom nano-color-subtle "#e5e7eb"
+    "Subtle backgrounds (mode/header lines, gentle selections)."
+    :type 'string :group 'my:nano)
+
+  (defun my/nano-apply-faces ()
+    "Apply faces based on the nano-style palette defined above."
+    (set-face-attribute 'default nil
+                        :background nano-color-background
+                        :foreground nano-color-foreground)
+    (set-face-attribute 'bold nil :foreground nano-color-strong :weight 'bold)
+    (set-face-attribute 'italic nil :slant 'italic)
+
+    (set-face-attribute 'font-lock-comment-face nil :foreground nano-color-faded)
+    (set-face-attribute 'font-lock-keyword-face nil
+                        :foreground nano-color-salient :weight 'semi-bold)
+    (set-face-attribute 'font-lock-string-face nil :foreground nano-color-popout)
+    (set-face-attribute 'font-lock-warning-face nil
+                        :foreground nano-color-popout :weight 'bold)
+
+    (set-face-attribute 'link nil :foreground nano-color-salient :underline t)
+    (set-face-attribute 'button nil :foreground nano-color-salient :underline t)
+
+    (set-face-attribute 'error nil
+                        :foreground nano-color-critical :weight 'bold)
+    (set-face-attribute 'warning nil
+                        :foreground nano-color-popout :weight 'bold)
+    (set-face-attribute 'success nil :foreground "#10b981")
+
+    (set-face-attribute 'region nil :background nano-color-subtle)
+
+    (let ((ml-bg nano-color-subtle)
+          (ml-fg nano-color-strong))
+      (set-face-attribute 'mode-line nil
+                          :background ml-bg :foreground ml-fg
+                          :box `(:line-width 1 :color ,ml-bg))
+      (set-face-attribute 'mode-line-inactive nil
+                          :background nano-color-background
+                          :foreground nano-color-faded
+                          :box `(:line-width 1 :color ,nano-color-background)))
+
+    (set-face-attribute 'minibuffer-prompt nil
+                        :foreground nano-color-salient :weight 'semi-bold))
+
+  (defun my/nano-set-palette-and-apply (&rest plist)
+    "Override palette entries via PLIST and apply faces."
+    (when plist
+      (let ((map '((:background . nano-color-background)
+                   (:foreground . nano-color-foreground)
+                   (:salient    . nano-color-salient)
+                   (:popout     . nano-color-popout)
+                   (:critical   . nano-color-critical)
+                   (:strong     . nano-color-strong)
+                   (:faded      . nano-color-faded)
+                   (:subtle     . nano-color-subtle))))
+        (while plist
+          (let* ((k (pop plist))
+                 (v (pop plist))
+                 (sym (cdr (assq k map))))
+            (when sym (set sym v))))))
+    (my/nano-apply-faces))
+
+  (provide 'ui-nano-palette)
+  ;;; ui/ui-nano-palette.el ends here
+#+end_src
+
+**** ui/ui-doom-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-doom-modeline
+:header-args:emacs-lisp: :tangle lisp/ui/ui-doom-modeline.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-doom-modeline.el --- Doom modeline UI bundle -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Doom-modeline based mode-line UI bundle.
+  ;;
+  ;; This module:
+  ;; - configures and enables doom-modeline
+  ;; - integrates Nerd Icons for the mode-line
+  ;; - exposes an explicit interactive enable command
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+  (declare-function doom-modeline-mode "doom-modeline")
+
+  (leaf nerd-icons :straight t)
+
+  (leaf doom-modeline
+    :straight t
+    :custom ((doom-modeline-height . 28)
+             (doom-modeline-buffer-file-name-style
+              . 'truncate-with-project)
+             (doom-modeline-minor-modes . nil)
+             (doom-modeline-enable-word-count . t))
+    :config
+    (doom-modeline-mode 1))
+
+  ;;;###autoload
+  (defun my/ui-enable-doom ()
+    "Enable Doom UI modeline bundle."
+    (interactive)
+    (doom-modeline-mode 1)
+    (message "[ui] Doom modeline enabled."))
+
+  (provide 'ui-doom-modeline)
+  ;;; ui/ui-doom-modeline.el ends here
+#+end_src
+
+**** ui/ui-nano-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-nano-modeline
+:header-args:emacs-lisp: :tangle lisp/ui/ui-nano-modeline.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-nano-modeline.el --- Nano modeline UI bundle -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Nano-modeline based lightweight mode-line bundle.
+  ;;
+  ;; This module:
+  ;; - initializes nano-modeline lazily and safely
+  ;; - activates mode-specific modeline hooks
+  ;; - exposes an explicit interactive enable command
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (defvar ui--nano-modeline-initialized nil)
+
+  (defun my/ui--nano-available-p ()
+    (require 'nano-modeline nil 'noerror))
+
+  (defun my/ui--nano-setup ()
+    (when (and (not ui--nano-modeline-initialized)
+               (my/ui--nano-available-p))
+      (setopt nano-modeline-padding '(0.20 . 0.25))
+      (add-hook 'prog-mode-hook #'nano-modeline-prog-mode)
+      (add-hook 'text-mode-hook #'nano-modeline-text-mode)
+      (setq ui--nano-modeline-initialized t)
+      (message "[ui] nano-modeline initialized.")))
+
+  (leaf nano-modeline
+    :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
+    :after nano-emacs
+    :require nil
+    :init
+    (add-hook 'after-init-hook #'my/ui--nano-setup))
+
+  ;;;###autoload
+  (defun my/ui-enable-nano ()
+    "Enable Nano UI modeline bundle."
+    (interactive)
+    (my/ui--nano-setup))
+
+  (provide 'ui-nano-modeline)
+  ;;; ui/ui-nano-modeline.el ends here
+#+end_src
+
+**** ui/ui-theme.el
+:PROPERTIES:
+:CUSTOM_ID: ui-theme
+:header-args:emacs-lisp: :tangle lisp/ui/ui-theme.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Theme orchestration and face normalization.
+  ;;
+  ;; This module:
+  ;; - applies Nano-based themes and palettes
+  ;; - re-normalizes faces after theme changes
+  ;; - adjusts UI faces for dired-subtree and padding
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (require 'ui-nano-palette)
+
+  (setq-default line-spacing 0.24)
+
+  (defvar ui-theme--initialized nil
+    "Non-nil once the Nano theme and faces have been initialized.")
+
+  (defun ui-theme--apply ()
+    "Apply Nano theme and related face customizations once."
+    (unless ui-theme--initialized
+      (setq ui-theme--initialized t)
+
+      ;; Reapply faces after theme change
+      (with-eval-after-load 'cus-theme
+        (if (boundp 'enable-theme-functions)
+            (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
+          (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
+
+      ;; Dired subtree faces
+      (with-eval-after-load 'dired-subtree
+        (set-face-attribute 'dired-subtree-depth-1-face nil :background "#e6f4ea")
+        (set-face-attribute 'dired-subtree-depth-2-face nil :background "#dff0e3")
+        (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
+        (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
+
+      ;; Nano theme stack
+      (require 'nano-layout)
+      (require 'nano-faces)
+      (nano-faces)
+
+      (set-face-attribute 'nano-face-strong nil
+                          :foreground (face-foreground 'nano-face-default)
+                          :weight 'bold)
+
+      (load-theme 'nano t)
+      (my/nano-apply-faces)
+
+      (set-face-attribute 'bold nil :weight 'bold)
+      (set-face-attribute 'italic nil :slant 'italic)
+
+      (with-eval-after-load 'elec-pair
+        (custom-set-faces
+         '(electric-pair-overlay-face ((t (:background "#e5e7eb"))))
+         '(show-paren-match ((t (:background "#e5e7eb"
+                                             :foreground "#111827"
+                                             :weight bold))))
+         '(show-paren-mismatch ((t (:background "#dc2626"
+                                                :foreground "white"
+                                                :weight bold))))))
+
+      ;; Padding
+      (when (display-graphic-p)
+        (spacious-padding-mode 1)
+        (my/nano-apply-faces))))
+
+  ;; Nano packages (definitions only; no eager work)
+  (leaf nano-emacs
+    :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs"))
+
+  (leaf nano-theme
+    :straight (nano-theme :type git :host github :repo "rougier/nano-theme"))
+
+  (leaf spacious-padding
+    :straight t
+    :if (display-graphic-p)
+    :custom
+    ((spacious-padding-widths . '((left . 15) (right . 15)))
+     (spacious-padding-subtle-mode-line . t)))
+
+  ;; Apply theme after first frame is ready
+  (add-hook 'emacs-startup-hook #'ui-theme--apply)
+
+  (provide 'ui-theme)
+  ;;; ui/ui-theme.el ends here
+#+end_src
+
+**** ui/ui-window.el
+:PROPERTIES:
+:CUSTOM_ID: ui-window
+:header-args:emacs-lisp: :tangle lisp/ui/ui-window.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-window.el --- Window management helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Window and layout management helpers.
+  ;;
+  ;; This module:
+  ;; - enables zoom, winner, and desktop persistence
+  ;; - provides interactive window layout save/restore
+  ;; - avoids enforcing rigid window policies
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf zoom
+    :straight t
+    :hook (after-init-hook . zoom-mode)
+    :custom
+    ((zoom-size . '(0.62 . 0.62))
+     (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
+     (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
+
+  (leaf desktop
+    :straight nil
+    :config
+    (let ((dir (concat no-littering-var-directory "desktop/")))
+      (setq desktop-dirname dir
+            desktop-path (list dir)
+            desktop-base-file-name "desktop"
+            desktop-base-lock-name "lock"
+            desktop-restore-eager 10
+            desktop-save t
+            desktop-load-locked-desktop nil
+            desktop-auto-save-timeout 300)
+      (my/ensure-directory-exists dir)
+      (desktop-save-mode 1)))
+
+  (leaf winner
+    :straight nil
+    :global-minor-mode t)
+
+  (defvar my:saved-window-config nil
+    "Saved window configuration state.")
+
+  (defun my/save-window-layout ()
+    "Save current window layout."
+    (interactive)
+    (setq my:saved-window-config (window-state-get nil t))
+    (message "Window configuration saved."))
+
+  (defun my/restore-window-layout ()
+    "Restore last saved window layout."
+    (interactive)
+    (if my:saved-window-config
+        (window-state-put my:saved-window-config)
+      (message "No saved window configuration found.")))
+
+  (provide 'ui-window)
+  ;;; ui/ui-window.el ends here
+#+end_src
+
+**** ui/ui-utils.el
+:PROPERTIES:
+:CUSTOM_ID: ui-utils
+:header-args:emacs-lisp: :tangle lisp/ui/ui-utils.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-utils.el --- UI utilities and Treemacs configuration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Assorted UI-related utilities and panels.
+  ;;
+  ;; This module:
+  ;; - configures mode-line helpers and system indicators
+  ;; - integrates Treemacs and Dired icon helpers
+  ;; - provides platform-specific clipboard support
+  ;;
+  ;;; Code:
+
+  (leaf minions :straight t
+    :custom ((minions-mode-line-lighter . "⚙"))
+    :hook (after-init-hook . minions-mode))
+
+  (setq display-time-interval 30
+        display-time-day-and-date t
+        display-time-24hr-format t)
+  (display-time-mode 1)
+  (when (fboundp 'display-battery-mode) (display-battery-mode 1))
+
+  (leaf treemacs :straight t
+    :if (display-graphic-p)
+    :custom ((treemacs-filewatch-mode . t)
+             (treemacs-follow-mode . t)
+             (treemacs-indentation . 2)
+             (treemacs-missing-project-action . 'remove)))
+
+  (leaf nerd-icons-dired :straight t
+    :hook (dired-mode . nerd-icons-dired-mode))
+
+  (leaf pbcopy
+    :if (memq window-system '(mac ns))
+    :straight t
+    :config (turn-on-pbcopy))
+
+  (provide 'ui-utils)
+  ;;; ui/ui-utils.el ends here
+#+end_src
+
+**** ui/ui-health-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-health-modeline
+:header-args:emacs-lisp: :tangle lisp/ui/ui-health-modeline.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-health-modeline.el --- Session health indicators -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Mode-line indicators for Emacs session health.
+  ;;
+  ;; This module:
+  ;; - displays buffer, process, and LSP counts
+  ;; - updates indicators reactively via lightweight hooks
+  ;; - introduces no control or policy decisions
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'subr-x))
+
+  (defgroup ui-health-modeline nil
+    "Mode-line indicators for session health."
+    :group 'mode-line)
+
+  (defcustom ui-health-show-buffers-p t
+    "Show buffer count in the mode-line."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defcustom ui-health-show-processes-p t
+    "Show process count in the mode-line."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defcustom ui-health-show-eglot-p t
+    "Show Eglot workspace count in the mode-line when available."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defvar ui-health--mode-line-string ""
+    "Mode-line string representing current session health.")
+
+  (defun ui-health--buffers-count ()
+    "Return the number of live buffers."
+    (length (buffer-list)))
+
+  (defun ui-health--processes-count ()
+    "Return the number of live processes."
+    (length (process-list)))
+
+  (defun ui-health--eglot-count ()
+    "Return the number of active Eglot workspaces, or nil."
+    (when (and ui-health-show-eglot-p
+               (featurep 'eglot)
+               (boundp 'eglot--managed-buffers))
+      (length eglot--managed-buffers)))
+
+  (defun ui-health--update ()
+    "Update `ui-health--mode-line-string`."
+    (setq ui-health--mode-line-string
+          (concat
+           (when ui-health-show-buffers-p
+             (format " B:%d" (ui-health--buffers-count)))
+           (when ui-health-show-processes-p
+             (format " P:%d" (ui-health--processes-count)))
+           (when-let* ((n (ui-health--eglot-count)))
+             (format " LSP:%d" n))))
+    (force-mode-line-update))
+
+  (add-hook 'buffer-list-update-hook #'ui-health--update)
+  (add-hook 'process-status-change-hook #'ui-health--update)
+
+  (with-eval-after-load 'eglot
+    (add-hook 'eglot-managed-mode-hook #'ui-health--update)
+    (add-hook 'eglot-server-stopped-hook #'ui-health--update))
+
+  (unless (member 'ui-health--mode-line-string global-mode-string)
+    (setq global-mode-string
+          (append global-mode-string '(ui-health--mode-line-string))))
+
+  (ui-health--update)
+
+  (provide 'ui-health-modeline)
+  ;;; ui/ui-health-modeline.el ends here
+#+end_src
+
+**** ui/ui-imenu.el
+:PROPERTIES:
+:CUSTOM_ID: ui-imenu
+:header-args:emacs-lisp: :tangle lisp/ui/ui-imenu.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-imenu.el --- Imenu / outline UI integration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; UI-level integration for Imenu-based navigation.
+  ;;
+  ;; This module:
+  ;; - installs and autoloads imenu-list as an optional UI component
+  ;; - does NOT define commands or workflows itself
+  ;; - provides a stable dependency surface for utils-layer helpers
+  ;;
+  ;; Design notes:
+  ;; - utils may opportunistically (require 'imenu-list nil 'noerror)
+  ;; - this module owns the decision to install the package
+  ;; - loading is deferred until explicitly used
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'leaf))
+
+  ;;;; Built-in -------------------------------------------------------------------
+
+  (require 'imenu)
+
+  ;;;; imenu-list -----------------------------------------------------------------
+  ;; Optional sidebar-style Imenu UI.
+  ;; Loaded only on demand via commands.
+
+  (leaf imenu-list
+    :straight t
+    :commands
+    (imenu-list-minor-mode
+     imenu-list-display-dwim
+     imenu-list-stop-timer)
+    :custom
+    ((imenu-list-position . 'left)
+     (imenu-list-size . 36)
+     (imenu-list-focus-after-activation . t)))
+
+  (provide 'ui-imenu)
+  ;;; ui/ui-imenu.el ends here
+#+end_src
+
+**** ui/ui-leader.el
+:PROPERTIES:
+:CUSTOM_ID: ui-leader
+:header-args:emacs-lisp: :tangle lisp/ui/ui-leader.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-leader.el --- Leader key infrastructure (maps only) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Leader key infrastructure (maps and prefix wiring only).
+  ;;
+  ;; This module:
+  ;; - defines the leader key sequence and prefix maps
+  ;; - binds the leader prefix to the root map
+  ;; - does NOT bind concrete commands (that belongs to ui-keymap)
+  ;; - remains delete-safe: removing ui layer must not break core correctness
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup ui-leader nil
+    "Leader key infrastructure."
+    :group 'convenience)
+
+  (defcustom ui-leader-key "C-c SPC"
+    "Key sequence used as the global leader key."
+    :type 'string
+    :group 'ui-leader)
+
+  (defcustom ui-leader-local-suffix "m"
+    "Suffix key under leader used as a local (major-mode) leader group."
+    :type 'string
+    :group 'ui-leader)
+
+  (defcustom ui-leader-enable-p t
+    "If non-nil, enable leader key infrastructure."
+    :type 'boolean
+    :group 'ui-leader)
+
+  (defvar ui-leader-map nil
+    "Root leader prefix map.")
+
+  (defvar ui-leader-b-map nil)
+  (defvar ui-leader-w-map nil)
+  (defvar ui-leader-p-map nil)
+  (defvar ui-leader-g-map nil)
+  (defvar ui-leader-c-map nil)
+  (defvar ui-leader-e-map nil)
+  (defvar ui-leader-t-map nil)
+  (defvar ui-leader-o-map nil)
+  (defvar ui-leader-m-map nil)
+  (defvar ui-leader-a-map nil)
+  (defvar ui-leader-q-map nil)
+  (defvar ui-leader-h-map nil)
+
+  (defun ui-leader--define-maps ()
+    "Define leader prefix maps."
+    (unless (keymapp ui-leader-map)
+      (define-prefix-command 'ui-leader-map))
+    (unless (keymapp ui-leader-b-map) (define-prefix-command 'ui-leader-b-map))
+    (unless (keymapp ui-leader-w-map) (define-prefix-command 'ui-leader-w-map))
+    (unless (keymapp ui-leader-p-map) (define-prefix-command 'ui-leader-p-map))
+    (unless (keymapp ui-leader-g-map) (define-prefix-command 'ui-leader-g-map))
+    (unless (keymapp ui-leader-c-map) (define-prefix-command 'ui-leader-c-map))
+    (unless (keymapp ui-leader-e-map) (define-prefix-command 'ui-leader-e-map))
+    (unless (keymapp ui-leader-t-map) (define-prefix-command 'ui-leader-t-map))
+    (unless (keymapp ui-leader-o-map) (define-prefix-command 'ui-leader-o-map))
+    (unless (keymapp ui-leader-m-map) (define-prefix-command 'ui-leader-m-map))
+    (unless (keymapp ui-leader-a-map) (define-prefix-command 'ui-leader-a-map))
+    (unless (keymapp ui-leader-q-map) (define-prefix-command 'ui-leader-q-map))
+    (unless (keymapp ui-leader-h-map) (define-prefix-command 'ui-leader-h-map))
+
+    (define-key ui-leader-map (kbd "b") 'ui-leader-b-map)
+    (define-key ui-leader-map (kbd "w") 'ui-leader-w-map)
+    (define-key ui-leader-map (kbd "p") 'ui-leader-p-map)
+    (define-key ui-leader-map (kbd "g") 'ui-leader-g-map)
+    (define-key ui-leader-map (kbd "c") 'ui-leader-c-map)
+    (define-key ui-leader-map (kbd "e") 'ui-leader-e-map)
+    (define-key ui-leader-map (kbd "t") 'ui-leader-t-map)
+    (define-key ui-leader-map (kbd "o") 'ui-leader-o-map)
+    (define-key ui-leader-map (kbd ui-leader-local-suffix) 'ui-leader-m-map)
+    (define-key ui-leader-map (kbd "a") 'ui-leader-a-map)
+    (define-key ui-leader-map (kbd "q") 'ui-leader-q-map)
+    (define-key ui-leader-map (kbd "h") 'ui-leader-h-map))
+
+  (defun ui-leader--bind-root ()
+    "Bind the leader key to `ui-leader-map`."
+    (when ui-leader-enable-p
+      (ui-leader--define-maps)
+      (cond
+       ((fboundp 'keymap-global-set)
+        (keymap-global-set ui-leader-key 'ui-leader-map))
+       (t
+        (global-set-key (kbd ui-leader-key) 'ui-leader-map)))))
+
+  (defun ui-leader--startup-init ()
+    "Initialize leader infrastructure."
+    (ui-leader--bind-root))
+
+  (add-hook 'after-init-hook #'ui-leader--startup-init)
+
+  (provide 'ui-leader)
+  ;;; ui-leader.el ends here
+#+end_src
+
+**** ui/ui-hydra.el
+:PROPERTIES:
+:CUSTOM_ID: ui-hydra
+:header-args:emacs-lisp: :tangle lisp/ui/ui-hydra.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-hydra.el --- UI hydras (optional) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Optional hydras used by UI keymaps.
+  ;;
+  ;; This module:
+  ;; - defines hydras when `hydra` is available
+  ;; - never hard-requires hydra at startup
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup ui-hydra nil
+    "Hydra helpers for UI."
+    :group 'convenience)
+
+  (defcustom ui-hydra-enable-p t
+    "If non-nil, enable UI hydras when dependencies are available."
+    :type 'boolean
+    :group 'ui-hydra)
+
+  (defvar ui-hydra-text-scale--defined nil)
+
+  (defun ui-hydra-define-text-scale ()
+    "Define text-scale hydra if possible."
+    (interactive)
+    (when (and ui-hydra-enable-p
+               (not ui-hydra-text-scale--defined)
+               (require 'hydra nil t))
+      (setq ui-hydra-text-scale--defined t)
+      (defhydra ui-hydra-text-scale (:hint nil :color red)
+        "
+  ^Text Scaling^
+  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
+  "
+        ("+" text-scale-increase)
+        ("-" text-scale-decrease)
+        ("0" (text-scale-set 0) :color blue)
+        ("q" nil "quit" :color blue))))
+
+  (defun ui-hydra-text-scale/body ()
+    "Call the text-scale hydra (define lazily if needed)."
+    (interactive)
+    (ui-hydra-define-text-scale)
+    (if (fboundp 'ui-hydra-text-scale/body)
+        (call-interactively 'ui-hydra-text-scale/body)
+      (user-error "hydra is not available")))
+
+  (provide 'ui-hydra)
+  ;;; ui-hydra.el ends here
+#+end_src
+**** ui/ui-which-key.el
+:PROPERTIES:
+:CUSTOM_ID: ui-which-key
+:header-args:emacs-lisp: :tangle lisp/ui/ui-which-key.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-which-key.el --- which-key integration for leader maps -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; which-key integration for leader infrastructure.
+  ;;
+  ;; This module:
+  ;; - enables which-key (optional)
+  ;; - labels leader subgroups
+  ;; - remains safe if which-key is absent
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup ui-which-key nil
+    "which-key integration."
+    :group 'convenience)
+
+  (defcustom ui-which-key-enable-p t
+    "If non-nil, enable which-key when available."
+    :type 'boolean
+    :group 'ui-which-key)
+
+  (defcustom ui-which-key-idle-delay 0.4
+    "Idle delay for which-key."
+    :type 'number
+    :group 'ui-which-key)
+
+  (defun ui-which-key--label-leader-groups ()
+    "Label leader group prefixes for which-key."
+    (when (and (featurep 'which-key)
+               (fboundp 'which-key-add-key-based-replacements)
+               (boundp 'ui-leader-key)
+               (stringp ui-leader-key))
+      (let ((p ui-leader-key))
+        (dolist (it `((,(concat p " b") . "buffers")
+                      (,(concat p " w") . "windows")
+                      (,(concat p " p") . "project")
+                      (,(concat p " s") . "search")
+                      (,(concat p " g") . "git")
+                      (,(concat p " c") . "code")
+                      (,(concat p " e") . "errors")
+                      (,(concat p " t") . "toggles")
+                      (,(concat p " o") . "org/roam")
+                      (,(concat p " m") . "mode")
+                      (,(concat p " a") . "ai")
+                      (,(concat p " q") . "session")
+                      (,(concat p " h") . "help")))
+          (which-key-add-key-based-replacements (car it) (cdr it))))))
+
+  (defun ui-which-key--startup-init ()
+    "Enable which-key and label leader groups."
+    (when ui-which-key-enable-p
+      (when (require 'which-key nil t)
+        (setq which-key-idle-delay ui-which-key-idle-delay)
+        (add-hook 'after-init-hook #'which-key-mode)
+        (ui-which-key--label-leader-groups))))
+
+  (add-hook 'after-init-hook #'ui-which-key--startup-init)
+
+  (provide 'ui-which-key)
+  ;;; ui-which-key.el ends here
+#+end_src
+
+**** ui/ui-keymap.el
+:PROPERTIES:
+:CUSTOM_ID: ui-keymap
+:header-args:emacs-lisp: :tangle lisp/ui/ui-keymap.el
+:END:
+
+#+begin_src emacs-lisp
+;;; ui/ui-keymap.el --- Leader and local-leader bindings -*- lexical-binding: t; -*-
+
+(eval-when-compile
+  (require 'subr-x))
+
+(require 'ui-leader nil t)
+
+(defun ui-keymap--bind (map key cmd)
+  "Bind KEY to CMD in MAP if MAP exists."
+  (when (and (symbolp map)
+             (boundp map)
+             (keymapp (symbol-value map)))
+    (define-key (symbol-value map) (kbd key) cmd)))
+
+(defun ui-keymap--leader-bind (key cmd)
+  "Bind KEY to CMD in `ui-leader-map`."
+  (when (and (boundp 'ui-leader-map)
+             (keymapp ui-leader-map))
+    (define-key ui-leader-map (kbd key) cmd)))
+
+(defun ui-keymap--leader-binds ()
+  "Install leader keybindings."
+
+  ;; Top-level
+  (ui-keymap--leader-bind "SPC" #'execute-extended-command)
+  (ui-keymap--leader-bind "."   #'other-window)
+  (ui-keymap--leader-bind "f"   #'find-file)
+  (ui-keymap--leader-bind "F"   #'find-file-other-window)
+  (ui-keymap--leader-bind "O"   #'find-file-other-frame)
+  (ui-keymap--leader-bind "z"   #'ui-hydra-text-scale/body)
+
+  ;; Search
+  (ui-keymap--leader-bind "/"   #'consult-line)
+  (ui-keymap--leader-bind "s r" #'consult-ripgrep)
+  (ui-keymap--leader-bind "s m" #'consult-imenu)
+
+  ;; Buffers
+  (ui-keymap--bind 'ui-leader-b-map "b" #'consult-buffer)
+  (ui-keymap--bind 'ui-leader-b-map "n" #'next-buffer)
+  (ui-keymap--bind 'ui-leader-b-map "p" #'previous-buffer)
+  (ui-keymap--bind 'ui-leader-b-map "r" #'revert-buffer)
+
+  ;; Windows
+  (ui-keymap--bind 'ui-leader-w-map "s" #'split-window-below)
+  (ui-keymap--bind 'ui-leader-w-map "v" #'split-window-right)
+  (ui-keymap--bind 'ui-leader-w-map "d" #'delete-window)
+  (ui-keymap--bind 'ui-leader-w-map "o" #'delete-other-windows)
+  (ui-keymap--bind 'ui-leader-w-map "=" #'balance-windows)
+
+  ;; Project
+  (ui-keymap--bind 'ui-leader-p-map "p" #'project-switch-project)
+  (ui-keymap--bind 'ui-leader-p-map "f" #'project-find-file)
+  (ui-keymap--bind 'ui-leader-p-map "d" #'project-dired)
+
+  ;; Git
+  (ui-keymap--bind 'ui-leader-g-map "s" #'magit-status)
+  (ui-keymap--bind 'ui-leader-g-map "c" #'magit-commit)
+
+  ;; Code (dev bridge)
+  (ui-keymap--bind 'ui-leader-c-map "a" #'dev-lsp-code-actions)
+  (ui-keymap--bind 'ui-leader-c-map "r" #'dev-lsp-rename)
+  (ui-keymap--bind 'ui-leader-c-map "f" #'dev-lsp-format-buffer)
+  (ui-keymap--bind 'ui-leader-c-map "d" #'xref-find-definitions)
+  (ui-keymap--bind 'ui-leader-c-map "R" #'xref-find-references)
+
+  ;; Errors
+  (ui-keymap--bind 'ui-leader-e-map "n" #'flymake-goto-next-error)
+  (ui-keymap--bind 'ui-leader-e-map "p" #'flymake-goto-prev-error)
+
+  ;; Toggles
+  (ui-keymap--bind 'ui-leader-t-map "w" #'whitespace-mode)
+  (ui-keymap--bind 'ui-leader-t-map "r" #'read-only-mode)
+
+  ;; Org
+  (ui-keymap--bind 'ui-leader-o-map "a" #'org-agenda)
+  (ui-keymap--bind 'ui-leader-o-map "c" #'org-capture)
+
+  ;; Session
+  (ui-keymap--bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
+
+(defun ui-keymap--local-leader-binds ()
+  "Install major-mode local leader bindings."
+
+  ;; Dired
+  (with-eval-after-load 'dired
+    (when (boundp 'dired-mode-map)
+      (define-key dired-mode-map (kbd "TAB") #'dired-subtree-toggle)
+      (define-key dired-mode-map (kbd "i")   #'dired-subtree-insert)))
+
+  ;; Org
+  (with-eval-after-load 'org
+    (when (boundp 'org-mode-map)
+      (define-key org-mode-map (kbd "C-c SPC m t") #'org-todo)
+      (define-key org-mode-map (kbd "C-c SPC m s") #'org-schedule)
+      (define-key org-mode-map (kbd "C-c SPC m d") #'org-deadline))))
+
+(defun ui-keymap--startup-init ()
+  "Initialize UI keymaps."
+  (ui-keymap--leader-binds)
+  (ui-keymap--local-leader-binds))
+
+(add-hook 'after-init-hook #'ui-keymap--startup-init)
+
+(provide 'ui-keymap)
+;;; ui/ui-keymap.el ends here
+#+end_src
+
+**** ui/ui-global-keys.el
+:PROPERTIES:
+:CUSTOM_ID: ui-global-keys
+:header-args:emacs-lisp: :tangle lisp/ui/ui-global-keys.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-global-keys.el --- Global keybindings (outside leader) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Global keybindings that are intentionally outside leader UX.
+  ;;
+  ;; This module:
+  ;; - binds global keys best-effort
+  ;; - does not require optional packages at load time
+  ;; - remains delete-safe: removing ui layer must not break core correctness
+  ;;
+  ;;; Code:
+
+  (defun ui-global-keys--startup-init ()
+    "Install global keybindings."
+    (global-set-key (kbd "<f1>") #'help-command)
+
+    ;; Small ergonomics (opt-in: keep minimal)
+    (global-set-key (kbd "C-?") #'undo-redo)
+
+    ;; Convenience
+    (global-set-key (kbd "C-c b") #'consult-buffer)
+    (global-set-key (kbd "C-c r") #'consult-ripgrep)
+    (global-set-key (kbd "C-c o") #'find-file)
+
+    ;; macOS-like (Super) navigation (safe even if user changes modifiers)
+    (global-set-key (kbd "s-<left>")  #'previous-buffer)
+    (global-set-key (kbd "s-<right>") #'next-buffer)
+    (global-set-key (kbd "s-<up>")    #'beginning-of-buffer)
+    (global-set-key (kbd "s-<down>")  #'end-of-buffer)
+
+    ;; Standard M-x
+    (global-set-key (kbd "M-x") #'execute-extended-command))
+
+  (add-hook 'after-init-hook #'ui-global-keys--startup-init)
+
+  (provide 'ui-global-keys)
+  ;;; ui-global-keys.el ends here
+#+end_src
+
+**** ui/ui-visual-aids.el
+:PROPERTIES:
+:CUSTOM_ID: ui-visual-aids
+:header-args:emacs-lisp: :tangle lisp/ui/ui-visual-aids.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-visual-aids.el --- Subtle visual helpers -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Non-intrusive visual aids for editing and navigation.
+  ;;
+  ;; This module:
+  ;; - highlights cursor movement and TODO keywords
+  ;; - adds rainbow delimiters and indent guides
+  ;; - avoids persistent or disruptive visual effects
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf pulsar
+    :straight t
+    :init
+    (setq pulsar-delay 0.04
+          pulsar-pulse t
+          pulsar-face 'pulsar-generic)
+    :config
+    (pulsar-global-mode 1)
+    (dolist (cmd '(recenter-top-bottom
+                   other-window
+                   next-buffer
+                   previous-buffer))
+      (add-to-list 'pulsar-pulse-functions cmd)))
+
+  (leaf hl-todo
+    :straight t
+    :hook ((prog-mode-hook text-mode-hook) . hl-todo-mode)
+    :init
+    (setq hl-todo-keyword-faces
+          '(("TODO" . "#d97706")
+            ("FIXME" . "#dc2626")
+            ("NOTE" . "#2563eb")
+            ("HACK" . "#9333ea"))))
+
+  (leaf rainbow-delimiters
+    :straight t
+    :hook (prog-mode-hook . rainbow-delimiters-mode))
+
+  (leaf indent-bars
+    :straight t
+    :hook (prog-mode-hook . indent-bars-mode)
+    :init
+    (setq indent-bars-prefer-character t
+          indent-bars-spacing-override 2))
+
+  (provide 'ui-visual-aids)
+  ;;; ui/ui-visual-aids.el ends here
+#+end_src
+
+**** ui/ui-macos.el
+:PROPERTIES:
+:CUSTOM_ID: ui-macos
+:header-args:emacs-lisp: :tangle lisp/ui/ui-macos.el
+:END:
+#+begin_src emacs-lisp
+  ;;; ui/ui-macos.el --- macOS-specific UI niceties -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;; Commentary:
+  ;; Small macOS-specific UI adjustments.
+  ;;
+  ;; This module:
+  ;; - enables native title-bar integration on macOS
+  ;; - avoids any effect on non-darwin systems
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (when (eq system-type 'darwin)
+    (add-to-list 'default-frame-alist
+                 '(ns-transparent-titlebar . t))
+    (add-to-list 'default-frame-alist
+                 '(use-title-bar . t)))
+
+  (provide 'ui-macos)
+  ;;; ui/ui-macos.el ends here
+#+end_src
+
+*** auth/
+:PROPERTIES:
+:CUSTOM_ID: authx-modules
+:END:
+
+**** auth/auth-core.el
+:PROPERTIES:
+:CUSTOM_ID: auth-core
+:header-args:emacs-lisp: :tangle lisp/auth/auth-core.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; auth/auth-core.el --- Authentication policy -*- lexical-binding: t; -*-
+
+  (defgroup auth-core nil
+    "Authentication policy."
+    :group 'convenience)
+
+  (defcustom auth-core-enable-p t
+    "Enable authentication helpers."
+    :type 'boolean
+    :group 'auth-core)
+
+  (defun auth-core-check-env ()
+    "Warn if required environment variables are missing."
+    (when auth-core-enable-p
+      (unless (getenv "GPG_KEY_ID")
+        (display-warning 'auth "GPG_KEY_ID is not set."))))
+
+  (defun auth-core--startup-init ()
+    (auth-core-check-env)
+    (when (require 'epa-file nil t)
+      (add-hook 'emacs-startup-hook #'epa-file-enable))
+    (when (require 'auth-source-pass nil t)
+      (when (executable-find "pass")
+        (auth-source-pass-enable))))
+
+  (add-hook 'after-init-hook #'auth-core--startup-init)
+
+  (provide 'auth-core)
+  ;;; auth/auth-core.el ends here
+#+end_src
+
 *** completion/
 :PROPERTIES:
 :CUSTOM_ID: completion-modules
 :END:
-
 
 **** completion/completion-core.el
 :PROPERTIES:
@@ -3817,870 +4923,6 @@ Its role is orchestration only.
   ;;; completion/completion-lsp.el ends here
 #+end_src
 
-*** ui/
-:PROPERTIES:
-:CUSTOM_ID: ui-modules
-:END:
-
-
-**** ui/ui-font.el
-:PROPERTIES:
-:CUSTOM_ID: ui-font
-:header-args:emacs-lisp: :tangle lisp/ui/ui-font.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-font.el --- Font configuration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2025
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Font configuration for graphical UI frames.
-  ;;
-  ;; This module:
-  ;; - configures default, variable-pitch, and emoji fonts
-  ;; - applies OS-aware fallbacks and daemon-safe hooks
-  ;; - optionally enables programming ligatures
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'leaf))
-
-  ;;;; Custom variables
-
-  (defgroup ui-font nil
-    "Font configuration for UI."
-    :group 'ui)
-
-  (defcustom ui-font-default nil
-    "Default monospace font family.
-  If nil, an OS-dependent fallback is used."
-    :type '(choice (const :tag "Auto" nil)
-                   (string :tag "Font family"))
-    :group 'ui-font)
-
-  (defcustom ui-font-variable-pitch nil
-    "Variable-pitch font family.
-  If nil, the default monospace font is reused."
-    :type '(choice (const :tag "Auto" nil)
-                   (string :tag "Font family"))
-    :group 'ui-font)
-
-  (defcustom ui-font-emoji nil
-    "Emoji font family.
-  If nil, an OS-dependent fallback is used."
-    :type '(choice (const :tag "Auto" nil)
-                   (string :tag "Font family"))
-    :group 'ui-font)
-
-  (defcustom ui-font-size 18
-    "Default font size in points."
-    :type 'integer
-    :group 'ui-font)
-
-  ;;;; Internal helpers
-
-  (defun ui-font--system-default ()
-    "Return a default monospace font family depending on OS."
-    (cond
-     ((eq system-type 'darwin)     "Menlo")
-     ((eq system-type 'gnu/linux)  "Monospace")
-     ((eq system-type 'windows-nt) "Consolas")
-     (t "Monospace")))
-
-  (defun ui-font--system-emoji ()
-    "Return a default emoji font family depending on OS."
-    (cond
-     ((eq system-type 'darwin)     "Apple Color Emoji")
-     ((eq system-type 'gnu/linux)  "Noto Color Emoji")
-     ((eq system-type 'windows-nt) "Segoe UI Emoji")
-     (t "Noto Color Emoji")))
-
-  ;;;; Core setup
-
-  (defun ui-font-apply ()
-    "Apply font settings to the current frame."
-    (when (display-graphic-p)
-      (set-face-attribute
-       'default nil
-       :family (or ui-font-default (ui-font--system-default))
-       :height (* 10 ui-font-size))
-      (set-face-attribute
-       'variable-pitch nil
-       :family (or ui-font-variable-pitch
-                   ui-font-default
-                   (ui-font--system-default)))
-      (set-fontset-font
-       t 'emoji
-       (font-spec :family
-                  (or ui-font-emoji (ui-font--system-emoji))))
-      (ui-font-describe)))
-
-  ;;;###autoload
-  (defun ui-font-show-current ()
-    "Echo the current default font family and point size."
-    (interactive)
-    (let ((family (face-attribute 'default :family))
-          (height (face-attribute 'default :height)))
-      (message "Current font: %s, %.1f pt"
-               family (/ height 10.0))))
-
-  ;;;###autoload
-  (defun ui-font-describe ()
-    "Display font information applied by `ui-font-apply`."
-    (interactive)
-    (unless (display-graphic-p)
-      (user-error "Fonts are only meaningful in graphical frames"))
-    (let* ((default-family (face-attribute 'default :family))
-           (default-height (face-attribute 'default :height))
-           (variable-family (face-attribute 'variable-pitch :family))
-           (emoji-font (font-get
-                        (font-spec :script 'emoji)
-                        :family)))
-      (message
-       (concat
-        "Fonts applied:\n"
-        "  Default        : %s (%.1f pt)\n"
-        "  Variable-pitch : %s\n"
-        "  Emoji          : %s")
-       default-family
-       (/ default-height 10.0)
-       variable-family
-       (or emoji-font "unknown"))))
-
-  ;;;; Startup handling
-
-  (if (daemonp)
-      (add-hook 'after-make-frame-functions
-                (lambda (frame)
-                  (with-selected-frame frame
-                    (ui-font-apply))))
-    (add-hook 'after-init-hook #'ui-font-apply))
-
-  ;;;; Optional ligatures
-
-  (leaf ligature
-    :straight (ligature :type git :host github :repo "mickeynp/ligature.el")
-    :when (display-graphic-p)
-    :hook (prog-mode-hook . global-ligature-mode)
-    :config
-    (ligature-set-ligatures
-     'prog-mode
-     '("->" "=>" "::" "===" "!=" "&&" "||")))
-
-  (provide 'ui-font)
-  ;;; ui-font.el ends here
-#+end_src
-
-**** ui/ui-nano-palette.el
-:PROPERTIES:
-:CUSTOM_ID: ui-nano-palette
-:header-args:emacs-lisp: :tangle lisp/ui/ui-nano-palette.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-nano-palette.el --- Nano-style color palette -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Single source of truth for Nano-style UI colors.
-  ;;
-  ;; This module:
-  ;; - defines all palette entries as defcustom variables
-  ;; - applies faces through a single normalization function
-  ;; - avoids duplicated literal colors across the UI layer
-  ;;
-  ;;; Code:
-
-  (defgroup my:nano nil
-    "Minimal nano-style light palette."
-    :group 'faces)
-
-  (defcustom nano-color-background "#fafafa"
-    "UI background for buffers/panels."
-    :type 'string :group 'my:nano)
-
-  (defcustom nano-color-foreground "#374151"
-    "Default body text color."
-    :type 'string :group 'my:nano)
-
-  (defcustom nano-color-salient "#2563eb"
-    "Accent for links/keywords/standout choices."
-    :type 'string :group 'my:nano)
-
-  (defcustom nano-color-popout "#6b7280"
-    "Neutral notice / muted highlight."
-    :type 'string :group 'my:nano)
-
-  (defcustom nano-color-critical "#dc2626"
-    "Critical error / danger color."
-    :type 'string :group 'my:nano)
-
-  (defcustom nano-color-strong "#111827"
-    "Strong emphasis (headings, key mode-line parts)."
-    :type 'string :group 'my:nano)
-
-  (defcustom nano-color-faded "#9ca3af"
-    "De-emphasized info (comments/secondary/disabled)."
-    :type 'string :group 'my:nano)
-
-  (defcustom nano-color-subtle "#e5e7eb"
-    "Subtle backgrounds (mode/header lines, gentle selections)."
-    :type 'string :group 'my:nano)
-
-  (defun my/nano-apply-faces ()
-    "Apply faces based on the nano-style palette defined above."
-    (set-face-attribute 'default nil
-                        :background nano-color-background
-                        :foreground nano-color-foreground)
-    (set-face-attribute 'bold nil :foreground nano-color-strong :weight 'bold)
-    (set-face-attribute 'italic nil :slant 'italic)
-
-    (set-face-attribute 'font-lock-comment-face nil :foreground nano-color-faded)
-    (set-face-attribute 'font-lock-keyword-face nil
-                        :foreground nano-color-salient :weight 'semi-bold)
-    (set-face-attribute 'font-lock-string-face nil :foreground nano-color-popout)
-    (set-face-attribute 'font-lock-warning-face nil
-                        :foreground nano-color-popout :weight 'bold)
-
-    (set-face-attribute 'link nil :foreground nano-color-salient :underline t)
-    (set-face-attribute 'button nil :foreground nano-color-salient :underline t)
-
-    (set-face-attribute 'error nil
-                        :foreground nano-color-critical :weight 'bold)
-    (set-face-attribute 'warning nil
-                        :foreground nano-color-popout :weight 'bold)
-    (set-face-attribute 'success nil :foreground "#10b981")
-
-    (set-face-attribute 'region nil :background nano-color-subtle)
-
-    (let ((ml-bg nano-color-subtle)
-          (ml-fg nano-color-strong))
-      (set-face-attribute 'mode-line nil
-                          :background ml-bg :foreground ml-fg
-                          :box `(:line-width 1 :color ,ml-bg))
-      (set-face-attribute 'mode-line-inactive nil
-                          :background nano-color-background
-                          :foreground nano-color-faded
-                          :box `(:line-width 1 :color ,nano-color-background)))
-
-    (set-face-attribute 'minibuffer-prompt nil
-                        :foreground nano-color-salient :weight 'semi-bold))
-
-  (defun my/nano-set-palette-and-apply (&rest plist)
-    "Override palette entries via PLIST and apply faces."
-    (when plist
-      (let ((map '((:background . nano-color-background)
-                   (:foreground . nano-color-foreground)
-                   (:salient    . nano-color-salient)
-                   (:popout     . nano-color-popout)
-                   (:critical   . nano-color-critical)
-                   (:strong     . nano-color-strong)
-                   (:faded      . nano-color-faded)
-                   (:subtle     . nano-color-subtle))))
-        (while plist
-          (let* ((k (pop plist))
-                 (v (pop plist))
-                 (sym (cdr (assq k map))))
-            (when sym (set sym v))))))
-    (my/nano-apply-faces))
-
-  (provide 'ui-nano-palette)
-  ;;; ui/ui-nano-palette.el ends here
-#+end_src
-
-**** ui/ui-theme.el
-:PROPERTIES:
-:CUSTOM_ID: ui-theme
-:header-args:emacs-lisp: :tangle lisp/ui/ui-theme.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Theme orchestration and face normalization.
-  ;;
-  ;; This module:
-  ;; - applies Nano-based themes and palettes
-  ;; - re-normalizes faces after theme changes
-  ;; - adjusts UI faces for dired-subtree and padding
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (require 'ui-nano-palette)
-
-  (setq-default line-spacing 0.24)
-
-  (defvar ui-theme--initialized nil
-    "Non-nil once the Nano theme and faces have been initialized.")
-
-  (defun ui-theme--apply ()
-    "Apply Nano theme and related face customizations once."
-    (unless ui-theme--initialized
-      (setq ui-theme--initialized t)
-
-      ;; Reapply faces after theme change
-      (with-eval-after-load 'cus-theme
-        (if (boundp 'enable-theme-functions)
-            (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
-          (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
-
-      ;; Dired subtree faces
-      (with-eval-after-load 'dired-subtree
-        (set-face-attribute 'dired-subtree-depth-1-face nil :background "#e6f4ea")
-        (set-face-attribute 'dired-subtree-depth-2-face nil :background "#dff0e3")
-        (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
-        (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
-
-      ;; Nano theme stack
-      (require 'nano-layout)
-      (require 'nano-faces)
-      (nano-faces)
-
-      (set-face-attribute 'nano-face-strong nil
-                          :foreground (face-foreground 'nano-face-default)
-                          :weight 'bold)
-
-      (load-theme 'nano t)
-      (my/nano-apply-faces)
-
-      (set-face-attribute 'bold nil :weight 'bold)
-      (set-face-attribute 'italic nil :slant 'italic)
-
-      (with-eval-after-load 'elec-pair
-        (custom-set-faces
-         '(electric-pair-overlay-face ((t (:background "#e5e7eb"))))
-         '(show-paren-match ((t (:background "#e5e7eb"
-                                             :foreground "#111827"
-                                             :weight bold))))
-         '(show-paren-mismatch ((t (:background "#dc2626"
-                                                :foreground "white"
-                                                :weight bold))))))
-
-      ;; Padding
-      (when (display-graphic-p)
-        (spacious-padding-mode 1)
-        (my/nano-apply-faces))))
-
-  ;; Nano packages (definitions only; no eager work)
-  (leaf nano-emacs
-    :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs"))
-
-  (leaf nano-theme
-    :straight (nano-theme :type git :host github :repo "rougier/nano-theme"))
-
-  (leaf spacious-padding
-    :straight t
-    :if (display-graphic-p)
-    :custom
-    ((spacious-padding-widths . '((left . 15) (right . 15)))
-     (spacious-padding-subtle-mode-line . t)))
-
-  ;; Apply theme after first frame is ready
-  (add-hook 'emacs-startup-hook #'ui-theme--apply)
-
-  (provide 'ui-theme)
-  ;;; ui/ui-theme.el ends here
-#+end_src
-
-**** ui/ui-doom-modeline.el
-:PROPERTIES:
-:CUSTOM_ID: ui-doom-modeline
-:header-args:emacs-lisp: :tangle lisp/ui/ui-doom-modeline.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-doom-modeline.el --- Doom modeline UI bundle -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Doom-modeline based mode-line UI bundle.
-  ;;
-  ;; This module:
-  ;; - configures and enables doom-modeline
-  ;; - integrates Nerd Icons for the mode-line
-  ;; - exposes an explicit interactive enable command
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-  (declare-function doom-modeline-mode "doom-modeline")
-
-  (leaf nerd-icons :straight t)
-
-  (leaf doom-modeline
-    :straight t
-    :custom ((doom-modeline-height . 28)
-             (doom-modeline-buffer-file-name-style
-              . 'truncate-with-project)
-             (doom-modeline-minor-modes . nil)
-             (doom-modeline-enable-word-count . t))
-    :config
-    (doom-modeline-mode 1))
-
-  ;;;###autoload
-  (defun my/ui-enable-doom ()
-    "Enable Doom UI modeline bundle."
-    (interactive)
-    (doom-modeline-mode 1)
-    (message "[ui] Doom modeline enabled."))
-
-  (provide 'ui-doom-modeline)
-  ;;; ui/ui-doom-modeline.el ends here
-#+end_src
-
-**** ui/ui-nano-modeline.el
-:PROPERTIES:
-:CUSTOM_ID: ui-nano-modeline
-:header-args:emacs-lisp: :tangle lisp/ui/ui-nano-modeline.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-nano-modeline.el --- Nano modeline UI bundle -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Nano-modeline based lightweight mode-line bundle.
-  ;;
-  ;; This module:
-  ;; - initializes nano-modeline lazily and safely
-  ;; - activates mode-specific modeline hooks
-  ;; - exposes an explicit interactive enable command
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (defvar ui--nano-modeline-initialized nil)
-
-  (defun my/ui--nano-available-p ()
-    (require 'nano-modeline nil 'noerror))
-
-  (defun my/ui--nano-setup ()
-    (when (and (not ui--nano-modeline-initialized)
-               (my/ui--nano-available-p))
-      (setopt nano-modeline-padding '(0.20 . 0.25))
-      (add-hook 'prog-mode-hook #'nano-modeline-prog-mode)
-      (add-hook 'text-mode-hook #'nano-modeline-text-mode)
-      (setq ui--nano-modeline-initialized t)
-      (message "[ui] nano-modeline initialized.")))
-
-  (leaf nano-modeline
-    :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
-    :after nano-emacs
-    :require nil
-    :init
-    (add-hook 'after-init-hook #'my/ui--nano-setup))
-
-  ;;;###autoload
-  (defun my/ui-enable-nano ()
-    "Enable Nano UI modeline bundle."
-    (interactive)
-    (my/ui--nano-setup))
-
-  (provide 'ui-nano-modeline)
-  ;;; ui/ui-nano-modeline.el ends here
-#+end_src
-
-**** ui/ui-health-modeline.el
-:PROPERTIES:
-:CUSTOM_ID: ui-health-modeline
-:header-args:emacs-lisp: :tangle lisp/ui/ui-health-modeline.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-health-modeline.el --- Session health indicators -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Mode-line indicators for Emacs session health.
-  ;;
-  ;; This module:
-  ;; - displays buffer, process, and LSP counts
-  ;; - updates indicators reactively via lightweight hooks
-  ;; - introduces no control or policy decisions
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'leaf)
-    (require 'subr-x))
-
-  (defgroup ui-health-modeline nil
-    "Mode-line indicators for session health."
-    :group 'mode-line)
-
-  (defcustom ui-health-show-buffers-p t
-    "Show buffer count in the mode-line."
-    :type 'boolean
-    :group 'ui-health-modeline)
-
-  (defcustom ui-health-show-processes-p t
-    "Show process count in the mode-line."
-    :type 'boolean
-    :group 'ui-health-modeline)
-
-  (defcustom ui-health-show-eglot-p t
-    "Show Eglot workspace count in the mode-line when available."
-    :type 'boolean
-    :group 'ui-health-modeline)
-
-  (defvar ui-health--mode-line-string ""
-    "Mode-line string representing current session health.")
-
-  (defun ui-health--buffers-count ()
-    "Return the number of live buffers."
-    (length (buffer-list)))
-
-  (defun ui-health--processes-count ()
-    "Return the number of live processes."
-    (length (process-list)))
-
-  (defun ui-health--eglot-count ()
-    "Return the number of active Eglot workspaces, or nil."
-    (when (and ui-health-show-eglot-p
-               (featurep 'eglot)
-               (boundp 'eglot--managed-buffers))
-      (length eglot--managed-buffers)))
-
-  (defun ui-health--update ()
-    "Update `ui-health--mode-line-string`."
-    (setq ui-health--mode-line-string
-          (concat
-           (when ui-health-show-buffers-p
-             (format " B:%d" (ui-health--buffers-count)))
-           (when ui-health-show-processes-p
-             (format " P:%d" (ui-health--processes-count)))
-           (when-let* ((n (ui-health--eglot-count)))
-             (format " LSP:%d" n))))
-    (force-mode-line-update))
-
-  (add-hook 'buffer-list-update-hook #'ui-health--update)
-  (add-hook 'process-status-change-hook #'ui-health--update)
-
-  (with-eval-after-load 'eglot
-    (add-hook 'eglot-managed-mode-hook #'ui-health--update)
-    (add-hook 'eglot-server-stopped-hook #'ui-health--update))
-
-  (unless (member 'ui-health--mode-line-string global-mode-string)
-    (setq global-mode-string
-          (append global-mode-string '(ui-health--mode-line-string))))
-
-  (ui-health--update)
-
-  (provide 'ui-health-modeline)
-  ;;; ui/ui-health-modeline.el ends here
-#+end_src
-
-**** ui/ui-window.el
-:PROPERTIES:
-:CUSTOM_ID: ui-window
-:header-args:emacs-lisp: :tangle lisp/ui/ui-window.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-window.el --- Window management helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Window and layout management helpers.
-  ;;
-  ;; This module:
-  ;; - enables zoom, winner, and desktop persistence
-  ;; - provides interactive window layout save/restore
-  ;; - avoids enforcing rigid window policies
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf zoom
-    :straight t
-    :hook (after-init-hook . zoom-mode)
-    :custom
-    ((zoom-size . '(0.62 . 0.62))
-     (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
-     (zoom-ignored-buffer-names . '("*Messages*" "*Help*"))))
-
-  (leaf desktop
-    :straight nil
-    :config
-    (let ((dir (concat no-littering-var-directory "desktop/")))
-      (setq desktop-dirname dir
-            desktop-path (list dir)
-            desktop-base-file-name "desktop"
-            desktop-base-lock-name "lock"
-            desktop-restore-eager 10
-            desktop-save t
-            desktop-load-locked-desktop nil
-            desktop-auto-save-timeout 300)
-      (my/ensure-directory-exists dir)
-      (desktop-save-mode 1)))
-
-  (leaf winner
-    :straight nil
-    :global-minor-mode t)
-
-  (defvar my:saved-window-config nil
-    "Saved window configuration state.")
-
-  (defun my/save-window-layout ()
-    "Save current window layout."
-    (interactive)
-    (setq my:saved-window-config (window-state-get nil t))
-    (message "Window configuration saved."))
-
-  (defun my/restore-window-layout ()
-    "Restore last saved window layout."
-    (interactive)
-    (if my:saved-window-config
-        (window-state-put my:saved-window-config)
-      (message "No saved window configuration found.")))
-
-  (provide 'ui-window)
-  ;;; ui/ui-window.el ends here
-#+end_src
-
-**** ui/ui-utils.el
-:PROPERTIES:
-:CUSTOM_ID: ui-utils
-:header-args:emacs-lisp: :tangle lisp/ui/ui-utils.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-utils.el --- UI utilities and Treemacs configuration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Assorted UI-related utilities and panels.
-  ;;
-  ;; This module:
-  ;; - configures mode-line helpers and system indicators
-  ;; - integrates Treemacs and Dired icon helpers
-  ;; - provides platform-specific clipboard support
-  ;;
-  ;;; Code:
-
-  (leaf minions :straight t
-    :custom ((minions-mode-line-lighter . "⚙"))
-    :hook (after-init-hook . minions-mode))
-
-  (setq display-time-interval 30
-        display-time-day-and-date t
-        display-time-24hr-format t)
-  (display-time-mode 1)
-  (when (fboundp 'display-battery-mode) (display-battery-mode 1))
-
-  (leaf treemacs :straight t
-    :if (display-graphic-p)
-    :custom ((treemacs-filewatch-mode . t)
-             (treemacs-follow-mode . t)
-             (treemacs-indentation . 2)
-             (treemacs-missing-project-action . 'remove)))
-
-  (leaf nerd-icons-dired :straight t
-    :hook (dired-mode . nerd-icons-dired-mode))
-
-  (leaf pbcopy
-    :if (memq window-system '(mac ns))
-    :straight t
-    :config (turn-on-pbcopy))
-
-  (provide 'ui-utils)
-  ;;; ui/ui-utils.el ends here
-#+end_src
-
-**** ui/ui-imenu.el
-:PROPERTIES:
-:CUSTOM_ID: ui-imenu
-:header-args:emacs-lisp: :tangle lisp/ui/ui-imenu.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-imenu.el --- Imenu / outline UI integration -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; UI-level integration for Imenu-based navigation.
-  ;;
-  ;; This module:
-  ;; - installs and autoloads imenu-list as an optional UI component
-  ;; - does NOT define commands or workflows itself
-  ;; - provides a stable dependency surface for utils-layer helpers
-  ;;
-  ;; Design notes:
-  ;; - utils may opportunistically (require 'imenu-list nil 'noerror)
-  ;; - this module owns the decision to install the package
-  ;; - loading is deferred until explicitly used
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'leaf))
-
-  ;;;; Built-in -------------------------------------------------------------------
-
-  (require 'imenu)
-
-  ;;;; imenu-list -----------------------------------------------------------------
-  ;; Optional sidebar-style Imenu UI.
-  ;; Loaded only on demand via commands.
-
-  (leaf imenu-list
-    :straight t
-    :commands
-    (imenu-list-minor-mode
-     imenu-list-display-dwim
-     imenu-list-stop-timer)
-    :custom
-    ((imenu-list-position . 'left)
-     (imenu-list-size . 36)
-     (imenu-list-focus-after-activation . t)))
-
-  (provide 'ui-imenu)
-  ;;; ui/ui-imenu.el ends here
-#+end_src
-
-**** ui/ui-visual-aids.el
-:PROPERTIES:
-:CUSTOM_ID: ui-visual-aids
-:header-args:emacs-lisp: :tangle lisp/ui/ui-visual-aids.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-visual-aids.el --- Subtle visual helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Non-intrusive visual aids for editing and navigation.
-  ;;
-  ;; This module:
-  ;; - highlights cursor movement and TODO keywords
-  ;; - adds rainbow delimiters and indent guides
-  ;; - avoids persistent or disruptive visual effects
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (leaf pulsar
-    :straight t
-    :init
-    (setq pulsar-delay 0.04
-          pulsar-pulse t
-          pulsar-face 'pulsar-generic)
-    :config
-    (pulsar-global-mode 1)
-    (dolist (cmd '(recenter-top-bottom
-                   other-window
-                   next-buffer
-                   previous-buffer))
-      (add-to-list 'pulsar-pulse-functions cmd)))
-
-  (leaf hl-todo
-    :straight t
-    :hook ((prog-mode-hook text-mode-hook) . hl-todo-mode)
-    :init
-    (setq hl-todo-keyword-faces
-          '(("TODO" . "#d97706")
-            ("FIXME" . "#dc2626")
-            ("NOTE" . "#2563eb")
-            ("HACK" . "#9333ea"))))
-
-  (leaf rainbow-delimiters
-    :straight t
-    :hook (prog-mode-hook . rainbow-delimiters-mode))
-
-  (leaf indent-bars
-    :straight t
-    :hook (prog-mode-hook . indent-bars-mode)
-    :init
-    (setq indent-bars-prefer-character t
-          indent-bars-spacing-override 2))
-
-  (provide 'ui-visual-aids)
-  ;;; ui/ui-visual-aids.el ends here
-#+end_src
-
-**** ui/ui-macos.el
-:PROPERTIES:
-:CUSTOM_ID: ui-macos
-:header-args:emacs-lisp: :tangle lisp/ui/ui-macos.el
-:END:
-#+begin_src emacs-lisp
-  ;;; ui/ui-macos.el --- macOS-specific UI niceties -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;; Commentary:
-  ;; Small macOS-specific UI adjustments.
-  ;;
-  ;; This module:
-  ;; - enables native title-bar integration on macOS
-  ;; - avoids any effect on non-darwin systems
-  ;;
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
-
-  (when (eq system-type 'darwin)
-    (add-to-list 'default-frame-alist
-                 '(ns-transparent-titlebar . t))
-    (add-to-list 'default-frame-alist
-                 '(use-title-bar . t)))
-
-  (provide 'ui-macos)
-  ;;; ui/ui-macos.el ends here
-#+end_src
-
 *** orgx/
 :PROPERTIES:
 :CUSTOM_ID: orgx-modules
@@ -5348,7 +5590,53 @@ Its role is orchestration only.
 :CUSTOM_ID: dev-modules
 :END:
 
+**** dev/dev-lsp-bridge.el
+:PROPERTIES:
+:CUSTOM_ID: dev-lsp-bridge
+:header-args:emacs-lisp: :tangle lisp/dev/dev-lsp-bridge.el
+:END:
 
+#+begin_src emacs-lisp
+  ;;; dev/dev-lsp-bridge.el --- LSP abstraction helpers -*- lexical-binding: t; -*-
+
+  (defun dev-lsp-code-actions ()
+    "Run code actions via available LSP backend."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-code-actions)
+      (call-interactively #'eglot-code-actions))
+     ((fboundp 'lsp-execute-code-action)
+      (call-interactively #'lsp-execute-code-action))
+     (t
+      (user-error "No LSP backend available"))))
+
+  (defun dev-lsp-rename ()
+    "Rename symbol via available LSP backend."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-rename)
+      (call-interactively #'eglot-rename))
+     ((fboundp 'lsp-rename)
+      (call-interactively #'lsp-rename))
+     (t
+      (user-error "No LSP backend available"))))
+
+  (defun dev-lsp-format-buffer ()
+    "Format buffer using LSP backend or fallback indentation."
+    (interactive)
+    (cond
+     ((fboundp 'eglot-format-buffer)
+      (call-interactively #'eglot-format-buffer))
+     ((fboundp 'lsp-format-buffer)
+      (call-interactively #'lsp-format-buffer))
+     ((fboundp 'indent-region)
+      (indent-region (point-min) (point-max)))
+     (t
+      (user-error "No formatter available"))))
+
+  (provide 'dev-lsp-bridge)
+  ;;; dev/dev-lsp-bridge.el ends here
+#+end_src
 **** dev/dev-lsp-eglot.el
 :PROPERTIES:
 :CUSTOM_ID: dev-lsp-eglot
