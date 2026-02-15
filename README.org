@@ -24,27 +24,6 @@ A modern, literate Emacs configuration using Org Mode's Babel format, emphasizin
 
 This project focuses on extensibility \emojifont{🚀 🧩 🤖 🎨 🗂️ ✅ 📦 🌿 📚 🧠} and maintainability.
 
-** Design Tenets (TL;DR)
-
-- *Deterministic startup* — no implicit installs, no hidden side effects.
-- *Layered ownership* — each layer owns its policy; dependencies flow downward.
-- *Opt-in power* — advanced tooling is never required for baseline use.
-- *Observable over magical* — prefer inspectable state to opaque automation.
-- *Deletion-friendly* — removing a layer reduces convenience, not correctness.
-
-** Features
-:PROPERTIES:
-:CUSTOM_ID: features
-:END:
-
-- 🚀 *Performance & Native Compilation* — ELN files under `.cache/`, optimized startup GC, restored runtime thresholds, and GCMH for idle collection.
-- 🧩 *Language Server Protocol* — Backend-agnostic helpers; switch between *Eglot* and *lsp-mode* via `core/switches.el`.
-- 🤖 *AI Integration* — Aidermacs (vterm). Uses OpenRouter when `OPENROUTER_API_KEY` is set, otherwise OpenAI via `OPENAI_API_KEY`.
-- 🎨 *Modern UI & Editing* — Tree-sitter remaps, ef-themes + spacious-padding, Nerd Icons, Vertico/Orderless/Corfu/CAPE/Embark/Consult, Doom/Nano modelines.
-- 🗂️ *Productivity* — Curated Org stack (agenda, capture, journal, roam, download, TOC), Magit + diff-hl/Forge, REST client, Docker/dev helpers, controlled backups.
-
-[[file:demo.png]]
-
 ** Design Tenets
 
 - *Deterministic startup* — no implicit installs or hidden side effects.
@@ -354,10 +333,9 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   (defconst my:d:treesit
     (expand-file-name "tree-sitter/" my:d:var))
+
   (setq treesit-install-dir my:d:treesit)
   (setq treesit-extra-load-path (list my:d:treesit))
-  (unless (file-directory-p treesit-install-dir)
-    (make-directory treesit-install-dir t))
 
   (defconst my:d:url       (expand-file-name "url/" my:d:var))
   (defconst my:d:eww       (expand-file-name "eww/" my:d:var))
@@ -369,43 +347,32 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   ;;; macOS Homebrew toolchain ----------------------------------------------------
 
-  (when (eq system-type 'darwin)
-    (when-let* ((brew (or (getenv "HOMEBREW_PREFIX")
-                          (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
-                          (and (file-directory-p "/usr/local")   "/usr/local")))
-                (bin  (expand-file-name "bin" brew)))
-      (when (file-directory-p bin)
-        (let* ((path  (or (getenv "PATH") ""))
-               (parts (split-string path ":" t)))
-          (unless (member bin parts)
-            (setenv "PATH" (concat bin ":" path)))))
+  (when-let* ((brew (or (getenv "HOMEBREW_PREFIX")
+                        (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
+                        (and (file-directory-p "/usr/local")   "/usr/local")))
+              (bin  (expand-file-name "bin" brew)))
+    (when (file-directory-p bin)
 
-      (let* ((libgccjit (expand-file-name "opt/libgccjit" brew))
-             (gcc       (expand-file-name "opt/gcc" brew))
-             (candidates
-              (seq-filter
-               #'file-directory-p
-               (list (expand-file-name "lib/gcc/current" libgccjit)
-                     (expand-file-name "lib" libgccjit)
-                     (expand-file-name "lib/gcc/current" gcc)))))
-        (when candidates
-          (setenv "LIBRARY_PATH"
-                  (string-join
-                   (delete-dups
-                    (append candidates
-                            (when-let* ((old (getenv "LIBRARY_PATH")))
-                              (split-string old ":" t))))
-                   ":"))))
+      ;; Ensure Homebrew bin is in PATH
+      (let* ((path  (or (getenv "PATH") ""))
+             (parts (split-string path ":" t)))
+        (unless (member bin parts)
+          (setenv "PATH" (concat bin ":" path))))
 
-      (when-let* ((gcc-bin
-                   (seq-find
-                    #'file-exists-p
-                    (mapcar
-                     (lambda (n)
-                       (expand-file-name (format "gcc-%d" n) bin))
-                     (number-sequence 20 10 -1)))))
-        (setenv "CC" gcc-bin))))
-
+      ;; -------- Forward-safe GCC detection --------
+      (let* ((gcc-candidates
+              (directory-files bin t "^gcc-[0-9]+$"))
+             (gcc-pairs
+              (mapcar (lambda (path)
+                        (when (string-match "gcc-\\([0-9]+\\)$" path)
+                          (cons (string-to-number (match-string 1 path))
+                                path)))
+                      gcc-candidates))
+             (gcc-sorted
+              (sort (delq nil gcc-pairs)
+                    (lambda (a b) (> (car a) (car b))))))
+        (when-let* ((latest (cdr (car gcc-sorted))))
+          (setenv "CC" latest)))))
 
   ;;; Native compilation ----------------------------------------------------------
 
