@@ -1633,7 +1633,7 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/core/core-session.el
 :END:
 #+begin_src emacs-lisp
-  ;;; core/core-session.el --- Long-running session orchestration -*- lexical-binding: t; -*-
+  ;;; core/core-session.el --- Session orchestration -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1642,167 +1642,163 @@ Its role is orchestration only.
   ;; Category: core
   ;;
   ;; Commentary:
-  ;; Central orchestration layer for long-running Emacs sessions.
   ;;
-  ;; This module:
-  ;; - defines when maintenance tasks run
-  ;; - evaluates session risk heuristics
-  ;; - delegates actual work to utils modules
+  ;; Central session lifecycle manager.
   ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'leaf)
-    (require 'subr-x))
+  ;; Responsibilities:
+  ;; - Own all periodic timers
+  ;; - Coordinate maintenance tasks
+  ;; - Monitor buffer/process pressure
+  ;; - Run conservative background cleanup
+  ;;
+  ;; Design principles:
+  ;; - No upward dependencies
+  ;; - All timers are centralized here
+  ;; - Fully disable-able
+  ;; - Defensive and failure-tolerant
+  ;;
+  ;; Code:
 
   ;; ---------------------------------------------------------------------------
   ;; Customization
   ;; ---------------------------------------------------------------------------
 
   (defgroup core-session nil
-    "Long-running Emacs session orchestration."
-    :group 'convenience)
+    "Session lifecycle orchestration."
+    :group 'core)
 
   (defcustom core-session-enable-p t
-    "Enable long-running session orchestration."
+    "Master switch for session orchestration."
     :type 'boolean
     :group 'core-session)
 
-  (defcustom core-session-idle-delay
-    (* 30 60)
-    "Seconds of idle time before running lightweight maintenance."
+  (defcustom core-session-idle-delay (* 20 60)
+    "Seconds of idle time before idle maintenance runs."
     :type 'integer
     :group 'core-session)
 
-  (defcustom core-session-periodic-interval
-    600
-    "Interval in seconds for periodic maintenance tasks."
+  (defcustom core-session-periodic-interval 600
+    "Seconds between periodic maintenance runs."
     :type 'integer
     :group 'core-session)
 
-  (defcustom core-session-buffer-threshold
-    300
-    "Soft threshold for number of live buffers considered risky."
+  (defcustom core-session-buffer-threshold 300
+    "Buffer count threshold for warning."
     :type 'integer
     :group 'core-session)
 
-  (defcustom core-session-process-threshold
-    8
-    "Soft threshold for number of live processes considered risky."
+  (defcustom core-session-process-threshold 10
+    "Process count threshold for warning."
     :type 'integer
     :group 'core-session)
 
   ;; ---------------------------------------------------------------------------
-  ;; Internal helpers
+  ;; Internal State
   ;; ---------------------------------------------------------------------------
 
-  (defvar core-session--idle-timer nil
-    "Idle timer for lightweight session maintenance.")
+  (defvar core-session--idle-timer nil)
+  (defvar core-session--periodic-timer nil)
+  (defvar core-session--running-p nil)
 
-  (defvar core-session--periodic-timer nil
-    "Periodic timer for session health checks.")
+  ;; ---------------------------------------------------------------------------
+  ;; Utilities (pressure checks)
+  ;; ---------------------------------------------------------------------------
 
-  (defun core-session--buffers-count ()
-    "Return the number of live buffers."
+  (defun core-session--buffer-count ()
     (length (buffer-list)))
 
-  (defun core-session--processes-count ()
-    "Return the number of live processes."
+  (defun core-session--process-count ()
     (length (process-list)))
 
-  (defun core-session--risky-state-p ()
-    "Return non-nil if the current session looks risky."
-    (or (> (core-session--buffers-count)
-           core-session-buffer-threshold)
-        (> (core-session--processes-count)
-           core-session-process-threshold)))
+  (defun core-session--pressure-check ()
+    "Emit warnings if buffer/process pressure exceeds thresholds."
+    (let ((buffers (core-session--buffer-count))
+          (procs   (core-session--process-count)))
+      (when (> buffers core-session-buffer-threshold)
+        (message "[session] buffer pressure: %d buffers" buffers))
+      (when (> procs core-session-process-threshold)
+        (message "[session] process pressure: %d processes" procs))))
 
   ;; ---------------------------------------------------------------------------
-  ;; Maintenance actions (delegation only)
+  ;; Idle Tasks
   ;; ---------------------------------------------------------------------------
 
-  (defun core-session--lightweight-maintenance ()
-    "Run lightweight maintenance tasks.
-
-  This function delegates actual work to utils modules and must remain safe."
+  (defun core-session--idle-tasks ()
+    "Tasks run after user idle."
     (when core-session-enable-p
-      ;; GC helpers
-      (when (fboundp 'utils-gc--collect)
-        (utils-gc--collect))
-
-      ;; Buffer housekeeping
-      (when (fboundp 'utils-buffers-cleanup)
-        (utils-buffers-cleanup))))
-
-  (defun core-session--periodic-check ()
-    "Run periodic session health checks.
-
-  Currently this only performs maintenance when the session looks risky."
-    (when (and core-session-enable-p
-               (core-session--risky-state-p))
-      (core-session--lightweight-maintenance)))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Public commands
-  ;; ---------------------------------------------------------------------------
-
-  ;;;###autoload
-  (defun core-session-run-health-check ()
-    "Run a manual session health check."
-    (interactive)
-    (core-session--lightweight-maintenance)
-    (message "Core session health check completed"))
-
-  ;;;###autoload
-  (defun core-session-lightweight-restart ()
-    "Perform a safe lightweight restart of the current Emacs session.
-
-  This shuts down obsolete LSP servers, cleans buffers, and runs GC.
-  No buffers with unsaved changes are touched."
-    (interactive)
-    ;; LSP lifecycle cleanup
-    (when (and core-session-enable-p
-               (fboundp 'utils-lsp-on-project-switch))
       (ignore-errors
-        (utils-lsp-on-project-switch)))
+        ;; Garbage collection (if provided)
+        (when (fboundp 'utils-gc--collect)
+          (utils-gc--collect))
 
-    ;; Buffers and GC
-    (core-session--lightweight-maintenance)
+        ;; Buffer cleanup
+        (when (fboundp 'utils-buffers-cleanup)
+          (utils-buffers-cleanup))
 
-    (clear-image-cache)
-    (message "Core session lightweight restart completed"))
+        ;; Pressure diagnostics
+        (core-session--pressure-check))))
 
   ;; ---------------------------------------------------------------------------
-  ;; Activation
+  ;; Periodic Tasks
   ;; ---------------------------------------------------------------------------
 
-  (defun core-session--enable ()
-    "Enable core session orchestration."
-    ;; Idle maintenance
-    (setq core-session--idle-timer
-          (run-with-idle-timer
-           core-session-idle-delay
-           t
-           #'core-session--lightweight-maintenance))
+  (defun core-session--periodic-tasks ()
+    "Tasks run periodically."
+    (when core-session-enable-p
+      (ignore-errors
+        ;; Conservative buffer cleanup
+        (when (fboundp 'utils-buffers-cleanup)
+          (utils-buffers-cleanup))
 
-    ;; Periodic checks
-    (setq core-session--periodic-timer
-          (run-with-timer
-           core-session-periodic-interval
-           core-session-periodic-interval
-           #'core-session--periodic-check)))
+        ;; Pressure check
+        (core-session--pressure-check))))
 
-  (defun core-session--disable ()
-    "Disable core session orchestration."
-    (when (timerp core-session--idle-timer)
-      (cancel-timer core-session--idle-timer))
-    (when (timerp core-session--periodic-timer)
-      (cancel-timer core-session--periodic-timer))
-    (setq core-session--idle-timer nil
-          core-session--periodic-timer nil))
+  ;; ---------------------------------------------------------------------------
+  ;; Timer Control
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-session--start ()
+    "Start session timers."
+    (unless core-session--running-p
+      (setq core-session--idle-timer
+            (run-with-idle-timer
+             core-session-idle-delay t
+             #'core-session--idle-tasks))
+
+      (setq core-session--periodic-timer
+            (run-with-timer
+             core-session-periodic-interval
+             core-session-periodic-interval
+             #'core-session--periodic-tasks))
+
+      (setq core-session--running-p t)
+      (message "[session] started")))
+
+  (defun core-session--stop ()
+    "Stop session timers."
+    (when core-session--idle-timer
+      (cancel-timer core-session--idle-timer)
+      (setq core-session--idle-timer nil))
+
+    (when core-session--periodic-timer
+      (cancel-timer core-session--periodic-timer)
+      (setq core-session--periodic-timer nil))
+
+    (setq core-session--running-p nil)
+    (message "[session] stopped"))
+
+  (defun core-session-restart ()
+    "Restart session orchestration."
+    (interactive)
+    (core-session--stop)
+    (core-session--start))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Initialization
+  ;; ---------------------------------------------------------------------------
 
   (when core-session-enable-p
-    (core-session--enable))
+    (core-session--start))
 
   (provide 'core-session)
   ;;; core/core-session.el ends here
@@ -6864,9 +6860,7 @@ Its role is orchestration only.
           (when (or (utils-buffers--temporary-p buf)
                     (utils-buffers--dead-process-p buf))
             (ignore-errors
-  	    (kill-buffer buf))))))
-
-    (run-with-timer 900 900 #'utils-buffers-cleanup))
+  	    (kill-buffer buf)))))))
 
   (provide 'utils-buffers)
   ;;; utils/utils-buffers.el ends here
@@ -6887,14 +6881,16 @@ Its role is orchestration only.
   ;; Category: utils
   ;;
   ;; Commentary:
-  ;; Small editing-related helpers for day-to-day workflows.
   ;;
-  ;; This module:
-  ;; - provides quick buffer revert utilities
-  ;; - optionally updates lightweight timestamps on save
-  ;; - never enforces global editing policy by default
+  ;; Lightweight editing helpers for day-to-day workflows.
   ;;
-  ;;; Code:
+  ;; Design principles:
+  ;; - This module owns no global editing policy.
+  ;; - All global behavior is opt-in via customization.
+  ;; - Hooks are reversible and centrally managed.
+  ;; - No timers, no background tasks, no cross-layer dependency.
+  ;;
+  ;; Code:
 
   ;; ---------------------------------------------------------------------------
   ;; Customization
@@ -6905,15 +6901,22 @@ Its role is orchestration only.
     :group 'editing)
 
   (defcustom utils-edit-enable-p nil
-    "Enable utils-edit save-time helpers.
+    "Enable save-time helpers from utils-edit.
 
   When non-nil, `my/save-buffer-wrapper` is installed into
   `before-save-hook`.
 
-  This option is opt-in by design, to avoid defining global editing policy
-  from the utils layer."
+  This is intentionally opt-in. The utils layer never enforces
+  global editing policy by default."
     :type 'boolean
     :group 'utils-edit)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Internal State
+  ;; ---------------------------------------------------------------------------
+
+  (defvar utils-edit--hook-installed-p nil
+    "Non-nil if utils-edit hooks are currently installed.")
 
   ;; ---------------------------------------------------------------------------
   ;; Editing helpers
@@ -6927,11 +6930,11 @@ Its role is orchestration only.
   (defun my/save-buffer-wrapper ()
     "Insert or update a `$Lastupdate` timestamp at the top of the buffer.
 
-  This runs only for:
-  - file-backed buffers
-  - non-Org text buffers
+  Runs only for:
+  - File-backed buffers
+  - Non-Org text buffers
 
-  It is intentionally conservative and avoids semantic file formats."
+  Conservative by design: avoids semantic formats and structured modes."
     (when (and buffer-file-name
                (derived-mode-p 'text-mode)
                (not (derived-mode-p 'org-mode)))
@@ -6946,23 +6949,39 @@ Its role is orchestration only.
             (replace-match timestamp t nil))))))
 
   ;; ---------------------------------------------------------------------------
-  ;; Hook installation (opt-in)
+  ;; Hook Management (centralized + reversible)
   ;; ---------------------------------------------------------------------------
 
-  (defun utils-edit--maybe-enable ()
-    "Install or remove utils-edit hooks based on `utils-edit-enable-p`."
+  (defun utils-edit--install-hooks ()
+    "Install utils-edit hooks if not already installed."
+    (unless utils-edit--hook-installed-p
+      (add-hook 'before-save-hook #'my/save-buffer-wrapper)
+      (setq utils-edit--hook-installed-p t)))
+
+  (defun utils-edit--remove-hooks ()
+    "Remove utils-edit hooks if currently installed."
+    (when utils-edit--hook-installed-p
+      (remove-hook 'before-save-hook #'my/save-buffer-wrapper)
+      (setq utils-edit--hook-installed-p nil)))
+
+  (defun utils-edit--apply ()
+    "Apply hook state according to `utils-edit-enable-p`."
     (if utils-edit-enable-p
-        (add-hook 'before-save-hook #'my/save-buffer-wrapper)
-      (remove-hook 'before-save-hook #'my/save-buffer-wrapper)))
+        (utils-edit--install-hooks)
+      (utils-edit--remove-hooks)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Initialization
+  ;; ---------------------------------------------------------------------------
 
   ;; Apply once at load time
-  (utils-edit--maybe-enable)
+  (utils-edit--apply)
 
-  ;; React to customization changes
+  ;; React dynamically to customization changes
   (add-variable-watcher
    'utils-edit-enable-p
    (lambda (_sym _newval _op _where)
-     (utils-edit--maybe-enable)))
+     (utils-edit--apply)))
 
   (provide 'utils-edit)
   ;;; utils/utils-edit.el ends here
@@ -7488,7 +7507,7 @@ All macOS integrations are guarded via =fboundp= checks.
   ;; Personal editing preferences
   ;; ---------------------------------------------------------------------------
 
-  (add-hook 'before-save-hook #'my/save-buffer-wrapper)
+  (setq utils-edit-enable-p t)
 
   ;; ---------------------------------------------------------------------------
   ;; Core session orchestration knobs
