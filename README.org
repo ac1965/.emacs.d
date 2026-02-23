@@ -6825,42 +6825,58 @@ Its role is orchestration only.
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
+  (require 'subr-x)
 
-  (leaf nil
-    :straight nil
-    :init
-    (defcustom utils-buffers-enable-p t
-      "Enable automatic buffer housekeeping."
-      :type 'boolean
-      :group 'utils)
+  (defgroup utils-buffers nil
+    "Automatic cleanup of temporary and dead-process buffers."
+    :group 'utils)
 
-    (defvar utils-buffers--temporary-regexp
-      (rx string-start "*"
-          (or "Help" "Warnings" "Compile-Log" "Backtrace"
-              "Async-native-compile-log" "eglot-events")
-          (* any) string-end))
+  (defcustom utils-buffers-enable-p t
+    "Enable automatic buffer housekeeping."
+    :type 'boolean
+    :group 'utils-buffers)
 
-    (defun utils-buffers--temporary-p (buffer)
-      (with-current-buffer buffer
-        (and (string-match-p utils-buffers--temporary-regexp (buffer-name))
-             (not (buffer-file-name))
-             (not (buffer-modified-p))
-             (not (get-buffer-window buffer 'visible)))))
+  (defcustom utils-buffers-job-kind 'periodic
+    "Which scheduler lane to use: 'periodic or 'idle."
+    :type '(choice (const periodic) (const idle))
+    :group 'utils-buffers)
 
-    (defun utils-buffers--dead-process-p (buffer)
-      (let ((proc (get-buffer-process buffer)))
-        (and proc
-             (memq (process-status proc) '(exit signal)))))
+  (defvar utils-buffers--temporary-regexp
+    (rx string-start "*"
+        (or "Help" "Warnings" "Compile-Log" "Backtrace"
+            "Async-native-compile-log" "eglot-events")
+        (* any) string-end))
 
-    (defun utils-buffers-cleanup ()
-      "Clean up temporary and dead-process buffers."
-      (interactive)
-      (when utils-buffers-enable-p
-        (dolist (buf (buffer-list))
-          (when (or (utils-buffers--temporary-p buf)
-                    (utils-buffers--dead-process-p buf))
-            (ignore-errors
-  	    (kill-buffer buf)))))))
+  (defun utils-buffers--temporary-p (buffer)
+    (with-current-buffer buffer
+      (and (string-match-p utils-buffers--temporary-regexp (buffer-name))
+           (not (buffer-file-name))
+           (not (buffer-modified-p))
+           (not (get-buffer-window buffer 'visible)))))
+
+  (defun utils-buffers--dead-process-p (buffer)
+    (let ((proc (get-buffer-process buffer)))
+      (and proc
+           (memq (process-status proc) '(exit signal)))))
+
+  ;;;###autoload
+  (defun utils-buffers-cleanup ()
+    "Clean up temporary and dead-process buffers."
+    (interactive)
+    (when utils-buffers-enable-p
+      (dolist (buf (buffer-list))
+        (when (or (utils-buffers--temporary-p buf)
+                  (utils-buffers--dead-process-p buf))
+          (ignore-errors (kill-buffer buf))))))
+
+  ;; Register into core-session if available; otherwise do nothing.
+  (with-eval-after-load 'core-session
+    (when (fboundp 'core-session-register-job)
+      (core-session-register-job
+       'utils-buffers-cleanup
+       #'utils-buffers-cleanup
+       :kind utils-buffers-job-kind
+       :enabled t)))
 
   (provide 'utils-buffers)
   ;;; utils/utils-buffers.el ends here
