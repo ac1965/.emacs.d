@@ -999,6 +999,7 @@ Its role is orchestration only.
       core-fixes
       core-policy
       core-session
+      core-session-private
       core-gc
       core-persistence
       core-buffers
@@ -1325,7 +1326,6 @@ Its role is orchestration only.
 :CUSTOM_ID: core-native
 :header-args:emacs-lisp: :tangle lisp/core/core-native.el
 :END:
-
 #+begin_src emacs-lisp
   ;;; core/core-native.el --- Native compilation diagnostics & reporting -*- lexical-binding: t; -*-
   ;;
@@ -1633,7 +1633,7 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/core/core-session.el
 :END:
 #+begin_src emacs-lisp
-  ;;; core/core-session.el --- Session orchestration -*- lexical-binding: t; -*-
+  ;;; core/core-session.el --- Session orchestration (public facade) -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1642,169 +1642,177 @@ Its role is orchestration only.
   ;; Category: core
   ;;
   ;; Commentary:
+  ;; Public, stable facade for session orchestration.
   ;;
-  ;; Central session lifecycle manager.
-  ;;
-  ;; Responsibilities:
-  ;; - Own all periodic timers
-  ;; - Coordinate maintenance tasks
-  ;; - Monitor buffer/process pressure
-  ;; - Run conservative background cleanup
+  ;; This module:
+  ;; - exposes the minimal stable public API
+  ;; - delegates implementation to core-session-private
+  ;; - provides deterministic scheduler lifecycle control
   ;;
   ;; Design principles:
-  ;; - No upward dependencies
-  ;; - All timers are centralized here
-  ;; - Fully disable-able
-  ;; - Defensive and failure-tolerant
+  ;; - Public/private separation
+  ;; - No cross-layer leakage
+  ;; - Delete-safe
   ;;
-  ;; Code:
+  ;;; Code:
 
-  ;; ---------------------------------------------------------------------------
-  ;; Customization
-  ;; ---------------------------------------------------------------------------
+  (require 'subr-x)
+  (require 'seq)
+  (require 'core-session-private)
 
   (defgroup core-session nil
-    "Session lifecycle orchestration."
+    "Session orchestration and background hygiene."
     :group 'core)
 
   (defcustom core-session-enable-p t
-    "Master switch for session orchestration."
+    "Master switch for core-session jobs."
     :type 'boolean
     :group 'core-session)
 
-  (defcustom core-session-idle-delay (* 20 60)
-    "Seconds of idle time before idle maintenance runs."
+  (defcustom core-session-idle-delay 120
+    "Seconds of idle time before idle-lane jobs may run."
     :type 'integer
     :group 'core-session)
 
   (defcustom core-session-periodic-interval 600
-    "Seconds between periodic maintenance runs."
+    "Seconds between periodic-lane job runs."
     :type 'integer
     :group 'core-session)
 
-  (defcustom core-session-buffer-threshold 300
-    "Buffer count threshold for warning."
-    :type 'integer
-    :group 'core-session)
+  (defvar core-session--started-p nil
+    "Non-nil if scheduler has started.")
 
-  (defcustom core-session-process-threshold 10
-    "Process count threshold for warning."
-    :type 'integer
-    :group 'core-session)
+  (defun core-session--ensure-started ()
+    (when (and core-session-enable-p
+               (not core-session--started-p))
+      (core-session--start)
+      (setq core-session--started-p t)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Internal State
-  ;; ---------------------------------------------------------------------------
+  (defun core-session-start ()
+    "Start scheduler."
+    (interactive)
+    (core-session--ensure-started)
+    (message "core-session: started"))
 
-  (defvar core-session--idle-timer nil)
-  (defvar core-session--periodic-timer nil)
-  (defvar core-session--running-p nil)
-
-  ;; ---------------------------------------------------------------------------
-  ;; Utilities (pressure checks)
-  ;; ---------------------------------------------------------------------------
-
-  (defun core-session--buffer-count ()
-    (length (buffer-list)))
-
-  (defun core-session--process-count ()
-    (length (process-list)))
-
-  (defun core-session--pressure-check ()
-    "Emit warnings if buffer/process pressure exceeds thresholds."
-    (let ((buffers (core-session--buffer-count))
-          (procs   (core-session--process-count)))
-      (when (> buffers core-session-buffer-threshold)
-        (message "[session] buffer pressure: %d buffers" buffers))
-      (when (> procs core-session-process-threshold)
-        (message "[session] process pressure: %d processes" procs))))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Idle Tasks
-  ;; ---------------------------------------------------------------------------
-
-  (defun core-session--idle-tasks ()
-    "Tasks run after user idle."
-    (when core-session-enable-p
-      (ignore-errors
-        ;; Garbage collection (if provided)
-        (when (fboundp 'utils-gc--collect)
-          (utils-gc--collect))
-
-        ;; Buffer cleanup
-        (when (fboundp 'utils-buffers-cleanup)
-          (utils-buffers-cleanup))
-
-        ;; Pressure diagnostics
-        (core-session--pressure-check))))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Periodic Tasks
-  ;; ---------------------------------------------------------------------------
-
-  (defun core-session--periodic-tasks ()
-    "Tasks run periodically."
-    (when core-session-enable-p
-      (ignore-errors
-        ;; Conservative buffer cleanup
-        (when (fboundp 'utils-buffers-cleanup)
-          (utils-buffers-cleanup))
-
-        ;; Pressure check
-        (core-session--pressure-check))))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Timer Control
-  ;; ---------------------------------------------------------------------------
-
-  (defun core-session--start ()
-    "Start session timers."
-    (unless core-session--running-p
-      (setq core-session--idle-timer
-            (run-with-idle-timer
-             core-session-idle-delay t
-             #'core-session--idle-tasks))
-
-      (setq core-session--periodic-timer
-            (run-with-timer
-             core-session-periodic-interval
-             core-session-periodic-interval
-             #'core-session--periodic-tasks))
-
-      (setq core-session--running-p t)
-      (message "[session] started")))
-
-  (defun core-session--stop ()
-    "Stop session timers."
-    (when core-session--idle-timer
-      (cancel-timer core-session--idle-timer)
-      (setq core-session--idle-timer nil))
-
-    (when core-session--periodic-timer
-      (cancel-timer core-session--periodic-timer)
-      (setq core-session--periodic-timer nil))
-
-    (setq core-session--running-p nil)
-    (message "[session] stopped"))
-
-  (defun core-session-restart ()
-    "Restart session orchestration."
+  (defun core-session-stop ()
+    "Stop scheduler."
     (interactive)
     (core-session--stop)
-    (core-session--start))
+    (setq core-session--started-p nil)
+    (message "core-session: stopped"))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Initialization
-  ;; ---------------------------------------------------------------------------
+  (defun core-session-register-job (name fn &rest plist)
+    "Register a job (public API)."
+    (let ((meta (core-session--normalize-job-meta name fn plist)))
+      (core-session--register meta)
+      (core-session--ensure-started)
+      name))
 
-  (when core-session-enable-p
-    (core-session--start))
+  (defun core-session-unregister-job (name)
+    "Unregister job NAME."
+    (core-session--unregister name)
+    name)
+
+  (defun core-session-run-job (name)
+    "Run job NAME immediately."
+    (core-session--run-job name))
 
   (provide 'core-session)
   ;;; core/core-session.el ends here
 #+end_src
+**** core/core-session-private.el
+:PROPERTIES:
+:CUSTOM_ID: core-session-private
+:header-args:emacs-lisp: :tangle lisp/core/core-session-private.el
+:END:
+#+begin_src emacs-lisp
+  ;;; core/core-session-private.el --- Session orchestration (private) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;; Commentary:
+  ;; Private implementation of core-session.
+  ;;
+  ;; This module:
+  ;; - contains internal state and timers
+  ;; - must never be required outside core-session
+  ;;
+  ;; Design principles:
+  ;; - All symbols are core-session--*
+  ;; - No external dependencies
+  ;; - Deterministic lifecycle
+  ;;
+  ;;; Code:
 
+  (require 'subr-x)
+  (require 'seq)
+
+  (defvar core-session--jobs-table (make-hash-table :test 'eq))
+  (defvar core-session--periodic-timer nil)
+  (defvar core-session--idle-timer nil)
+
+  (defun core-session--normalize-job-meta (name fn plist)
+    (unless (symbolp name)
+      (error "Job name must be symbol"))
+    (unless (functionp fn)
+      (error "Job fn must be function"))
+    (append (list :name name :fn fn :enabled t)
+            plist))
+
+  (defun core-session--register (meta)
+    (puthash (plist-get meta :name) meta core-session--jobs-table))
+
+  (defun core-session--unregister (name)
+    (remhash name core-session--jobs-table))
+
+  (defun core-session--jobs ()
+    (let (out)
+      (maphash (lambda (_k v) (push v out))
+               core-session--jobs-table)
+      (nreverse out)))
+
+  (defun core-session--run-job (name)
+    (let ((meta (gethash name core-session--jobs-table)))
+      (when meta
+        (condition-case _err
+            (funcall (plist-get meta :fn))
+          (error nil)))))
+
+  (defun core-session--run-all ()
+    (dolist (j (core-session--jobs))
+      (when (plist-get j :enabled)
+        (core-session--run-job (plist-get j :name)))))
+
+  (defun core-session--start ()
+    (setq core-session--periodic-timer
+          (run-at-time core-session-periodic-interval
+                       core-session-periodic-interval
+                       #'core-session--run-all))
+    (setq core-session--idle-timer
+          (run-with-idle-timer core-session-idle-delay
+                               t
+                               #'core-session--run-all)))
+
+  (defun core-session--stop ()
+    (when (timerp core-session--periodic-timer)
+      (cancel-timer core-session--periodic-timer))
+    (when (timerp core-session--idle-timer)
+      (cancel-timer core-session--idle-timer))
+    (setq core-session--periodic-timer nil)
+    (setq core-session--idle-timer nil))
+
+  (provide 'core-session-private)
+  ;;; core/core-session-private.el ends here
+#+end_src
 **** core/core-gc.el.
+:PROPERTIES:
+:CUSTOM_ID: core-gc
+:header-args:emacs-lisp: :tangle lisp/core/core-gc.el
+:END:
 #+begin_src emacs-lisp
   ;;; core/core-gc.el --- Safe garbage collection helpers -*- lexical-binding: t; -*-
   ;;
@@ -1955,7 +1963,6 @@ Its role is orchestration only.
 :CUSTOM_ID: core-runtime
 :header-args:emacs-lisp: :tangle lisp/core/core-runtime.el
 :END:
-
 #+begin_src emacs-lisp
   ;;; lisp/core/core-runtime.el --- Core runtime invariants (no UX) -*- lexical-binding: t; -*-
   ;;
@@ -2754,127 +2761,48 @@ Its role is orchestration only.
 :CUSTOM_ID: core-api
 :header-args:emacs-lisp: :tangle lisp/core/core-api.el
 :END:
-
 #+begin_src emacs-lisp
-  ;;; core/core-api.el --- Public Core API surface (single entry point) -*- lexical-binding: t; -*-
+  ;;; core/core-api.el --- Stable public API surface -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
   ;;
   ;; Category: core
   ;;
+  ;; Commentary:
+  ;; Stable API wrappers for cross-layer consumption.
+  ;;
+  ;; This module:
+  ;; - provides forward-safe wrapper functions
+  ;; - isolates internal API churn
+  ;; - is the only allowed interface for other layers
+  ;;
+  ;; Design principles:
+  ;; - No business logic
+  ;; - Thin wrappers only
+  ;; - Delete-safe
+  ;;
   ;;; Code:
 
-  (eval-when-compile
-    (require 'subr-x))
+  (defun core-api-session-register-job (name fn &rest plist)
+    "Stable wrapper to register a session job."
+    (when (fboundp 'core-session-register-job)
+      (apply #'core-session-register-job name fn plist)))
 
-  (defgroup core-api nil
-    "Stable public API surface of the core layer."
-    :group 'convenience)
+  (defun core-api-session-unregister-job (name)
+    "Stable wrapper to unregister job."
+    (when (fboundp 'core-session-unregister-job)
+      (core-session-unregister-job name)))
 
-  (defcustom core-api-strict-mode nil
-    "If non-nil, warn when non-core layers require core implementation modules directly."
-    :type 'boolean
-    :group 'core-api)
-
-  (defvar core-api--impl-features
-    '(core-tools
-      core-session
-      core-native
-      core-treesit)
-    "Core implementation modules that provide public services.")
-
-  (defun core-api--require-impl ()
-    "Require core implementation modules."
-    (dolist (f core-api--impl-features)
-      (require f nil t)))
-
-  (defun core-api--caller-file ()
-    "Return best-effort caller file path."
-    (or load-file-name
-        (ignore-errors (buffer-file-name))
-        (car-safe (last command-line-args))))
-
-  (defun core-api--warn (fmt &rest args)
-    "Emit a core-api warning message."
-    (apply #'message (concat "[core-api] " fmt) args))
-
-  (defun core-api--maybe-warn-direct-core-require (feature file)
-    "Warn if non-core FILE requires core FEATURE directly."
-    (when (and core-api-strict-mode
-               (symbolp feature)
-               (stringp file)
-               (string-prefix-p "core-" (symbol-name feature)))
-      (let* ((f (expand-file-name file))
-             (is-core (string-match-p "/lisp/core/" f)))
-        (unless is-core
-          (core-api--warn
-           "non-core file requires core impl feature directly: %s <- %s"
-           feature f)))))
-
-  (defun core-api-enable-strict-require-watch ()
-    "Enable best-effort warnings for direct core requires."
-    (interactive)
-    (when (boundp 'after-load-functions)
-      (add-hook 'after-load-functions
-                #'core-api--maybe-warn-direct-core-require)))
-
-  (defun core-api-disable-strict-require-watch ()
-    "Disable strict require warnings."
-    (interactive)
-    (when (boundp 'after-load-functions)
-      (remove-hook 'after-load-functions
-                   #'core-api--maybe-warn-direct-core-require)))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Load implementation modules
-  ;; ---------------------------------------------------------------------------
-
-  (core-api--require-impl)
-
-  ;; ---------------------------------------------------------------------------
-  ;; Re-exported Public API
-  ;; ---------------------------------------------------------------------------
-
-  ;; core-tools
-  (defalias 'core-api-emacs>=            #'core-tools-emacs>=)
-  (defalias 'core-api-require-if-present #'core-tools-require-if-present)
-  (defalias 'core-api-call-if-present    #'core-tools-call-if-present)
-
-  ;; core-session
-  (defalias 'core-api-session-health-check
-    #'core-session-run-health-check)
-  (defalias 'core-api-session-lightweight-restart
-    #'core-session-lightweight-restart)
-
-  ;; core-native
-  (defalias 'core-api-native-set-mode
-    #'core-native-set-mode)
-  (defalias 'core-api-native-show-warnings
-    #'core-native-show-warnings)
-  (defalias 'core-api-native-save-warnings
-    #'core-native-save-warnings)
-  (defalias 'core-api-native-clear-warnings
-    #'core-native-clear-warnings)
-  (defalias 'core-api-native-warnings-count
-    #'core-native-warnings-count)
-
-  ;; core-treesit
-  (defalias 'core-api-treesit-install-grammar
-    #'core-treesit-install-grammar)
-  (defalias 'core-api-treesit-install-all
-    #'core-treesit-install-all)
-  (defalias 'core-api-treesit-report
-    #'core-treesit-report)
-  (defalias 'core-api-treesit-apply-remap
-    #'core-treesit-apply-remap)
-  (defalias 'core-api-treesit-register-sources
-    #'core-treesit-register-sources)
-
-  (when core-api-strict-mode
-    (core-api-enable-strict-require-watch))
+  (defun core-api-session-run-job (name)
+    "Stable wrapper to run job immediately."
+    (when (fboundp 'core-session-run-job)
+      (core-session-run-job name)))
 
   (provide 'core-api)
   ;;; core/core-api.el ends here
 #+end_src
-
 **** core/core-custom-ui-extras.el
 :PROPERTIES:
 :CUSTOM_ID: core-custom-ui-extras
@@ -3937,113 +3865,158 @@ Its role is orchestration only.
 :CUSTOM_ID: ui-keymap
 :header-args:emacs-lisp: :tangle lisp/ui/ui-keymap.el
 :END:
-
 #+begin_src emacs-lisp
-;;; ui/ui-keymap.el --- Leader and local-leader bindings -*- lexical-binding: t; -*-
+  ;;; ui/ui-keymap.el --- Leader and local-leader bindings -*- lexical-binding: t; -*-
 
-(eval-when-compile
-  (require 'subr-x))
+  (eval-when-compile
+    (require 'subr-x))
 
-(require 'ui-leader nil t)
+  (require 'ui-leader nil t)
 
-(defun ui-keymap--bind (map key cmd)
-  "Bind KEY to CMD in MAP if MAP exists."
-  (when (and (symbolp map)
-             (boundp map)
-             (keymapp (symbol-value map)))
-    (define-key (symbol-value map) (kbd key) cmd)))
+  ;; ---------------------------------------------------------------------------
+  ;; Keyboard translation (C-h → DEL only)
+  ;; Responsibility: physical key translation only
+  ;; Does NOT touch help-command or F1
+  ;; ---------------------------------------------------------------------------
 
-(defun ui-keymap--leader-bind (key cmd)
-  "Bind KEY to CMD in `ui-leader-map`."
-  (when (and (boundp 'ui-leader-map)
-             (keymapp ui-leader-map))
-    (define-key ui-leader-map (kbd key) cmd)))
+  (defgroup ui-keyboard nil
+    "Keyboard translation helpers."
+    :group 'ui)
 
-(defun ui-keymap--leader-binds ()
-  "Install leader keybindings."
+  (defcustom ui-keyboard-map-c-h-to-del t
+    "If non-nil, translate C-h to DEL (Backspace)."
+    :type 'boolean
+    :group 'ui-keyboard)
 
-  ;; Top-level
-  (ui-keymap--leader-bind "SPC" #'execute-extended-command)
-  (ui-keymap--leader-bind "."   #'other-window)
-  (ui-keymap--leader-bind "f"   #'find-file)
-  (ui-keymap--leader-bind "F"   #'find-file-other-window)
-  (ui-keymap--leader-bind "O"   #'find-file-other-frame)
-  (ui-keymap--leader-bind "z"   #'ui-hydra-text-scale/body)
+  (defvar ui-keyboard--translation-active-p nil
+    "Internal state flag indicating whether C-h translation is active.")
 
-  ;; Search
-  (ui-keymap--leader-bind "/"   #'consult-line)
-  (ui-keymap--leader-bind "s r" #'consult-ripgrep)
-  (ui-keymap--leader-bind "s m" #'consult-imenu)
+  (defun ui-keyboard--apply ()
+    "Apply C-h translation according to customization."
+    (cond
+     ;; Enable
+     ((and ui-keyboard-map-c-h-to-del
+           (not ui-keyboard--translation-active-p))
+      (define-key key-translation-map (kbd "C-h") (kbd "DEL"))
+      (setq ui-keyboard--translation-active-p t))
 
-  ;; Buffers
-  (ui-keymap--bind 'ui-leader-b-map "b" #'consult-buffer)
-  (ui-keymap--bind 'ui-leader-b-map "n" #'next-buffer)
-  (ui-keymap--bind 'ui-leader-b-map "p" #'previous-buffer)
-  (ui-keymap--bind 'ui-leader-b-map "r" #'revert-buffer)
+     ;; Disable
+     ((and (not ui-keyboard-map-c-h-to-del)
+           ui-keyboard--translation-active-p)
+      (define-key key-translation-map (kbd "C-h") nil)
+      (setq ui-keyboard--translation-active-p nil))))
 
-  ;; Windows
-  (ui-keymap--bind 'ui-leader-w-map "s" #'split-window-below)
-  (ui-keymap--bind 'ui-leader-w-map "v" #'split-window-right)
-  (ui-keymap--bind 'ui-leader-w-map "d" #'delete-window)
-  (ui-keymap--bind 'ui-leader-w-map "o" #'delete-other-windows)
-  (ui-keymap--bind 'ui-leader-w-map "=" #'balance-windows)
+  ;; Apply immediately
+  (ui-keyboard--apply)
 
-  ;; Project
-  (ui-keymap--bind 'ui-leader-p-map "p" #'project-switch-project)
-  (ui-keymap--bind 'ui-leader-p-map "f" #'project-find-file)
-  (ui-keymap--bind 'ui-leader-p-map "d" #'project-dired)
+  ;; React dynamically to customization changes
+  (add-variable-watcher
+   'ui-keyboard-map-c-h-to-del
+   (lambda (_sym _newval _op _where)
+     (ui-keyboard--apply)))
 
-  ;; Git
-  (ui-keymap--bind 'ui-leader-g-map "s" #'magit-status)
-  (ui-keymap--bind 'ui-leader-g-map "c" #'magit-commit)
+  ;; ---------------------------------------------------------------------------
+  ;; Leader bindings (original code preserved)
+  ;; ---------------------------------------------------------------------------
 
-  ;; Code (dev bridge)
-  (ui-keymap--bind 'ui-leader-c-map "a" #'dev-lsp-code-actions)
-  (ui-keymap--bind 'ui-leader-c-map "r" #'dev-lsp-rename)
-  (ui-keymap--bind 'ui-leader-c-map "f" #'dev-lsp-format-buffer)
-  (ui-keymap--bind 'ui-leader-c-map "d" #'xref-find-definitions)
-  (ui-keymap--bind 'ui-leader-c-map "R" #'xref-find-references)
+  (defun ui-keymap--bind (map key cmd)
+    "Bind KEY to CMD in MAP if MAP exists."
+    (when (and (symbolp map)
+               (boundp map)
+               (keymapp (symbol-value map)))
+      (define-key (symbol-value map) (kbd key) cmd)))
 
-  ;; Errors
-  (ui-keymap--bind 'ui-leader-e-map "n" #'flymake-goto-next-error)
-  (ui-keymap--bind 'ui-leader-e-map "p" #'flymake-goto-prev-error)
+  (defun ui-keymap--leader-bind (key cmd)
+    "Bind KEY to CMD in `ui-leader-map`."
+    (when (and (boundp 'ui-leader-map)
+               (keymapp ui-leader-map))
+      (define-key ui-leader-map (kbd key) cmd)))
 
-  ;; Toggles
-  (ui-keymap--bind 'ui-leader-t-map "w" #'whitespace-mode)
-  (ui-keymap--bind 'ui-leader-t-map "r" #'read-only-mode)
+  (defun ui-keymap--leader-binds ()
+    "Install leader keybindings."
 
-  ;; Org
-  (ui-keymap--bind 'ui-leader-o-map "a" #'org-agenda)
-  (ui-keymap--bind 'ui-leader-o-map "c" #'org-capture)
+    ;; Top-level
+    (ui-keymap--leader-bind "SPC" #'execute-extended-command)
+    (ui-keymap--leader-bind "."   #'other-window)
+    (ui-keymap--leader-bind "f"   #'find-file)
+    (ui-keymap--leader-bind "F"   #'find-file-other-window)
+    (ui-keymap--leader-bind "O"   #'find-file-other-frame)
+    (ui-keymap--leader-bind "z"   #'ui-hydra-text-scale/body)
 
-  ;; Session
-  (ui-keymap--bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
+    ;; Search
+    (ui-keymap--leader-bind "/"   #'consult-line)
+    (ui-keymap--leader-bind "s r" #'consult-ripgrep)
+    (ui-keymap--leader-bind "s m" #'consult-imenu)
 
-(defun ui-keymap--local-leader-binds ()
-  "Install major-mode local leader bindings."
+    ;; Buffers
+    (ui-keymap--bind 'ui-leader-b-map "b" #'consult-buffer)
+    (ui-keymap--bind 'ui-leader-b-map "n" #'next-buffer)
+    (ui-keymap--bind 'ui-leader-b-map "p" #'previous-buffer)
+    (ui-keymap--bind 'ui-leader-b-map "r" #'revert-buffer)
 
-  ;; Dired
-  (with-eval-after-load 'dired
-    (when (boundp 'dired-mode-map)
-      (define-key dired-mode-map (kbd "TAB") #'dired-subtree-toggle)
-      (define-key dired-mode-map (kbd "i")   #'dired-subtree-insert)))
+    ;; Windows
+    (ui-keymap--bind 'ui-leader-w-map "s" #'split-window-below)
+    (ui-keymap--bind 'ui-leader-w-map "v" #'split-window-right)
+    (ui-keymap--bind 'ui-leader-w-map "d" #'delete-window)
+    (ui-keymap--bind 'ui-leader-w-map "o" #'delete-other-windows)
+    (ui-keymap--bind 'ui-leader-w-map "=" #'balance-windows)
 
-  ;; Org
-  (with-eval-after-load 'org
-    (when (boundp 'org-mode-map)
-      (define-key org-mode-map (kbd "C-c SPC m t") #'org-todo)
-      (define-key org-mode-map (kbd "C-c SPC m s") #'org-schedule)
-      (define-key org-mode-map (kbd "C-c SPC m d") #'org-deadline))))
+    ;; Project
+    (ui-keymap--bind 'ui-leader-p-map "p" #'project-switch-project)
+    (ui-keymap--bind 'ui-leader-p-map "f" #'project-find-file)
+    (ui-keymap--bind 'ui-leader-p-map "d" #'project-dired)
 
-(defun ui-keymap--startup-init ()
-  "Initialize UI keymaps."
-  (ui-keymap--leader-binds)
-  (ui-keymap--local-leader-binds))
+    ;; Git
+    (ui-keymap--bind 'ui-leader-g-map "s" #'magit-status)
+    (ui-keymap--bind 'ui-leader-g-map "c" #'magit-commit)
 
-(add-hook 'after-init-hook #'ui-keymap--startup-init)
+    ;; Code
+    (ui-keymap--bind 'ui-leader-c-map "a" #'dev-lsp-code-actions)
+    (ui-keymap--bind 'ui-leader-c-map "r" #'dev-lsp-rename)
+    (ui-keymap--bind 'ui-leader-c-map "f" #'dev-lsp-format-buffer)
+    (ui-keymap--bind 'ui-leader-c-map "d" #'xref-find-definitions)
+    (ui-keymap--bind 'ui-leader-c-map "R" #'xref-find-references)
 
-(provide 'ui-keymap)
-;;; ui/ui-keymap.el ends here
+    ;; Errors
+    (ui-keymap--bind 'ui-leader-e-map "n" #'flymake-goto-next-error)
+    (ui-keymap--bind 'ui-leader-e-map "p" #'flymake-goto-prev-error)
+
+    ;; Toggles
+    (ui-keymap--bind 'ui-leader-t-map "w" #'whitespace-mode)
+    (ui-keymap--bind 'ui-leader-t-map "r" #'read-only-mode)
+
+    ;; Org
+    (ui-keymap--bind 'ui-leader-o-map "a" #'org-agenda)
+    (ui-keymap--bind 'ui-leader-o-map "c" #'org-capture)
+
+    ;; Session
+    (ui-keymap--bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
+
+  (defun ui-keymap--local-leader-binds ()
+    "Install major-mode local leader bindings."
+
+    ;; Dired
+    (with-eval-after-load 'dired
+      (when (boundp 'dired-mode-map)
+        (define-key dired-mode-map (kbd "TAB") #'dired-subtree-toggle)
+        (define-key dired-mode-map (kbd "i")   #'dired-subtree-insert)))
+
+    ;; Org
+    (with-eval-after-load 'org
+      (when (boundp 'org-mode-map)
+        (define-key org-mode-map (kbd "C-c SPC m t") #'org-todo)
+        (define-key org-mode-map (kbd "C-c SPC m s") #'org-schedule)
+        (define-key org-mode-map (kbd "C-c SPC m d") #'org-deadline))))
+
+  (defun ui-keymap--startup-init ()
+    "Initialize UI keymaps."
+    (ui-keymap--leader-binds)
+    (ui-keymap--local-leader-binds))
+
+  (add-hook 'after-init-hook #'ui-keymap--startup-init)
+
+  (provide 'ui-keymap)
+  ;;; ui/ui-keymap.el ends here
 #+end_src
 
 **** ui/ui-global-keys.el
@@ -4051,7 +4024,6 @@ Its role is orchestration only.
 :CUSTOM_ID: ui-global-keys
 :header-args:emacs-lisp: :tangle lisp/ui/ui-global-keys.el
 :END:
-
 #+begin_src emacs-lisp
   ;;; lisp/ui/ui-global-keys.el --- Global keybindings (outside leader) -*- lexical-binding: t; -*-
   ;;
@@ -6318,11 +6290,9 @@ Its role is orchestration only.
   ;;
   ;; Commentary:
   ;; Project-wide search and navigation helpers.
-  ;;
-  ;; This module:
-  ;; - integrates ripgrep-based jumping via dumb-jump
-  ;; - provides lightweight EWW search helpers
-  ;; - avoids intrusive global navigation policy
+  ;; Ensures xref backend preference:
+  ;; - Prefer native xref backend from Eglot (when managed)
+  ;; - Otherwise fallback to dumb-jump
   ;;
   ;;; Code:
 
@@ -6330,11 +6300,26 @@ Its role is orchestration only.
     (require 'leaf)
     (require 'subr-x))
 
+  (defun my/dumb-jump-backend ()
+    "Fallback dumb-jump backend.
+  Only activates when Eglot is NOT managing the current buffer."
+    (unless (and (fboundp 'eglot-managed-p)
+                 (eglot-managed-p))
+      (when (fboundp 'dumb-jump-xref-activate)
+        (dumb-jump-xref-activate))))
+
   (leaf dumb-jump
     :straight t
-    :hook (xref-backend-functions . dumb-jump-xref-activate)
     :custom ((dumb-jump-force-searcher  . 'rg)
-  	   (dumb-jump-prefer-searcher . 'rg)))
+             (dumb-jump-prefer-searcher . 'rg))
+    :config
+    (remove-hook 'xref-backend-functions #'dumb-jump-xref-activate)
+    (add-hook 'prog-mode-hook
+              (lambda ()
+                (add-hook 'xref-backend-functions
+                          #'my/dumb-jump-backend
+                          t
+                          t))))
 
   (leaf multiple-cursors :straight t)
 
@@ -6759,7 +6744,8 @@ Its role is orchestration only.
   ;;; utils/utils-async.el ends here
 #+end_src
 
-**** utils/utils-dired.el
+**** ut
+ils/utils-dired.el
 :PROPERTIES:
 :CUSTOM_ID: utils-dired
 :header-args:emacs-lisp: :tangle lisp/utils/utils-dired.el
@@ -6783,18 +6769,67 @@ Its role is orchestration only.
   ;;
   ;;; Code:
 
+  ;;; ---------------------------------------------------------------------------
+  ;;; Dired view-mode key (opt-in, reversible)
+  ;;; ---------------------------------------------------------------------------
+
+  (defgroup utils-dired nil
+    "Lightweight Dired helpers."
+    :group 'dired)
+
+  (defcustom utils-dired-enable-view-key t
+    "If non-nil, bind `z` in Dired to view files in another window.
+
+  The binding opens files using `view-file-other-window`,
+  providing a read-only preview workflow.
+
+  This feature is reversible and introduces no global policy."
+    :type 'boolean
+    :group 'utils-dired)
+
+  (defvar utils-dired--view-key-installed-p nil
+    "Non-nil when the Dired view keybinding is installed.")
+
   (declare-function dired-get-file-for-visit "dired")
-  (declare-function dired-goto-subdir "dired")
 
   (defun my/dired-view-file-other-window ()
-    "Open Dired file or directory in another window."
+    "View file at point in another window using `view-mode'.
+
+  Directories are opened via `dired-other-window`."
     (interactive)
     (let ((file (dired-get-file-for-visit)))
       (if (file-directory-p file)
-          (or (and (cdr dired-subdir-alist)
-                   (dired-goto-subdir file))
-              (dired file))
+          (dired-other-window file)
         (view-file-other-window file))))
+
+  (defun utils-dired--install-view-key ()
+    "Install the Dired view keybinding."
+    (unless utils-dired--view-key-installed-p
+      (define-key dired-mode-map (kbd "z")
+                  #'my/dired-view-file-other-window)
+      (setq utils-dired--view-key-installed-p t)))
+
+  (defun utils-dired--remove-view-key ()
+    "Remove the Dired view keybinding."
+    (when utils-dired--view-key-installed-p
+      (define-key dired-mode-map (kbd "z") nil)
+      (setq utils-dired--view-key-installed-p nil)))
+
+  (defun utils-dired--apply-view-key ()
+    "Apply keybinding state according to customization."
+    (if utils-dired-enable-view-key
+        (utils-dired--install-view-key)
+      (utils-dired--remove-view-key)))
+
+  ;; Apply once after Dired loads
+  (with-eval-after-load 'dired
+    (utils-dired--apply-view-key))
+
+  ;; React dynamically to customization changes
+  (add-variable-watcher
+   'utils-dired-enable-view-key
+   (lambda (_sym _newval _op _where)
+     (utils-dired--apply-view-key)))
 
   (provide 'utils-dired)
   ;;; utils/utils-dired.el ends here
@@ -6816,15 +6851,10 @@ Its role is orchestration only.
   ;;
   ;; Commentary:
   ;; Automatic cleanup of temporary and dead-process buffers.
-  ;;
-  ;; This module:
-  ;; - periodically removes unused helper buffers
-  ;; - never touches visible, modified, or file-backed buffers
-  ;; - runs conservatively with explicit opt-in customization
+  ;; Depends ONLY on core-api (never core-session directly).
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
   (require 'subr-x)
 
   (defgroup utils-buffers nil
@@ -6837,7 +6867,7 @@ Its role is orchestration only.
     :group 'utils-buffers)
 
   (defcustom utils-buffers-job-kind 'periodic
-    "Which scheduler lane to use: 'periodic or 'idle."
+    "Scheduler lane used by core-session via core-api."
     :type '(choice (const periodic) (const idle))
     :group 'utils-buffers)
 
@@ -6869,10 +6899,9 @@ Its role is orchestration only.
                   (utils-buffers--dead-process-p buf))
           (ignore-errors (kill-buffer buf))))))
 
-  ;; Register into core-session if available; otherwise do nothing.
-  (with-eval-after-load 'core-session
-    (when (fboundp 'core-session-register-job)
-      (core-session-register-job
+  (with-eval-after-load 'core-api
+    (when (fboundp 'core-api-session-register-job)
+      (core-api-session-register-job
        'utils-buffers-cleanup
        #'utils-buffers-cleanup
        :kind utils-buffers-job-kind
@@ -7018,17 +7047,12 @@ Its role is orchestration only.
   ;; Category: utils
   ;;
   ;; Commentary:
-  ;; Build org-agenda-files using a persistent on-disk cache.
-  ;;
-  ;; This module:
-  ;; - scans org-directory defensively
-  ;; - stores agenda file lists in a reusable cache
-  ;; - avoids runtime penalties during startup and agenda refresh
+  ;; Secure org-agenda-files cache using JSON (data-only, non-evaluating).
   ;;
   ;;; Code:
 
-  (require 'subr-x)
   (require 'seq)
+  (require 'json)
 
   (defgroup utils-org-agenda nil
     "Cached org-agenda-files builder."
@@ -7038,7 +7062,7 @@ Its role is orchestration only.
     (expand-file-name "org-agenda-files.cache"
                       (or (bound-and-true-p no-littering-var-directory)
                           user-emacs-directory))
-    "Cache file for org-agenda-files."
+    "Cache file for org-agenda-files (JSON format)."
     :type 'file
     :group 'utils-org-agenda)
 
@@ -7049,43 +7073,46 @@ Its role is orchestration only.
     :group 'utils-org-agenda)
 
   (defun utils-org-agenda--valid-org-directory-p ()
-    "Return non-nil if org-directory is defined and readable."
     (and (boundp 'org-directory)
          (stringp org-directory)
-         (file-directory-p org-directory)))
+         (file-directory-p org-directory)
+         (file-readable-p org-directory)))
 
-  (defun utils-org-agenda--scan (org-directory)
-    "Recursively scan ORG-DIRECTORY and return a list of agenda files."
-    (when (file-directory-p org-directory)
+  (defun utils-org-agenda--scan (dir)
+    (when (file-directory-p dir)
       (seq-filter
        (lambda (file)
          (and (string-match-p "\\.org\\'" file)
               (not (file-symlink-p file))
               (not (string-match-p utils-org-agenda-exclude-regexp file))))
-       (directory-files-recursively
-        org-directory "\\.org\\'" nil nil))))
+       (directory-files-recursively dir "\\.org\\'" nil nil))))
 
   (defun utils-org-agenda--load-cache ()
-    "Load cached agenda files from disk."
     (when (file-readable-p utils-org-agenda-cache-file)
-      (with-temp-buffer
-        (insert-file-contents utils-org-agenda-cache-file)
-        (read (current-buffer)))))
+      (condition-case nil
+          (with-temp-buffer
+            (insert-file-contents utils-org-agenda-cache-file)
+            (let ((data (json-parse-buffer :array-type 'list)))
+              (when (and (listp data)
+                         (seq-every-p #'stringp data))
+                data)))
+        (error nil))))
 
   (defun utils-org-agenda--save-cache (files)
-    "Save FILES to the agenda cache."
+    (let ((dir (file-name-directory utils-org-agenda-cache-file)))
+      (unless (file-directory-p dir)
+        (make-directory dir t)))
     (with-temp-file utils-org-agenda-cache-file
-      (prin1 files (current-buffer))))
+      (insert (json-encode files))))
 
   ;;;###autoload
   (defun utils-org-agenda-build (&optional force)
     "Return agenda files using the cache.
   If FORCE is non-nil, rebuild the cache."
-    (if (not (utils-org-agenda--valid-org-directory-p))
-        nil
+    (when (utils-org-agenda--valid-org-directory-p)
       (let ((cached (and (not force)
                          (utils-org-agenda--load-cache))))
-        (if (and cached (listp cached))
+        (if cached
             cached
           (let ((files (utils-org-agenda--scan org-directory)))
             (utils-org-agenda--save-cache files)
