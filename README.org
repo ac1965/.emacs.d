@@ -2584,16 +2584,20 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; This module configures the visual theme layer.
+  ;;; Commentary:
+  ;;
+  ;; Theme configuration for the UI layer.
   ;;
   ;; Responsibilities:
   ;;
-  ;; - load nano-emacs theme
-  ;; - configure nano faces
-  ;; - adjust spacing and padding
-  ;; - apply face overrides after theme activation
+  ;; - load the Nano theme
+  ;; - configure Nano faces
+  ;; - apply palette overrides
+  ;; - configure subtree and pairing highlights
+  ;; - apply spacing adjustments for graphical displays
   ;;
-  ;; The configuration is idempotent and safe to run multiple times.
+  ;; The initialization is idempotent and safe to run multiple times.
+  ;; It also supports daemon mode and new frame creation.
 
   ;;; Code:
 
@@ -2603,32 +2607,36 @@ Its role is orchestration only.
   (setq-default line-spacing 0.24)
 
   (defvar ui-theme--initialized nil
-    "Non-nil once the theme configuration has been initialized.
+    "Non-nil once the theme configuration has been initialized.")
 
-  This flag prevents the theme initialization routine from running
-  multiple times during the same Emacs session.")
+  (defun ui-theme--reapply-after-theme (&rest _)
+    "Reapply Nano palette adjustments after a theme change."
+    (when (fboundp 'my/nano-apply-faces)
+      (my/nano-apply-faces)))
+
+  (defun ui-theme--apply-frame (frame)
+    "Apply graphical UI adjustments to FRAME."
+    (with-selected-frame frame
+      (when (display-graphic-p)
+        (when (fboundp 'spacious-padding-mode)
+          (spacious-padding-mode 1))
+        (when (fboundp 'my/nano-apply-faces)
+          (my/nano-apply-faces)))))
 
   (defun ui-theme--apply ()
     "Initialize and apply the UI theme configuration.
 
-  This function performs the following tasks:
-
-  - Ensures the initialization runs only once
-  - Registers hooks to reapply Nano faces after theme changes
-  - Configures subtree face backgrounds
-  - Loads Nano theme and supporting face configuration
-  - Applies spacing adjustments for graphical displays
-
-  The function is safe to run multiple times but will only execute
-  the initialization logic once."
+  This function ensures initialization runs only once and
+  installs hooks that keep theme customizations stable
+  across theme reloads and frame creation."
     (unless ui-theme--initialized
       (setq ui-theme--initialized t)
 
-      ;; Reapply Nano faces when themes are enabled
+      ;; Reapply Nano palette when themes change
       (with-eval-after-load 'cus-theme
         (if (boundp 'enable-theme-functions)
-            (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
-          (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
+            (add-hook 'enable-theme-functions #'ui-theme--reapply-after-theme)
+          (advice-add 'enable-theme :after #'ui-theme--reapply-after-theme)))
 
       ;; Configure dired-subtree background colors
       (with-eval-after-load 'dired-subtree
@@ -2637,10 +2645,14 @@ Its role is orchestration only.
         (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
         (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
 
-      ;; Load Nano layout and faces
+      ;; Load Nano components
       (require 'nano-layout)
       (require 'nano-faces)
 
+      ;; Load theme first
+      (load-theme 'nano t)
+
+      ;; Apply Nano face configuration
       (nano-faces)
 
       ;; Strengthen emphasis faces
@@ -2648,27 +2660,33 @@ Its role is orchestration only.
                           :foreground (face-foreground 'nano-face-default)
                           :weight 'bold)
 
-      ;; Load theme
-      (load-theme 'nano t)
+      ;; Apply palette overrides
+      (when (fboundp 'my/nano-apply-faces)
+        (my/nano-apply-faces))
 
-      ;; Apply palette adjustments
-      (my/nano-apply-faces)
-
-      ;; Ensure emphasis faces behave as expected
+      ;; Ensure standard emphasis behaviour
       (set-face-attribute 'bold nil :weight 'bold)
       (set-face-attribute 'italic nil :slant 'italic)
 
-      ;; Configure pairing and parenthesis highlighting
+      ;; Configure pairing highlight
       (with-eval-after-load 'elec-pair
         (custom-set-faces
-         '(electric-pair-overlay-face ((t (:background "#e5e7eb"))))
-         '(show-paren-match ((t (:background "#e5e7eb" :foreground "#111827" :weight bold))))
-         '(show-paren-mismatch ((t (:background "#dc2626" :foreground "white" :weight bold))))))
+         '(electric-pair-overlay-face
+           ((t (:background "#e5e7eb"))))
+         '(show-paren-match
+           ((t (:background "#e5e7eb" :foreground "#111827" :weight bold))))
+         '(show-paren-mismatch
+           ((t (:background "#dc2626" :foreground "white" :weight bold))))))
 
-      ;; Graphical display adjustments
-      (when (display-graphic-p)
-        (spacious-padding-mode 1)
-        (my/nano-apply-faces))))
+      ;; Apply graphical settings for existing frame
+      (ui-theme--apply-frame (selected-frame))
+
+      ;; Ensure daemon / new frame support
+      (add-hook 'after-make-frame-functions #'ui-theme--apply-frame)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Packages
+  ;; ---------------------------------------------------------------------------
 
   (leaf nano-emacs
     :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs"))
@@ -2681,6 +2699,10 @@ Its role is orchestration only.
     :if (display-graphic-p)
     :custom ((spacious-padding-widths . '((left . 15) (right . 15)))
              (spacious-padding-subtle-mode-line . t)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Startup
+  ;; ---------------------------------------------------------------------------
 
   (add-hook 'emacs-startup-hook #'ui-theme--apply)
 
@@ -3587,28 +3609,60 @@ Its role is orchestration only.
   ;;
   ;; Category: auth
   ;;
+  ;;; Commentary:
+  ;;
+  ;; Authentication infrastructure for the configuration.
+  ;;
+  ;; Responsibilities:
+  ;;
+  ;; - verify required authentication environment variables
+  ;; - enable EasyPG file encryption support
+  ;; - enable pass-based auth-source backend
+  ;;
+  ;; The configuration is optional and activates only when
+  ;; the necessary external tools are available.
+
   ;;; Code:
 
-  (defgroup auth-core nil "Authentication policy." :group 'convenience)
+  (defgroup auth-core nil
+    "Authentication policy."
+    :group 'convenience)
 
-  (defcustom auth-core-enable-p t :type 'boolean :group 'auth-core)
+  (defcustom auth-core-enable-p t
+    "Enable authentication infrastructure."
+    :type 'boolean
+    :group 'auth-core)
 
   (defun auth-core-check-env ()
+    "Verify required authentication environment variables.
+
+  Currently checks whether the `GPG_KEY_ID` environment variable
+  is defined and warns if it is missing."
     (when auth-core-enable-p
       (unless (getenv "GPG_KEY_ID")
-        (display-warning 'auth "GPG_KEY_ID is not set."))))
+        (display-warning 'auth-core
+                         "GPG_KEY_ID environment variable is not set."))))
 
   (defun auth-core--startup-init ()
-    (auth-core-check-env)
-    (when (require 'epa-file nil t)
-      (add-hook 'emacs-startup-hook #'epa-file-enable))
-    (when (require 'auth-source-pass nil t)
-      (when (executable-find "pass")
+    "Initialize authentication infrastructure."
+    (when auth-core-enable-p
+
+      ;; Check environment configuration
+      (auth-core-check-env)
+
+      ;; Enable EasyPG encrypted file support
+      (when (require 'epa-file nil t)
+        (epa-file-enable))
+
+      ;; Enable pass integration for auth-source
+      (when (and (require 'auth-source-pass nil t)
+                 (executable-find "pass"))
         (auth-source-pass-enable))))
 
   (add-hook 'after-init-hook #'auth-core--startup-init)
 
   (provide 'auth-core)
+
   ;;; auth/auth-core.el ends here
 #+end_src
 
@@ -4813,70 +4867,75 @@ Its role is orchestration only.
   (eval-when-compile (require 'leaf) (require 'cl-lib))
   (require 'ui-nano-palette)
 
-  (defun my/vterm-apply-palette ()
+  (defun dev-term--safe-face-set (face &rest props)
+    "Safely set FACE attributes using PROPS."
+    (when (facep face)
+      (apply #'set-face-attribute face nil props)))
+
+  (defun dev-term-apply-palette ()
     "Apply the Nano color palette to vterm faces."
-    (cl-labels
-        ((safe-face-set (face &rest props)
-           (when (facep face)
-             (apply #'set-face-attribute face nil props))))
-      (if (facep 'vterm-color-default)
-          (safe-face-set 'vterm-color-default
-                         :foreground nano-color-foreground
-                         :background nano-color-background)
-        (safe-face-set 'vterm
-                       :foreground nano-color-foreground
-                       :background nano-color-background))
+    (if (facep 'vterm-color-default)
+        (dev-term--safe-face-set
+         'vterm-color-default
+         :foreground nano-color-foreground
+         :background nano-color-background)
+      (dev-term--safe-face-set
+       'vterm
+       :foreground nano-color-foreground
+       :background nano-color-background))
 
-      (safe-face-set 'vterm-color-black
-                     :foreground nano-color-strong
-                     :background 'unspecified)
+    (dev-term--safe-face-set 'vterm-color-black
+                             :foreground nano-color-strong)
 
-      (safe-face-set 'vterm-color-red
-                     :foreground nano-color-critical
-                     :background 'unspecified)
+    (dev-term--safe-face-set 'vterm-color-red
+                             :foreground nano-color-critical)
 
-      (safe-face-set 'vterm-color-green
-                     :foreground "#10b981"
-                     :background 'unspecified)
+    (dev-term--safe-face-set 'vterm-color-green
+                             :foreground "#10b981")
 
-      (safe-face-set 'vterm-color-yellow
-                     :foreground nano-color-popout
-                     :background 'unspecified)
+    (dev-term--safe-face-set 'vterm-color-yellow
+                             :foreground nano-color-popout)
 
-      (safe-face-set 'vterm-color-blue
-                     :foreground nano-color-salient
-                     :background 'unspecified)
+    (dev-term--safe-face-set 'vterm-color-blue
+                             :foreground nano-color-salient)
 
-      (safe-face-set 'vterm-color-magenta
-                     :foreground "#a21caf"
-                     :background 'unspecified)
+    (dev-term--safe-face-set 'vterm-color-magenta
+                             :foreground "#a21caf")
 
-      (safe-face-set 'vterm-color-cyan
-                     :foreground "#0891b2"
-                     :background 'unspecified)
+    (dev-term--safe-face-set 'vterm-color-cyan
+                             :foreground "#0891b2")
 
-      (safe-face-set 'vterm-color-white
-                     :foreground nano-color-subtle
-                     :background 'unspecified)))
+    (dev-term--safe-face-set 'vterm-color-white
+                             :foreground nano-color-subtle))
 
-  (defun my/vterm-buffer-p (buf)
+  (defun dev-term--buffer-p (buf)
     "Return non-nil if BUF is a vterm buffer."
     (with-current-buffer buf
       (or (eq major-mode 'vterm-mode)
           (string-prefix-p "*vterm" (buffer-name buf)))))
 
+  (defun dev-term--reapply-palette (&rest _)
+    "Reapply vterm palette after theme changes."
+    (dev-term-apply-palette))
+
+  (defun dev-term--frame-init (frame)
+    "Apply palette for newly created FRAME."
+    (with-selected-frame frame
+      (dev-term-apply-palette)))
+
   (leaf vterm
     :straight t
     :config
-    (my/vterm-apply-palette)
+    (dev-term-apply-palette)
 
+    ;; Theme reload support
     (with-eval-after-load 'cus-theme
       (if (boundp 'enable-theme-functions)
-          (add-hook 'enable-theme-functions #'my/vterm-apply-palette)
-        (advice-add 'enable-theme
-                    :after
-                    (lambda (&rest _)
-                      (my/vterm-apply-palette))))))
+          (add-hook 'enable-theme-functions #'dev-term--reapply-palette)
+        (advice-add 'enable-theme :after #'dev-term--reapply-palette)))
+
+    ;; Daemon / new frame support
+    (add-hook 'after-make-frame-functions #'dev-term--frame-init))
 
   (leaf vterm-toggle
     :straight t
@@ -4887,7 +4946,8 @@ Its role is orchestration only.
   (with-eval-after-load 'vterm
     (add-to-list
      'display-buffer-alist
-     `(my/vterm-buffer-p
+     '((lambda (buf _)
+         (dev-term--buffer-p buf))
        (display-buffer-reuse-window display-buffer-in-direction)
        (direction . bottom)
        (dedicated . t)
