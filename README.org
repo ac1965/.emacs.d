@@ -1513,6 +1513,11 @@ Its role is orchestration only.
     (require 'subr-x)
     (require 'seq))
 
+  ;; core-session-idle-delay and core-session-periodic-interval are
+  ;; defined in core-session.el.  We require it here so this file is
+  ;; safe to load or byte-compile independently.
+  (require 'core-session nil t)
+
   (defvar core-session--jobs-table (make-hash-table :test 'eq))
   (defvar core-session--periodic-timer nil)
   (defvar core-session--idle-timer nil)
@@ -1619,7 +1624,9 @@ Its role is orchestration only.
   (defun my/delete-old-backups ()
     "Delete backup files older than 7 days."
     (interactive)
-    (let ((backup-dir (concat no-littering-var-directory "backup/"))
+    (let ((backup-dir (concat (or (bound-and-true-p my:d:var)
+                                  no-littering-var-directory)
+                              "backup/"))
           (threshold (- (float-time (current-time)) (* 7 24 60 60))))
       (when (file-directory-p backup-dir)
         (dolist (file (directory-files backup-dir t))
@@ -1669,7 +1676,8 @@ Its role is orchestration only.
     (defun my/kill-scratch-buffer-advice (buf)
       "If BUF is *scratch*, recreate it shortly after kill."
       (when (string= (buffer-name buf) "*scratch*")
-        (run-at-time 0 nil #'my/create-scratch-buffer)))
+        ;; Use idle-timer so recreation happens after kill fully completes.
+        (run-with-idle-timer 0 nil #'my/create-scratch-buffer)))
 
     (add-hook 'kill-buffer-hook
               (lambda ()
@@ -2416,9 +2424,13 @@ Its role is orchestration only.
   (leaf ligature
     :straight (ligature :type git :host github :repo "mickeynp/ligature.el")
     :when (display-graphic-p)
-    :hook (prog-mode-hook . global-ligature-mode)
     :config
-    (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||")))
+    ;; Register ligatures for prog-mode, then enable globally.
+    ;; global-ligature-mode must not be added to prog-mode-hook because
+    ;; it is a global minor mode — repeated activation is redundant and
+    ;; confusing to debug.
+    (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
+    (global-ligature-mode 1))
 
   (provide 'ui-font)
   ;;; ui-font.el ends here
@@ -3689,18 +3701,19 @@ Its role is orchestration only.
   ;;; Code:
 
   (defun ui-global-keys--startup-init ()
-    (global-set-key (kbd "<f1>") #'help-command)
+    (global-set-key (kbd "C-.")   #'other-window)
     (global-set-key (kbd "C-?") #'undo-redo)
     (global-set-key (kbd "C-c b") #'consult-buffer)
     (global-set-key (kbd "C-c k") #'my/smart-kill-buffer)
     (global-set-key (kbd "C-c o") #'find-file)
     (global-set-key (kbd "C-c r") #'consult-ripgrep)
     (global-set-key (kbd "C-s")   #'consult-line)
+    (global-set-key (kbd "M-x") #'execute-extended-command)
+    (global-set-key (kbd "s-<down>")  #'end-of-buffer)
     (global-set-key (kbd "s-<left>")  #'previous-buffer)
     (global-set-key (kbd "s-<right>") #'next-buffer)
     (global-set-key (kbd "s-<up>")    #'beginning-of-buffer)
-    (global-set-key (kbd "s-<down>")  #'end-of-buffer)
-    (global-set-key (kbd "M-x") #'execute-extended-command))
+    (global-set-key (kbd "<f1>") #'help-command))
 
   (add-hook 'after-init-hook #'ui-global-keys--startup-init)
 
@@ -4240,8 +4253,9 @@ Its role is orchestration only.
   ;;
   ;; REFACTORED (Fix 1): Replaced internal variable `eglot--servers` with
   ;; the public API `eglot-current-server` + `eglot-managed-buffers`.
-  ;; The old approach was fragile against Eglot internals changing across
-  ;; Emacs versions.  The new approach uses only documented public functions.
+  ;;
+  ;; REFACTORED (Fix 5): `eglot--project` is also an internal function.
+  ;; Guarded with `fboundp` to remain safe across Emacs versions.
   ;;
   ;;; Code:
 
@@ -4264,7 +4278,8 @@ Its role is orchestration only.
     "Shutdown Eglot servers whose root matches OLD-ROOT.
 
   Uses only public Eglot API (eglot-managed-buffers, eglot-current-server,
-  eglot-shutdown) to avoid breakage from internal variable changes."
+  eglot-shutdown) to avoid breakage from internal variable changes.
+  eglot--project is guarded with fboundp for forward compatibility."
     (when (and (stringp old-root)
                (featurep 'eglot)
                (fboundp 'eglot-managed-buffers)
@@ -4277,11 +4292,11 @@ Its role is orchestration only.
               (when-let* ((server (ignore-errors (eglot-current-server))))
                 (unless (gethash server seen-servers)
                   (puthash server t seen-servers)
-                  ;; Check server root against the old project root.
                   (let ((server-root
                          (ignore-errors
-                           (expand-file-name
-                            (project-root (eglot--project server))))))
+                           (when (fboundp 'eglot--project)
+                             (expand-file-name
+                              (project-root (eglot--project server)))))))
                     (when (and server-root
                                (string-prefix-p old-root server-root))
                       (ignore-errors
@@ -4522,9 +4537,13 @@ Its role is orchestration only.
 
     (defun orgx--org-roam-autosync-enable ()
       "Enable org-roam autosync (called from idle timer)."
-      (when (fboundp 'org-roam-db-autosync-mode)
-        (org-roam-db-autosync-mode 1)
-        (message "[org-roam] autosync enabled (delayed)")))
+      (condition-case err
+          (when (fboundp 'org-roam-db-autosync-mode)
+            (org-roam-db-autosync-mode 1)
+            (message "[org-roam] autosync enabled (delayed)"))
+        (error
+         (message "[org-roam] autosync failed: %s"
+                  (error-message-string err)))))
 
     (with-eval-after-load 'org-roam
       (when (fboundp 'org-roam-db--file-hash)
@@ -4563,7 +4582,10 @@ Its role is orchestration only.
       (interactive)
       (save-excursion
         (org-back-to-heading t)
-        (if (org-fold-folded-p (point))
+        (if (if (fboundp 'org-fold-folded-p)
+                (org-fold-folded-p (point))
+              ;; Emacs < 29 fallback: check outline visibility
+              (outline-invisible-p (line-end-position)))
             (org-show-subtree)
           (org-fold-subtree t))))
 
@@ -4989,6 +5011,11 @@ Its role is orchestration only.
           (append aidermacs-extra-args
                   (seq-remove (lambda (arg) (member arg aidermacs-extra-args)) args))))
 
+  ;; Declare before leaf so :config can safely append to it without
+  ;; risking a reset if aidermacs itself also defvar's this symbol.
+  (defvar aidermacs-extra-args nil
+    "Extra command-line arguments passed to the aider process.")
+
   (leaf aidermacs
     :straight t
     :init
@@ -5008,7 +5035,6 @@ Its role is orchestration only.
      (aidermacs-retry-delay   . 2.0))
     :config
     ;; All post-load configuration consolidated here to ensure correct ordering.
-    (defvar aidermacs-extra-args nil)
     (let ((env-file (expand-file-name ".env" my:d:aider)))
       (when (file-exists-p env-file)
         (my/aidermacs--append-unique-args (list "--env-file" env-file))))
@@ -5017,8 +5043,8 @@ Its role is orchestration only.
            "--chat-history-file"  (getenv "AIDER_CHAT_HISTORY_FILE")
            "--llm-history-file"   (getenv "AIDER_LLM_HISTORY_FILE")))
     ;; Use vterm when available; silently fall back to comint otherwise.
-    ;; No warning is emitted: comint is a fully supported backend and the
-    ;; absence of vterm is a normal configuration, not an error condition.
+    ;; comint is a fully supported backend and its absence of vterm is
+    ;; a normal configuration, not an error condition.
     (setopt aidermacs-backend
             (if (require 'vterm nil 'noerror) 'vterm 'comint)))
 
@@ -5700,7 +5726,8 @@ Its role is orchestration only.
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'subr-x))
+  (eval-when-compile (require 'subr-x) (require 'cl-lib))
+  (require 'cl-lib)
 
   (defvar utils-org-agenda--cache nil
     "Cache of Org agenda file paths. Nil = not yet built.")
@@ -5727,9 +5754,9 @@ Its role is orchestration only.
   (defun utils-org-agenda--scan (dir depth)
     (when (and (file-directory-p dir) (> depth 0)
                (not (utils-org-agenda--should-exclude-p dir)))
-      (let ((files (directory-files dir t "\\.org\\'"))
+      (let ((files (directory-files dir t "\.org\'"))
             (subdirs (seq-filter #'file-directory-p
-                                 (directory-files dir t "\\`[^.]"))))
+                                 (directory-files dir t "\`[^.]"))))
         (append files
                 (cl-loop for subdir in subdirs
                          append (utils-org-agenda--scan subdir (1- depth)))))))
