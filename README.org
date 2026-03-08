@@ -2579,9 +2579,7 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-theme.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
-  ;;
-  ;; Theme configuration module for the UI layer.
+  ;;; ui/ui-theme.el --- Theme configuration for UI layer -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -2591,112 +2589,128 @@ Its role is orchestration only.
   ;;
   ;;; Commentary:
   ;;
-  ;; Theme configuration for the UI layer.
+  ;; Theme configuration module for the UI layer.
   ;;
   ;; Responsibilities:
   ;;
   ;; - load the Nano theme
   ;; - configure Nano faces
   ;; - apply palette overrides
-  ;; - configure subtree and pairing highlights
-  ;; - apply spacing adjustments for graphical displays
+  ;; - configure pairing highlight faces
+  ;; - enable spacious padding for graphical frames
   ;;
-  ;; The initialization is idempotent and safe to run multiple times.
-  ;; It also supports daemon mode and new frame creation.
+  ;; Design goals:
+  ;;
+  ;; - deterministic initialization
+  ;; - daemon-safe frame handling
+  ;; - theme reload safety
+  ;; - Emacs 30 / 31 forward compatibility
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (eval-when-compile
+    (require 'leaf))
+
   (require 'ui-nano-palette)
 
   (defgroup ui-theme nil
-    "Theme configuration for the UI layer."
+    "UI theme configuration."
     :group 'ui)
 
   (defcustom ui-theme-enable-p t
-    "If non-nil enable the Nano theme configuration."
+    "Enable UI theme configuration."
     :type 'boolean
     :group 'ui-theme)
 
-  (setq-default line-spacing 0.24)
+  (defcustom ui-theme-line-spacing 0.24
+    "Default line spacing."
+    :type 'number
+    :group 'ui-theme)
 
-  (defvar ui-theme--initialized nil
-    "Non-nil once the theme configuration has been initialized.")
+  (setq-default line-spacing ui-theme-line-spacing)
 
-  (defun ui-theme--reapply-after-theme (&rest _)
-    "Reapply Nano palette adjustments after a theme change."
+  (defun ui-theme--safe-face (face &rest args)
+    "Apply ARGS to FACE when FACE exists."
+    (when (facep face)
+      (apply #'set-face-attribute face nil args)))
+
+  (defun ui-theme--apply-faces ()
+    "Apply UI face policy."
     (when (fboundp 'my/nano-apply-faces)
-      (my/nano-apply-faces)))
+      (my/nano-apply-faces))
+
+    (ui-theme--safe-face 'bold :weight 'bold)
+    (ui-theme--safe-face 'italic :slant 'italic)
+
+    (ui-theme--safe-face
+     'electric-pair-overlay-face
+     :background "#e5e7eb")
+
+    (ui-theme--safe-face
+     'show-paren-match
+     :background "#e5e7eb"
+     :foreground "#111827"
+     :weight 'bold)
+
+    (ui-theme--safe-face
+     'show-paren-mismatch
+     :background "#dc2626"
+     :foreground "white"
+     :weight 'bold))
 
   (defun ui-theme--apply-frame (frame)
-    "Apply graphical UI adjustments to FRAME."
+    "Apply graphical UI settings to FRAME."
     (with-selected-frame frame
-      (when (display-graphic-p)
+      (when (display-graphic-p frame)
         (when (fboundp 'spacious-padding-mode)
           (spacious-padding-mode 1))
-        (when (fboundp 'my/nano-apply-faces)
-          (my/nano-apply-faces)))))
+        (ui-theme--apply-faces))))
 
-  (defun ui-theme--apply ()
-    "Initialize and apply the UI theme configuration."
+  (defun ui-theme--after-theme (&rest _)
+    "Reapply UI policy after theme changes."
+    (ui-theme--apply-faces))
+
+  (defun ui-theme--init ()
+    "Initialize UI theme configuration."
     (when ui-theme-enable-p
-      (unless ui-theme--initialized
-        (setq ui-theme--initialized t)
 
-        (with-eval-after-load 'cus-theme
-          (if (boundp 'enable-theme-functions)
-              (add-hook 'enable-theme-functions #'ui-theme--reapply-after-theme)
-            (advice-add 'enable-theme :after #'ui-theme--reapply-after-theme)))
+      (require 'nano-layout nil t)
+      (require 'nano-faces nil t)
 
-        (with-eval-after-load 'dired-subtree
-          (set-face-attribute 'dired-subtree-depth-1-face nil :background "#e6f4ea")
-          (set-face-attribute 'dired-subtree-depth-2-face nil :background "#dff0e3")
-          (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
-          (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
-
-        (require 'nano-layout)
-        (require 'nano-faces)
-
+      (when (member 'nano (custom-available-themes))
         (load-theme 'nano t)
+        (when (fboundp 'nano-faces)
+          (nano-faces)))
 
-        (nano-faces)
+      (ui-theme--apply-faces)
 
-        (set-face-attribute 'nano-face-strong nil
-                            :foreground (face-foreground 'nano-face-default)
-                            :weight 'bold)
+      (add-hook 'after-make-frame-functions #'ui-theme--apply-frame)
 
-        (when (fboundp 'my/nano-apply-faces)
-          (my/nano-apply-faces))
+      (if (boundp 'enable-theme-functions)
+          (add-hook 'enable-theme-functions #'ui-theme--after-theme)
+        (advice-add 'enable-theme :after #'ui-theme--after-theme))
 
-        (set-face-attribute 'bold nil :weight 'bold)
-        (set-face-attribute 'italic nil :slant 'italic)
-
-        (with-eval-after-load 'elec-pair
-          (custom-set-faces
-           '(electric-pair-overlay-face
-             ((t (:background "#e5e7eb"))))
-           '(show-paren-match
-             ((t (:background "#e5e7eb" :foreground "#111827" :weight bold))))
-           '(show-paren-mismatch
-             ((t (:background "#dc2626" :foreground "white" :weight bold))))))
-
-        (ui-theme--apply-frame (selected-frame))
-
-        (add-hook 'after-make-frame-functions #'ui-theme--apply-frame))))
+      (ui-theme--apply-frame (selected-frame))))
 
   (leaf nano-emacs
-    :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs"))
+    :straight (nano-emacs
+               :type git
+               :host github
+               :repo "rougier/nano-emacs"))
 
   (leaf nano-theme
-    :straight (nano-theme :type git :host github :repo "rougier/nano-theme"))
+    :straight (nano-theme
+               :type git
+               :host github
+               :repo "rougier/nano-theme"))
 
   (leaf spacious-padding
     :straight t
-    :if (display-graphic-p)
-    :custom ((spacious-padding-widths . '((left . 15) (right . 15)))
-             (spacious-padding-subtle-mode-line . t)))
+    :custom
+    ((spacious-padding-widths . '((left . 15) (right . 15)))
+     (spacious-padding-subtle-mode-line . t)))
 
-  (add-hook 'emacs-startup-hook #'ui-theme--apply)
+  (add-hook 'emacs-startup-hook #'ui-theme--init)
 
   (provide 'ui-theme)
 
@@ -3838,7 +3852,7 @@ Its role is orchestration only.
       (add-to-list 'completion-at-point-functions #'cape-dabbrev)
       (remove-hook 'completion-at-point-functions #'completion-corfu--init)))
 
-  (add-hook 'completion-at-point-functions #'completion-corfu--init)
+  (add-hook 'window-setup-hook #'completion-corfu--init)
 
   (leaf corfu :straight t :custom ((corfu-auto . t) (corfu-cycle . t)))
   (leaf kind-icon :straight t :after corfu :require t
@@ -4845,137 +4859,116 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/dev/dev-term.el
 :END:
 #+begin_src emacs-lisp
-  ;;; dev/dev-term.el --- Terminal integration helpers -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: dev
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; Terminal integration helpers based on vterm.
-  ;;
-  ;; Provides:
-  ;;
-  ;; - Nano palette integration for terminal colors
-  ;; - project-scoped terminal toggling via vterm-toggle
-  ;; - bottom-docked terminal window display
-  ;;
-  ;; The color palette is sourced from `ui-nano-palette.el`.
+;;; dev/dev-term.el --- Terminal integration helpers -*- lexical-binding: t; -*-
+;;
+;; Copyright (c) 2021-2026
+;; Author: YAMASHITA, Takao
+;; License: GNU GPL v3 or later
+;;
+;; Category: dev
+;;
+;;; Commentary:
+;;
+;; Terminal integration helpers based on vterm.
+;;
+;; Provides:
+;;
+;; - Nano palette integration for terminal colors
+;; - project-scoped terminal toggling via vterm-toggle
+;; - bottom-docked terminal window display
+;;
+;; The color palette is sourced from `ui-nano-palette.el`.
 
-  ;;; Code:
+;;; Code:
 
-  (eval-when-compile (require 'leaf) (require 'cl-lib))
-  (require 'ui-nano-palette)
+(eval-when-compile (require 'leaf))
 
-  (defgroup dev-term nil
-    "Terminal integration helpers."
-    :group 'tools)
+(require 'ui-nano-palette)
 
-  (defcustom dev-term-enable-p t
-    "If non-nil enable terminal integration."
-    :type 'boolean
-    :group 'dev-term)
+(defgroup dev-term nil
+  "Terminal integration helpers."
+  :group 'tools)
 
-  (defun dev-term--safe-face-set (face &rest props)
-    "Safely set FACE attributes using PROPS."
-    (when (facep face)
-      (apply #'set-face-attribute face nil props)))
+(defcustom dev-term-enable-p t
+  "If non-nil enable terminal integration."
+  :type 'boolean
+  :group 'dev-term)
 
-  (defun dev-term-apply-palette ()
-    "Apply the Nano color palette to vterm faces."
-    (when dev-term-enable-p
+(defun dev-term--safe-face-set (face &rest props)
+  "Safely set FACE attributes using PROPS."
+  (when (facep face)
+    (apply #'set-face-attribute face nil props)))
 
-      (if (facep 'vterm-color-default)
-          (dev-term--safe-face-set
-           'vterm-color-default
-           :foreground nano-color-foreground
-           :background nano-color-background)
-        (dev-term--safe-face-set
-         'vterm
-         :foreground nano-color-foreground
-         :background nano-color-background))
+(defun dev-term-apply-palette ()
+  "Apply the Nano color palette to vterm faces."
+  (when dev-term-enable-p
+    (dev-term--safe-face-set
+     'vterm-color-default
+     :foreground nano-color-foreground
+     :background nano-color-background)
 
-      (dev-term--safe-face-set 'vterm-color-black
-                               :foreground nano-color-strong)
+    (dev-term--safe-face-set 'vterm-color-black :foreground nano-color-strong)
+    (dev-term--safe-face-set 'vterm-color-red :foreground nano-color-critical)
+    (dev-term--safe-face-set 'vterm-color-green :foreground "#10b981")
+    (dev-term--safe-face-set 'vterm-color-yellow :foreground nano-color-popout)
+    (dev-term--safe-face-set 'vterm-color-blue :foreground nano-color-salient)
+    (dev-term--safe-face-set 'vterm-color-magenta :foreground "#a21caf")
+    (dev-term--safe-face-set 'vterm-color-cyan :foreground "#0891b2")
+    (dev-term--safe-face-set 'vterm-color-white :foreground nano-color-subtle)))
 
-      (dev-term--safe-face-set 'vterm-color-red
-                               :foreground nano-color-critical)
-
-      (dev-term--safe-face-set 'vterm-color-green
-                               :foreground "#10b981")
-
-      (dev-term--safe-face-set 'vterm-color-yellow
-                               :foreground nano-color-popout)
-
-      (dev-term--safe-face-set 'vterm-color-blue
-                               :foreground nano-color-salient)
-
-      (dev-term--safe-face-set 'vterm-color-magenta
-                               :foreground "#a21caf")
-
-      (dev-term--safe-face-set 'vterm-color-cyan
-                               :foreground "#0891b2")
-
-      (dev-term--safe-face-set 'vterm-color-white
-                               :foreground nano-color-subtle)))
-
-  (defun dev-term--buffer-p (buf)
-    "Return non-nil if BUF is a vterm buffer."
+(defun dev-term--buffer-p (buf)
+  "Return non-nil if BUF is a vterm buffer."
+  (when (buffer-live-p buf)
     (with-current-buffer buf
       (or (eq major-mode 'vterm-mode)
-          (string-prefix-p "*vterm" (buffer-name buf)))))
+          (string-prefix-p "*vterm" (buffer-name buf))))))
 
-  (defun dev-term--reapply-palette (&rest _)
-    "Reapply vterm palette after theme changes."
-    (dev-term-apply-palette))
+(defun dev-term--reapply-palette (&rest _)
+  "Reapply vterm palette after theme changes."
+  (dev-term-apply-palette))
 
-  (defun dev-term--frame-init (frame)
-    "Apply palette for newly created FRAME."
-    (with-selected-frame frame
-      (dev-term-apply-palette)))
+(defun dev-term--frame-init (frame)
+  "Apply palette for newly created FRAME."
+  (with-selected-frame frame
+    (dev-term-apply-palette)))
 
-  (leaf vterm
-    :straight t
-    :when dev-term-enable-p
-    :config
-    (dev-term-apply-palette)
+(leaf vterm
+  :straight t
+  :when dev-term-enable-p
+  :config
+  (dev-term-apply-palette)
 
-    ;; Theme reload support
-    (with-eval-after-load 'cus-theme
-      (if (boundp 'enable-theme-functions)
-          (add-hook 'enable-theme-functions #'dev-term--reapply-palette)
-        (advice-add 'enable-theme :after #'dev-term--reapply-palette)))
+  (with-eval-after-load 'cus-theme
+    (if (boundp 'enable-theme-functions)
+        (add-hook 'enable-theme-functions #'dev-term--reapply-palette)
+      (advice-add 'enable-theme :after #'dev-term--reapply-palette)))
 
-    ;; Daemon / new frame support
-    (add-hook 'after-make-frame-functions #'dev-term--frame-init))
+  (add-hook 'after-make-frame-functions #'dev-term--frame-init))
 
-  (leaf vterm-toggle
-    :straight t
-    :when dev-term-enable-p
-    :custom ((vterm-toggle-cd-auto-create-buffer . t)
-             (vterm-toggle-fullscreen-p . nil)
-             (vterm-toggle-scope . 'project)))
+(leaf vterm-toggle
+  :straight t
+  :when dev-term-enable-p
+  :custom ((vterm-toggle-cd-auto-create-buffer . t)
+           (vterm-toggle-fullscreen-p . nil)
+           (vterm-toggle-scope . 'project)))
 
-  (with-eval-after-load 'vterm
-    (add-to-list
-     'display-buffer-alist
-     '((lambda (buf _)
-         (dev-term--buffer-p buf))
-       (display-buffer-reuse-window display-buffer-in-direction)
-       (direction . bottom)
-       (dedicated . t)
-       (reusable-frames . visible)
-       (window-height . 0.3))))
+(with-eval-after-load 'vterm
+  (push
+   '((lambda (buf _)
+       (dev-term--buffer-p buf))
+     (display-buffer-reuse-window display-buffer-in-direction)
+     (direction . bottom)
+     (dedicated . t)
+     (reusable-frames . visible)
+     (window-height . 0.3))
+   display-buffer-alist))
 
-  (provide 'dev-term)
+(provide 'dev-term)
 
-  ;;; dev/dev-term.el ends here
+;;; dev/dev-term.el ends here
 #+end_src
 
-**** dev/dev-web-core.el
+**** [#B] dev/dev-web-core.el
 :PROPERTIES:
 :CUSTOM_ID: dev-web-core
 :header-args:emacs-lisp: :tangle lisp/dev/dev-web-core.el
@@ -5978,10 +5971,11 @@ The key files are:
                 (count 0))
             (dolist (row rows)
               (let* ((parts (split-string row "|"))
-                     (contact   (nth 0 parts))
-                     (text      (nth 1 parts))
-                     (ts-ns     (string-to-number (or (nth 2 parts) "0")))
-                     (ts        (/ ts-ns 1e9)))
+  		   (contact (nth 0 parts))
+  		   (text    (nth 1 parts))
+  		   (ts-ns   (string-to-number (or (nth 2 parts) "0")))
+  		   (ts-mac  (/ ts-ns 1e9))
+  		   (ts      (+ ts-mac 978307200)))
                 (when (> ts 0)
                   (personal-messages--archive-message contact text ts)
                   (cl-incf count)
