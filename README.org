@@ -227,12 +227,12 @@ Notes:
 
 1. Clone:
 #+begin_src shell
-  git clone --depth 1 https://github.com/ac1965/.emacs.d ~/.emacs.d/
+git clone --depth 1 https://github.com/ac1965/.emacs.d ~/.emacs.d/
 #+end_src
 
 2. Tangle:
 #+begin_src shell
-  EMACS=/Applications/Emacs.app/Contents/MacOS/Emacs make -C ~/.emacs.d/ tangle
+EMACS=/Applications/Emacs.app/Contents/MacOS/Emacs make -C ~/.emacs.d/ tangle
 #+end_src
 
 * Configuration Files
@@ -612,9 +612,10 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;
   ;;; Code:
 
-  (require 'subr-x)
-  (require 'seq)
-  (require 'cl-lib)
+  (eval-when-compile
+    (require 'subr-x)
+    (require 'seq)
+    (require 'cl-lib))
 
   ;; ---------------------------------------------------------------------------
   ;; Internal helpers
@@ -1127,7 +1128,6 @@ Its role is orchestration only.
   ;;; modules.el ends here
 #+end_src
 
-
 *** core/
 :PROPERTIES:
 :CUSTOM_ID: core-modules
@@ -1418,7 +1418,6 @@ Its role is orchestration only.
   ;;; core/core-native.el ends here
 #+end_src
 
-
 **** core/core-session.el
 :PROPERTIES:
 :CUSTOM_ID: core-session
@@ -1435,8 +1434,9 @@ Its role is orchestration only.
   ;;
   ;;; Code:
 
-  (require 'subr-x)
-  (require 'seq)
+  (eval-when-compile
+    (require 'subr-x)
+    (require 'seq))
   (require 'core-session-private)
 
   (defgroup core-session nil
@@ -1506,8 +1506,9 @@ Its role is orchestration only.
   ;;
   ;;; Code:
 
-  (require 'subr-x)
-  (require 'seq)
+  (eval-when-compile
+    (require 'subr-x)
+    (require 'seq))
 
   (defvar core-session--jobs-table (make-hash-table :test 'eq))
   (defvar core-session--periodic-timer nil)
@@ -1728,7 +1729,6 @@ Its role is orchestration only.
   ;;; core-runtime.el ends here
 #+end_src
 
-
 **** core/core-tools.el
 :PROPERTIES:
 :CUSTOM_ID: core-tools
@@ -1750,9 +1750,10 @@ Its role is orchestration only.
         (and (= emacs-major-version major)
              (>= emacs-minor-version minor))))
 
-  (defun core-tools-ensure-directory (dir)
-    (when (and (stringp dir) (not (file-directory-p dir)))
-      (make-directory dir t)))
+  ;; Canonical: my/ensure-directory-exists is defined in early-init.el.
+  ;; Provide core-tools-ensure-directory as a stable alias so existing
+  ;; call sites in other modules continue to work without modification.
+  (defalias 'core-tools-ensure-directory #'my/ensure-directory-exists)
 
   (defun core-tools-feature-present-p (feature)
     (or (featurep feature) (locate-library (symbol-name feature))))
@@ -1989,10 +1990,13 @@ Its role is orchestration only.
   (when (fboundp 'auto-save-visited-mode)
     (auto-save-visited-mode 1))
 
+  (defun core-editing--paredit-setup ()
+    "Enable paredit and disable electric-pair locally (they conflict)."
+    (enable-paredit-mode)
+    (electric-pair-local-mode -1))
+
   (leaf paredit :straight t
-    :hook (emacs-lisp-mode . (lambda ()
-                               (enable-paredit-mode)
-                               (electric-pair-local-mode -1))))
+    :hook (emacs-lisp-mode . core-editing--paredit-setup))
 
   (leaf paren :straight nil
     :custom ((show-paren-delay . 0)
@@ -2000,9 +2004,13 @@ Its role is orchestration only.
              (show-paren-highlight-openparen . t))
     :global-minor-mode show-paren-mode)
 
+  (defun core-editing--puni-minibuffer-off ()
+    "Disable puni-global-mode inside the minibuffer."
+    (puni-global-mode -1))
+
   (leaf puni :straight t
     :global-minor-mode puni-global-mode
-    :hook ((minibuffer-setup . (lambda () (puni-global-mode -1)))))
+    :hook ((minibuffer-setup . core-editing--puni-minibuffer-off)))
 
   (leaf undo-fu :straight t
     :custom ((undo-fu-allow-undo-in-region . t)))
@@ -2302,7 +2310,6 @@ Its role is orchestration only.
   ;;; core/core-custom-ui-extras.el ends here
 #+end_src
 
-
 *** ui/
 :PROPERTIES:
 :CUSTOM_ID: ui-modules
@@ -2348,18 +2355,21 @@ Its role is orchestration only.
     :type 'integer :group 'ui-font)
 
   (defun ui-font--system-default ()
+    "Return the default monospace font family for the current OS."
     (cond ((eq system-type 'darwin)     "Menlo")
           ((eq system-type 'gnu/linux)  "Monospace")
           ((eq system-type 'windows-nt) "Consolas")
           (t "Monospace")))
 
   (defun ui-font--system-emoji ()
+    "Return the default emoji font family for the current OS."
     (cond ((eq system-type 'darwin)     "Apple Color Emoji")
           ((eq system-type 'gnu/linux)  "Noto Color Emoji")
           ((eq system-type 'windows-nt) "Segoe UI Emoji")
           (t "Noto Color Emoji")))
 
   (defun ui-font-apply ()
+    "Apply configured fonts to the current graphical frame."
     (when (display-graphic-p)
       (set-face-attribute 'default nil
                           :family (or ui-font-default (ui-font--system-default))
@@ -2374,6 +2384,7 @@ Its role is orchestration only.
 
   ;;;###autoload
   (defun ui-font-show-current ()
+    "Display the currently active default font."
     (interactive)
     (let ((family (face-attribute 'default :family))
           (height (face-attribute 'default :height)))
@@ -2381,6 +2392,7 @@ Its role is orchestration only.
 
   ;;;###autoload
   (defun ui-font-describe ()
+    "Show detailed information about the current font configuration."
     (interactive)
     (unless (display-graphic-p)
       (user-error "Fonts are only meaningful in graphical frames"))
@@ -2572,6 +2584,17 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
+  ;; This module configures the visual theme layer.
+  ;;
+  ;; Responsibilities:
+  ;;
+  ;; - load nano-emacs theme
+  ;; - configure nano faces
+  ;; - adjust spacing and padding
+  ;; - apply face overrides after theme activation
+  ;;
+  ;; The configuration is idempotent and safe to run multiple times.
+
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -2579,42 +2602,80 @@ Its role is orchestration only.
 
   (setq-default line-spacing 0.24)
 
-  (defvar ui-theme--initialized nil)
+  (defvar ui-theme--initialized nil
+    "Non-nil once the theme configuration has been initialized.
+
+  This flag prevents the theme initialization routine from running
+  multiple times during the same Emacs session.")
 
   (defun ui-theme--apply ()
+    "Initialize and apply the UI theme configuration.
+
+  This function performs the following tasks:
+
+  - Ensures the initialization runs only once
+  - Registers hooks to reapply Nano faces after theme changes
+  - Configures subtree face backgrounds
+  - Loads Nano theme and supporting face configuration
+  - Applies spacing adjustments for graphical displays
+
+  The function is safe to run multiple times but will only execute
+  the initialization logic once."
     (unless ui-theme--initialized
       (setq ui-theme--initialized t)
+
+      ;; Reapply Nano faces when themes are enabled
       (with-eval-after-load 'cus-theme
         (if (boundp 'enable-theme-functions)
             (add-hook 'enable-theme-functions #'my/nano--reapply-after-theme)
           (advice-add 'enable-theme :after #'my/nano--reapply-after-theme)))
+
+      ;; Configure dired-subtree background colors
       (with-eval-after-load 'dired-subtree
         (set-face-attribute 'dired-subtree-depth-1-face nil :background "#e6f4ea")
         (set-face-attribute 'dired-subtree-depth-2-face nil :background "#dff0e3")
         (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
         (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
+
+      ;; Load Nano layout and faces
       (require 'nano-layout)
       (require 'nano-faces)
+
       (nano-faces)
+
+      ;; Strengthen emphasis faces
       (set-face-attribute 'nano-face-strong nil
-                          :foreground (face-foreground 'nano-face-default) :weight 'bold)
+                          :foreground (face-foreground 'nano-face-default)
+                          :weight 'bold)
+
+      ;; Load theme
       (load-theme 'nano t)
+
+      ;; Apply palette adjustments
       (my/nano-apply-faces)
+
+      ;; Ensure emphasis faces behave as expected
       (set-face-attribute 'bold nil :weight 'bold)
       (set-face-attribute 'italic nil :slant 'italic)
+
+      ;; Configure pairing and parenthesis highlighting
       (with-eval-after-load 'elec-pair
         (custom-set-faces
          '(electric-pair-overlay-face ((t (:background "#e5e7eb"))))
          '(show-paren-match ((t (:background "#e5e7eb" :foreground "#111827" :weight bold))))
          '(show-paren-mismatch ((t (:background "#dc2626" :foreground "white" :weight bold))))))
+
+      ;; Graphical display adjustments
       (when (display-graphic-p)
         (spacious-padding-mode 1)
         (my/nano-apply-faces))))
 
   (leaf nano-emacs
     :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs"))
+
   (leaf nano-theme
     :straight (nano-theme :type git :host github :repo "rougier/nano-theme"))
+
   (leaf spacious-padding
     :straight t
     :if (display-graphic-p)
@@ -2624,9 +2685,9 @@ Its role is orchestration only.
   (add-hook 'emacs-startup-hook #'ui-theme--apply)
 
   (provide 'ui-theme)
+
   ;;; ui/ui-theme.el ends here
 #+end_src
-
 
 **** ui/ui-window.el
 :PROPERTIES:
@@ -2701,27 +2762,72 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
+  ;;; Commentary:
+  ;;
+  ;; Miscellaneous UI utilities and integrations.
+  ;;
+  ;; Provides:
+  ;;
+  ;; - mode line compaction via minions
+  ;; - time and battery display
+  ;; - Treemacs configuration
+  ;; - Dired icons
+  ;; - macOS clipboard integration
+  ;;
+  ;; This module intentionally avoids defining core UI policy.
+
   ;;; Code:
 
-  (leaf minions :straight t
+  (eval-when-compile (require 'leaf))
+
+  ;; --------------------------------------------------
+  ;; Mode-line utilities
+  ;; --------------------------------------------------
+
+  (leaf minions
+    :straight t
     :custom ((minions-mode-line-lighter . "⚙"))
     :hook (after-init-hook . minions-mode))
 
-  (setq display-time-interval 30
-        display-time-day-and-date t
-        display-time-24hr-format t)
-  (display-time-mode 1)
-  (when (fboundp 'display-battery-mode) (display-battery-mode 1))
+  ;; --------------------------------------------------
+  ;; Time / battery display
+  ;; --------------------------------------------------
 
-  (leaf treemacs :straight t
+  (leaf time
+    :straight nil
+    :custom ((display-time-interval . 30)
+             (display-time-day-and-date . t)
+             (display-time-24hr-format . t))
+    :hook (after-init-hook . display-time-mode))
+
+  (leaf battery
+    :straight nil
+    :if (fboundp 'display-battery-mode)
+    :hook (after-init-hook . display-battery-mode))
+
+  ;; --------------------------------------------------
+  ;; Treemacs
+  ;; --------------------------------------------------
+
+  (leaf treemacs
+    :straight t
     :if (display-graphic-p)
-    :custom ((treemacs-filewatch-mode . t)
-             (treemacs-follow-mode . t)
-             (treemacs-indentation . 2)
-             (treemacs-missing-project-action . 'remove)))
+    :custom ((treemacs-indentation . 2)
+             (treemacs-missing-project-action . 'remove))
+    :hook ((treemacs-mode-hook . treemacs-filewatch-mode)
+           (treemacs-mode-hook . treemacs-follow-mode)))
 
-  (leaf nerd-icons-dired :straight t
-    :hook (dired-mode . nerd-icons-dired-mode))
+  ;; --------------------------------------------------
+  ;; Dired icons
+  ;; --------------------------------------------------
+
+  (leaf nerd-icons-dired
+    :straight t
+    :hook (dired-mode-hook . nerd-icons-dired-mode))
+
+  ;; --------------------------------------------------
+  ;; macOS clipboard
+  ;; --------------------------------------------------
 
   (leaf pbcopy
     :if (memq window-system '(mac ns))
@@ -2729,6 +2835,7 @@ Its role is orchestration only.
     :config (turn-on-pbcopy))
 
   (provide 'ui-utils)
+
   ;;; ui/ui-utils.el ends here
 #+end_src
 
@@ -2746,28 +2853,64 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
+  ;;; Commentary:
+  ;;
+  ;; Displays lightweight session health indicators in the mode line.
+  ;;
+  ;; The indicators include:
+  ;;
+  ;;  - number of buffers
+  ;;  - number of running processes
+  ;;  - number of Eglot-managed buffers
+  ;;
+  ;; These metrics provide quick visibility into Emacs session load and
+  ;; background activity without introducing heavy instrumentation.
+
   ;;; Code:
 
   (eval-when-compile (require 'leaf) (require 'subr-x))
 
-  (defgroup ui-health-modeline nil "Mode-line indicators for session health." :group 'mode-line)
+  (defgroup ui-health-modeline nil
+    "Mode-line indicators for session health."
+    :group 'mode-line)
 
-  (defcustom ui-health-show-buffers-p t :type 'boolean :group 'ui-health-modeline)
-  (defcustom ui-health-show-processes-p t :type 'boolean :group 'ui-health-modeline)
-  (defcustom ui-health-show-eglot-p t :type 'boolean :group 'ui-health-modeline)
+  (defcustom ui-health-show-buffers-p t
+    "If non-nil, display the number of live buffers."
+    :type 'boolean
+    :group 'ui-health-modeline)
 
-  (defvar ui-health--mode-line-string "")
+  (defcustom ui-health-show-processes-p t
+    "If non-nil, display the number of running processes."
+    :type 'boolean
+    :group 'ui-health-modeline)
 
-  (defun ui-health--buffers-count () (length (buffer-list)))
-  (defun ui-health--processes-count () (length (process-list)))
+  (defcustom ui-health-show-eglot-p t
+    "If non-nil, display the number of Eglot-managed buffers."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defvar ui-health--mode-line-string ""
+    "Mode-line string containing session health indicators.")
+
+  (defun ui-health--buffers-count ()
+    "Return the number of live buffers."
+    (length (buffer-list)))
+
+  (defun ui-health--processes-count ()
+    "Return the number of active processes."
+    (length (process-list)))
 
   (defun ui-health--eglot-count ()
+    "Return the number of buffers currently managed by Eglot.
+
+  Returns nil when Eglot is not loaded or unavailable."
     (when (and ui-health-show-eglot-p
                (featurep 'eglot)
-               (boundp 'eglot--managed-buffers))
-      (length eglot--managed-buffers)))
+               (fboundp 'eglot-managed-buffers))
+      (length (eglot-managed-buffers))))
 
   (defun ui-health--update ()
+    "Update the mode-line session health indicators."
     (setq ui-health--mode-line-string
           (concat
            (when ui-health-show-buffers-p
@@ -2783,7 +2926,7 @@ Its role is orchestration only.
 
   (with-eval-after-load 'eglot
     (add-hook 'eglot-managed-mode-hook #'ui-health--update)
-    (add-hook 'eglot-server-stopped-hook #'ui-health--update))
+    (add-hook 'eglot-shutdown-hook #'ui-health--update))
 
   (unless (member 'ui-health--mode-line-string global-mode-string)
     (setq global-mode-string
@@ -2792,6 +2935,7 @@ Its role is orchestration only.
   (ui-health--update)
 
   (provide 'ui-health-modeline)
+
   ;;; ui/ui-health-modeline.el ends here
 #+end_src
 
@@ -2809,6 +2953,22 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
+  ;;; Commentary:
+  ;;
+  ;; UI integration for symbol navigation using Imenu.
+  ;;
+  ;; Provides a side-panel symbol outline using `imenu-list'.
+  ;; This module does not change Imenu semantics and only adds
+  ;; a convenient visual index for navigating large buffers.
+  ;;
+  ;; Features:
+  ;;
+  ;; - left-side symbol tree
+  ;; - automatic focus on activation
+  ;; - lightweight integration with major modes supporting Imenu
+  ;;
+  ;; The module intentionally keeps the configuration minimal.
+
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -2816,12 +2976,15 @@ Its role is orchestration only.
 
   (leaf imenu-list
     :straight t
-    :commands (imenu-list-minor-mode imenu-list-display-dwim imenu-list-stop-timer)
+    :commands (imenu-list-minor-mode
+               imenu-list-display-dwim
+               imenu-list-stop-timer)
     :custom ((imenu-list-position . 'left)
              (imenu-list-size . 36)
              (imenu-list-focus-after-activation . t)))
 
   (provide 'ui-imenu)
+
   ;;; ui/ui-imenu.el ends here
 #+end_src
 
@@ -2839,32 +3002,114 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
+  ;;; Commentary:
+  ;;
+  ;; Leader key infrastructure providing hierarchical keymaps.
+  ;;
+  ;; This module defines the root leader key and a set of prefix
+  ;; keymaps used throughout the UI layer.  It does not assign
+  ;; commands; it only provides the map structure.
+  ;;
+  ;; Typical layout:
+  ;;
+  ;; C-c SPC
+  ;; ├─ b  buffers
+  ;; ├─ w  windows
+  ;; ├─ p  projects
+  ;; ├─ g  git
+  ;; ├─ c  code
+  ;; ├─ e  evaluation
+  ;; ├─ t  toggles
+  ;; ├─ o  open
+  ;; ├─ m  mode/local
+  ;; ├─ a  applications
+  ;; ├─ q  quit/session
+  ;; └─ h  help
+  ;;
+  ;; Command bindings are defined in other modules.
+
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
 
-  (defgroup ui-leader nil "Leader key infrastructure." :group 'convenience)
+  (defgroup ui-leader nil
+    "Leader key infrastructure."
+    :group 'convenience)
 
-  (defcustom ui-leader-key "C-c SPC" :type 'string :group 'ui-leader)
-  (defcustom ui-leader-local-suffix "m" :type 'string :group 'ui-leader)
-  (defcustom ui-leader-enable-p t :type 'boolean :group 'ui-leader)
+  (defcustom ui-leader-key "C-c SPC"
+    "Root key sequence used for the leader key."
+    :type 'string
+    :group 'ui-leader)
 
-  (defvar ui-leader-map nil)
-  (defvar ui-leader-b-map nil) (defvar ui-leader-w-map nil)
-  (defvar ui-leader-p-map nil) (defvar ui-leader-g-map nil)
-  (defvar ui-leader-c-map nil) (defvar ui-leader-e-map nil)
-  (defvar ui-leader-t-map nil) (defvar ui-leader-o-map nil)
-  (defvar ui-leader-m-map nil) (defvar ui-leader-a-map nil)
-  (defvar ui-leader-q-map nil) (defvar ui-leader-h-map nil)
+  (defcustom ui-leader-local-suffix "m"
+    "Suffix used for the local leader map."
+    :type 'string
+    :group 'ui-leader)
+
+  (defcustom ui-leader-enable-p t
+    "If non-nil, enable the leader key infrastructure."
+    :type 'boolean
+    :group 'ui-leader)
+
+  (defvar ui-leader-map nil
+    "Root leader keymap.")
+
+  (defvar ui-leader-b-map nil
+    "Leader keymap for buffer-related commands.")
+
+  (defvar ui-leader-w-map nil
+    "Leader keymap for window management.")
+
+  (defvar ui-leader-p-map nil
+    "Leader keymap for project operations.")
+
+  (defvar ui-leader-g-map nil
+    "Leader keymap for Git commands.")
+
+  (defvar ui-leader-c-map nil
+    "Leader keymap for code-related actions.")
+
+  (defvar ui-leader-e-map nil
+    "Leader keymap for evaluation commands.")
+
+  (defvar ui-leader-t-map nil
+    "Leader keymap for toggle commands.")
+
+  (defvar ui-leader-o-map nil
+    "Leader keymap for open/navigation commands.")
+
+  (defvar ui-leader-m-map nil
+    "Leader keymap for mode-local commands.")
+
+  (defvar ui-leader-a-map nil
+    "Leader keymap for application commands.")
+
+  (defvar ui-leader-q-map nil
+    "Leader keymap for quit/session commands.")
+
+  (defvar ui-leader-h-map nil
+    "Leader keymap for help commands.")
 
   (defun ui-leader--define-maps ()
-    (unless (keymapp ui-leader-map) (define-prefix-command 'ui-leader-map))
-    (dolist (sym '(ui-leader-b-map ui-leader-w-map ui-leader-p-map
-                   ui-leader-g-map ui-leader-c-map ui-leader-e-map
-                   ui-leader-t-map ui-leader-o-map ui-leader-m-map
-                   ui-leader-a-map ui-leader-q-map ui-leader-h-map))
+    "Create leader keymaps if they are not already defined."
+    (unless (keymapp ui-leader-map)
+      (define-prefix-command 'ui-leader-map))
+
+    (dolist (sym '(ui-leader-b-map
+                   ui-leader-w-map
+                   ui-leader-p-map
+                   ui-leader-g-map
+                   ui-leader-c-map
+                   ui-leader-e-map
+                   ui-leader-t-map
+                   ui-leader-o-map
+                   ui-leader-m-map
+                   ui-leader-a-map
+                   ui-leader-q-map
+                   ui-leader-h-map))
       (unless (keymapp (symbol-value sym))
         (define-prefix-command sym)))
+
     (define-key ui-leader-map (kbd "b") 'ui-leader-b-map)
     (define-key ui-leader-map (kbd "w") 'ui-leader-w-map)
     (define-key ui-leader-map (kbd "p") 'ui-leader-p-map)
@@ -2879,15 +3124,18 @@ Its role is orchestration only.
     (define-key ui-leader-map (kbd "h") 'ui-leader-h-map))
 
   (defun ui-leader--bind-root ()
+    "Bind the root leader key globally."
     (when ui-leader-enable-p
       (ui-leader--define-maps)
       (cond ((fboundp 'keymap-global-set)
              (keymap-global-set ui-leader-key 'ui-leader-map))
-            (t (global-set-key (kbd ui-leader-key) 'ui-leader-map)))))
+            (t
+             (global-set-key (kbd ui-leader-key) 'ui-leader-map)))))
 
   (add-hook 'after-init-hook #'ui-leader--bind-root)
 
   (provide 'ui-leader)
+
   ;;; ui-leader.el ends here
 #+end_src
 
@@ -2905,17 +3153,41 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
+  ;;; Commentary:
+  ;;
+  ;; Optional Hydra helpers used by the UI layer.
+  ;;
+  ;; Hydras provide small transient keymaps for interactive
+  ;; adjustments such as text scaling.
+  ;;
+  ;; This module lazily defines hydras only when they are
+  ;; first invoked, allowing the configuration to operate
+  ;; correctly even when the `hydra' package is not installed.
+
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
 
-  (defgroup ui-hydra nil "Hydra helpers for UI." :group 'convenience)
-  (defcustom ui-hydra-enable-p t :type 'boolean :group 'ui-hydra)
+  (defgroup ui-hydra nil
+    "Hydra helpers for UI."
+    :group 'convenience)
 
-  (defvar ui-hydra-text-scale--defined nil)
+  (defcustom ui-hydra-enable-p t
+    "If non-nil, enable optional Hydra helpers."
+    :type 'boolean
+    :group 'ui-hydra)
+
+  (defvar ui-hydra-text-scale--defined nil
+    "Non-nil once the text scale hydra has been defined.")
 
   (defun ui-hydra-define-text-scale ()
-    (interactive)
+    "Define the text scale hydra if Hydra is available.
+
+  The hydra provides quick access to:
+
+  - increase text scale
+  - decrease text scale
+  - reset scaling"
     (when (and ui-hydra-enable-p
                (not ui-hydra-text-scale--defined)
                (require 'hydra nil t))
@@ -2931,13 +3203,17 @@ Its role is orchestration only.
         ("q" nil "quit" :color blue))))
 
   (defun ui-hydra-text-scale/body ()
+    "Activate the text scaling hydra.
+
+  If Hydra is not installed, signal a user error."
     (interactive)
     (ui-hydra-define-text-scale)
     (if (fboundp 'ui-hydra-text-scale/body)
         (call-interactively 'ui-hydra-text-scale/body)
-      (user-error "hydra is not available")))
+      (user-error "Hydra is not available")))
 
   (provide 'ui-hydra)
+
   ;;; ui-hydra.el ends here
 #+end_src
 
@@ -2955,19 +3231,52 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
-  ;; Uses Emacs 30+ built-in which-key when available; falls back to the
-  ;; standalone package for earlier versions.
+  ;;; Commentary:
   ;;
+  ;; which-key integration for leader key infrastructure.
+  ;;
+  ;; Emacs 30+ includes which-key as a built-in package.  On earlier
+  ;; versions we install the standalone package.
+  ;;
+  ;; This module configures:
+  ;;
+  ;; - which-key activation
+  ;; - leader key prefix labels
+  ;; - idle delay configuration
+  ;;
+  ;; The module does not define leader bindings; it only enhances their
+  ;; discoverability in the minibuffer popup.
+
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
 
-  (defgroup ui-which-key nil "which-key integration." :group 'convenience)
-  (defcustom ui-which-key-enable-p t :type 'boolean :group 'ui-which-key)
-  (defcustom ui-which-key-idle-delay 0.4 :type 'number :group 'ui-which-key)
+  (defgroup ui-which-key nil
+    "which-key integration."
+    :group 'convenience)
+
+  (defcustom ui-which-key-enable-p t
+    "If non-nil, enable which-key integration."
+    :type 'boolean
+    :group 'ui-which-key)
+
+  (defcustom ui-which-key-idle-delay 0.4
+    "Idle delay in seconds before which-key popup appears."
+    :type 'number
+    :group 'ui-which-key)
+
+  ;; Emacs 30+: built-in which-key
+  (leaf which-key
+    :straight nil
+    :if (version<= "30.0" emacs-version))
+
+  ;; Emacs < 30: external package
+  (leaf which-key
+    :straight t
+    :if (version< emacs-version "30.0"))
 
   (defun ui-which-key--label-leader-groups ()
+    "Attach descriptive labels to leader key prefixes for which-key."
     (when (and (featurep 'which-key)
                (fboundp 'which-key-add-key-based-replacements)
                (boundp 'ui-leader-key)
@@ -2989,19 +3298,17 @@ Its role is orchestration only.
           (which-key-add-key-based-replacements (car it) (cdr it))))))
 
   (defun ui-which-key--startup-init ()
-    (when ui-which-key-enable-p
-      ;; Emacs 30+ ships which-key as a built-in; prefer it over the package.
-      (let ((available (if (version<= "30.0" emacs-version)
-                           (require 'which-key nil t)
-                         (require 'which-key nil t))))
-        (when available
-          (setq which-key-idle-delay ui-which-key-idle-delay)
-          (which-key-mode 1)
-          (ui-which-key--label-leader-groups)))))
+    "Initialize which-key integration at startup."
+    (when (and ui-which-key-enable-p
+               (require 'which-key nil t))
+      (setopt which-key-idle-delay ui-which-key-idle-delay)
+      (which-key-mode 1)
+      (ui-which-key--label-leader-groups)))
 
   (add-hook 'after-init-hook #'ui-which-key--startup-init)
 
   (provide 'ui-which-key)
+
   ;;; ui-which-key.el ends here
 #+end_src
 
@@ -3019,41 +3326,70 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
+  ;;; Commentary:
+  ;;
+  ;; Leader key bindings and keyboard translation helpers.
+  ;;
+  ;; This module defines:
+  ;;
+  ;; - global leader bindings
+  ;; - local leader bindings for major modes
+  ;; - optional keyboard translation (C-h → DEL)
+  ;;
+  ;; The leader key infrastructure itself is defined in `ui-leader.el`.
+  ;; This module only attaches commands to those maps.
+
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
   (require 'ui-leader nil t)
 
-  (defgroup ui-keyboard nil "Keyboard translation helpers." :group 'ui)
+  (defgroup ui-keyboard nil
+    "Keyboard translation helpers."
+    :group 'ui)
 
   (defcustom ui-keyboard-map-c-h-to-del t
     "If non-nil, translate C-h to DEL (Backspace)."
-    :type 'boolean :group 'ui-keyboard)
+    :type 'boolean
+    :group 'ui-keyboard)
 
-  (defvar ui-keyboard--translation-active-p nil)
+  (defvar ui-keyboard--translation-active-p nil
+    "Non-nil when the C-h → DEL translation is currently active.")
 
   (defun ui-keyboard--apply ()
+    "Apply or remove keyboard translations according to configuration."
     (cond
-     ((and ui-keyboard-map-c-h-to-del (not ui-keyboard--translation-active-p))
+     ((and ui-keyboard-map-c-h-to-del
+           (not ui-keyboard--translation-active-p))
       (define-key key-translation-map (kbd "C-h") (kbd "DEL"))
       (setq ui-keyboard--translation-active-p t))
-     ((and (not ui-keyboard-map-c-h-to-del) ui-keyboard--translation-active-p)
+     ((and (not ui-keyboard-map-c-h-to-del)
+           ui-keyboard--translation-active-p)
       (define-key key-translation-map (kbd "C-h") nil)
       (setq ui-keyboard--translation-active-p nil))))
 
   (ui-keyboard--apply)
-  (add-variable-watcher 'ui-keyboard-map-c-h-to-del
-                        (lambda (_sym _newval _op _where) (ui-keyboard--apply)))
+
+  (add-variable-watcher
+   'ui-keyboard-map-c-h-to-del
+   (lambda (_sym _newval _op _where)
+     (ui-keyboard--apply)))
 
   (defun ui-keymap--bind (map key cmd)
-    (when (and (symbolp map) (boundp map) (keymapp (symbol-value map)))
+    "Bind KEY to CMD inside MAP when MAP exists."
+    (when (and (symbolp map)
+               (boundp map)
+               (keymapp (symbol-value map)))
       (define-key (symbol-value map) (kbd key) cmd)))
 
   (defun ui-keymap--leader-bind (key cmd)
-    (when (and (boundp 'ui-leader-map) (keymapp ui-leader-map))
+    "Bind KEY to CMD in the root leader map."
+    (when (and (boundp 'ui-leader-map)
+               (keymapp ui-leader-map))
       (define-key ui-leader-map (kbd key) cmd)))
 
   (defun ui-keymap--leader-binds ()
+    "Install global leader key bindings."
     (ui-keymap--leader-bind "SPC" #'execute-extended-command)
     (ui-keymap--leader-bind "."   #'other-window)
     (ui-keymap--leader-bind "f"   #'find-file)
@@ -3063,38 +3399,49 @@ Its role is orchestration only.
     (ui-keymap--leader-bind "/"   #'consult-line)
     (ui-keymap--leader-bind "s r" #'consult-ripgrep)
     (ui-keymap--leader-bind "s m" #'consult-imenu)
+
     (ui-keymap--bind 'ui-leader-b-map "b" #'consult-buffer)
     (ui-keymap--bind 'ui-leader-b-map "n" #'next-buffer)
     (ui-keymap--bind 'ui-leader-b-map "p" #'previous-buffer)
     (ui-keymap--bind 'ui-leader-b-map "r" #'revert-buffer)
+
     (ui-keymap--bind 'ui-leader-w-map "s" #'split-window-below)
     (ui-keymap--bind 'ui-leader-w-map "v" #'split-window-right)
     (ui-keymap--bind 'ui-leader-w-map "d" #'delete-window)
     (ui-keymap--bind 'ui-leader-w-map "o" #'delete-other-windows)
     (ui-keymap--bind 'ui-leader-w-map "=" #'balance-windows)
+
     (ui-keymap--bind 'ui-leader-p-map "p" #'project-switch-project)
     (ui-keymap--bind 'ui-leader-p-map "f" #'project-find-file)
     (ui-keymap--bind 'ui-leader-p-map "d" #'project-dired)
+
     (ui-keymap--bind 'ui-leader-g-map "s" #'magit-status)
     (ui-keymap--bind 'ui-leader-g-map "c" #'magit-commit)
+
     (ui-keymap--bind 'ui-leader-c-map "a" #'dev-lsp-code-actions)
     (ui-keymap--bind 'ui-leader-c-map "r" #'dev-lsp-rename)
     (ui-keymap--bind 'ui-leader-c-map "f" #'dev-lsp-format-buffer)
     (ui-keymap--bind 'ui-leader-c-map "d" #'xref-find-definitions)
     (ui-keymap--bind 'ui-leader-c-map "R" #'xref-find-references)
+
     (ui-keymap--bind 'ui-leader-e-map "n" #'flymake-goto-next-error)
     (ui-keymap--bind 'ui-leader-e-map "p" #'flymake-goto-prev-error)
+
     (ui-keymap--bind 'ui-leader-t-map "w" #'whitespace-mode)
     (ui-keymap--bind 'ui-leader-t-map "r" #'read-only-mode)
+
     (ui-keymap--bind 'ui-leader-o-map "a" #'org-agenda)
     (ui-keymap--bind 'ui-leader-o-map "c" #'org-capture)
+
     (ui-keymap--bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
 
   (defun ui-keymap--local-leader-binds ()
+    "Install local leader bindings for specific major modes."
     (with-eval-after-load 'dired
       (when (boundp 'dired-mode-map)
         (define-key dired-mode-map (kbd "TAB") #'dired-subtree-toggle)
         (define-key dired-mode-map (kbd "i")   #'dired-subtree-insert)))
+
     (with-eval-after-load 'org
       (when (boundp 'org-mode-map)
         (define-key org-mode-map (kbd "C-c SPC m t") #'org-todo)
@@ -3102,12 +3449,14 @@ Its role is orchestration only.
         (define-key org-mode-map (kbd "C-c SPC m d") #'org-deadline))))
 
   (defun ui-keymap--startup-init ()
+    "Initialize UI key bindings at startup."
     (ui-keymap--leader-binds)
     (ui-keymap--local-leader-binds))
 
   (add-hook 'after-init-hook #'ui-keymap--startup-init)
 
   (provide 'ui-keymap)
+
   ;;; ui/ui-keymap.el ends here
 #+end_src
 
@@ -3217,7 +3566,6 @@ Its role is orchestration only.
   (provide 'ui-macos)
   ;;; ui/ui-macos.el ends here
 #+end_src
-
 
 *** auth/
 :PROPERTIES:
@@ -3628,7 +3976,7 @@ Its role is orchestration only.
   ;;; completion/completion-orderless-org-src.el ends here
 #+end_src
 
-**** completion/completion-lsp.el  ← [FIX 1: eglot--servers 内部変数を公開API置換]
+**** completion/completion-lsp.el
 :PROPERTIES:
 :CUSTOM_ID: completion-lsp
 :header-args:emacs-lisp: :tangle lisp/completion/completion-lsp.el
@@ -3713,13 +4061,12 @@ Its role is orchestration only.
   ;;; completion/completion-lsp.el ends here
 #+end_src
 
-
 *** orgx/
 :PROPERTIES:
 :CUSTOM_ID: orgx-modules
 :END:
 
-**** orgx/orgx-core.el  ← [FIX 2: レイヤー違反解消・二重スキャン排除]
+**** orgx/orgx-core.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-core
 :header-args:emacs-lisp: :tangle lisp/orgx/orgx-core.el
@@ -3806,6 +4153,7 @@ Its role is orchestration only.
   (with-eval-after-load 'org
     (let* ((central (expand-file-name "archive.org"
                                       (or (bound-and-true-p org-directory)
+                                          (bound-and-true-p my:d:org)
                                           (expand-file-name "~/org")))))
       (setopt org-archive-location (concat central "::"))))
 
@@ -3928,16 +4276,17 @@ Its role is orchestration only.
          (message "[org-roam] skip hash: %s (%s)" file (error-message-string err))
          nil)))
 
+    (defun orgx--org-roam-autosync-enable ()
+      "Enable org-roam autosync (called from idle timer)."
+      (when (fboundp 'org-roam-db-autosync-mode)
+        (org-roam-db-autosync-mode 1)
+        (message "[org-roam] autosync enabled (delayed)")))
+
     (with-eval-after-load 'org-roam
       (when (fboundp 'org-roam-db--file-hash)
         (advice-add 'org-roam-db--file-hash :around #'orgx--org-roam-file-hash-guard)))
 
-    (run-with-idle-timer
-     5 nil
-     (lambda ()
-       (when (fboundp 'org-roam-db-autosync-mode)
-         (org-roam-db-autosync-mode 1)
-         (message "[org-roam] autosync enabled (delayed)")))))
+    (run-with-idle-timer 5 nil #'orgx--org-roam-autosync-enable))
 
   (leaf org-download :straight t :custom ((org-download-image-dir . my:d:org-pictures)))
   (leaf toc-org :straight t :hook ((org-mode . toc-org-enable) (markdown-mode . toc-org-mode)))
@@ -4035,31 +4384,61 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
+  ;;; Commentary:
+  ;;
+  ;; Lightweight Markdown note system stored under the Org directory.
+  ;;
+  ;; This module provides:
+  ;;
+  ;; - notebook-style directory structure
+  ;; - timestamped Markdown note creation
+  ;; - Pandoc-based Markdown editing
+  ;; - consult-ripgrep integration for searching notes
+  ;; - org-download integration for images
+  ;;
+  ;; The system is intentionally minimal and avoids complex
+  ;; knowledge graph frameworks.
+
   ;;; Code:
 
   (eval-when-compile (require 'leaf) (require 'subr-x))
 
-  (defgroup my:notes nil "Prose-oriented Markdown notes under Org directory." :group 'convenience)
+  (defgroup my:notes nil
+    "Prose-oriented Markdown notes stored under the Org directory."
+    :group 'convenience)
 
-  (defcustom my:notes-directory-name "notes" :type 'string)
-  (defcustom my:notes-default-notebooks '("inbox" "work" "life" "ideas" "archive")
-    :type '(repeat string))
+  (defcustom my:notes-directory-name "notes"
+    "Name of the notes directory located under `my:d:org'."
+    :type 'string
+    :group 'my:notes)
+
+  (defcustom my:notes-default-notebooks
+    '("inbox" "work" "life" "ideas" "archive")
+    "Default notebook directories created under the notes root."
+    :type '(repeat string)
+    :group 'my:notes)
 
   (defvar my:d:notes
-    (expand-file-name my:notes-directory-name my:d:org))
+    (expand-file-name my:notes-directory-name my:d:org)
+    "Root directory for Markdown notes.")
 
   (defun my/notes--ensure-root ()
-    (unless (file-directory-p my:d:notes) (make-directory my:d:notes t))
+    "Ensure the notes directory and default notebooks exist."
+    (unless (file-directory-p my:d:notes)
+      (make-directory my:d:notes t))
     (dolist (name my:notes-default-notebooks)
       (let ((dir (expand-file-name name my:d:notes)))
-        (unless (file-directory-p dir) (make-directory dir t)))))
+        (unless (file-directory-p dir)
+          (make-directory dir t)))))
 
   (defun my/notes--slugify (title)
+    "Convert TITLE into a filesystem-safe slug."
     (let* ((lower (downcase title))
-           (repl  (replace-regexp-in-string "[^[:alnum:]]+" "-" lower)))
+           (repl (replace-regexp-in-string "[^[:alnum:]]+" "-" lower)))
       (string-trim repl "-+" "-+")))
 
   (defun my/notes-new-note (notebook title)
+    "Create a new Markdown note in NOTEBOOK with TITLE."
     (interactive
      (progn
        (my/notes--ensure-root)
@@ -4073,23 +4452,28 @@ Its role is orchestration only.
            (timestamp (format-time-string "%Y%m%d-%H%M%S"))
            (filename (format "%s-%s.md" timestamp slug))
            (path (expand-file-name filename dir)))
-      (unless (file-directory-p dir) (make-directory dir t))
+      (unless (file-directory-p dir)
+        (make-directory dir t))
       (find-file path)
       (when (= (buffer-size) 0)
-        (insert (format "---\ntitle: %s\nnotebook: %s\ntags: []\ncreated: %s\nupdated: %s\n---\n\n"
-                        title notebook
-                        (format-time-string "%Y-%m-%d")
-                        (format-time-string "%Y-%m-%d")))
+        (insert
+         (format
+          "---\ntitle: %s\nnotebook: %s\ntags: []\ncreated: %s\nupdated: %s\n---\n\n"
+          title notebook
+          (format-time-string "%Y-%m-%d")
+          (format-time-string "%Y-%m-%d")))
         (save-buffer))))
 
   (defun my/notes-open-root ()
+    "Open the notes root directory in Dired."
     (interactive)
     (my/notes--ensure-root)
     (dired my:d:notes))
 
   (leaf markdown-mode
     :straight t
-    :mode (("\\.md\\'" . gfm-mode) ("README\\.md\\'" . gfm-mode))
+    :mode (("\\.md\\'" . gfm-mode)
+           ("README\\.md\\'" . gfm-mode))
     :hook ((markdown-mode . visual-line-mode)
            (markdown-mode . variable-pitch-mode)
            (markdown-mode . my/notes-markdown-visual-fill))
@@ -4097,17 +4481,20 @@ Its role is orchestration only.
              (markdown-fontify-code-blocks-natively . t))
     :config
     (defun my/markdown-toggle-live-preview ()
+      "Toggle live preview mode in Markdown buffers."
       (interactive)
       (if (bound-and-true-p markdown-live-preview-mode)
           (markdown-live-preview-mode -1)
         (markdown-live-preview-mode 1)))
-    (define-key markdown-mode-map (kbd "C-c C-p") #'my/markdown-toggle-live-preview))
+    (define-key markdown-mode-map (kbd "C-c C-p")
+                #'my/markdown-toggle-live-preview))
 
   (leaf visual-fill-column
     :straight nil
     :commands (visual-fill-column-mode)
     :init
     (defun my/notes-markdown-visual-fill ()
+      "Enable centered writing layout for Markdown notes."
       (setq-local visual-fill-column-width 100)
       (setq-local visual-fill-column-center-text t)
       (visual-fill-column-mode 1)))
@@ -4118,6 +4505,7 @@ Its role is orchestration only.
     :require t
     :init
     (defun my/notes-consult-ripgrep ()
+      "Search Markdown notes using consult-ripgrep."
       (interactive)
       (my/notes--ensure-root)
       (let ((default-directory my:d:notes))
@@ -4128,12 +4516,14 @@ Its role is orchestration only.
 
   (with-eval-after-load 'org-download
     (defun my/notes-markdown-org-download-setup ()
+      "Configure org-download integration for Markdown notes."
       (setq-local org-download-link-format "![](%s)")
       (setq-local org-download-image-dir "./images")
       (org-download-enable))
     (add-hook 'markdown-mode-hook #'my/notes-markdown-org-download-setup))
 
   (provide 'orgx-notes-markdown)
+
   ;;; orgx/orgx-notes-markdown.el ends here
 #+end_src
 
@@ -4203,7 +4593,6 @@ Its role is orchestration only.
   ;;; orgx/orgx-typography.el ends here
 #+end_src
 
-
 *** dev/
 :PROPERTIES:
 :CUSTOM_ID: dev-modules
@@ -4264,12 +4653,17 @@ Its role is orchestration only.
     :straight t
     :commands (eglot eglot-ensure)
     :custom ((eglot-autoreconnect . t))
-    :hook ((prog-mode . (lambda () (when (my/eglot-guessable-p) (eglot-ensure))))))
+    :hook ((prog-mode . my/lsp-eglot--maybe-ensure)))
+
+  ;;;###autoload
+  (defun my/lsp-eglot--maybe-ensure ()
+    "Enable eglot in the current buffer when the project is guessable."
+    (when (my/eglot-guessable-p) (eglot-ensure)))
 
   ;;;###autoload
   (defun my/lsp-enable-eglot ()
     (interactive)
-    (add-hook 'prog-mode-hook (lambda () (when (my/eglot-guessable-p) (eglot-ensure))))
+    (add-hook 'prog-mode-hook #'my/lsp-eglot--maybe-ensure)
     (message "[lsp] Eglot enabled."))
 
   (provide 'dev-lsp-eglot)
@@ -4378,8 +4772,11 @@ Its role is orchestration only.
      (list "--input-history-file" (getenv "AIDER_INPUT_HISTORY_FILE")
            "--chat-history-file"  (getenv "AIDER_CHAT_HISTORY_FILE")
            "--llm-history-file"   (getenv "AIDER_LLM_HISTORY_FILE")))
+    ;; Use vterm when available; silently fall back to comint otherwise.
+    ;; No warning is emitted: comint is a fully supported backend and the
+    ;; absence of vterm is a normal configuration, not an error condition.
     (setopt aidermacs-backend
-          (if (require 'vterm nil 'noerror) 'vterm 'comint)))
+            (if (require 'vterm nil 'noerror) 'vterm 'comint)))
 
   (provide 'dev-ai)
   ;;; dev/dev-ai.el ends here
@@ -4393,61 +4790,112 @@ Its role is orchestration only.
 #+begin_src emacs-lisp
   ;;; dev/dev-term.el --- Terminal integration helpers -*- lexical-binding: t; -*-
   ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Terminal integration helpers based on vterm.
+  ;;
+  ;; Provides:
+  ;;
+  ;; - Nano palette integration for terminal colors
+  ;; - project-scoped terminal toggling via vterm-toggle
+  ;; - bottom-docked terminal window display
+  ;;
+  ;; The color palette is sourced from `ui-nano-palette.el`.
+
   ;;; Code:
 
   (eval-when-compile (require 'leaf) (require 'cl-lib))
   (require 'ui-nano-palette)
 
   (defun my/vterm-apply-palette ()
-    (defvar nano-color-foreground "#374151")
-    (defvar nano-color-background "#fafafa")
-    (defvar nano-color-salient    "#2563eb")
-    (defvar nano-color-popout     "#6b7280")
-    (defvar nano-color-critical   "#dc2626")
-    (defvar nano-color-strong     "#111827")
-    (defvar nano-color-faded      "#9ca3af")
-    (defvar nano-color-subtle     "#e5e7eb")
+    "Apply the Nano color palette to vterm faces."
     (cl-labels
         ((safe-face-set (face &rest props)
-           (when (facep face) (apply #'set-face-attribute face nil props))))
+           (when (facep face)
+             (apply #'set-face-attribute face nil props))))
       (if (facep 'vterm-color-default)
           (safe-face-set 'vterm-color-default
-                         :foreground nano-color-foreground :background nano-color-background)
-        (safe-face-set 'vterm :foreground nano-color-foreground :background nano-color-background))
-      (safe-face-set 'vterm-color-black   :foreground nano-color-strong   :background 'unspecified)
-      (safe-face-set 'vterm-color-red     :foreground nano-color-critical :background 'unspecified)
-      (safe-face-set 'vterm-color-green   :foreground "#10b981"           :background 'unspecified)
-      (safe-face-set 'vterm-color-yellow  :foreground nano-color-popout   :background 'unspecified)
-      (safe-face-set 'vterm-color-blue    :foreground nano-color-salient  :background 'unspecified)
-      (safe-face-set 'vterm-color-magenta :foreground "#a21caf"           :background 'unspecified)
-      (safe-face-set 'vterm-color-cyan    :foreground "#0891b2"           :background 'unspecified)
-      (safe-face-set 'vterm-color-white   :foreground nano-color-subtle   :background 'unspecified)))
+                         :foreground nano-color-foreground
+                         :background nano-color-background)
+        (safe-face-set 'vterm
+                       :foreground nano-color-foreground
+                       :background nano-color-background))
+
+      (safe-face-set 'vterm-color-black
+                     :foreground nano-color-strong
+                     :background 'unspecified)
+
+      (safe-face-set 'vterm-color-red
+                     :foreground nano-color-critical
+                     :background 'unspecified)
+
+      (safe-face-set 'vterm-color-green
+                     :foreground "#10b981"
+                     :background 'unspecified)
+
+      (safe-face-set 'vterm-color-yellow
+                     :foreground nano-color-popout
+                     :background 'unspecified)
+
+      (safe-face-set 'vterm-color-blue
+                     :foreground nano-color-salient
+                     :background 'unspecified)
+
+      (safe-face-set 'vterm-color-magenta
+                     :foreground "#a21caf"
+                     :background 'unspecified)
+
+      (safe-face-set 'vterm-color-cyan
+                     :foreground "#0891b2"
+                     :background 'unspecified)
+
+      (safe-face-set 'vterm-color-white
+                     :foreground nano-color-subtle
+                     :background 'unspecified)))
 
   (defun my/vterm-buffer-p (buf)
+    "Return non-nil if BUF is a vterm buffer."
     (with-current-buffer buf
-      (or (eq major-mode 'vterm-mode) (string-prefix-p "*vterm" (buffer-name buf)))))
+      (or (eq major-mode 'vterm-mode)
+          (string-prefix-p "*vterm" (buffer-name buf)))))
 
-  (leaf vterm :straight t
+  (leaf vterm
+    :straight t
     :config
     (my/vterm-apply-palette)
+
     (with-eval-after-load 'cus-theme
       (if (boundp 'enable-theme-functions)
           (add-hook 'enable-theme-functions #'my/vterm-apply-palette)
-        (advice-add 'enable-theme :after (lambda (&rest _) (my/vterm-apply-palette))))))
+        (advice-add 'enable-theme
+                    :after
+                    (lambda (&rest _)
+                      (my/vterm-apply-palette))))))
 
-  (leaf vterm-toggle :straight t
+  (leaf vterm-toggle
+    :straight t
     :custom ((vterm-toggle-cd-auto-create-buffer . t)
              (vterm-toggle-fullscreen-p . nil)
              (vterm-toggle-scope . 'project)))
 
   (with-eval-after-load 'vterm
-    (add-to-list 'display-buffer-alist
-                 `(my/vterm-buffer-p
-                   (display-buffer-reuse-window display-buffer-in-direction)
-                   (direction . bottom) (dedicated . t)
-                   (reusable-frames . visible) (window-height . 0.3))))
+    (add-to-list
+     'display-buffer-alist
+     `(my/vterm-buffer-p
+       (display-buffer-reuse-window display-buffer-in-direction)
+       (direction . bottom)
+       (dedicated . t)
+       (reusable-frames . visible)
+       (window-height . 0.3))))
 
   (provide 'dev-term)
+
   ;;; dev/dev-term.el ends here
 #+end_src
 
@@ -4484,22 +4932,29 @@ Its role is orchestration only.
 
   (eval-when-compile (require 'leaf))
 
+  (defun dev-build--makefile-setup ()
+    "Configure local settings for Makefile buffers."
+    (setq-local indent-tabs-mode t
+                tab-width 8
+                show-trailing-whitespace t))
+
+  (defun dev-build--ansi-color-compilation ()
+    "Apply ANSI color codes in compilation output."
+    (let ((inhibit-read-only t))
+      (ansi-color-apply-on-region compilation-filter-start (point-max))))
+
   (leaf make-mode :straight nil
     :mode (("\\`Makefile\\'" . makefile-gmake-mode)
            ("\\`GNUmakefile\\'" . makefile-gmake-mode)
            ("\\`makefile\\'" . makefile-gmake-mode))
     :hook ((makefile-mode . my/set-make-compile-command)
-           (makefile-mode . (lambda ()
-                              (setq-local indent-tabs-mode t tab-width 8
-                                          show-trailing-whitespace t))))
-    :config
-    (leaf compile :straight nil
-      :custom ((compilation-scroll-output . t) (compilation-skip-threshold . 2)))
-    (leaf ansi-color :straight nil
-      :hook (compilation-filter . (lambda ()
-                                    (let ((inhibit-read-only t))
-                                      (ansi-color-apply-on-region
-                                       compilation-filter-start (point-max)))))))
+           (makefile-mode . dev-build--makefile-setup)))
+
+  (leaf compile :straight nil
+    :custom ((compilation-scroll-output . t) (compilation-skip-threshold . 2)))
+
+  (leaf ansi-color :straight nil
+    :hook (compilation-filter . dev-build--ansi-color-compilation))
 
   (defun my/set-make-compile-command ()
     (setq-local compile-command "make -k"))
@@ -4652,42 +5107,51 @@ Its role is orchestration only.
     (unless (and (fboundp 'eglot-managed-p) (eglot-managed-p))
       (when (fboundp 'dumb-jump-xref-activate) (dumb-jump-xref-activate))))
 
+  (defun dev-navigation--dumb-jump-setup ()
+    "Register dumb-jump as a secondary xref backend for the current buffer."
+    (add-hook 'xref-backend-functions #'my/dumb-jump-backend t t))
+
   (leaf dumb-jump
     :straight t
     :custom ((dumb-jump-force-searcher . 'rg) (dumb-jump-prefer-searcher . 'rg))
     :config
     (remove-hook 'xref-backend-functions #'dumb-jump-xref-activate)
-    (add-hook 'prog-mode-hook
-              (lambda ()
-                (add-hook 'xref-backend-functions #'my/dumb-jump-backend t t))))
+    (add-hook 'prog-mode-hook #'dev-navigation--dumb-jump-setup))
 
   (leaf multiple-cursors :straight t)
+
+  ;; eww state variables - must be top-level for byte-compiler visibility
+  (defvar my:d:eww
+    (expand-file-name "eww/" (or (bound-and-true-p my:d:var) user-emacs-directory)))
+  (defvar eww-hl-search-word nil
+    "Search term to highlight after eww renders a page.")
+
+  (defun my/eww-after-render ()
+    "Highlight the active search word after eww renders."
+    (when eww-hl-search-word
+      (isearch-mode t)
+      (isearch-yank-string eww-hl-search-word)
+      (setq eww-hl-search-word nil)))
+
+  (defun my/eww-search (term)
+    (interactive "sSearch terms: ")
+    (setq eww-hl-search-word term)
+    (eww-browse-url (concat eww-search-prefix term)))
+
+  (defun my/eww-toggle-images ()
+    (interactive)
+    (setq shr-inhibit-images (not shr-inhibit-images))
+    (eww-reload))
 
   (leaf eww
     :straight nil
     :custom ((eww-search-prefix . "https://duckduckgo.com/html/?kl=jp-jp&k1=-1&kc=1&kf=-1&q=")
              (eww-download-directory . "~/Downloads"))
     :init
-    (defvar my:d:eww
-      (expand-file-name "eww/" (or (bound-and-true-p my:d:var) user-emacs-directory)))
     (setopt eww-cache-directory (expand-file-name "cache/" my:d:eww))
     (unless (file-directory-p eww-cache-directory) (make-directory eww-cache-directory t))
     (setq eww-history-limit 200)
-    (defvar eww-hl-search-word nil)
-    (defun my/eww-search (term)
-      (interactive "sSearch terms: ")
-      (setq eww-hl-search-word term)
-      (eww-browse-url (concat eww-search-prefix term)))
-    (add-hook 'eww-after-render-hook
-              (lambda ()
-                (when eww-hl-search-word
-                  (isearch-mode t)
-                  (isearch-yank-string eww-hl-search-word)
-                  (setq eww-hl-search-word nil))))
-    (defun my/eww-toggle-images ()
-      (interactive)
-      (setq shr-inhibit-images (not shr-inhibit-images))
-      (eww-reload)))
+    (add-hook 'eww-after-render-hook #'my/eww-after-render))
 
   (provide 'dev-navigation)
   ;;; dev/dev-navigation.el ends here
@@ -4739,7 +5203,6 @@ Its role is orchestration only.
   (provide 'dev-tools)
   ;;; dev/dev-tools.el ends here
 #+end_src
-
 
 *** vcs/
 :PROPERTIES:
@@ -4835,14 +5298,9 @@ Its role is orchestration only.
   (defun utils-path-safe-name (str)
     (replace-regexp-in-string "[^[:alnum:]_.-]" "-" str))
 
-  ;; my/ensure-directory-exists is defined in early-init.el as a defalias
-  ;; to core--ensure-directory.  Do not redefine it here.
-  (unless (fboundp 'my/ensure-directory-exists)
-    (defalias 'my/ensure-directory-exists
-      (lambda (dir)
-        "Ensure DIR exists, creating it recursively if needed."
-        (unless (file-directory-p dir)
-          (make-directory dir t)))))
+  ;; my/ensure-directory-exists is defined in early-init.el (defalias of
+  ;; core--ensure-directory).  early-init.el always loads before any module,
+  ;; so the function is guaranteed to be present here.  No fallback needed.
 
   (provide 'utils-path)
   ;;; utils/utils-path.el ends here
@@ -5390,7 +5848,8 @@ The key files are:
   (defcustom personal-messages-archive-dir
     (expand-file-name "messages/"
                       (or (bound-and-true-p my:d:org-roam)
-                          (expand-file-name "~/org/org-roam/")))
+                          (expand-file-name "org-roam/" (or (bound-and-true-p my:d:org)
+                                                            (expand-file-name "~/org")))))
     "Directory where archived message notes are saved."
     :type 'directory :group 'personal-messages)
 
@@ -5502,42 +5961,129 @@ help:
 
 ** 2026-03
 
-*** Refactoring: Critical fixes (this revision)
+*** Refactoring: 全修正一覧
 
-- *[Fix 1] completion-lsp.el*: Replaced fragile internal variable
-  =eglot--servers= with the public API (=eglot-managed-buffers=,
-  =eglot-current-server=, =eglot-shutdown=).  The old code iterated
-  a private association list that could change in any Emacs release.
-  The new code uses only documented and stable public functions.
+*重複排除 (🟡)*
 
-- *[Fix 2] orgx-core.el + utils-org-agenda.el*: Eliminated a layer
-  violation and a duplicate directory scan.  Previously =orgx-core=
-  called =directory-files-recursively= directly at load time, making
-  =utils-org-agenda='s cache pointless.  Now =orgx-core= sets a minimal
-  fallback at load time and defers to =utils-org-agenda-build= via
-  =after-init-hook=, respecting the core/org/utils dependency ordering.
+- *[Fix 10] ui-which-key.el*: `version<=` 分岐の両ブランチが同じ式になっていた誤りを修正。
+  Emacs 30+ では `:straight nil` の built-in leaf を使い、30未満では `:straight t` の
+  パッケージ版を使う2つの `:if` ガード付き leaf に分離。
+  `ui-which-key--startup-init` も単純化し、分岐ロジックを leaf 宣言側に移動。
 
-- *[Fix 3] personal/user.el*: The =personal-messages= archiver was
-  previously loaded unconditionally with =run-with-timer= firing
-  immediately at startup.  It is now guarded by =locate-library=,
-  deferred inside =with-eval-after-load 'org=, and scheduled with
-  =run-with-idle-timer= (120s delay, 10-minute repeat) to prevent
-  startup races and avoid blocking Org initialization.
+- *[Fix 6b] core-tools.el*: `core-tools-ensure-directory` の独立実装を削除し
+  `my/ensure-directory-exists` への `defalias` に変更。正規実装の連鎖を
+  `core--ensure-directory` → `my/ensure-directory-exists` → `core-tools-ensure-directory`
+  と明確化。既存呼び出しを壊さず重複コードを排除。
 
-- *[Bonus] core-fixes.el*: Removed dead =when= guard that referenced
-  =my:with-thisfile--load= and =my:with-thisfile--require=, functions
-  that were never defined anywhere in the configuration.  The module
-  is kept as a clean placeholder for future version-scoped fixes.
+- *[Fix 6c] utils-path.el*: `(unless (fboundp 'my/ensure-directory-exists) ...)` の
+  フォールバック定義を削除。`early-init.el` は常に先行してロードされるため
+  このコードは実行されないデッドコードだった。コメントのみ残す。
 
-- *[Bonus] core-runtime.el*: Consolidated modifier key variable
-  configuration to a single authoritative location (=core-runtime.el=).
-  Removed the duplicate =leaf my:modifier= block from =init.el= that
-  was setting the same variables a second time.
+- *[Bonus] core-fixes.el*: 未定義関数 =my:with-thisfile--load= /
+  =my:with-thisfile--require= への dead `when` guard を除去。
+  モジュールはバージョンスコープ修正のクリーンなプレースホルダとして維持。
 
-- *[Bonus] orgx-visual.el*: Fixed =org-mode-hook= / initialization flag
-  interaction.  Variable configuration now runs exactly once via
-  =after-init-hook= (=orgx-visual--configure-once=) while mode activation
-  runs per-buffer via =org-mode-hook= (=orgx-visual--enable-mode=).
-  Previously, the single hook function mixed one-time setup and per-buffer
-  activation, causing =org-modern-mode= to silently skip new buffers after
-  the first one.
+- *[Bonus] core-runtime.el*: modifier key 変数設定を `core-runtime.el` の
+  1箇所に集約。`init.el` から重複していた `leaf my:modifier` ブロックを削除。
+
+*Critical 修正*
+
+- *[Fix 1] completion-lsp.el*: 内部変数 =eglot--servers= を公開 API
+  (=eglot-managed-buffers=, =eglot-current-server=, =eglot-shutdown=) で置換。
+  旧コードは Emacs バージョン間で変わり得るプライベート連想リストを直接参照していた。
+  新コードは文書化・安定した公開関数のみを使用。
+
+- *[Fix 2] orgx-core.el + utils-org-agenda.el*: レイヤー違反と二重スキャンを解消。
+  従来 `orgx-core` はロード時に `directory-files-recursively` を直接呼び出し
+  `utils-org-agenda` のキャッシュを無意味にしていた。現在は最小フォールバックを
+  即時設定し (Phase 1)、`after-init-hook` で `utils-org-agenda-build` に委譲 (Phase 2)。
+
+- *[Fix 3] personal/user.el*: `personal-messages` アーカイバが無条件かつ
+  起動直後に実行されていた問題を修正。`locate-library` ガード +
+  `with-eval-after-load 'org` による遅延 + `run-with-idle-timer` (120秒遅延・10分反復)
+  の3段構えで起動時の競合状態を排除。
+
+*パフォーマンス修正*
+
+- *[Bonus] orgx-visual.el*: `org-mode-hook` と初期化フラグの相互作用を修正。
+  変数設定が `after-init-hook` で一度だけ実行 (`orgx-visual--configure-once`) し、
+  モード有効化がバッファごとに `org-mode-hook` で実行 (`orgx-visual--enable-mode`) する
+  2関数に分離。旧来の単一フック関数では新バッファで `org-modern-mode` が
+  サイレントにスキップされる問題があった。
+
+- *[Fix 9] dev-ai.el*: ロード後の全設定を `:config` ブロックに集約し
+
+*今回の修正 (🟡 重複排除 / コード品質)*
+
+- *[Fix A] orgx-core.el*: org-archive-location の fallback パスを
+  =~/org= ハードコードから =my:d:org= 変数経由に変更。
+  優先順位: =org-directory= → =my:d:org= → =~/org=。
+
+- *[Fix A] personal-messages.el*: =personal-messages-archive-dir= の
+  fallback パスを =~/org/org-roam/= ハードコードから
+  =my:d:org-roam= → =my:d:org= 変数経由に変更。
+
+- *[Fix B] dev-lsp-eglot.el*: =add-hook= に渡していた匿名 lambda を
+  名前付き関数 =my/lsp-eglot--maybe-ensure= に抽出。
+  デバッグ・toggle・重複追加防止が可能になる。
+
+- *[Fix C] init.el / core-session.el / core-session-private.el*:
+  実行時に直接使用しない =subr-x= / =seq= / =cl-lib= の bare =require= を
+  =eval-when-compile= に変更。コンパイル時の展開保証を維持しつつ起動時の不要ロードを排除。
+
+- *[Fix vterm] dev-ai.el*: =display-warning= 付き vterm フォールバックを
+  サイレントな =(if (require 'vterm nil 'noerror) 'vterm 'comint)= に変更。
+  comint は正規バックエンドであり警告は不適切だった。
+
+*** Refactoring: Code quality pass (今回)
+
+*🔴 Critical — 公開 API 違反 / 存在しないフック*
+
+- *[Fix 1] ui-health-modeline.el*: =eglot--managed-buffers= (内部変数) を
+  公開 API =eglot-managed-buffers= 関数呼び出しに置換。前回の
+  =completion-lsp.el= Fix 1 と同じ原則を適用。
+
+- *[Fix 2] ui-health-modeline.el*: =eglot-server-stopped-hook= は
+  Eglot のどのバージョンにも存在しないフック名。
+  正しい =eglot-shutdown-hook= に修正。
+
+*🟠 Medium — 匿名 lambda hook → 名前付き defun*
+
+- *[Fix 3] core-editing.el (paredit)*: 2呼び出しを持つ lambda を
+  =core-editing--paredit-setup= として抽出。
+
+- *[Fix 4] core-editing.el (puni)*: minibuffer 無効化 lambda を
+  =core-editing--puni-minibuffer-off= として抽出。
+
+- *[Fix 5&6&12] dev-build.el*: makefile ローカル設定 lambda を
+  =dev-build--makefile-setup= に、ansi-color lambda を
+  =dev-build--ansi-color-compilation= に抽出。
+  =leaf compile= / =leaf ansi-color= を =make-mode= leaf の
+  =:config= ネストから独立した top-level leaf に昇格。
+
+- *[Fix 7] dev-lsp-eglot.el (eglot leaf)*: =:hook= の lambda を
+  前回定義した =my/lsp-eglot--maybe-ensure= で置換
+  (Fix B との一貫性)。
+
+- *[Fix 8] orgx-extensions.el*: =run-with-idle-timer= の lambda を
+  =orgx--org-roam-autosync-enable= として抽出。
+
+- *[Fix 10b] dev-navigation.el (dumb-jump)*: =prog-mode-hook= に
+  渡していた =add-hook= lambda を =dev-navigation--dumb-jump-setup=
+  として抽出。eww の =eww-after-render-hook= lambda を
+  =my/eww-after-render= として抽出。
+
+*🟠 Medium — defvar の誤配置 → top-level へ*
+
+- *[Fix 9] dev-term.el*: =defvar nano-color-*= 8個を =my/vterm-apply-palette=
+  関数内から削除。変数は既に =ui-nano-palette.el= で定義済みであり、
+  関数内の =defvar= は二重定義かつ初期値の再設定を抑止する意図しない副作用がある。
+
+- *[Fix 10] dev-navigation.el (eww)*: =defvar my:d:eww= と
+  =defvar eww-hl-search-word= を =leaf eww= の =:init= 内から
+  top-level に移動。バイトコンパイラが変数を認識できるようになる。
+
+*🟡 Minor — setq → setopt*
+
+- *[Fix 11] ui-which-key.el*: =which-key-idle-delay= の設定を
+  =setq= から =setopt= に変更。=defcustom= 変数には常に =setopt= を使う。
