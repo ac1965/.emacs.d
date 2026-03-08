@@ -428,9 +428,12 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   (when (and (boundp 'my:d:lisp)
              (file-directory-p my:d:lisp))
-    (dolist (dir (directory-files my:d:lisp t "\\`[^.]"))
-      (when (file-directory-p dir)
-        (add-to-list 'load-path dir))))
+    (dolist (dir
+           (sort
+            (directory-files my:d:lisp t "\\`[^.]")
+            #'string<))
+    (when (file-directory-p dir)
+      (add-to-list 'load-path dir))))
 
   ;; ---------------------------------------------------------------------------
   ;; 3) State directories (.cache, ELN, Tree-sitter, URL/EWW)
@@ -2578,6 +2581,8 @@ Its role is orchestration only.
 #+begin_src emacs-lisp
   ;;; ui/ui-theme.el --- Theme configuration -*- lexical-binding: t; -*-
   ;;
+  ;; Theme configuration module for the UI layer.
+  ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
@@ -2598,11 +2603,20 @@ Its role is orchestration only.
   ;;
   ;; The initialization is idempotent and safe to run multiple times.
   ;; It also supports daemon mode and new frame creation.
-
+  ;;
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
   (require 'ui-nano-palette)
+
+  (defgroup ui-theme nil
+    "Theme configuration for the UI layer."
+    :group 'ui)
+
+  (defcustom ui-theme-enable-p t
+    "If non-nil enable the Nano theme configuration."
+    :type 'boolean
+    :group 'ui-theme)
 
   (setq-default line-spacing 0.24)
 
@@ -2624,69 +2638,51 @@ Its role is orchestration only.
           (my/nano-apply-faces)))))
 
   (defun ui-theme--apply ()
-    "Initialize and apply the UI theme configuration.
+    "Initialize and apply the UI theme configuration."
+    (when ui-theme-enable-p
+      (unless ui-theme--initialized
+        (setq ui-theme--initialized t)
 
-  This function ensures initialization runs only once and
-  installs hooks that keep theme customizations stable
-  across theme reloads and frame creation."
-    (unless ui-theme--initialized
-      (setq ui-theme--initialized t)
+        (with-eval-after-load 'cus-theme
+          (if (boundp 'enable-theme-functions)
+              (add-hook 'enable-theme-functions #'ui-theme--reapply-after-theme)
+            (advice-add 'enable-theme :after #'ui-theme--reapply-after-theme)))
 
-      ;; Reapply Nano palette when themes change
-      (with-eval-after-load 'cus-theme
-        (if (boundp 'enable-theme-functions)
-            (add-hook 'enable-theme-functions #'ui-theme--reapply-after-theme)
-          (advice-add 'enable-theme :after #'ui-theme--reapply-after-theme)))
+        (with-eval-after-load 'dired-subtree
+          (set-face-attribute 'dired-subtree-depth-1-face nil :background "#e6f4ea")
+          (set-face-attribute 'dired-subtree-depth-2-face nil :background "#dff0e3")
+          (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
+          (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
 
-      ;; Configure dired-subtree background colors
-      (with-eval-after-load 'dired-subtree
-        (set-face-attribute 'dired-subtree-depth-1-face nil :background "#e6f4ea")
-        (set-face-attribute 'dired-subtree-depth-2-face nil :background "#dff0e3")
-        (set-face-attribute 'dired-subtree-depth-3-face nil :background "#d8ecdc")
-        (set-face-attribute 'dired-subtree-depth-4-face nil :background "#d1e8d5"))
+        (require 'nano-layout)
+        (require 'nano-faces)
 
-      ;; Load Nano components
-      (require 'nano-layout)
-      (require 'nano-faces)
+        (load-theme 'nano t)
 
-      ;; Load theme first
-      (load-theme 'nano t)
+        (nano-faces)
 
-      ;; Apply Nano face configuration
-      (nano-faces)
+        (set-face-attribute 'nano-face-strong nil
+                            :foreground (face-foreground 'nano-face-default)
+                            :weight 'bold)
 
-      ;; Strengthen emphasis faces
-      (set-face-attribute 'nano-face-strong nil
-                          :foreground (face-foreground 'nano-face-default)
-                          :weight 'bold)
+        (when (fboundp 'my/nano-apply-faces)
+          (my/nano-apply-faces))
 
-      ;; Apply palette overrides
-      (when (fboundp 'my/nano-apply-faces)
-        (my/nano-apply-faces))
+        (set-face-attribute 'bold nil :weight 'bold)
+        (set-face-attribute 'italic nil :slant 'italic)
 
-      ;; Ensure standard emphasis behaviour
-      (set-face-attribute 'bold nil :weight 'bold)
-      (set-face-attribute 'italic nil :slant 'italic)
+        (with-eval-after-load 'elec-pair
+          (custom-set-faces
+           '(electric-pair-overlay-face
+             ((t (:background "#e5e7eb"))))
+           '(show-paren-match
+             ((t (:background "#e5e7eb" :foreground "#111827" :weight bold))))
+           '(show-paren-mismatch
+             ((t (:background "#dc2626" :foreground "white" :weight bold))))))
 
-      ;; Configure pairing highlight
-      (with-eval-after-load 'elec-pair
-        (custom-set-faces
-         '(electric-pair-overlay-face
-           ((t (:background "#e5e7eb"))))
-         '(show-paren-match
-           ((t (:background "#e5e7eb" :foreground "#111827" :weight bold))))
-         '(show-paren-mismatch
-           ((t (:background "#dc2626" :foreground "white" :weight bold))))))
+        (ui-theme--apply-frame (selected-frame))
 
-      ;; Apply graphical settings for existing frame
-      (ui-theme--apply-frame (selected-frame))
-
-      ;; Ensure daemon / new frame support
-      (add-hook 'after-make-frame-functions #'ui-theme--apply-frame)))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Packages
-  ;; ---------------------------------------------------------------------------
+        (add-hook 'after-make-frame-functions #'ui-theme--apply-frame))))
 
   (leaf nano-emacs
     :straight (nano-emacs :type git :host github :repo "rougier/nano-emacs"))
@@ -2699,10 +2695,6 @@ Its role is orchestration only.
     :if (display-graphic-p)
     :custom ((spacious-padding-widths . '((left . 15) (right . 15)))
              (spacious-padding-subtle-mode-line . t)))
-
-  ;; ---------------------------------------------------------------------------
-  ;; Startup
-  ;; ---------------------------------------------------------------------------
 
   (add-hook 'emacs-startup-hook #'ui-theme--apply)
 
@@ -3016,7 +3008,7 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-leader.el
 :END:
 #+begin_src emacs-lisp
-  ;;; lisp/ui/ui-leader.el --- Leader key infrastructure (maps only) -*- lexical-binding: t; -*-
+  ;;; lisp/ui/ui-leader.el --- Leader key infrastructure -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -3026,50 +3018,51 @@ Its role is orchestration only.
   ;;
   ;;; Commentary:
   ;;
-  ;; Leader key infrastructure providing hierarchical keymaps.
+  ;; Hierarchical leader key infrastructure.
   ;;
-  ;; This module defines the root leader key and a set of prefix
-  ;; keymaps used throughout the UI layer.  It does not assign
-  ;; commands; it only provides the map structure.
+  ;; This module defines only keymaps and global installation of the
+  ;; root leader prefix.  It does not assign actual command bindings.
   ;;
-  ;; Typical layout:
+  ;; The layout is intentionally stable and delete-safe:
   ;;
   ;; C-c SPC
   ;; ├─ b  buffers
   ;; ├─ w  windows
   ;; ├─ p  projects
+  ;; ├─ s  search
   ;; ├─ g  git
   ;; ├─ c  code
-  ;; ├─ e  evaluation
+  ;; ├─ e  errors / evaluation
   ;; ├─ t  toggles
-  ;; ├─ o  open
-  ;; ├─ m  mode/local
-  ;; ├─ a  applications
-  ;; ├─ q  quit/session
+  ;; ├─ o  open / org
+  ;; ├─ m  local leader
+  ;; ├─ a  apps
+  ;; ├─ q  quit / session
   ;; └─ h  help
   ;;
-  ;; Command bindings are defined in other modules.
+  ;; Other modules are expected to bind commands into these maps.
 
   ;;; Code:
 
-  (eval-when-compile (require 'subr-x))
+  (eval-when-compile
+    (require 'subr-x))
 
   (defgroup ui-leader nil
     "Leader key infrastructure."
     :group 'convenience)
 
   (defcustom ui-leader-key "C-c SPC"
-    "Root key sequence used for the leader key."
+    "Root key sequence used for the global leader key."
     :type 'string
     :group 'ui-leader)
 
   (defcustom ui-leader-local-suffix "m"
-    "Suffix used for the local leader map."
+    "Suffix key used for the local leader prefix."
     :type 'string
     :group 'ui-leader)
 
   (defcustom ui-leader-enable-p t
-    "If non-nil, enable the leader key infrastructure."
+    "If non-nil, install the global leader key."
     :type 'boolean
     :group 'ui-leader)
 
@@ -3077,88 +3070,98 @@ Its role is orchestration only.
     "Root leader keymap.")
 
   (defvar ui-leader-b-map nil
-    "Leader keymap for buffer-related commands.")
+    "Leader keymap for buffer commands.")
 
   (defvar ui-leader-w-map nil
-    "Leader keymap for window management.")
+    "Leader keymap for window commands.")
 
   (defvar ui-leader-p-map nil
-    "Leader keymap for project operations.")
+    "Leader keymap for project commands.")
+
+  (defvar ui-leader-s-map nil
+    "Leader keymap for search commands.")
 
   (defvar ui-leader-g-map nil
     "Leader keymap for Git commands.")
 
   (defvar ui-leader-c-map nil
-    "Leader keymap for code-related actions.")
+    "Leader keymap for code commands.")
 
   (defvar ui-leader-e-map nil
-    "Leader keymap for evaluation commands.")
+    "Leader keymap for error and evaluation commands.")
 
   (defvar ui-leader-t-map nil
     "Leader keymap for toggle commands.")
 
   (defvar ui-leader-o-map nil
-    "Leader keymap for open/navigation commands.")
+    "Leader keymap for open and Org-related commands.")
 
   (defvar ui-leader-m-map nil
-    "Leader keymap for mode-local commands.")
+    "Leader keymap for local leader commands.")
 
   (defvar ui-leader-a-map nil
     "Leader keymap for application commands.")
 
   (defvar ui-leader-q-map nil
-    "Leader keymap for quit/session commands.")
+    "Leader keymap for quit and session commands.")
 
   (defvar ui-leader-h-map nil
     "Leader keymap for help commands.")
 
+  (defun ui-leader--ensure-prefix-map (symbol)
+    "Ensure SYMBOL names a prefix keymap and return it."
+    (unless (and (boundp symbol) (keymapp (symbol-value symbol)))
+      (define-prefix-command symbol))
+    (symbol-value symbol))
+
   (defun ui-leader--define-maps ()
-    "Create leader keymaps if they are not already defined."
-    (unless (keymapp ui-leader-map)
-      (define-prefix-command 'ui-leader-map))
+    "Create leader maps and install the fixed prefix hierarchy."
+    (ui-leader--ensure-prefix-map 'ui-leader-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-b-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-w-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-p-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-s-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-g-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-c-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-e-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-t-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-o-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-m-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-a-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-q-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-h-map)
 
-    (dolist (sym '(ui-leader-b-map
-                   ui-leader-w-map
-                   ui-leader-p-map
-                   ui-leader-g-map
-                   ui-leader-c-map
-                   ui-leader-e-map
-                   ui-leader-t-map
-                   ui-leader-o-map
-                   ui-leader-m-map
-                   ui-leader-a-map
-                   ui-leader-q-map
-                   ui-leader-h-map))
-      (unless (keymapp (symbol-value sym))
-        (define-prefix-command sym)))
+    (define-key ui-leader-map (kbd "b") ui-leader-b-map)
+    (define-key ui-leader-map (kbd "w") ui-leader-w-map)
+    (define-key ui-leader-map (kbd "p") ui-leader-p-map)
+    (define-key ui-leader-map (kbd "s") ui-leader-s-map)
+    (define-key ui-leader-map (kbd "g") ui-leader-g-map)
+    (define-key ui-leader-map (kbd "c") ui-leader-c-map)
+    (define-key ui-leader-map (kbd "e") ui-leader-e-map)
+    (define-key ui-leader-map (kbd "t") ui-leader-t-map)
+    (define-key ui-leader-map (kbd "o") ui-leader-o-map)
+    (define-key ui-leader-map (kbd ui-leader-local-suffix) ui-leader-m-map)
+    (define-key ui-leader-map (kbd "a") ui-leader-a-map)
+    (define-key ui-leader-map (kbd "q") ui-leader-q-map)
+    (define-key ui-leader-map (kbd "h") ui-leader-h-map))
 
-    (define-key ui-leader-map (kbd "b") 'ui-leader-b-map)
-    (define-key ui-leader-map (kbd "w") 'ui-leader-w-map)
-    (define-key ui-leader-map (kbd "p") 'ui-leader-p-map)
-    (define-key ui-leader-map (kbd "g") 'ui-leader-g-map)
-    (define-key ui-leader-map (kbd "c") 'ui-leader-c-map)
-    (define-key ui-leader-map (kbd "e") 'ui-leader-e-map)
-    (define-key ui-leader-map (kbd "t") 'ui-leader-t-map)
-    (define-key ui-leader-map (kbd "o") 'ui-leader-o-map)
-    (define-key ui-leader-map (kbd ui-leader-local-suffix) 'ui-leader-m-map)
-    (define-key ui-leader-map (kbd "a") 'ui-leader-a-map)
-    (define-key ui-leader-map (kbd "q") 'ui-leader-q-map)
-    (define-key ui-leader-map (kbd "h") 'ui-leader-h-map))
+  (defun ui-leader-local-key ()
+    "Return the full key sequence string for the local leader prefix."
+    (format "%s %s" ui-leader-key ui-leader-local-suffix))
 
   (defun ui-leader--bind-root ()
     "Bind the root leader key globally."
     (when ui-leader-enable-p
       (ui-leader--define-maps)
-      (cond ((fboundp 'keymap-global-set)
-             (keymap-global-set ui-leader-key 'ui-leader-map))
-            (t
-             (global-set-key (kbd ui-leader-key) 'ui-leader-map)))))
+      (if (fboundp 'keymap-global-set)
+          (keymap-global-set ui-leader-key ui-leader-map)
+        (global-set-key (kbd ui-leader-key) ui-leader-map))))
 
   (add-hook 'after-init-hook #'ui-leader--bind-root)
 
   (provide 'ui-leader)
 
-  ;;; ui-leader.el ends here
+  ;;; ui/ui-leader.el ends here
 #+end_src
 
 **** ui/ui-hydra.el
@@ -4867,6 +4870,15 @@ Its role is orchestration only.
   (eval-when-compile (require 'leaf) (require 'cl-lib))
   (require 'ui-nano-palette)
 
+  (defgroup dev-term nil
+    "Terminal integration helpers."
+    :group 'tools)
+
+  (defcustom dev-term-enable-p t
+    "If non-nil enable terminal integration."
+    :type 'boolean
+    :group 'dev-term)
+
   (defun dev-term--safe-face-set (face &rest props)
     "Safely set FACE attributes using PROPS."
     (when (facep face)
@@ -4874,39 +4886,41 @@ Its role is orchestration only.
 
   (defun dev-term-apply-palette ()
     "Apply the Nano color palette to vterm faces."
-    (if (facep 'vterm-color-default)
+    (when dev-term-enable-p
+
+      (if (facep 'vterm-color-default)
+          (dev-term--safe-face-set
+           'vterm-color-default
+           :foreground nano-color-foreground
+           :background nano-color-background)
         (dev-term--safe-face-set
-         'vterm-color-default
+         'vterm
          :foreground nano-color-foreground
-         :background nano-color-background)
-      (dev-term--safe-face-set
-       'vterm
-       :foreground nano-color-foreground
-       :background nano-color-background))
+         :background nano-color-background))
 
-    (dev-term--safe-face-set 'vterm-color-black
-                             :foreground nano-color-strong)
+      (dev-term--safe-face-set 'vterm-color-black
+                               :foreground nano-color-strong)
 
-    (dev-term--safe-face-set 'vterm-color-red
-                             :foreground nano-color-critical)
+      (dev-term--safe-face-set 'vterm-color-red
+                               :foreground nano-color-critical)
 
-    (dev-term--safe-face-set 'vterm-color-green
-                             :foreground "#10b981")
+      (dev-term--safe-face-set 'vterm-color-green
+                               :foreground "#10b981")
 
-    (dev-term--safe-face-set 'vterm-color-yellow
-                             :foreground nano-color-popout)
+      (dev-term--safe-face-set 'vterm-color-yellow
+                               :foreground nano-color-popout)
 
-    (dev-term--safe-face-set 'vterm-color-blue
-                             :foreground nano-color-salient)
+      (dev-term--safe-face-set 'vterm-color-blue
+                               :foreground nano-color-salient)
 
-    (dev-term--safe-face-set 'vterm-color-magenta
-                             :foreground "#a21caf")
+      (dev-term--safe-face-set 'vterm-color-magenta
+                               :foreground "#a21caf")
 
-    (dev-term--safe-face-set 'vterm-color-cyan
-                             :foreground "#0891b2")
+      (dev-term--safe-face-set 'vterm-color-cyan
+                               :foreground "#0891b2")
 
-    (dev-term--safe-face-set 'vterm-color-white
-                             :foreground nano-color-subtle))
+      (dev-term--safe-face-set 'vterm-color-white
+                               :foreground nano-color-subtle)))
 
   (defun dev-term--buffer-p (buf)
     "Return non-nil if BUF is a vterm buffer."
@@ -4925,6 +4939,7 @@ Its role is orchestration only.
 
   (leaf vterm
     :straight t
+    :when dev-term-enable-p
     :config
     (dev-term-apply-palette)
 
@@ -4939,6 +4954,7 @@ Its role is orchestration only.
 
   (leaf vterm-toggle
     :straight t
+    :when dev-term-enable-p
     :custom ((vterm-toggle-cd-auto-create-buffer . t)
              (vterm-toggle-fullscreen-p . nil)
              (vterm-toggle-scope . 'project)))
