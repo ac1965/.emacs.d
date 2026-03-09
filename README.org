@@ -35,6 +35,8 @@ Primary goals:
 
 This configuration is designed to function as a modular Emacs distribution.
 
+[[file:demo.png]]
+
 ** Architecture
 :PROPERTIES:
 :CUSTOM_ID: architecture
@@ -291,10 +293,10 @@ Benefits:
 Example:
 
 #+begin_src emacs-lisp
-(leaf vertico
-  :straight t
-  :custom
-  ((vertico-count . 15)))
+  (leaf vertico
+    :straight t
+    :custom
+    ((vertico-count . 15)))
 #+end_src
 
 ** Tangling Strategy
@@ -312,8 +314,8 @@ Tangling rules:
 
 Example:
 
-#+begin_src emacs-lisp :tangle lisp/core/core-history.el
-(setq savehist-mode t)
+#+begin_src emacs-lisp
+  (setq savehist-mode t)
 #+end_src
 
 This produces:
@@ -1700,11 +1702,13 @@ Its role is orchestration only.
   ;;
   ;; NOTE: External modules should require this file only; never load
   ;; `core-session-private` directly.
+  ;;
   ;;; Code:
 
   (eval-when-compile
     (require 'subr-x)
     (require 'seq))
+
   (require 'core-session-private)
 
   (defgroup core-session nil
@@ -1713,48 +1717,61 @@ Its role is orchestration only.
 
   (defcustom core-session-enable-p t
     "Master switch for core-session jobs."
-    :type 'boolean :group 'core-session)
+    :type 'boolean
+    :group 'core-session)
 
   (defcustom core-session-idle-delay 120
     "Seconds of idle time before idle-lane jobs may run."
-    :type 'integer :group 'core-session)
+    :type 'integer
+    :group 'core-session)
 
   (defcustom core-session-periodic-interval 600
     "Seconds between periodic-lane job runs."
-    :type 'integer :group 'core-session)
+    :type 'integer
+    :group 'core-session)
 
-  (defvar core-session--started-p nil)
+  (defvar core-session--started-p nil
+    "Non-nil when session scheduler has started.")
 
   (defun core-session--ensure-started ()
+    "Ensure the scheduler is running."
     (when (and core-session-enable-p (not core-session--started-p))
       (core-session--start)
       (setq core-session--started-p t)))
 
   (defun core-session-start ()
+    "Start the core-session scheduler."
     (interactive)
     (core-session--ensure-started)
     (message "core-session: started"))
 
   (defun core-session-stop ()
+    "Stop the core-session scheduler."
     (interactive)
     (core-session--stop)
     (setq core-session--started-p nil)
     (message "core-session: stopped"))
 
   (defun core-session-register-job (name fn &rest plist)
+    "Register background job NAME with function FN.
+
+  PLIST may contain additional metadata such as :enabled."
     (let ((meta (core-session--normalize-job-meta name fn plist)))
       (core-session--register meta)
       (core-session--ensure-started)
       name))
 
   (defun core-session-unregister-job (name)
+    "Unregister background job NAME."
     (core-session--unregister name)
     name)
 
   (defun core-session-run-job (name)
+    "Run job NAME immediately."
     (core-session--run-job name))
 
   (provide 'core-session)
+
   ;;; core/core-session.el ends here
 #+end_src
 
@@ -1777,71 +1794,100 @@ Its role is orchestration only.
   ;; Private implementation of the session job scheduler.
   ;;
   ;; This file:
-  ;; - owns the job registry hash-table and idle/periodic timer handles
-  ;; - normalises job metadata (name, fn, lane, enabled flag)
-  ;; - runs jobs dispatched via `core-session--start` on startup
+  ;; - owns the job registry hash-table
+  ;; - manages idle and periodic timers
+  ;; - normalises job metadata
+  ;; - executes registered jobs
   ;;
-  ;; NOTE: This module is an internal detail of core-session.el.
-  ;; Do not require or call its symbols from outside the core layer.
+  ;; NOTE:
+  ;; This module is an internal detail of core-session.el.
+  ;; External modules must not depend on it.
+  ;;
   ;;; Code:
 
   (eval-when-compile
     (require 'subr-x)
     (require 'seq))
 
-  ;; core-session-idle-delay and core-session-periodic-interval are
-  ;; defined in core-session.el.  We require it here so this file is
-  ;; safe to load or byte-compile independently.
-  (require 'core-session nil t)
+  ;; Forward declarations for byte-compiler safety.
+  (defvar core-session-idle-delay)
+  (defvar core-session-periodic-interval)
 
-  (defvar core-session--jobs-table (make-hash-table :test 'eq))
-  (defvar core-session--periodic-timer nil)
-  (defvar core-session--idle-timer nil)
+  (defvar core-session--jobs-table (make-hash-table :test 'eq)
+    "Hash table storing registered jobs.")
+
+  (defvar core-session--periodic-timer nil
+    "Periodic scheduler timer.")
+
+  (defvar core-session--idle-timer nil
+    "Idle scheduler timer.")
 
   (defun core-session--normalize-job-meta (name fn plist)
-    (unless (symbolp name) (error "Job name must be symbol"))
-    (unless (functionp fn) (error "Job fn must be function"))
+    "Return normalized job metadata."
+    (unless (symbolp name)
+      (error "Job name must be a symbol"))
+    (unless (functionp fn)
+      (error "Job function must be callable"))
     (append (list :name name :fn fn :enabled t) plist))
 
   (defun core-session--register (meta)
+    "Register META job entry."
     (puthash (plist-get meta :name) meta core-session--jobs-table))
 
   (defun core-session--unregister (name)
+    "Remove job NAME."
     (remhash name core-session--jobs-table))
 
   (defun core-session--jobs ()
+    "Return all registered jobs."
     (let (out)
-      (maphash (lambda (_k v) (push v out)) core-session--jobs-table)
+      (maphash
+       (lambda (_k v)
+         (push v out))
+       core-session--jobs-table)
       (nreverse out)))
 
   (defun core-session--run-job (name)
+    "Execute job NAME."
     (let ((meta (gethash name core-session--jobs-table)))
       (when meta
-        (condition-case _err (funcall (plist-get meta :fn)) (error nil)))))
+        (condition-case _err
+            (funcall (plist-get meta :fn))
+          (error nil)))))
 
   (defun core-session--run-all ()
-    (dolist (j (core-session--jobs))
-      (when (plist-get j :enabled)
-        (core-session--run-job (plist-get j :name)))))
+    "Run all enabled jobs."
+    (dolist (job (core-session--jobs))
+      (when (plist-get job :enabled)
+        (core-session--run-job (plist-get job :name)))))
 
   (defun core-session--start ()
+    "Start timers for background jobs."
     (setq core-session--periodic-timer
-          (run-at-time core-session-periodic-interval
-                       core-session-periodic-interval
-                       #'core-session--run-all))
+          (run-at-time
+           core-session-periodic-interval
+           core-session-periodic-interval
+           #'core-session--run-all))
+
     (setq core-session--idle-timer
-          (run-with-idle-timer core-session-idle-delay t
-                               #'core-session--run-all)))
+          (run-with-idle-timer
+           core-session-idle-delay
+           t
+           #'core-session--run-all)))
 
   (defun core-session--stop ()
+    "Stop scheduler timers."
     (when (timerp core-session--periodic-timer)
       (cancel-timer core-session--periodic-timer))
+
     (when (timerp core-session--idle-timer)
       (cancel-timer core-session--idle-timer))
+
     (setq core-session--periodic-timer nil
           core-session--idle-timer nil))
 
   (provide 'core-session-private)
+
   ;;; core/core-session-private.el ends here
 #+end_src
 
@@ -7312,31 +7358,128 @@ The key files are:
 :END:
 
 #+begin_src makefile :tangle Makefile :mkdirp no :padline no
-# Makefile --- Configuration build targets
-# Copyright (c) 2021-2026, YAMASHITA, Takao
-# License: GNU GPL v3 or later
+# Makefile — One-pass builder for a modular Emacs config
+# - Default / `make all` : onepass-init (tangle -> incremental byte-compile)
+# - `make onepass-q`     : -Q (minimal env) tangle -> full byte-compile
+# - Paths are absolutized from repo root to avoid "lisp/personal" confusion.
 
-EMACS ?= emacs
-EMACS_FLAGS = --batch --no-init-file
-ORG_FILE = README.org
-TANGLE_CMD = (require 'ob-tangle) (org-babel-tangle-file "$(ORG_FILE)")
+SHELL := /bin/sh
 
-.PHONY: all tangle clean help
+# ---- Repo-root & absolutized dirs --------------------------------------------
+ROOT := $(CURDIR)
 
-all: tangle
+EMACS  ?= emacs
+ORG    ?= README.org
+EARLY  ?= early-init.el
+INIT   ?= init.el
 
-tangle: $(ORG_FILE)
-	$(EMACS) $(EMACS_FLAGS) \
-	  --eval "$(TANGLE_CMD)"
-	@echo "Tangling complete."
+# Always treat these as top-level under repo root
+LISPDIR_REL     ?= lisp
+PERSONALDIR_REL ?= personal
+
+LISPDIR     := $(abspath $(ROOT)/$(LISPDIR_REL))
+PERSONALDIR := $(abspath $(ROOT)/$(PERSONALDIR_REL))
+ORG := $(abspath $(ROOT)/$(ORG))
+EARLY := $(abspath $(ROOT)/$(EARLY))
+INIT  := $(abspath $(ROOT)/$(INIT))
+
+STRICT_BYTE_WARN ?= 0   # Treat byte-compile warnings as errors
+NATIVE_COMPILE   ?= 1   # Prefer native-compile if available
+
+# ---- Emacs runners & common eval snippets ------------------------------------
+EMACS_BATCH := "$(EMACS)" --batch
+EMACS_Q     := $(EMACS_BATCH) -Q
+
+EVAL_STRICT := $(if $(filter 1,$(STRICT_BYTE_WARN)),--eval "(setq byte-compile-error-on-warn t)",)
+EVAL_NATIVE := $(if $(filter 1,$(NATIVE_COMPILE)),--eval "(setq comp-deferred-compilation t)",)
+
+# Optional leaf injection for -Q
+STRAIGHT_BASE_DIR ?= $(shell \
+  if [ -f "$(EARLY)" ]; then \
+    $(EMACS_Q) -l "$(EARLY)" \
+      --eval "(princ (expand-file-name (or (ignore-errors STRAIGHT_BASE_DIR) \
+                                           (ignore-errors (and (boundp 'straight-base-dir) straight-base-dir)) \
+                                           (expand-file-name \"straight\" user-emacs-directory))))"; \
+  else \
+    printf "%s" "$$HOME/.emacs.d/straight"; \
+  fi)
+LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf
+LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords
+
+EVAL_LEAF := \
+  --eval "(let* ((ldir \"$(LEAF_DIR)\") (kwdir \"$(LEAFKW_DIR)\")) \
+            (when (file-directory-p ldir)  (add-to-list 'load-path ldir)) \
+            (when (file-directory-p kwdir) (add-to-list 'load-path kwdir)) \
+            (ignore-errors (require 'leaf)) \
+            (ignore-errors (require 'leaf-keywords)) \
+            (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
+
+# ---- Default target (no args) ------------------------------------------------
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle
+all: onepass-init
+
+# ---- One-pass (early+init env) : tangle -> incremental compile ---------------
+onepass-init: $(ORG)
+	@echo "[onepass-init] tangle -> incremental byte-compile (init loaded)"
+	@$(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" \
+	  $(EVAL_STRICT) $(EVAL_NATIVE) \
+	  --eval "(setq org-confirm-babel-evaluate nil)" \
+	  --eval "(require 'org)" \
+	  --eval "(org-babel-tangle-file \"$(ORG)\")" \
+	  --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
+	                                        (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
+	            (dolist (d dirs) (byte-recompile-directory d 0)) \
+	            (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
+	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
+	  --eval "(message \"[onepass-init] done\")"
+
+# ---- One-pass (-Q minimal env) : tangle -> full compile ----------------------
+onepass-q: $(ORG)
+	@echo "[onepass-q] -Q tangle -> full byte-compile (init not loaded)"
+	@$(EMACS_Q) \
+	  $(EVAL_LEAF) $(EVAL_STRICT) $(EVAL_NATIVE) \
+	  --eval "(setq org-confirm-babel-evaluate nil)" \
+	  --eval "(require 'org)" \
+	  --eval "(org-babel-tangle-file \"$(ORG)\")" \
+	  --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
+	                                        (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
+	            (dolist (d dirs) (byte-recompile-directory d t)) \
+	            (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
+	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
+	  --eval "(message \"[onepass-q] done\")"
+
+# ---- Utilities ---------------------------------------------------------------
+show-files:
+	@echo "[list] $(LISPDIR)";    { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } || true
+	@echo "[list] $(PERSONALDIR)"; { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } || true
+
+echo-paths:
+	@echo "ROOT=$(ROOT)"; \
+	echo "EARLY=$(EARLY)"; \
+	echo "INIT=$(INIT)"; \
+	echo "LISPDIR=$(LISPDIR)"; \
+	echo "PERSONALDIR=$(PERSONALDIR)"; \
+	echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
+	echo "LEAF_DIR=$(LEAF_DIR)"; \
+	echo "LEAFKW_DIR=$(LEAFKW_DIR)"
 
 clean:
-	find . -name "*.elc" -delete
-	@echo "Cleaned compiled files."
+	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
+	@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+	@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 
-help:
-	@echo "make tangle  — tangle all source blocks from README.org"
-	@echo "make clean   — remove compiled .elc files"
+distclean: clean
+	@echo "[distclean] remove stray *.eln"
+	@find "$(ROOT)" -type f -name '*.eln' -delete
+
+tangle:
+	@echo "[tangle] $(ORG)"
+	@$(EMACS_Q) \
+	  --eval "(require 'org)" \
+	  --eval "(require 'ob-core)" \
+	  --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
+	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+	  --eval "(org-babel-tangle-file \"$(ORG)\")"
 #+end_src
 
 * Changelog
