@@ -2899,7 +2899,7 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/ui/ui-nano-palette.el
 :END:
 #+begin_src emacs-lisp
-  ;;; ui/ui-nano-palette.el --- Nano-style color palette -*- lexical-binding: t; -*-
+  ;;; ui/ui-nano-palette.el --- Nano-style color palette (evolved) -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -2909,219 +2909,338 @@ Its role is orchestration only.
   ;;
   ;;; Commentary:
   ;;
-  ;; Minimal nano-style light color palette used by the UI layer.
+  ;; Evolved Nano palette used by the UI layer.
   ;;
   ;; This module provides:
   ;;
-  ;; - customizable palette colors
-  ;; - helper functions to apply palette faces
-  ;; - runtime palette overrides
+  ;; - semantic palette variables
+  ;; - safe face application
+  ;; - palette override API
+  ;; - daemon / frame safe reapplication
+  ;; - theme reload resilience
+  ;;
+  ;; Design goals:
+  ;;
+  ;; - minimal palette
+  ;; - semantic color usage
+  ;; - UI consistency
+  ;; - idempotent application
   ;;
   ;;; Code:
 
   (defgroup my:nano nil
-    "Minimal nano-style light palette."
+    "Minimal nano-style palette."
     :group 'faces)
 
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Base palette
+  ;;;; ---------------------------------------------------------------------------
+
   (defcustom nano-color-background "#fafafa"
-    "Background color used for the main UI."
+    "Main editor background."
     :type 'color
     :group 'my:nano)
 
   (defcustom nano-color-foreground "#374151"
-    "Primary foreground text color."
+    "Primary text color."
     :type 'color
     :group 'my:nano)
 
-  (defcustom nano-color-salient "#2563eb"
-    "Salient accent color used for keywords and highlights."
-    :type 'color
-    :group 'my:nano)
-
-  (defcustom nano-color-popout "#6b7280"
-    "Secondary accent color used for strings and warnings."
-    :type 'color
-    :group 'my:nano)
-
-  (defcustom nano-color-critical "#dc2626"
-    "Critical color used for errors."
-    :type 'color
-    :group 'my:nano)
-
-  (defcustom nano-color-strong "#111827"
-    "Strong foreground color used for bold text."
-    :type 'color
-    :group 'my:nano)
-
-  (defcustom nano-color-faded "#9ca3af"
-    "Faded color used for comments and inactive UI elements."
+  (defcustom nano-color-surface "#ffffff"
+    "UI surface color."
     :type 'color
     :group 'my:nano)
 
   (defcustom nano-color-subtle "#e5e7eb"
-    "Subtle background color used for regions and UI surfaces."
+    "Subtle UI surface."
     :type 'color
     :group 'my:nano)
 
+  (defcustom nano-color-border "#d1d5db"
+    "UI border color."
+    :type 'color
+    :group 'my:nano)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Text palette
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom nano-color-strong "#111827"
+    "Strong text color."
+    :type 'color
+    :group 'my:nano)
+
+  (defcustom nano-color-muted "#9ca3af"
+    "Muted text color."
+    :type 'color
+    :group 'my:nano)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Accent palette
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom nano-color-salient "#2563eb"
+    "Primary accent color."
+    :type 'color
+    :group 'my:nano)
+
+  (defcustom nano-color-popout "#6b7280"
+    "Secondary accent color."
+    :type 'color
+    :group 'my:nano)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Semantic state colors
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom nano-color-success "#10b981"
+    "Success state color."
+    :type 'color
+    :group 'my:nano)
+
+  (defcustom nano-color-warning "#f59e0b"
+    "Warning state color."
+    :type 'color
+    :group 'my:nano)
+
+  (defcustom nano-color-critical "#dc2626"
+    "Critical error color."
+    :type 'color
+    :group 'my:nano)
+
+  (defcustom nano-color-info "#0284c7"
+    "Informational color."
+    :type 'color
+    :group 'my:nano)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Interaction colors
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom nano-color-highlight "#e0e7ff"
+    "Highlight background."
+    :type 'color
+    :group 'my:nano)
+
+  (defcustom nano-color-selection "#e5e7eb"
+    "Selection background."
+    :type 'color
+    :group 'my:nano)
+
+  (defcustom nano-color-cursor "#2563eb"
+    "Cursor color."
+    :type 'color
+    :group 'my:nano)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Utilities
+  ;;;; ---------------------------------------------------------------------------
+
+  (defun my/nano--safe-face (face &rest args)
+    "Safely apply FACE attributes."
+    (when (facep face)
+      (apply #'set-face-attribute face nil args)))
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Face application
+  ;;;; ---------------------------------------------------------------------------
+
   (defun my/nano-apply-faces ()
-    "Apply Nano palette colors to core Emacs faces."
-    (set-face-attribute
-     'default nil
+    "Apply Nano palette."
+
+    ;; default
+    (my/nano--safe-face
+     'default
      :background nano-color-background
      :foreground nano-color-foreground)
 
-    (set-face-attribute
-     'bold nil
+    ;; cursor
+    (setq cursor-type 'bar)
+    (set-cursor-color nano-color-cursor)
+
+    ;; region
+    (my/nano--safe-face
+     'region
+     :background nano-color-selection)
+
+    ;; bold / italic
+    (my/nano--safe-face
+     'bold
      :foreground nano-color-strong
      :weight 'bold)
 
-    (set-face-attribute
-     'italic nil
+    (my/nano--safe-face
+     'italic
      :slant 'italic)
 
-    (set-face-attribute
-     'font-lock-comment-face nil
-     :foreground nano-color-faded)
+    ;; font-lock
+    (my/nano--safe-face
+     'font-lock-comment-face
+     :foreground nano-color-muted)
 
-    (set-face-attribute
-     'font-lock-keyword-face nil
+    (my/nano--safe-face
+     'font-lock-keyword-face
      :foreground nano-color-salient
      :weight 'semi-bold)
 
-    (set-face-attribute
-     'font-lock-string-face nil
+    (my/nano--safe-face
+     'font-lock-string-face
      :foreground nano-color-popout)
 
-    (set-face-attribute
-     'font-lock-warning-face nil
-     :foreground nano-color-popout
-     :weight 'bold)
+    (my/nano--safe-face
+     'font-lock-function-name-face
+     :foreground nano-color-info)
 
-    (set-face-attribute
-     'link nil
-     :foreground nano-color-salient
-     :underline t)
+    (my/nano--safe-face
+     'font-lock-type-face
+     :foreground nano-color-salient)
 
-    (set-face-attribute
-     'button nil
-     :foreground nano-color-salient
-     :underline t)
+    (my/nano--safe-face
+     'font-lock-variable-name-face
+     :foreground nano-color-strong)
 
-    (set-face-attribute
-     'error nil
+    ;; messages
+    (my/nano--safe-face
+     'error
      :foreground nano-color-critical
      :weight 'bold)
 
-    (set-face-attribute
-     'warning nil
-     :foreground nano-color-popout
+    (my/nano--safe-face
+     'warning
+     :foreground nano-color-warning
      :weight 'bold)
 
-    (set-face-attribute
-     'success nil
-     :foreground "#10b981")
+    (my/nano--safe-face
+     'success
+     :foreground nano-color-success)
 
-    (set-face-attribute
-     'region nil
-     :background nano-color-subtle)
+    ;; link
+    (my/nano--safe-face
+     'link
+     :foreground nano-color-salient
+     :underline t)
 
-    (let ((ml-bg nano-color-subtle)
-          (ml-fg nano-color-strong))
-      (set-face-attribute
-       'mode-line nil
-       :background ml-bg
-       :foreground ml-fg
-       :box `(:line-width 1 :color ,ml-bg))
-
-      (set-face-attribute
-       'mode-line-inactive nil
-       :background nano-color-background
-       :foreground nano-color-faded
-       :box `(:line-width 1 :color ,nano-color-background)))
-
-    (set-face-attribute
-     'minibuffer-prompt nil
+    ;; minibuffer
+    (my/nano--safe-face
+     'minibuffer-prompt
      :foreground nano-color-salient
      :weight 'semi-bold)
 
-    (set-face-attribute
-   'dired-directory nil
-   :foreground nano-color-salient
-   :weight 'bold)
+    ;; mode-line
+    (my/nano--safe-face
+     'mode-line
+     :background nano-color-subtle
+     :foreground nano-color-strong
+     :box `(:line-width 1 :color ,nano-color-subtle))
 
-  (set-face-attribute
-   'dired-symlink nil
-   :foreground nano-color-popout)
+    (my/nano--safe-face
+     'mode-line-inactive
+     :background nano-color-background
+     :foreground nano-color-muted
+     :box `(:line-width 1 :color ,nano-color-background))
 
-  (set-face-attribute
-   'dired-ignored nil
-   :foreground nano-color-faded)
+    ;; dired
+    (my/nano--safe-face
+     'dired-directory
+     :foreground nano-color-salient
+     :weight 'bold)
 
-  (set-face-attribute
-   'dired-flagged nil
-   :foreground nano-color-critical
-   :weight 'bold)
+    (my/nano--safe-face
+     'dired-symlink
+     :foreground nano-color-info)
 
-  (set-face-attribute
-   'dired-marked nil
-   :foreground nano-color-salient
-   :weight 'bold)
+    (my/nano--safe-face
+     'dired-ignored
+     :foreground nano-color-muted)
 
-  (set-face-attribute
-   'dired-header nil
-   :foreground nano-color-strong
-   :weight 'bold)
+    (my/nano--safe-face
+     'dired-flagged
+     :foreground nano-color-critical
+     :weight 'bold)
 
-  (set-face-attribute
-   'dired-warning nil
-   :foreground nano-color-critical
-   :weight 'bold)
+    (my/nano--safe-face
+     'dired-marked
+     :foreground nano-color-salient
+     :weight 'bold)
 
-  ;; dired-filter faces
+    (my/nano--safe-face
+     'dired-header
+     :foreground nano-color-strong
+     :weight 'bold)
 
-  (set-face-attribute
-   'dired-filter-group-header nil
-   :foreground nano-color-strong
-   :weight 'bold)
+    (my/nano--safe-face
+     'dired-warning
+     :foreground nano-color-warning
+     :weight 'bold)
 
-  (set-face-attribute
-   'dired-filter-group-name-face nil
-   :foreground nano-color-salient
-   :weight 'bold)
+    ;; dired-filter
+    (my/nano--safe-face
+     'dired-filter-group-header
+     :foreground nano-color-strong
+     :weight 'bold)
 
-  (set-face-attribute
-   'dired-filter-marked nil
-   :foreground nano-color-salient)
+    (my/nano--safe-face
+     'dired-filter-group-name-face
+     :foreground nano-color-salient
+     :weight 'bold)
 
-  (set-face-attribute
-   'dired-filter-ignored nil
-   :foreground nano-color-faded))
+    (my/nano--safe-face
+     'dired-filter-marked
+     :foreground nano-color-salient)
+
+    (my/nano--safe-face
+     'dired-filter-ignored
+     :foreground nano-color-muted))
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Palette override API
+  ;;;; ---------------------------------------------------------------------------
 
   (defun my/nano-set-palette-and-apply (&rest plist)
-    "Override palette colors using PLIST and apply the faces.
+    "Override palette and apply.
 
-  Example usage:
+  Example:
 
-    (my/nano-set-palette-and-apply
-     :background \"#ffffff\"
-     :foreground \"#000000\")"
-    (when plist
-      (let ((map '((:background . nano-color-background)
-                   (:foreground . nano-color-foreground)
-                   (:salient . nano-color-salient)
-                   (:popout . nano-color-popout)
-                   (:critical . nano-color-critical)
-                   (:strong . nano-color-strong)
-                   (:faded . nano-color-faded)
-                   (:subtle . nano-color-subtle))))
-        (while plist
-          (let* ((key (pop plist))
-                 (value (pop plist))
-                 (sym (cdr (assq key map))))
-            (when sym
-              (setf (symbol-value sym) value))))))
+   (my/nano-set-palette-and-apply
+    :background \"#ffffff\"
+    :foreground \"#000000\")"
+
+    (let ((map
+           '((:background . nano-color-background)
+             (:foreground . nano-color-foreground)
+             (:surface . nano-color-surface)
+             (:subtle . nano-color-subtle)
+             (:border . nano-color-border)
+             (:strong . nano-color-strong)
+             (:muted . nano-color-muted)
+             (:salient . nano-color-salient)
+             (:popout . nano-color-popout)
+             (:success . nano-color-success)
+             (:warning . nano-color-warning)
+             (:critical . nano-color-critical)
+             (:info . nano-color-info)
+             (:highlight . nano-color-highlight)
+             (:selection . nano-color-selection)
+             (:cursor . nano-color-cursor))))
+
+      (while plist
+        (let* ((key (pop plist))
+               (value (pop plist))
+               (sym (cdr (assq key map))))
+          (when sym
+            (setf (symbol-value sym) value)))))
 
     (my/nano-apply-faces))
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; Theme reload resilience
+  ;;;; ---------------------------------------------------------------------------
+
+  (defun my/nano-reapply-after-theme (&rest _)
+    "Reapply Nano palette after theme load."
+    (my/nano-apply-faces))
+
+  (advice-add 'load-theme :after #'my/nano-reapply-after-theme)
 
   (provide 'ui-nano-palette)
 
