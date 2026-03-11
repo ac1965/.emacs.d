@@ -2393,7 +2393,7 @@ Its role is orchestration only.
   ;; - enables `auto-save-visited-mode` for continuous auto-saving
   ;; - sets up paredit (disabling electric-pair to avoid conflict) and puni
   ;; - configures show-paren, undo-fu/vundo, ace-window, visual-line-mode
-  ;; - extends Dired with dirvish (replaces dired-filter and dired-subtree)
+  ;; - extends Dired with dired-filter and dired-subtree
   ;; - installs expand-region for semantic text selection
   ;;; Code:
 
@@ -2447,19 +2447,11 @@ Its role is orchestration only.
   (leaf visual-line-mode :straight nil
     :hook (text-mode . visual-line-mode))
 
-  (leaf dirvish
-    :straight t
-    :global-minor-mode dirvish-override-dired-mode
-    :custom
-    ((dirvish-quick-access-entries
-      . '(("h" "~/"         "Home")
-          ("d" "~/Downloads" "Downloads")
-          ("e" "~/.emacs.d"  "Emacs config")))
-     (dirvish-attributes
-      . '(file-time file-size collapse subtree-state vc-state git-msg))
-     (dirvish-subtree-state-style . 'nerd))
+  (leaf dired-filter :straight t)
+  (leaf dired-subtree :straight t :after dired)
+
+  (leaf dired :straight nil
     :config
-    (dirvish-peek-mode 1)
     (if (and (eq system-type 'darwin) (executable-find "gls"))
         (progn
           (setq insert-directory-program "gls"
@@ -3184,23 +3176,24 @@ Its role is orchestration only.
      :foreground nano-color-warning
      :weight 'bold)
 
-    ;; dirvish
+    ;; dired-filter
     (my/nano--safe-face
-     'dirvish-hl-line
-     :background nano-color-highlight)
-
-    (my/nano--safe-face
-     'dirvish-git-commit-message-face
-     :foreground nano-color-muted)
-
-    (my/nano--safe-face
-     'dirvish-header-line-path-face
+     'dired-filter-group-header
      :foreground nano-color-strong
      :weight 'bold)
 
     (my/nano--safe-face
-     'dirvish-subtree-state-face
-     :foreground nano-color-salient))
+     'dired-filter-group-name-face
+     :foreground nano-color-salient
+     :weight 'bold)
+
+    (my/nano--safe-face
+     'dired-filter-marked
+     :foreground nano-color-salient)
+
+    (my/nano--safe-face
+     'dired-filter-ignored
+     :foreground nano-color-muted))
 
   ;;;; ---------------------------------------------------------------------------
   ;;;; Palette override API
@@ -4274,11 +4267,10 @@ Its role is orchestration only.
 
   (defun ui-keymap--local-leader-binds ()
     "Install local leader bindings for specific major modes."
-    (with-eval-after-load 'dirvish
-      (when (boundp 'dirvish-mode-map)
-        (define-key dirvish-mode-map (kbd "TAB") #'dirvish-subtree-toggle)
-        (define-key dirvish-mode-map (kbd "i")   #'dirvish-subtree-toggle)
-        (define-key dirvish-mode-map (kbd "q")   #'dirvish-quit)))
+    (with-eval-after-load 'dired
+      (when (boundp 'dired-mode-map)
+        (define-key dired-mode-map (kbd "TAB") #'dired-subtree-toggle)
+        (define-key dired-mode-map (kbd "i")   #'dired-subtree-insert)))
 
     (with-eval-after-load 'org
       (when (boundp 'org-mode-map)
@@ -6948,7 +6940,7 @@ Its role is orchestration only.
 :header-args:emacs-lisp: :tangle lisp/utils/utils-dired.el
 :END:
 #+begin_src emacs-lisp
-  ;;; utils/utils-dired.el --- Dired/Dirvish utilities -*- lexical-binding: t; -*-
+  ;;; utils/utils-dired.el --- Dired utilities -*- lexical-binding: t; -*-
   ;;
   ;;
   ;; Copyright (c) 2021-2026
@@ -6959,21 +6951,18 @@ Its role is orchestration only.
   ;;
   ;; Commentary:
   ;;
-  ;; Dired/Dirvish utility: smart RET for file-or-directory navigation.
+  ;; Dired utility: smart RET for file-or-directory navigation.
   ;;
   ;; This file:
-  ;; - `my/dired-get-file-or-dir`: visits a directory with `dirvish` (if active)
-  ;;   or `dired-find-file`, opens a file with `find-file`, bound to RET
-  ;;   in `dired-mode-map`
+  ;; - `my/dired-get-file-or-dir`: visits a directory with `dired-find-file`
+  ;;   or a file with `find-file`, bound to RET in `dired-mode-map`
   ;;; Code:
 
   (defun my/dired-get-file-or-dir ()
     (interactive)
     (let ((file (dired-get-file-for-visit)))
       (if (file-directory-p file)
-          (if (fboundp 'dirvish)
-              (dirvish file)
-            (dired-find-file))
+          (dired-find-file)
         (find-file file))))
 
   (with-eval-after-load 'dired
@@ -7737,152 +7726,161 @@ tangle:
 
 ** 2026-03
 
-*** Refactoring: 全修正一覧
+*** Refactoring: Full fix list
 
-*重複排除 (🟡)*
+*Deduplication (🟡)*
 
-- *[Fix 10] ui-which-key.el*: `version<=` 分岐の両ブランチが同じ式になっていた誤りを修正。
-  Emacs 30+ では `:straight nil` の built-in leaf を使い、30未満では `:straight t` の
-  パッケージ版を使う2つの `:if` ガード付き leaf に分離。
-  `ui-which-key--startup-init` も単純化し、分岐ロジックを leaf 宣言側に移動。
+- *[Fix 10] ui-which-key.el*: Fixed a bug where both branches of the =version<=
+  guard evaluated to the same expression. Split into two separate =leaf= declarations,
+  each guarded by =:if=: the built-in (=:straight nil=) for Emacs 30+, the package
+  version (=:straight t=) for older releases. Simplified =ui-which-key--startup-init=
+  by moving the version-dispatch logic into the =leaf= declarations.
 
-- *[Fix 6b] core-tools.el*: `core-tools-ensure-directory` の独立実装を削除し
-  `my/ensure-directory-exists` への `defalias` に変更。正規実装の連鎖を
-  `core--ensure-directory` → `my/ensure-directory-exists` → `core-tools-ensure-directory`
-  と明確化。既存呼び出しを壊さず重複コードを排除。
+- *[Fix 6b] core-tools.el*: Removed the standalone implementation of
+  =core-tools-ensure-directory= and replaced it with a =defalias= pointing to
+  =my/ensure-directory-exists=. The canonical call chain is now:
+  =core--ensure-directory= → =my/ensure-directory-exists= → =core-tools-ensure-directory=.
+  Eliminates duplicate code without breaking any existing call sites.
 
-- *[Fix 6c] utils-path.el*: `(unless (fboundp 'my/ensure-directory-exists) ...)` の
-  フォールバック定義を削除。`early-init.el` は常に先行してロードされるため
-  このコードは実行されないデッドコードだった。コメントのみ残す。
+- *[Fix 6c] utils-path.el*: Removed the =(unless (fboundp 'my/ensure-directory-exists) ...)=
+  fallback definition. Since =early-init.el= always loads before any module, this
+  code path was dead and could never execute. Replaced with an explanatory comment.
 
-- *[Bonus] core-fixes.el*: 未定義関数 =my:with-thisfile--load= /
-  =my:with-thisfile--require= への dead `when` guard を除去。
-  モジュールはバージョンスコープ修正のクリーンなプレースホルダとして維持。
+- *[Bonus] core-fixes.el*: Removed dead =when= guards referencing undefined functions
+  =my:with-thisfile--load= and =my:with-thisfile--require=. The module is retained
+  as a clean placeholder for version-scoped compatibility fixes.
 
-- *[Bonus] core-runtime.el*: modifier key 変数設定を `core-runtime.el` の
-  1箇所に集約。`init.el` から重複していた `leaf my:modifier` ブロックを削除。
+- *[Bonus] core-runtime.el*: Consolidated all modifier key variable assignments into
+  =core-runtime.el=. Removed the duplicate =leaf my:modifier= block that had been
+  present in =init.el=.
 
-*Critical 修正*
+*Critical fixes*
 
-- *[Fix 1] completion-lsp.el*: 内部変数 =eglot--servers= を公開 API
-  (=eglot-managed-buffers=, =eglot-current-server=, =eglot-shutdown=) で置換。
-  旧コードは Emacs バージョン間で変わり得るプライベート連想リストを直接参照していた。
-  新コードは文書化・安定した公開関数のみを使用。
+- *[Fix 1] completion-lsp.el*: Replaced the internal variable =eglot--servers= with
+  the public API: =eglot-managed-buffers=, =eglot-current-server=, and =eglot-shutdown=.
+  The previous code accessed a private alist that could change across Emacs versions.
+  The new code relies exclusively on documented, stable public functions.
 
-- *[Fix 2] orgx-core.el + utils-org-agenda.el*: レイヤー違反と二重スキャンを解消。
-  従来 `orgx-core` はロード時に `directory-files-recursively` を直接呼び出し
-  `utils-org-agenda` のキャッシュを無意味にしていた。現在は最小フォールバックを
-  即時設定し (Phase 1)、`after-init-hook` で `utils-org-agenda-build` に委譲 (Phase 2)。
+- *[Fix 2] orgx-core.el + utils-org-agenda.el*: Resolved a layer violation and
+  redundant directory scan. Previously, =orgx-core= called =directory-files-recursively=
+  at load time, making the =utils-org-agenda= cache useless. The fix introduces a
+  two-phase approach: a minimal fallback is set immediately (Phase 1), then
+  =utils-org-agenda-build= is called from =after-init-hook= to replace it (Phase 2).
 
-- *[Fix 3] personal/user.el*: `personal-messages` アーカイバが無条件かつ
-  起動直後に実行されていた問題を修正。`locate-library` ガード +
-  `with-eval-after-load 'org` による遅延 + `run-with-idle-timer` (120秒遅延・10分反復)
-  の3段構えで起動時の競合状態を排除。
+- *[Fix 3] personal/user.el*: Fixed a startup race condition where the
+  =personal-messages= archiver ran unconditionally at load time. The fix applies
+  three guards: a =locate-library= check, deferred loading via
+  =with-eval-after-load 'org=, and a =run-with-idle-timer= with a 120-second
+  initial delay and a 600-second (10-minute) repeat interval.
 
-*パフォーマンス修正*
+*Performance fixes*
 
-- *[Bonus] orgx-visual.el*: `org-mode-hook` と初期化フラグの相互作用を修正。
-  変数設定が `after-init-hook` で一度だけ実行 (`orgx-visual--configure-once`) し、
-  モード有効化がバッファごとに `org-mode-hook` で実行 (`orgx-visual--enable-mode`) する
-  2関数に分離。旧来の単一フック関数では新バッファで `org-modern-mode` が
-  サイレントにスキップされる問題があった。
+- *[Bonus] orgx-visual.el*: Fixed an interaction between =org-mode-hook= and the
+  initialization guard flag. Split into two functions: =orgx-visual--configure-once=
+  (runs once via =after-init-hook= to set variables) and =orgx-visual--enable-mode=
+  (runs per buffer via =org-mode-hook= to activate the mode). The previous single-hook
+  design silently skipped =org-modern-mode= activation for buffers opened after init.
 
-- *[Fix 9] dev-ai.el*: ロード後の全設定を `:config` ブロックに集約し
+- *[Fix 9] dev-ai.el*: Consolidated all post-load configuration into the =:config=
+  block to guarantee correct ordering after the package is loaded.
 
-*今回の修正 (🟡 重複排除 / コード品質)*
+*Additional fixes (🟡 deduplication / code quality)*
 
-- *[Fix A] orgx-core.el*: org-archive-location の fallback パスを
-  =~/org= ハードコードから =my:d:org= 変数経由に変更。
-  優先順位: =org-directory= → =my:d:org= → =~/org=。
+- *[Fix A] orgx-core.el*: Changed the =org-archive-location= fallback path from the
+  hardcoded =~/org= to a variable-driven lookup. Resolution order:
+  =org-directory= → =my:d:org= → =~/org=.
 
-- *[Fix A] personal-messages.el*: =personal-messages-archive-dir= の
-  fallback パスを =~/org/org-roam/= ハードコードから
-  =my:d:org-roam= → =my:d:org= 変数経由に変更。
+- *[Fix A] personal-messages.el*: Changed the =personal-messages-archive-dir=
+  fallback from the hardcoded =~/org/org-roam/= to a variable-driven lookup:
+  =my:d:org-roam= → =my:d:org=.
 
-- *[Fix B] dev-lsp-eglot.el*: =add-hook= に渡していた匿名 lambda を
-  名前付き関数 =my/lsp-eglot--maybe-ensure= に抽出。
-  デバッグ・toggle・重複追加防止が可能になる。
+- *[Fix B] dev-lsp-eglot.el*: Extracted the anonymous lambda passed to =add-hook=
+  into the named function =my/lsp-eglot--maybe-ensure=. This makes the hook
+  debuggable, togglable, and safe against duplicate registration.
 
-- *[Fix C] init.el / core-session.el / core-session-private.el*:
-  実行時に直接使用しない =subr-x= / =seq= / =cl-lib= の bare =require= を
-  =eval-when-compile= に変更。コンパイル時の展開保証を維持しつつ起動時の不要ロードを排除。
+- *[Fix C] init.el / core-session.el / core-session-private.el*: Moved bare
+  =require= calls for =subr-x=, =seq=, and =cl-lib= (not used at runtime directly)
+  into =eval-when-compile= blocks. Compile-time macro expansion is preserved while
+  eliminating unnecessary loads at startup.
 
-- *[Fix vterm] dev-ai.el*: =display-warning= 付き vterm フォールバックを
-  サイレントな =(if (require 'vterm nil 'noerror) 'vterm 'comint)= に変更。
-  comint は正規バックエンドであり警告は不適切だった。
+- *[Fix vterm] dev-ai.el*: Replaced the =display-warning=-backed vterm fallback
+  with a silent =(if (require 'vterm nil 'noerror) 'vterm 'comint)=. Since =comint=
+  is a fully supported backend, the absence of =vterm= is not a warning condition.
 
-*** Refactoring: dired-filter → dirvish (今回)
+*** Refactoring: dired-filter → dirvish
 
-*🟠 Medium — パッケージ置換*
+*🟠 Medium — package replacement*
 
-- *[Fix D] core-editing.el*: =dired-filter= / =dired-subtree= の2パッケージを
-  =dirvish= 1パッケージに統合。=leaf dirvish= に =:global-minor-mode dirvish-override-dired-mode=
-  を追加し、=dirvish-attributes= で =subtree-state= / =vc-state= / =git-msg= 等の
-  アトリビュートを有効化。=dirvish-peek-mode= を有効化し、プレビュー機能を付与。
-  =ls= スイッチ設定は =leaf dirvish= の =:config= ブロック内に集約。
+- *[Fix D] core-editing.el*: Replaced =dired-filter= and =dired-subtree= with a
+  single =dirvish= package. Added =:global-minor-mode dirvish-override-dired-mode=
+  so all =dired= invocations redirect to dirvish automatically. Enabled
+  =dirvish-attributes= with =subtree-state=, =vc-state=, =git-msg=, and related
+  attributes. Enabled =dirvish-peek-mode= for preview support. Consolidated
+  =ls= switch configuration inside the =leaf dirvish :config= block.
 
-- *[Fix D] ui-keymap.el*: =dired-mode-map= の =dired-subtree-toggle= /
-  =dired-subtree-insert= キーバインドを削除。=dirvish-mode-map= に対して
-  =dirvish-subtree-toggle= (TAB / i) と =dirvish-quit= (q) を設定。
+- *[Fix D] ui-keymap.el*: Removed keybindings for =dired-subtree-toggle= and
+  =dired-subtree-insert= from =dired-mode-map=. Added bindings for
+  =dirvish-subtree-toggle= (=TAB= / =i=) and =dirvish-quit= (=q=) in
+  =dirvish-mode-map=.
 
-- *[Fix D] ui-nano-palette.el*: =dired-filter-group-header= 等の
-  =dired-filter= 専用 face 定義 4個を =dirvish= の対応 face
-  (=dirvish-hl-line= / =dirvish-git-commit-message-face= /
-  =dirvish-header-line-path-face= / =dirvish-subtree-state-face=) に置換。
+- *[Fix D] ui-nano-palette.el*: Replaced four =dired-filter=-specific face
+  definitions with their =dirvish= equivalents: =dirvish-hl-line=,
+  =dirvish-git-commit-message-face=, =dirvish-header-line-path-face=, and
+  =dirvish-subtree-state-face=.
 
-- *[Fix D] utils-dired.el*: =my/dired-get-file-or-dir= のディレクトリ訪問を
-  =(fboundp 'dirvish)= でガードした上で =dirvish= 呼び出しに変更。
-  =dirvish= が未ロードの場合は従来の =dired-find-file= へフォールバック。
+- *[Fix D] utils-dired.el*: Updated =my/dired-get-file-or-dir= to call =dirvish=
+  for directory navigation when =(fboundp 'dirvish)= is true, with a fallback to
+  =dired-find-file= when dirvish is not loaded.
 
-*** Refactoring: Code quality pass (今回)
+*** Refactoring: code quality pass
 
-*🔴 Critical — 公開 API 違反 / 存在しないフック*
+*🔴 Critical — public API violations / nonexistent hooks*
 
-- *[Fix 1] ui-health-modeline.el*: =eglot--managed-buffers= (内部変数) を
-  公開 API =eglot-managed-buffers= 関数呼び出しに置換。前回の
-  =completion-lsp.el= Fix 1 と同じ原則を適用。
+- *[Fix 1] ui-health-modeline.el*: Replaced the internal variable
+  =eglot--managed-buffers= with the public API function =eglot-managed-buffers=.
+  Applies the same principle established in =completion-lsp.el= Fix 1.
 
-- *[Fix 2] ui-health-modeline.el*: =eglot-server-stopped-hook= は
-  Eglot のどのバージョンにも存在しないフック名。
-  正しい =eglot-shutdown-hook= に修正。
+- *[Fix 2] ui-health-modeline.el*: Corrected the hook name from
+  =eglot-server-stopped-hook= (which does not exist in any version of Eglot) to
+  the correct =eglot-shutdown-hook=.
 
-*🟠 Medium — 匿名 lambda hook → 名前付き defun*
+*🟠 Medium — anonymous lambda hooks → named defuns*
 
-- *[Fix 3] core-editing.el (paredit)*: 2呼び出しを持つ lambda を
-  =core-editing--paredit-setup= として抽出。
+- *[Fix 3] core-editing.el (paredit)*: Extracted the two-call lambda into the
+  named function =core-editing--paredit-setup=.
 
-- *[Fix 4] core-editing.el (puni)*: minibuffer 無効化 lambda を
-  =core-editing--puni-minibuffer-off= として抽出。
+- *[Fix 4] core-editing.el (puni)*: Extracted the minibuffer-disable lambda into
+  the named function =core-editing--puni-minibuffer-off=.
 
-- *[Fix 5&6&12] dev-build.el*: makefile ローカル設定 lambda を
-  =dev-build--makefile-setup= に、ansi-color lambda を
-  =dev-build--ansi-color-compilation= に抽出。
-  =leaf compile= / =leaf ansi-color= を =make-mode= leaf の
-  =:config= ネストから独立した top-level leaf に昇格。
+- *[Fix 5, 6, 12] dev-build.el*: Extracted the Makefile local-settings lambda into
+  =dev-build--makefile-setup= and the ANSI color lambda into
+  =dev-build--ansi-color-compilation=. Promoted =leaf compile= and =leaf ansi-color=
+  from nested =:config= blocks inside =make-mode= to independent top-level =leaf=
+  declarations.
 
-- *[Fix 7] dev-lsp-eglot.el (eglot leaf)*: =:hook= の lambda を
-  前回定義した =my/lsp-eglot--maybe-ensure= で置換
-  (Fix B との一貫性)。
+- *[Fix 7] dev-lsp-eglot.el (eglot leaf)*: Replaced the =:hook= lambda with the
+  previously defined =my/lsp-eglot--maybe-ensure= for consistency with Fix B.
 
-- *[Fix 8] orgx-extensions.el*: =run-with-idle-timer= の lambda を
-  =orgx--org-roam-autosync-enable= として抽出。
+- *[Fix 8] orgx-extensions.el*: Extracted the =run-with-idle-timer= lambda into
+  the named function =orgx--org-roam-autosync-enable=.
 
-- *[Fix 10b] dev-navigation.el (dumb-jump)*: =prog-mode-hook= に
-  渡していた =add-hook= lambda を =dev-navigation--dumb-jump-setup=
-  として抽出。eww の =eww-after-render-hook= lambda を
-  =my/eww-after-render= として抽出。
+- *[Fix 10b] dev-navigation.el (dumb-jump)*: Extracted the =add-hook= lambda
+  passed to =prog-mode-hook= into =dev-navigation--dumb-jump-setup=. Extracted
+  the =eww-after-render-hook= lambda into =my/eww-after-render=.
 
-*🟠 Medium — defvar の誤配置 → top-level へ*
+*🟠 Medium — misplaced defvars → top-level*
 
-- *[Fix 9] dev-term.el*: =defvar nano-color-*= 8個を =my/vterm-apply-palette=
-  関数内から削除。変数は既に =ui-nano-palette.el= で定義済みであり、
-  関数内の =defvar= は二重定義かつ初期値の再設定を抑止する意図しない副作用がある。
+- *[Fix 9] dev-term.el*: Removed eight =defvar nano-color-*= declarations from
+  inside =my/vterm-apply-palette=. These variables are already defined at top
+  level in =ui-nano-palette.el=; inline =defvar= forms suppress their values and
+  create an unintended side effect of preventing re-initialization.
 
-- *[Fix 10] dev-navigation.el (eww)*: =defvar my:d:eww= と
-  =defvar eww-hl-search-word= を =leaf eww= の =:init= 内から
-  top-level に移動。バイトコンパイラが変数を認識できるようになる。
+- *[Fix 10] dev-navigation.el (eww)*: Moved =defvar my:d:eww= and
+  =defvar eww-hl-search-word= from inside the =leaf eww :init= block to top level,
+  allowing the byte-compiler to recognize these variables correctly.
 
 *🟡 Minor — setq → setopt*
 
-- *[Fix 11] ui-which-key.el*: =which-key-idle-delay= の設定を
-  =setq= から =setopt= に変更。=defcustom= 変数には常に =setopt= を使う。
+- *[Fix 11] ui-which-key.el*: Changed the =which-key-idle-delay= assignment from
+  =setq= to =setopt=. All =defcustom= variables should be set via =setopt= to
+  ensure setter functions and type validation are respected.
