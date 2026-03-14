@@ -1409,24 +1409,24 @@ Its role is orchestration only.
   ;; Commentary:
   ;; Minimal and version-scoped compatibility fixes for Emacs.
   ;;
-  ;; NOTE: The my:with-thisfile--load/require advice hooks were removed because
-  ;; the helper functions they depend on are not defined anywhere in this
-  ;; configuration.  The dead code was causing confusion without providing
-  ;; any benefit.  If these helpers are added in a future layer, restore
-  ;; the advice block here.
+  ;; Load-order note:
+  ;; core-fixes is the FIRST module loaded (see modules.el).  core-tools loads
+  ;; at position 9.  Therefore this file must NOT defalias to core-tools-emacs>=
+  ;; — that symbol is not yet defined at load time and would raise void-function.
   ;;
-  ;; Deduplication note (see also core-tools.el):
-  ;; `core-fixes--emacs>=` is now a thin alias pointing to `core-tools-emacs>=`.
-  ;; The implementation lives in core-tools.el, which is loaded first in the
-  ;; module sequence.  This eliminates the duplicate definition that previously
-  ;; existed between these two modules.
+  ;; core-fixes--emacs>= is defined independently here.  core-tools.el defines
+  ;; its own core-tools-emacs>= separately.  Both are identical one-liners, and
+  ;; the duplication is deliberate: the two functions serve different namespaces
+  ;; (internal vs public) and avoiding the duplication via defalias requires
+  ;; a load-order inversion that would break the deterministic module sequence.
   ;;
   ;;; Code:
 
-  ;; [R9 FIX] core-fixes--emacs>= was identical to core-tools-emacs>=.
-  ;; Provide it as an alias so any internal use sites continue to compile.
-  ;; core-tools must be loaded before core-fixes (guaranteed by my:modules order).
-  (defalias 'core-fixes--emacs>= #'core-tools-emacs>=)
+  (defun core-fixes--emacs>= (major minor)
+    "Return non-nil if running Emacs version is at least MAJOR.MINOR."
+    (or (> emacs-major-version major)
+        (and (= emacs-major-version major)
+             (>= emacs-minor-version minor))))
 
   ;;;; Forward-compatibility notes --------------------------------------------
   ;;
@@ -2495,6 +2495,8 @@ Its role is orchestration only.
     :custom
     ((dirvish-attributes . (list 'subtree-state 'vc-state 'git-msg 'file-size)))
     :config
+    (setopt dirvish-cache-dir
+            (expand-file-name "dirvish/" my:d:cache))
     ;; Preview pane on (disabled by default to avoid I/O on remote buffers).
     (dirvish-peek-mode 1)
     ;; ls switch configuration — consolidated from the former leaf dired block.
@@ -4317,14 +4319,23 @@ Its role is orchestration only.
 
     (ui-keymap--bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
 
+  (defun ui-keymap--dirvish-open-read-only ()
+    "Open file-at-point in another window as read-only.
+  Combines `dired-find-file-other-window' with `read-only-mode'
+  so the dirvish session remains intact for continued browsing."
+    (interactive)
+    (dired-find-file-other-window)
+    (read-only-mode 1))
+
   (defun ui-keymap--local-leader-binds ()
     "Install local leader bindings for specific major modes."
     (with-eval-after-load 'dirvish
-    (when (boundp 'dirvish-mode-map)
-      (define-key dirvish-mode-map (kbd "TAB") #'dirvish-subtree-toggle)
-      (define-key dirvish-mode-map (kbd "i")   #'dirvish-subtree-toggle)
-      (define-key dirvish-mode-map (kbd "o")   #'dired-find-file-other-window)
-      (define-key dirvish-mode-map (kbd "q")   #'dirvish-quit)))
+      (when (boundp 'dirvish-mode-map)
+        (define-key dirvish-mode-map (kbd "TAB") #'dirvish-subtree-toggle)
+        (define-key dirvish-mode-map (kbd "i")   #'dirvish-subtree-toggle)
+        (define-key dirvish-mode-map (kbd "o")   #'dired-find-file-other-window)
+        (define-key dirvish-mode-map (kbd "O")   #'ui-keymap--dirvish-open-read-only)
+        (define-key dirvish-mode-map (kbd "q")   #'dirvish-quit)))
 
     (with-eval-after-load 'org
       (when (boundp 'org-mode-map)
@@ -5245,15 +5256,14 @@ Its role is orchestration only.
                                           (expand-file-name "~/org")))))
       (setopt org-archive-location (concat central "::"))))
 
-  ;; Phase 2: Replace the fallback with the full cached list after init.
-  ;; utils-org-agenda is loaded later in the module sequence (utils/ layer),
-  ;; so we must defer via after-init-hook to respect layer ordering.
-  (add-hook 'after-init-hook
-            (lambda ()
-              (when (fboundp 'utils-org-agenda-build)
-                (let ((files (utils-org-agenda-build)))
-                  (when files
-                    (setq org-agenda-files files))))))
+  (defun orgx-core--rebuild-agenda-files ()
+    "Phase 2: replace agenda-files fallback with the full cached list."
+    (when (fboundp 'utils-org-agenda-build)
+      (let ((files (utils-org-agenda-build)))
+        (when files
+          (setq org-agenda-files files)))))
+
+  (add-hook 'after-init-hook #'orgx-core--rebuild-agenda-files)
 
   (provide 'orgx-core)
   ;;; orgx/org-core.el ends here
@@ -5682,7 +5692,6 @@ Its role is orchestration only.
 #+begin_src emacs-lisp
   ;;; orgx/orgx-auto-tangle.el --- Automatic tangling helpers -*- lexical-binding: t; -*-
   ;;
-  ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
@@ -5698,6 +5707,7 @@ Its role is orchestration only.
   ;;   ("README.org")
   ;; - uses a buffer-local in-progress flag to prevent recursive save loops
   ;; - registers `my/orgx-auto-tangle--maybe` in `after-save-hook` locally
+  ;;   via the named hook function `orgx-auto-tangle--install-hook`
   ;;; Code:
 
   (require 'org)
@@ -5723,9 +5733,15 @@ Its role is orchestration only.
           (error
            (message "[orgx-auto-tangle] error: %s" (error-message-string err)))))))
 
-  (add-hook 'org-mode-hook
-            (lambda ()
-              (add-hook 'after-save-hook #'my/orgx-auto-tangle--maybe nil 'local)))
+  ;; [FIX] Extracted anonymous lambda → named defun.
+  ;; Rationale: anonymous lambdas on org-mode-hook are not removable via
+  ;; remove-hook, cannot be inspected with describe-function, and are not
+  ;; safe against duplicate registration across eval-buffer calls.
+  (defun orgx-auto-tangle--install-hook ()
+    "Install the auto-tangle after-save hook buffer-locally."
+    (add-hook 'after-save-hook #'my/orgx-auto-tangle--maybe nil 'local))
+
+  (add-hook 'org-mode-hook #'orgx-auto-tangle--install-hook)
 
   (provide 'orgx-auto-tangle)
   ;;; orgx/orgx-auto-tangle.el ends here
@@ -6124,10 +6140,13 @@ Its role is orchestration only.
              (vterm-toggle-fullscreen-p . nil)
              (vterm-toggle-scope . 'project)))
 
+  (defun dev-term--display-buffer-p (buf _action)
+    "Return non-nil when BUF is a vterm terminal buffer."
+    (dev-term--buffer-p buf))
+
   (with-eval-after-load 'vterm
     (push
-     '((lambda (buf _)
-         (dev-term--buffer-p buf))
+     '(dev-term--display-buffer-p
        (display-buffer-reuse-window display-buffer-in-direction)
        (direction . bottom)
        (dedicated . t)
@@ -6438,41 +6457,31 @@ Its role is orchestration only.
     :straight t
     :if dev-music-enable-p
     :config
-
     (require 'emms-setup)
-
-    ;; full configuration
     (emms-all)
-
-    ;; default players
     (emms-default-players)
 
-    ;; directories
+    ;; Store EMMS data under my:d:var.
+    ;; Cache could technically live under my:d:cache,
+    ;; but history is persistent user data, so my:d:var
+    ;; is semantically more appropriate.
     (setq emms-directory
-          (expand-file-name ".cache/emms/" user-emacs-directory)
+          (expand-file-name "emms/" my:d:var))
 
-          emms-source-file-default-directory
-          "~/Music/"
+    ;; Keep the default EMMS structure by deriving
+    ;; these paths from `emms-directory`.
+    (setq emms-history-file
+          (expand-file-name "history" emms-directory))
+    (setq emms-cache-file
+          (expand-file-name "cache" emms-directory))
 
-          emms-history-file
-          (expand-file-name "history" emms-directory)
+    (setq emms-source-file-default-directory "~/Music/"
+          emms-playlist-buffer-name "*EMMS Playlist*"
+          emms-info-functions '(emms-info-native)
+          emms-player-list '(emms-player-mpv emms-player-mplayer))
 
-          emms-playlist-buffer-name
-          "*EMMS Playlist*")
-
-    ;; metadata
-    (setq emms-info-functions
-          '(emms-info-native))
-
-    ;; preferred players
-    (setq emms-player-list
-          '(emms-player-mpv
-            emms-player-mplayer))
-
-    ;; mode-line playback indicator
+    (my/ensure-directory-exists emms-directory)
     (emms-mode-line-mode 1)
-
-    ;; Dired integration
     (add-hook 'dired-mode-hook #'dev-music--setup-dired))
 
   (leaf emms-player-mpv
@@ -6998,7 +7007,6 @@ Its role is orchestration only.
 #+begin_src emacs-lisp
   ;;; utils/utils-dired.el --- Dired utilities -*- lexical-binding: t; -*-
   ;;
-  ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
   ;; License: GNU GPL v3 or later
@@ -7010,16 +7018,22 @@ Its role is orchestration only.
   ;; Dired utility: smart RET for file-or-directory navigation.
   ;;
   ;; This file:
-  ;; - `my/dired-get-file-or-dir`: visits a directory with `dired-find-file`
-  ;;   or a file with `find-file`, bound to RET in `dired-mode-map`
+  ;; - `my/dired-get-file-or-dir`: navigates directories within the existing
+  ;;   dirvish session via `dirvish-find-file`, or opens files with `find-file`.
+  ;;   Falls back to `dired-find-file` when dirvish is not loaded.
+  ;;
+  ;; [FIX] Previously called `(dirvish file)` for directory navigation.
+  ;; `dirvish` creates a brand-new full-frame session, discarding the current
+  ;; session's history and layout.  `dirvish-find-file` navigates within the
+  ;; existing session — this is the correct API for in-session directory entry.
   ;;; Code:
 
   (defun my/dired-get-file-or-dir ()
     (interactive)
     (let ((file (dired-get-file-for-visit)))
       (if (file-directory-p file)
-          (if (fboundp 'dirvish)
-              (dirvish file)
+          (if (fboundp 'dirvish-find-file)
+              (dirvish-find-file)
             (dired-find-file))
         (find-file file))))
 
