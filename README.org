@@ -32,6 +32,7 @@ Primary goals:
 - delete-safe module architecture
 - forward compatibility with Emacs 31+
 - maintainability for long-term evolution
+- LSP backend agnosticism (eglot / lsp-mode / lsp-bridge)
 
 This configuration is designed to function as a modular Emacs distribution.
 
@@ -50,14 +51,15 @@ direction only.
 Load order:
 
 1. early-init
-2. core
-3. policy
-4. ui
+2. core (includes policy)
+3. ui
+4. auth
 5. completion
 6. orgx
-7. dev
-8. utils
-9. personal
+7. vcs
+8. dev
+9. utils
+10. personal
 
 Rules:
 
@@ -65,6 +67,7 @@ Rules:
 - lower layers must never depend on upper layers
 - modules do not auto-discover dependencies
 - side effects must remain explicit
+- LSP backend (eglot / lsp-mode / lsp-bridge) is selected via core-switches
 
 The architecture guarantees:
 
@@ -107,10 +110,11 @@ Central orchestration layer.
 
 Responsibilities:
 
-- define layer load order
-- isolate module loading
-- handle optional modules safely
-- prevent dependency inversion
+- define canonical layer load order (core → ui → auth → completion → orgx → vcs → dev → utils)
+- isolate module loading with per-module error trapping
+- handle optional modules safely via my:modules-skip
+- report per-module load time when my:modules-verbose is non-nil
+- prevent dependency inversion between layers
 
 ** Directory Layout
 :PROPERTIES:
@@ -127,13 +131,13 @@ The repository follows a deterministic layout.
 ├── README.org
 ├── lisp/
 │   ├── core/
-│   ├── policy/
 │   ├── ui/
+│   ├── auth/
 │   ├── completion/
 │   ├── orgx/
+│   ├── vcs/
 │   ├── dev/
-│   ├── utils/
-│   └── personal/
+│   └── utils/
 ├── var/
 ├── cache/
 └── etc/
@@ -159,23 +163,27 @@ Fundamental runtime configuration.
 
 Responsibilities:
 
-- environment setup
-- path management
-- native compilation
-- tree-sitter integration
-- history persistence
+- environment setup and directory layout
+- path management and load-path construction
+- native compilation and eln-cache configuration
+- tree-sitter grammar management
+- session persistence and history
+- GC tuning and startup performance
+- editing helpers and structural navigation
 
 Core modules must not depend on UI.
 
 *** policy
 
-Global behavioral policies.
+Global behavioral policies (loaded as part of the core layer).
 
-Examples:
+Responsibilities:
 
-- whitespace rules
-- indentation standards
-- editor safety constraints
+- whitespace and trailing-whitespace rules
+- indentation standards and tab policy
+- editor safety constraints (require-final-newline, etc.)
+
+Policy modules must not activate UI or package features.
 
 *** ui
 
@@ -192,12 +200,31 @@ Responsibilities:
 
 Completion frameworks and minibuffer UX.
 
-Examples:
+Responsibilities:
 
-- vertico
-- marginalia
-- corfu
-- consult
+- minibuffer UI (vertico, marginalia)
+- popup completion (corfu, cape)
+- search and navigation (consult, embark)
+- icon integration (nerd-icons, kind-icon)
+- mode-specific CAPF configuration
+- Org SRC block completion integration
+
+The capf-org-src family (completion-capf-org-src, completion-capf-org-src-lang,
+completion-corfu-org-src, completion-orderless-org-src) cooperates to provide
+language-appropriate completion inside Org source blocks.
+
+*** auth
+
+Authentication and secrets management.
+
+Responsibilities:
+
+- auth-source backend configuration
+- EasyPG file encryption support
+- pass-based credential lookup
+- environment variable verification
+
+Auth modules must not depend on UI.
 
 *** orgx
 
@@ -205,10 +232,25 @@ Extended Org Mode functionality.
 
 Responsibilities:
 
-- agenda configuration
-- journaling
-- capture templates
-- org utilities
+- agenda and todo configuration
+- journaling (org-journal) and note capture
+- org-roam knowledge graph integration
+- export backends (ox-hugo, LaTeX/LuaLaTeX)
+- visual enhancements (org-modern)
+- auto-tangle on save
+- typography and reading-comfort configuration
+
+*** vcs
+
+Version control integration.
+
+Responsibilities:
+
+- Magit configuration
+- gutter diff indicators
+- GitHub/GitLab Forge integration
+
+VCS modules must not depend on dev.
 
 *** dev
 
@@ -216,20 +258,25 @@ Development tooling.
 
 Examples:
 
-- magit
-- project.el
-- terminal integration
-- compilation helpers
+- LSP backends (eglot, lsp-mode, lsp-bridge)
+- AI-assisted editing (gptel)
+- terminal integration (vterm)
+- build and compilation helpers
+- code formatting (apheleia)
 
 *** utils
 
 General utilities used across layers.
 
-Examples:
+Responsibilities:
 
-- lint tools
-- dired helpers
-- filesystem helpers
+- path and directory helpers
+- async shell command utilities
+- buffer management and ibuffer configuration
+- text editing helpers (expand-region, etc.)
+- dired and dirvish integration
+- org agenda file caching
+- lint and diagnostics tooling
 
 *** personal
 
@@ -848,7 +895,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Primary initialization sequence for Emacs 30+.
   ;;
   ;; This file:
@@ -1189,7 +1236,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Central entry point for loading modular configuration under lisp/.
   ;;
   ;;; Code:
@@ -1406,7 +1453,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Minimal and version-scoped compatibility fixes for Emacs.
   ;;
   ;; Load-order note:
@@ -1453,7 +1500,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Global editing policy: enforces lexical-binding in configuration files.
   ;;
@@ -1499,7 +1546,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Native compilation diagnostics, warning collection, and reporting.
   ;;
@@ -1714,7 +1761,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Session orchestration: public facade for background job scheduling.
   ;;
@@ -1813,7 +1860,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Private implementation of the session job scheduler.
   ;;
@@ -1929,7 +1976,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Safe garbage-collection hooks for long-running Emacs sessions.
   ;;
@@ -1973,7 +2020,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Backup file hygiene: automatic removal of stale backup files.
   ;;
@@ -2020,7 +2067,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Persistent *scratch* buffer: recreate it automatically when killed.
   ;;
@@ -2080,7 +2127,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Core runtime invariants: OS-level variables and startup sequencing.
   ;;
@@ -2144,7 +2191,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Low-level helper utilities shared across all configuration layers.
   ;;
@@ -2229,7 +2276,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Tree-sitter infrastructure: availability, grammar management, mode remapping.
   ;;
@@ -2371,7 +2418,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Session persistence: save-place, recentf, savehist, and autorevert.
   ;;
@@ -2426,7 +2473,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Editing helpers: structural editing, undo, window switching, and Dired.
   ;;
@@ -2543,7 +2590,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Runtime switches: selects UI bundle and LSP backend at startup.
   ;;
@@ -2667,7 +2714,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; custom-file path management and safe loading.
   ;;
@@ -2755,7 +2802,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Stable public API surface for cross-layer access to core services.
   ;;
@@ -2798,7 +2845,7 @@ Its role is orchestration only.
   ;;
   ;; Category: core
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Optional UI module extensions appended to the module load list.
   ;;
@@ -2837,7 +2884,7 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Font configuration: monospace, variable-pitch, emoji, and ligatures.
   ;;
@@ -3317,7 +3364,7 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Doom modeline UI bundle: nerd-icons + doom-modeline configuration.
   ;;
@@ -3364,7 +3411,7 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Nano modeline UI bundle: rougier/nano-modeline configuration.
   ;;
@@ -3563,7 +3610,7 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Window management: zoom, desktop session, winner, and layout snapshots.
   ;;
@@ -4371,7 +4418,7 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Global keybindings registered outside the leader-key system.
   ;;
@@ -4418,7 +4465,7 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Subtle visual aids: pulse, todo highlights, delimiters, indent guides.
   ;;
@@ -4472,7 +4519,7 @@ Its role is orchestration only.
   ;;
   ;; Category: ui
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; macOS-specific UI tweaks for graphical frames.
   ;;
@@ -4588,7 +4635,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Completion core: orderless style and per-category overrides.
   ;;
@@ -4627,7 +4674,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Vertico minibuffer UI with posframe overlay and marginalia annotations.
   ;;
@@ -4688,7 +4735,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Consult: enhanced search and cross-reference navigation.
   ;;
@@ -4722,7 +4769,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Embark contextual actions, integrated with Consult.
   ;;
@@ -4759,7 +4806,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Corfu in-buffer popup completion with kind-icon and CAPE sources.
   ;;
@@ -4819,7 +4866,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Nerd-icons integration for ibuffer and completion annotation UIs.
   ;;
@@ -4857,7 +4904,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Mode-specific `completion-at-point-functions` (CAPF) stacks.
   ;;
@@ -4924,7 +4971,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; CAPF dispatch for Org SRC edit buffers.
   ;;
@@ -4960,7 +5007,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Language-specific CAPF stacks for Org SRC blocks.
   ;;
@@ -5006,7 +5053,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Corfu tuning inside Org SRC edit buffers.
   ;;
@@ -5043,7 +5090,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Orderless tuning inside Org SRC edit buffers.
   ;;
@@ -5081,7 +5128,7 @@ Its role is orchestration only.
   ;;
   ;; Category: completion
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Defensive cleanup of obsolete Eglot servers on project switches.
   ;;
   ;; REFACTORED (Fix 1): Replaced internal variable `eglot--servers` with
@@ -5172,7 +5219,7 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Core Org Mode configuration and directory layout.
   ;;
   ;; REFACTORED (Fix 2): Removed direct `directory-files-recursively` scan from
@@ -5283,7 +5330,7 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Org visual enhancements: org-modern, pretty entities, custom faces.
   ;;
@@ -5364,7 +5411,7 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Org extension packages: journal, roam, download, toc, and cliplink.
   ;;
@@ -5432,7 +5479,7 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Extra Org folding commands with Emacs version compatibility.
   ;;
@@ -5487,7 +5534,7 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Org export backends: Hugo, Markdown, Mermaid, and Graphviz (dot).
   ;;
@@ -5698,7 +5745,7 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Automatic `org-babel-tangle` on save for README.org.
   ;;
@@ -5762,7 +5809,7 @@ Its role is orchestration only.
   ;;
   ;; Category: org
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Org typography: pixel-accurate table alignment and emphasis auto-reveal.
   ;;
@@ -5808,7 +5855,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; LSP abstraction layer: backend-agnostic code-actions, rename, format.
   ;;
@@ -5857,7 +5904,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Eglot LSP setup with project-guessable guard.
   ;;
@@ -5911,7 +5958,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; lsp-mode setup with lsp-ui sideline documentation.
   ;;
@@ -5967,7 +6014,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; AI-assisted development via aidermacs (aider.chat Emacs frontend).
   ;;
@@ -6174,7 +6221,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Project infrastructure, file hygiene, and EditorConfig.
   ;;
@@ -6210,7 +6257,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Build tooling: Makefile editing, compilation buffer, and ANSI colours.
   ;;
@@ -6269,7 +6316,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Automatic code formatting via Apheleia (async, non-blocking).
   ;;
@@ -6312,7 +6359,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Major-mode assignments for infrastructure and configuration files.
   ;;
@@ -6348,7 +6395,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Docker integration: Dockerfile, YAML, docker CLI, TRAMP containers.
   ;;
@@ -6508,7 +6555,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; SQL editing and formatting for PostgreSQL workflows.
   ;;
@@ -6546,7 +6593,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; REST client: restclient and jq integration for HTTP development.
   ;;
@@ -6578,7 +6625,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Code navigation helpers: dumb-jump, multiple-cursors, and EWW.
   ;;
@@ -6671,7 +6718,7 @@ Its role is orchestration only.
   ;;
   ;; Category: dev
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Miscellaneous development utility commands.
   ;;
@@ -6738,7 +6785,7 @@ Its role is orchestration only.
   ;;
   ;; Category: vcs
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Magit Git client configuration.
   ;;
@@ -6773,7 +6820,7 @@ Its role is orchestration only.
   ;;
   ;; Category: vcs
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; VCS gutter indicators via diff-hl.
   ;;
@@ -6809,7 +6856,7 @@ Its role is orchestration only.
   ;;
   ;; Category: vcs
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Magit Forge integration for GitHub/GitLab issues and pull requests.
   ;;
@@ -6845,7 +6892,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Path manipulation helpers for configuration modules.
   ;;
@@ -6896,7 +6943,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Async shell command utilities for non-blocking subprocess execution.
   ;;
@@ -6934,7 +6981,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Buffer management: smart kill with optional save prompt.
   ;;
@@ -6972,7 +7019,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Text editing convenience commands.
   ;;
@@ -7013,7 +7060,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Dired utility: smart RET for file-or-directory navigation.
   ;;
@@ -7059,7 +7106,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Miscellaneous interactive utility commands.
   ;;
@@ -7106,7 +7153,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Provides `utils-org-agenda-build` which scans org-directory once
   ;; and caches the result.  Called from `orgx-core` via after-init-hook
   ;; to avoid leaking a utils-layer dependency into the org layer at load time.
@@ -7190,7 +7237,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Flycheck and Flymake diagnostics with sideline display.
   ;;
@@ -7234,7 +7281,7 @@ Its role is orchestration only.
   ;;
   ;; Category: utils
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Configuration diagnostic commands for troubleshooting the environment.
   ;;
@@ -7315,7 +7362,7 @@ The key files are:
   ;;
   ;; Category: personal
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Shared personal settings loaded for all machines using this config.
   ;;
   ;; REFACTORED (Fix 3): personal-messages is loaded safely using
@@ -7391,7 +7438,7 @@ The key files are:
   ;;
   ;; Category: personal
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Machine-local identity, directory overrides, font, and UI switches.
   ;;
@@ -7443,7 +7490,7 @@ The key files are:
   ;;
   ;; Category: personal
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; macOS device-specific settings: IME switching and mouse scrolling.
   ;;
@@ -7498,7 +7545,7 @@ The key files are:
   ;;
   ;; Category: personal
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;;
   ;; Apple Music control from Emacs via AppleScript.
   ;;
@@ -7562,7 +7609,7 @@ The key files are:
   ;;
   ;; Category: personal
   ;;
-  ;; Commentary:
+  ;;; Commentary:
   ;; Reads macOS Messages.app chat history via SQLite and archives new
   ;; messages into org-roam notes.
   ;;
