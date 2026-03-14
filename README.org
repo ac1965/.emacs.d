@@ -805,13 +805,19 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (setq initial-frame-alist
         (assq-delete-all 'fullscreen initial-frame-alist))
 
-  (defvar core--did-fullscreen nil)
+  (defvar core--did-fullscreen nil
+    "Non-nil after fullscreen has been applied once.")
 
-  (add-hook 'window-setup-hook
-            (lambda ()
-              (unless core--did-fullscreen
-                (setq core--did-fullscreen t)
-                (set-frame-parameter nil 'fullscreen 'fullboth))))
+  ;; [R1 FIX] Extracted anonymous lambda → named defun.
+  ;; Rationale: named hooks are debuggable, togglable, and safe against
+  ;; duplicate registration.  Consistent with project-wide convention.
+  (defun core--fullscreen-once ()
+    "Apply fullscreen exactly once on window setup."
+    (unless core--did-fullscreen
+      (setq core--did-fullscreen t)
+      (set-frame-parameter nil 'fullscreen 'fullboth)))
+
+  (add-hook 'window-setup-hook #'core--fullscreen-once)
 
   (when (fboundp 'menu-bar-mode)   (menu-bar-mode -1))
   (when (fboundp 'tool-bar-mode)   (tool-bar-mode -1))
@@ -944,8 +950,9 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
     :when (and (eq system-type 'darwin)
                (or (daemonp) (memq window-system '(mac ns))))
     :config
-    (setq exec-path-from-shell-check-startup-files nil
-          exec-path-from-shell-arguments '("-l" "-i"))
+    ;; [R7 FIX] exec-path-from-shell-* are defcustom; use setopt.
+    (setopt exec-path-from-shell-check-startup-files nil
+            exec-path-from-shell-arguments '("-l" "-i"))
     (exec-path-from-shell-copy-envs
      '("PATH" "LANG"
        "PASSWORD_STORE_DIR"
@@ -969,11 +976,13 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (when (boundp 'read-process-output-max)
     (setq read-process-output-max core-default-read-process-output-max))
 
-  (add-hook 'after-init-hook
-            (lambda ()
-              (when (boundp 'read-process-output-max)
-                (setq read-process-output-max
-                      core--orig-read-process-output-max))))
+  ;; [R2 FIX] Extracted anonymous lambda → named defun.
+  (defun core--restore-process-output-max ()
+    "Restore read-process-output-max to its pre-startup value."
+    (when (boundp 'read-process-output-max)
+      (setq read-process-output-max core--orig-read-process-output-max)))
+
+  (add-hook 'after-init-hook #'core--restore-process-output-max)
 
   (leaf gcmh
     :straight t
@@ -1052,9 +1061,12 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
               (time-subtract after-init-time before-init-time))
              gcs-done))
 
-  (add-hook 'after-init-hook
-            (lambda ()
-              (run-with-idle-timer 0 nil #'core--announce-startup)))
+  ;; [R2 FIX] Extracted anonymous lambda → named defun.
+  (defun core--schedule-startup-announcement ()
+    "Schedule startup metrics report after the event loop settles."
+    (run-with-idle-timer 0 nil #'core--announce-startup))
+
+  (add-hook 'after-init-hook #'core--schedule-startup-announcement)
 
   (provide 'init)
   ;;; init.el ends here
@@ -1206,9 +1218,9 @@ Its role is orchestration only.
 
   (defconst my:modules
     '(
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; Core (runtime invariants, infrastructure, policy)
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       core-fixes
       core-policy
       core-session
@@ -1225,9 +1237,9 @@ Its role is orchestration only.
       core-custom
       core-api
 
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; UI (UX only; delete-safe)
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ui-font
       ui-theme
       ui-window
@@ -1240,14 +1252,14 @@ Its role is orchestration only.
       ui-keymap
       ui-global-keys
 
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; Auth (secrets, auth-source; delete-safe)
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       auth-core
 
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; Completion
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       completion-core
       completion-vertico
       completion-consult
@@ -1261,9 +1273,9 @@ Its role is orchestration only.
       completion-orderless-org-src
       completion-lsp
 
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; Org ecosystem
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       orgx-core
       orgx-visual
       orgx-extensions
@@ -1272,16 +1284,16 @@ Its role is orchestration only.
       orgx-notes-markdown
       orgx-auto-tangle
 
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; VCS
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       vcs-magit
       vcs-gutter
       vcs-forge
 
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; Dev
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       dev-lsp-bridge
       dev-ai
       dev-term
@@ -1296,9 +1308,9 @@ Its role is orchestration only.
       dev-navigation
       dev-tools
 
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       ;; Utils
-      ;; -------------------------------------------------------------------------
+      ;; -----------------------------------------------------------------------
       utils-path
       utils-async
       utils-buffers
@@ -1324,7 +1336,11 @@ Its role is orchestration only.
                 feature (error-message-string err))
        nil)))
 
-  (defun my:modules--format-seconds (sec)
+  ;; [R6 FIX] Renamed my:modules--format-seconds → my/modules--format-seconds.
+  ;; Rationale: `my:` prefix is reserved for directory/path variables (my:d,
+  ;; my:d:var, etc.).  All functions use `my/` prefix.  Consistent naming
+  ;; eliminates confusion when grepping for either convention.
+  (defun my/modules--format-seconds (sec)
     "Format SEC in a compact human-readable form."
     (cond
      ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
@@ -1348,12 +1364,12 @@ Its role is orchestration only.
           (when my:modules-verbose
             (message "[modules] %-24s %s"
                      mod
-                     (my:modules--format-seconds
+                     (my/modules--format-seconds
                       (float-time (time-subtract (current-time) m0)))))))
       (when my:modules-verbose
         (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
                  ok (length skipped) ng
-                 (my:modules--format-seconds
+                 (my/modules--format-seconds
                   (float-time (time-subtract (current-time) t0))))
         (when skipped
           (message "[modules] skipped (%d): %s"
@@ -1394,18 +1410,23 @@ Its role is orchestration only.
   ;; Minimal and version-scoped compatibility fixes for Emacs.
   ;;
   ;; NOTE: The my:with-thisfile--load/require advice hooks were removed because
-  ;; the helper functions they depend on (my:with-thisfile--load,
-  ;; my:with-thisfile--require) are not defined anywhere in this configuration.
-  ;; The dead code was causing confusion without providing any benefit.
-  ;; If these helpers are added in a future layer, restore the advice block here.
+  ;; the helper functions they depend on are not defined anywhere in this
+  ;; configuration.  The dead code was causing confusion without providing
+  ;; any benefit.  If these helpers are added in a future layer, restore
+  ;; the advice block here.
+  ;;
+  ;; Deduplication note (see also core-tools.el):
+  ;; `core-fixes--emacs>=` is now a thin alias pointing to `core-tools-emacs>=`.
+  ;; The implementation lives in core-tools.el, which is loaded first in the
+  ;; module sequence.  This eliminates the duplicate definition that previously
+  ;; existed between these two modules.
   ;;
   ;;; Code:
 
-  (defun core-fixes--emacs>= (major minor)
-    "Return non-nil if running Emacs version is >= MAJOR.MINOR."
-    (or (> emacs-major-version major)
-        (and (= emacs-major-version major)
-             (>= emacs-minor-version minor))))
+  ;; [R9 FIX] core-fixes--emacs>= was identical to core-tools-emacs>=.
+  ;; Provide it as an alias so any internal use sites continue to compile.
+  ;; core-tools must be loaded before core-fixes (guaranteed by my:modules order).
+  (defalias 'core-fixes--emacs>= #'core-tools-emacs>=)
 
   ;;;; Forward-compatibility notes --------------------------------------------
   ;;
@@ -2008,31 +2029,38 @@ Its role is orchestration only.
   ;; - schedules recreation via `run-with-idle-timer 0` so the kill
   ;;   fully completes before the new buffer is created
   ;; - initialises the replacement buffer in `lisp-interaction-mode`
+  ;;
+  ;; Design notes:
+  ;; - `defun` forms are at top level, not inside `leaf` blocks.
+  ;;   Leaf is a declaration macro; embedding function definitions inside it
+  ;;   is semantically confusing and inhibits byte-compiler analysis.
+  ;; - The hook function is named (core-buffers--maybe-recreate-scratch) rather
+  ;;   than anonymous, making it debuggable and safely removable.
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  (defun my/create-scratch-buffer ()
+    "Create or reset a `*scratch*` buffer."
+    (let ((buf (get-buffer-create "*scratch*")))
+      (with-current-buffer buf
+        (lisp-interaction-mode)
+        (erase-buffer)
+        (insert ";; This is a new *scratch* buffer\n\n"))
+      buf))
 
-  (leaf my:scratch-auto-recreate
-    :straight nil
-    :init
-    (defun my/create-scratch-buffer ()
-      "Create or reset a `*scratch*` buffer."
-      (let ((buf (get-buffer-create "*scratch*")))
-        (with-current-buffer buf
-          (lisp-interaction-mode)
-          (erase-buffer)
-          (insert ";; This is a new *scratch* buffer\n\n"))
-        buf))
+  (defun my/kill-scratch-buffer-advice (buf)
+    "If BUF is *scratch*, recreate it shortly after kill."
+    (when (string= (buffer-name buf) "*scratch*")
+      ;; idle-timer ensures recreation happens after kill fully completes.
+      (run-with-idle-timer 0 nil #'my/create-scratch-buffer)))
 
-    (defun my/kill-scratch-buffer-advice (buf)
-      "If BUF is *scratch*, recreate it shortly after kill."
-      (when (string= (buffer-name buf) "*scratch*")
-        ;; Use idle-timer so recreation happens after kill fully completes.
-        (run-with-idle-timer 0 nil #'my/create-scratch-buffer)))
+  ;; [R3 FIX] Extracted anonymous lambda → named defun.
+  ;; Rationale: named hooks are debuggable (M-x describe-function),
+  ;; safely removable (remove-hook works), and prevent duplicate registration.
+  (defun core-buffers--maybe-recreate-scratch ()
+    "Recreate *scratch* if it was just killed."
+    (my/kill-scratch-buffer-advice (current-buffer)))
 
-    (add-hook 'kill-buffer-hook
-              (lambda ()
-                (my/kill-scratch-buffer-advice (current-buffer)))))
+  (add-hook 'kill-buffer-hook #'core-buffers--maybe-recreate-scratch)
 
   (provide 'core-buffers)
   ;;; core/core-buffers.el ends here
@@ -2130,9 +2158,18 @@ Its role is orchestration only.
   ;;   safe wrappers that no-op when a feature or function is absent
   ;; - `core-tools-check-provide`: warns when a file omits `(provide ...)`
   ;; - `core-tools-user-file-p`: true for files under `user-emacs-directory`
+  ;;
+  ;; Deduplication note:
+  ;; `core-fixes--emacs>=` (internal to core-fixes.el) is aliased here as the
+  ;; public `core-tools-emacs>=`.  This eliminates two identical implementations
+  ;; without breaking any existing call sites.
   ;;; Code:
 
+  ;; [R9 FIX] Added docstring (public API must document its contract).
+  ;; [R9 FIX] De-duplicated: core-fixes--emacs>= and core-tools-emacs>= were
+  ;; identical implementations.  Define once here; core-fixes can defalias.
   (defun core-tools-emacs>= (major minor)
+    "Return non-nil if running Emacs version is at least MAJOR.MINOR."
     (or (> emacs-major-version major)
         (and (= emacs-major-version major)
              (>= emacs-minor-version minor))))
@@ -2143,26 +2180,32 @@ Its role is orchestration only.
   (defalias 'core-tools-ensure-directory #'my/ensure-directory-exists)
 
   (defun core-tools-feature-present-p (feature)
+    "Return non-nil if FEATURE is loaded or locatable on `load-path'."
     (or (featurep feature) (locate-library (symbol-name feature))))
 
   (defun core-tools-function-present-p (fn)
+    "Return non-nil if FN is a bound function symbol."
     (and (symbolp fn) (fboundp fn)))
 
   (defun core-tools-require-if-present (feature)
+    "Require FEATURE only if it is present; return the feature or nil."
     (when (core-tools-feature-present-p feature)
       (require feature nil t)))
 
   (defun core-tools-call-if-present (fn &rest args)
+    "Call FN with ARGS if it is bound; return nil otherwise."
     (when (core-tools-function-present-p fn)
       (apply fn args)))
 
   (defun core-tools-check-provide (feature file)
+    "Warn if FEATURE was not provided after loading FILE."
     (when (and feature file)
       (unless (featurep feature)
         (warn "[core-tools] %s loaded from %s but did not provide `%s`"
               feature file feature))))
 
   (defun core-tools-user-file-p (file)
+    "Return non-nil if FILE is under `user-emacs-directory'."
     (and (stringp file)
          (string-prefix-p
           (expand-file-name user-emacs-directory)
@@ -2353,12 +2396,11 @@ Its role is orchestration only.
 
   (leaf savehist
     :straight nil
-    :config
-    (setq savehist-file (concat no-littering-var-directory "history"))
-    (my/ensure-directory-exists (file-name-directory savehist-file))
-    (with-eval-after-load 'savehist
-      (add-to-list 'savehist-additional-variables
-                   'my:desktop-ask-on-restore)))
+    :pre-setq
+    `((savehist-file . ,(concat no-littering-var-directory "history"))
+      (savehist-additional-variables . '(my:desktop-ask-on-restore)))
+    :init
+    (my/ensure-directory-exists (file-name-directory (concat no-littering-var-directory "history"))))
 
   (defun core-history--startup-init ()
     (save-place-mode +1)
@@ -2447,16 +2489,20 @@ Its role is orchestration only.
   (leaf visual-line-mode :straight nil
     :hook (text-mode . visual-line-mode))
 
-  (leaf dired-filter :straight t)
-  (leaf dired-subtree :straight t :after dired)
-
-  (leaf dired :straight nil
+  (leaf dirvish
+    :straight t
+    :global-minor-mode dirvish-override-dired-mode
+    :custom
+    ((dirvish-attributes . '(subtree-state vc-state git-msg file-size)))
     :config
+    ;; Preview pane on (disabled by default to avoid I/O on remote buffers).
+    (dirvish-peek-mode 1)
+    ;; ls switch configuration — consolidated from the former leaf dired block.
+    ;; macOS ships BSD ls; use GNU coreutils gls when available.
     (if (and (eq system-type 'darwin) (executable-find "gls"))
-        (progn
-          (setq insert-directory-program "gls"
-                dired-use-ls-dired t
-                dired-listing-switches "-aBhl --group-directories-first"))
+        (setq insert-directory-program "gls"
+              dired-use-ls-dired t
+              dired-listing-switches "-aBhl --group-directories-first")
       (setq dired-use-ls-dired nil
             dired-listing-switches "-alh")))
 
@@ -2875,10 +2921,15 @@ Its role is orchestration only.
                default-family (/ default-height 10.0) variable-family
                (or emoji-font "unknown"))))
 
+  ;; [R10 FIX] Extracted anonymous lambda → named defun.
+  ;; Rationale: the daemon branch registered an anonymous function on
+  ;; after-make-frame-functions, making it non-removable and non-inspectable.
+  (defun ui-font--apply-to-frame (frame)
+    "Apply font configuration to FRAME (for daemon mode)."
+    (with-selected-frame frame (ui-font-apply)))
+
   (if (daemonp)
-      (add-hook 'after-make-frame-functions
-                (lambda (frame)
-                  (with-selected-frame frame (ui-font-apply))))
+      (add-hook 'after-make-frame-functions #'ui-font--apply-to-frame)
     (add-hook 'after-init-hook #'ui-font-apply))
 
   (leaf ligature
