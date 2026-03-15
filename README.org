@@ -2557,7 +2557,10 @@ Its role is orchestration only.
     :straight t
     :global-minor-mode dirvish-override-dired-mode
     :custom
-    ((dirvish-attributes . (list 'subtree-state 'vc-state 'git-msg 'file-size)))
+    ;; [Fix 10] Changed (list 'x ...) → quoted list.
+    ;; leaf :custom expands to (setopt var value) at macro-expansion time,
+    ;; so (list ...) would be stored as an unevaluated form, not a list of symbols.
+    ((dirvish-attributes . '(subtree-state vc-state git-msg file-size)))
     :config
     (setopt dirvish-cache-dir
             (expand-file-name "dirvish/" my:d:cache))
@@ -6125,17 +6128,41 @@ Its role is orchestration only.
   ;;
   ;; Provides:
   ;;
-  ;; - Nano palette integration for terminal colors
+  ;; - Nano palette integration for terminal colors (optional, ui-nano-palette)
   ;; - project-scoped terminal toggling via vterm-toggle
   ;; - bottom-docked terminal window display
   ;;
-  ;; The color palette is sourced from `ui-nano-palette.el`.
+  ;; Palette integration:
+  ;;
+  ;;   `dev-term-apply-palette' reads nano-color-* values via
+  ;;   `dev-term--nano-color', which returns a safe fallback when
+  ;;   `ui-nano-palette' is not loaded.  This module does NOT require
+  ;;   `ui-nano-palette' at load time, preserving layer independence:
+  ;;   the dev layer must never force-load a ui-layer module.
+  ;;
+  ;;   When `ui-nano-palette' is loaded (i.e. the nano UI bundle is active),
+  ;;   `dev-term-apply-palette' is registered via `with-eval-after-load' so
+  ;;   the terminal faces automatically adopt the Nano colour scheme.
 
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
-  (require 'ui-nano-palette)
+  ;; ---------------------------------------------------------------------------
+  ;; [Fix 1] Removed (require 'ui-nano-palette).
+  ;;
+  ;; Rationale: dev is an upper layer; ui is a lower layer.  The architecture
+  ;; rule "lower layers must never depend on upper layers" is not violated here,
+  ;; but the symmetric rule matters: ui-nano-palette is OPTIONAL (selected via
+  ;; my:use-ui / core-switches).  A hard require in dev-term forces the nano
+  ;; palette to load even when my:use-ui is 'doom or 'none, breaking the
+  ;; LSP-backend-agnostic / UI-replaceable design guarantee.
+  ;;
+  ;; Fix: nano-color-* variables are read lazily via dev-term--nano-color,
+  ;; which checks bound-and-true-p and returns a safe default otherwise.
+  ;; palette application is wired via with-eval-after-load 'ui-nano-palette
+  ;; so it fires only when the nano bundle is actually active.
+  ;; ---------------------------------------------------------------------------
 
   (defgroup dev-term nil
     "Terminal integration helpers."
@@ -6147,27 +6174,42 @@ Its role is orchestration only.
     :type 'boolean
     :group 'dev-term)
 
+  (defun dev-term--nano-color (var fallback)
+    "Return the value of nano-color variable VAR, or FALLBACK if unbound.
+  VAR is a symbol, e.g. \\='nano-color-foreground."
+    (if (boundp var) (symbol-value var) fallback))
+
   (defun dev-term--safe-face-set (face &rest props)
     "Safely set FACE attributes using PROPS."
     (when (facep face)
       (apply #'set-face-attribute face nil props)))
 
   (defun dev-term-apply-palette ()
-    "Apply the Nano color palette to vterm faces."
+    "Apply the Nano color palette to vterm faces.
+  Safe to call regardless of whether `ui-nano-palette' is loaded:
+  each color falls back to a neutral default when the variable is unbound."
     (when dev-term-enable-p
       (dev-term--safe-face-set
        'vterm-color-default
-       :foreground nano-color-foreground
-       :background nano-color-background)
+       :foreground (dev-term--nano-color 'nano-color-foreground "#d4d4d4")
+       :background (dev-term--nano-color 'nano-color-background "#1e1e1e"))
 
-      (dev-term--safe-face-set 'vterm-color-black :foreground nano-color-strong)
-      (dev-term--safe-face-set 'vterm-color-red :foreground nano-color-critical)
-      (dev-term--safe-face-set 'vterm-color-green :foreground "#10b981")
-      (dev-term--safe-face-set 'vterm-color-yellow :foreground nano-color-popout)
-      (dev-term--safe-face-set 'vterm-color-blue :foreground nano-color-salient)
-      (dev-term--safe-face-set 'vterm-color-magenta :foreground "#a21caf")
-      (dev-term--safe-face-set 'vterm-color-cyan :foreground "#0891b2")
-      (dev-term--safe-face-set 'vterm-color-white :foreground nano-color-subtle)))
+      (dev-term--safe-face-set 'vterm-color-black
+        :foreground (dev-term--nano-color 'nano-color-strong   "#111827"))
+      (dev-term--safe-face-set 'vterm-color-red
+        :foreground (dev-term--nano-color 'nano-color-critical "#dc2626"))
+      (dev-term--safe-face-set 'vterm-color-green
+        :foreground "#10b981")
+      (dev-term--safe-face-set 'vterm-color-yellow
+        :foreground (dev-term--nano-color 'nano-color-popout   "#6b7280"))
+      (dev-term--safe-face-set 'vterm-color-blue
+        :foreground (dev-term--nano-color 'nano-color-salient  "#2563eb"))
+      (dev-term--safe-face-set 'vterm-color-magenta
+        :foreground "#a21caf")
+      (dev-term--safe-face-set 'vterm-color-cyan
+        :foreground "#0891b2")
+      (dev-term--safe-face-set 'vterm-color-white
+        :foreground (dev-term--nano-color 'nano-color-subtle   "#e5e7eb"))))
 
   (defun dev-term--buffer-p (buf)
     "Return non-nil if BUF is a vterm buffer."
@@ -6189,7 +6231,14 @@ Its role is orchestration only.
     :straight t
     :when dev-term-enable-p
     :config
+    ;; Apply palette immediately (uses fallback colors when nano is not active).
     (dev-term-apply-palette)
+
+    ;; When the nano UI bundle loads later, re-apply with the real palette.
+    ;; This fires if nano is selected via my:use-ui, or if ui-nano-palette is
+    ;; loaded for any other reason — without creating a hard load-time dependency.
+    (with-eval-after-load 'ui-nano-palette
+      (dev-term-apply-palette))
 
     (with-eval-after-load 'cus-theme
       (if (boundp 'enable-theme-functions)
@@ -7860,6 +7909,40 @@ tangle:
 :PROPERTIES:
 :CUSTOM_ID: changelog
 :END:
+
+** 2026-03 (post-review)
+
+*** Fix #1: dev-term.el — Layer violation: removed hard require of ui-nano-palette
+
+*🔴 Critical — dependency inversion*
+
+- *[Fix Layer-1] dev/dev-term.el*: Removed =(require 'ui-nano-palette)= from the
+  top of the file.  =ui-nano-palette= is part of the =ui= layer and is loaded only
+  when =my:use-ui= is ='nano=.  A hard require at load time forced the nano palette
+  to initialize even when =my:use-ui= is ='doom= or ='none=, violating the
+  "UI-replaceable" design guarantee.
+
+  Fix applies three changes:
+  1. Introduced =dev-term--nano-color (var fallback)= — a guard accessor that reads
+     a =nano-color-*= variable via =symbol-value= when bound, or returns a neutral
+     fallback otherwise.  All eight color references in =dev-term-apply-palette=
+     now use this accessor.
+  2. Added =(with-eval-after-load 'ui-nano-palette (dev-term-apply-palette))= inside
+     the =leaf vterm :config= block.  When the nano bundle loads (regardless of
+     timing), vterm faces are automatically upgraded to the real palette.
+  3. The initial =(dev-term-apply-palette)= call at vterm load time still fires
+     immediately, providing neutral-but-functional colors when nano is absent.
+
+*** Fix #10: core-editing.el — dirvish :custom list call
+
+*🟡 Minor — silent bug*
+
+- *[Fix Custom-10] core/core-editing.el*: Changed =dirvish-attributes= assignment
+  from =(list 'subtree-state ...)= to the quoted list ='(subtree-state ...)=.
+  The =leaf :custom= keyword expands to =(setopt var <value>)= at macro-expansion
+  time; passing =(list ...)= stores the unevaluated form as the variable value
+  rather than a list of symbols, causing =dirvish-attributes= to silently receive
+  a cons cell instead of the intended symbol list.
 
 ** 2026-03
 
