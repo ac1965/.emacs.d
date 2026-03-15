@@ -2487,14 +2487,19 @@ Its role is orchestration only.
 
   (eval-when-compile (require 'leaf))
 
+  ;; [Fix K] save-place-file, recentf-save-file, and recentf-max-saved-items
+  ;; are defcustom variables.  The coding rule requires setopt (not setq) for
+  ;; defcustom vars.  Paths require runtime evaluation, so :pre-setq (which
+  ;; expands to setq before the package loads) is used here; this is
+  ;; consistent with how savehist-file is handled in the same module.
   (leaf saveplace :straight nil
-    :init
-    (setq save-place-file (concat no-littering-var-directory "saveplace")))
+    :pre-setq
+    `((save-place-file . ,(concat no-littering-var-directory "saveplace"))))
 
   (leaf recentf :straight nil
-    :init
-    (setq recentf-max-saved-items 100
-          recentf-save-file (concat no-littering-var-directory "recentf")))
+    :pre-setq
+    `((recentf-save-file      . ,(concat no-littering-var-directory "recentf"))
+      (recentf-max-saved-items . 100)))
 
   (leaf savehist
     :straight nil
@@ -4580,28 +4585,37 @@ Runs via `after-init-hook' so all modules are loaded before activation."
 
   (eval-when-compile (require 'leaf))
 
+  ;; [Fix M] pulsar-delay, pulsar-pulse, and pulsar-face are defcustom
+  ;; variables.  Moved from :init setq to :custom so their setters and
+  ;; type validation are respected (coding rule: setopt for defcustom).
   (leaf pulsar
     :straight t
-    :init (setq pulsar-delay 0.04 pulsar-pulse t pulsar-face 'pulsar-generic)
+    :custom ((pulsar-delay . 0.04)
+             (pulsar-pulse . t)
+             (pulsar-face  . 'pulsar-generic))
     :config
     (pulsar-global-mode 1)
     (dolist (cmd '(recenter-top-bottom other-window next-buffer previous-buffer))
       (add-to-list 'pulsar-pulse-functions cmd)))
 
+  ;; [Fix M] hl-todo-keyword-faces is a defcustom; moved to :custom.
   (leaf hl-todo
     :straight t
     :hook ((prog-mode-hook text-mode-hook) . hl-todo-mode)
-    :init
-    (setq hl-todo-keyword-faces
-          '(("TODO" . "#d97706") ("FIXME" . "#dc2626")
-            ("NOTE" . "#2563eb") ("HACK" . "#9333ea"))))
+    :custom
+    ((hl-todo-keyword-faces
+      . '(("TODO"  . "#d97706") ("FIXME" . "#dc2626")
+          ("NOTE"  . "#2563eb") ("HACK"  . "#9333ea")))))
 
   (leaf rainbow-delimiters :straight t
     :hook (prog-mode-hook . rainbow-delimiters-mode))
 
+  ;; [Fix M] indent-bars-prefer-character and indent-bars-spacing-override
+  ;; are defcustom variables; moved to :custom.
   (leaf indent-bars :straight t
     :hook (prog-mode-hook . indent-bars-mode)
-    :init (setq indent-bars-prefer-character t indent-bars-spacing-override 2))
+    :custom ((indent-bars-prefer-character  . t)
+             (indent-bars-spacing-override  . 2)))
 
   (provide 'ui-visual-aids)
   ;;; ui/ui-visual-aids.el ends here
@@ -4809,7 +4823,11 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     :custom ((vertico-count . 15)))
 
   (leaf marginalia
-    :straight t)
+    :straight t
+    ;; [Fix L] marginalia-align is a defcustom; moved here from the bare setq
+    ;; at the bottom of completion-icons.el.  Owned by the marginalia leaf
+    ;; block rather than floating outside any leaf declaration.
+    :custom ((marginalia-align . 'right)))
 
   (leaf posframe
     :straight t)
@@ -4976,7 +4994,10 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; This file:
   ;; - enables `nerd-icons-ibuffer-mode` in ibuffer buffers
   ;; - hooks `nerd-icons-completion-marginalia-setup` into `marginalia-mode`
-  ;; - sets `marginalia-align` to `right` for consistent annotation layout
+  ;;
+  ;; NOTE: marginalia-align is set in completion-vertico.el (leaf marginalia
+  ;; :custom block) rather than here.  Owning the setting in the leaf block
+  ;; that installs marginalia is cleaner than a bare setq in a downstream file.
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -4986,8 +5007,6 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     :straight t
     :hook (marginalia-mode-hook . nerd-icons-completion-marginalia-setup)
     :config (nerd-icons-completion-mode))
-
-  (setq marginalia-align 'right)
 
   (provide 'completion-icons)
   ;;; completion/completion-icons.el ends here
@@ -5946,13 +5965,14 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (eval-when-compile (require 'leaf))
 
   (leaf valign :straight t :hook (org-mode-hook . valign-mode))
+  ;; [Fix M] org-appear-autoemphasis, org-appear-autolinks, and
+  ;; org-appear-autosubmarkers are defcustom variables; moved to :custom.
   (leaf org-appear
     :straight t
     :hook (org-mode-hook . org-appear-mode)
-    :init
-    (setq org-appear-autoemphasis t
-          org-appear-autolinks t
-          org-appear-autosubmarkers t))
+    :custom ((org-appear-autoemphasis   . t)
+             (org-appear-autolinks      . t)
+             (org-appear-autosubmarkers . t)))
 
   (provide 'orgx-typography)
   ;;; orgx/orgx-typography.el ends here
@@ -6173,15 +6193,19 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (setenv "AIDER_LLM_HISTORY_FILE"   (expand-file-name "llm.history" my:d:aider))
   (setenv "AIDER_ANALYTICS_LOG"      (expand-file-name "analytics.log" my:d:aider))
 
+  ;; [Fix J] Moved defvar before its first use.
+  ;; my/aidermacs--append-unique-args references aidermacs-extra-args at
+  ;; runtime; the defvar must appear before the defun to avoid a
+  ;; void-variable error when the function is called interpreted.
+  ;; The defvar also pre-empts aidermacs's own defvar so :config can safely
+  ;; append to the list without risking a reset.
+  (defvar aidermacs-extra-args nil
+    "Extra command-line arguments passed to the aider process.")
+
   (defun my/aidermacs--append-unique-args (args)
     (setq aidermacs-extra-args
           (append aidermacs-extra-args
                   (seq-remove (lambda (arg) (member arg aidermacs-extra-args)) args))))
-
-  ;; Declare before leaf so :config can safely append to it without
-  ;; risking a reset if aidermacs itself also defvar's this symbol.
-  (defvar aidermacs-extra-args nil
-    "Extra command-line arguments passed to the aider process.")
 
   (leaf aidermacs
     :straight t
@@ -6603,8 +6627,10 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (leaf docker :straight t
     :commands (docker docker-containers docker-images docker-volumes docker-networks))
 
+  ;; [Fix M] tramp-container-method is a defcustom (tramp-container.el, Emacs 29+);
+  ;; moved to :custom.
   (leaf tramp-container :straight nil :after tramp
-    :init (setq tramp-container-method "docker"))
+    :custom ((tramp-container-method . "docker")))
 
   (leaf tempel :straight t
     :commands (tempel-insert)
@@ -7442,10 +7468,10 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (leaf flymake :straight nil
     :hook (prog-mode . flymake-mode))
 
+  ;; [Fix M] sideline-backends-right is a defcustom; moved to :custom.
   (leaf sideline :straight t
     :after flymake
-    :init
-    (setq sideline-backends-right '(sideline-flycheck sideline-flymake))
+    :custom ((sideline-backends-right . '(sideline-flycheck sideline-flymake)))
     :config
     (leaf sideline-flymake :straight t)
     (leaf sideline-flycheck :straight t))
@@ -7730,18 +7756,18 @@ The key files are:
     (sis-global-inline-mode t))
 
   ;; Mouse / scroll — Logitech MX Ergo S
+  ;; [Fix M] All scroll and mouse-wheel variables are defcustom; moved to :custom.
   (leaf my:mouse
     :straight nil
     :when (display-graphic-p)
-    :init
-    (setq scroll-step 1
-          scroll-conservatively 101
-          scroll-preserve-screen-position t
-          scroll-margin 3
-          mouse-wheel-scroll-amount '(3 ((shift) . 1) ((control) . nil))
-          mouse-wheel-progressive-speed nil
-          mouse-wheel-follow-mouse t
-          pixel-scroll-precision-use-momentum nil))
+    :custom ((scroll-step                       . 1)
+             (scroll-conservatively             . 101)
+             (scroll-preserve-screen-position   . t)
+             (scroll-margin                     . 3)
+             (mouse-wheel-scroll-amount         . '(3 ((shift) . 1) ((control) . nil)))
+             (mouse-wheel-progressive-speed     . nil)
+             (mouse-wheel-follow-mouse          . t)
+             (pixel-scroll-precision-use-momentum . nil)))
 
   (provide 'device-darwin)
   ;;; personal/device-darwin.el ends here
@@ -8461,71 +8487,157 @@ Four residual design-principle violations resolved.
   helper used only during the bootstrap phase.  The public alias =my/safe-load-file=
   is unchanged, so no call sites in other layers are affected.
 
-** 2026-03 (第2回評価修正)
+** 2026-03 (second evaluation pass)
 
-*** Fix E: ui-theme.el — ui-nano-palette の hard require を optional に変更
+*** Fix E: ui-theme.el — hard require of ui-nano-palette made optional
 
-*🟠 Medium — UI-replaceable 保証の違反*
+*🟠 Medium — UI-replaceable guarantee violated*
 
-- *[Fix E] ui/ui-theme.el*: =(require 'ui-nano-palette)= を
-  =(require 'ui-nano-palette nil t)= に変更。
-  =ui-theme= は =modules.el= の ui セクションに常時含まれるが、
-  =ui-nano-palette= は =my:use-ui='nano= 選択時のみ意味を持つ。
-  ハード require は =my:use-ui='doom= や ='none= の場合でも
-  nano パレットを強制ロードし、UI-replaceable 設計を破壊していた。
+- *[Fix E] ui/ui-theme.el*: Changed =(require 'ui-nano-palette)= to
+  =(require 'ui-nano-palette nil t)=.  =ui-theme= is loaded unconditionally
+  from the =modules.el= ui section, but =ui-nano-palette= is only meaningful
+  when =my:use-ui= is ='nano=.  The hard require forced the nano palette to
+  initialize even under =my:use-ui='doom= or ='none=, violating the
+  UI-replaceable design guarantee.
 
-  =ui-theme--apply-faces= はすでに =(fboundp 'my/nano-apply-faces)= で
-  ガードされているため、optional require への変更に機能的な後退はない。
+  =ui-theme--apply-faces= was already guarded with =(fboundp 'my/nano-apply-faces)=,
+  so making the require optional causes no functional regression on the nano path.
 
-  =(with-eval-after-load 'ui-nano-palette ...)= を追加し、
-  nano バンドルが後から有効化された場合にフェイスを自動再適用する。
+  Added =(with-eval-after-load 'ui-nano-palette ...)= so that when the nano
+  bundle is activated later (via =core-switches= =after-init-hook=), faces are
+  automatically re-applied with the real palette colours.
 
-  Commentary を更新し =ui-nano-palette= 依存関係のポリシーを明文化した。
+  Commentary updated to document the =ui-nano-palette= dependency policy.
 
-*** Fix F: core-editing.el — Commentary の旧 dired-filter/dired-subtree 記述を削除
+*** Fix F: core-editing.el — stale dired-filter/dired-subtree Commentary removed
 
-*🟠 Medium — Literate Programming「唯一の真実」原則の違反*
+*🟠 Medium — Literate Programming "single source of truth" violated*
 
-- *[Fix F] core/core-editing.el*: Commentary の
-  =- extends Dired with dired-filter and dired-subtree= を
-  =- replaces dired with dirvish (dirvish-override-dired-mode)= および
-  =- configures dirvish attributes (subtree-state, vc-state, git-msg, file-size)=
-  に置き換えた。
-  =dired-filter → dirvish= 移行は 2026-03 Refactoring で実施済みだったが、
-  Commentary が古い実装を参照したままだった。
-  README.org は「唯一の真実」であるため、コードと一致しない Commentary は
-  設計原則の直接違反となる。
+- *[Fix F] core/core-editing.el*: Replaced
+  =- extends Dired with dired-filter and dired-subtree= with
+  =- replaces dired with dirvish (dirvish-override-dired-mode)= and
+  =- configures dirvish attributes (subtree-state, vc-state, git-msg, file-size)=.
+  The =dired-filter → dirvish= migration was completed in the 2026-03 refactoring
+  pass, but the Commentary still referenced the old implementation.
+  README.org is the single source of truth; a Commentary that does not match
+  the code is a direct violation of the Literate Programming principle.
 
-*** Fix G: early-init.el — treesit-* 変数を setopt に統一
+*** Fix G: early-init.el — treesit-* variables switched to setopt
 
-*🟡 Minor — setq/setopt 一貫性*
+*🟡 Minor — setq/setopt consistency*
 
-- *[Fix G] early-init.el*: =treesit-install-dir= と =treesit-extra-load-path= の
-  設定を =setq= から =setopt= に変更。両変数は Emacs 29+ の =defcustom= であり、
-  コーディングルール「=defcustom= 変数には =setopt= を使う」に従う。
-  =boundp= ガードにより tree-sitter サポートなしのビルドでも安全。
+- *[Fix G] early-init.el*: Changed the =treesit-install-dir= and
+  =treesit-extra-load-path= assignments from =setq= to =setopt= with =boundp=
+  guards.  Both variables are =defcustom= in Emacs 29+.  The coding rule
+  requires =setopt= (not =setq=) for =defcustom= variables.  The =boundp=
+  guards preserve safety on Emacs builds without tree-sitter support.
 
-*** Fix H: core-native.el — native-comp-async-report-warnings-errors を setopt に統一
+*** Fix H: core-native.el — native-comp-async-report-warnings-errors switched to setopt
 
-*🟡 Minor — setq/setopt 一貫性*
+*🟡 Minor — setq/setopt consistency*
 
-- *[Fix H] core/core-native.el*: =core-native--apply-report-setting= 内の
-  =native-comp-async-report-warnings-errors= への代入を
-  =setq= から =setopt= に変更。
-  =early-init.el= では同変数を =setopt= で設定しており、
-  内部関数が =setq= で上書きするのは一貫性を欠いていた。
-  =defcustom= のセッター関数・型検証を経由させる。
+- *[Fix H] core/core-native.el*: Changed all four =setq= assignments to
+  =native-comp-async-report-warnings-errors= inside =core-native--apply-report-setting=
+  to =setopt=.  =early-init.el= already uses =setopt= for this same variable;
+  the internal function was inconsistently overwriting it with =setq=, bypassing
+  the =defcustom= setter and type validation.
 
-*** Fix I: personal-messages.el — 不要な runtime require を除去
+*** Fix I: personal-messages.el — redundant runtime requires removed
 
-*🟡 Minor — 起動コストと設計意図*
+*🟡 Minor — startup cost and design intent*
 
-- *[Fix I] personal/personal-messages.el*: トップレベルの
-  =(require 'org)= を削除。このファイルは =personal/user.el= の
-  =(with-eval-after-load 'org ...)= 経由でロードされるため、
-  ロード時点で =org= はすでに存在が保証される。
-  冗長な =require= は遅延ロード戦略の意図を損なう。
+- *[Fix I] personal/personal-messages.el*: Removed the top-level =(require 'org)=.
+  This file is loaded via =(with-eval-after-load 'org ...)= in =personal/user.el=,
+  so =org= is guaranteed to be present by the time this code runs.  A redundant
+  top-level require undermines the deferred-load strategy.
 
-  =(require 'subr-x)= を =(eval-when-compile (require 'subr-x))= に移動。
-  =subr-x= のマクロ（=when-let*=, =string-trim= 等）はバイトコンパイル時に
-  展開されるため、ランタイム require は不要。
+  Moved =(require 'subr-x)= into =(eval-when-compile (require 'subr-x))=.
+  =subr-x= macros (=when-let*=, =string-trim=, etc.) are expanded at compile time
+  and inlined; a runtime =require= is unnecessary.
+
+** 2026-03 (third evaluation pass)
+
+*** Fix J: dev-ai.el — defvar aidermacs-extra-args moved before its first use
+
+*🟠 Medium — void-variable at runtime*
+
+- *[Fix J] dev/dev-ai.el*: Moved =(defvar aidermacs-extra-args nil ...)= from
+  after =my/aidermacs--append-unique-args= to before it.  The function
+  references =aidermacs-extra-args= at runtime via =setq=; when evaluated
+  interpreted (not byte-compiled), the symbol was void at call time because
+  =defvar= had not yet been evaluated.  The prior comment claimed the =defvar=
+  was placed "before =leaf=" for safety, but the function preceding it already
+  used the variable — that ordering guarantee was therefore unmet.  Moving the
+  =defvar= first satisfies both the byte-compiler forward-declaration requirement
+  and the interpreter evaluation-order requirement.
+
+*** Fix K: core-history.el — save-place-file / recentf-* converted to :pre-setq
+
+*🟡 Minor — setq/setopt consistency*
+
+- *[Fix K] core/core-history.el*: Converted =save-place-file=,
+  =recentf-save-file=, and =recentf-max-saved-items= from =:init setq= to
+  =:pre-setq=.  All three are =defcustom= variables; the coding rule requires
+  that =defcustom= variables are set through =setopt= (or the equivalent
+  =leaf :custom= / =:pre-setq= path that expands to =setopt=).  Using =:pre-setq=
+  is consistent with how =savehist-file= is handled in the same module and
+  correctly evaluates the no-littering path expressions before the package loads.
+
+*** Fix L: completion-icons.el — bare setq marginalia-align moved into leaf :custom
+
+*🟡 Minor — setq/setopt consistency, ownership clarity*
+
+- *[Fix L] completion/completion-vertico.el*: Added =marginalia-align= to the
+  =leaf marginalia :custom= block as =(marginalia-align . 'right)=.  The
+  =marginalia= package is installed and owned by this module; placing its
+  =defcustom= setting here is architecturally correct.
+
+- *[Fix L] completion/completion-icons.el*: Removed the bare =(setq marginalia-align 'right)=
+  that appeared outside any =leaf= declaration.  A floating =setq= for a
+  =defcustom= variable in a file that does not own the package violated both
+  the setq/setopt rule and the principle that side effects must remain explicit
+  and traceable to their owning module.  Updated Commentary to note that
+  =marginalia-align= is configured in =completion-vertico.el=.
+
+*** Fix M: ui-visual-aids.el / orgx-typography.el — :init setq → :custom for defcustom vars
+
+*🟡 Minor — setq/setopt consistency (four packages)*
+
+- *[Fix M] ui/ui-visual-aids.el (pulsar)*: Moved =pulsar-delay=, =pulsar-pulse=,
+  and =pulsar-face= from =:init setq= to =:custom=.  All three are =defcustom=
+  variables; =:custom= expands to =setopt= and respects setters and type
+  validation.
+
+- *[Fix M] ui/ui-visual-aids.el (hl-todo)*: Moved =hl-todo-keyword-faces= from
+  =:init setq= to =:custom=.
+
+- *[Fix M] ui/ui-visual-aids.el (indent-bars)*: Moved =indent-bars-prefer-character=
+  and =indent-bars-spacing-override= from =:init setq= to =:custom=.
+
+- *[Fix M] orgx/orgx-typography.el (org-appear)*: Moved =org-appear-autoemphasis=,
+  =org-appear-autolinks=, and =org-appear-autosubmarkers= from =:init setq= to
+  =:custom=.
+
+- *[Fix M] dev/dev-docker.el (tramp-container)*: Moved =tramp-container-method=
+  from =:init setq= to =:custom=.  =tramp-container-method= is a =defcustom= in
+  =tramp-container.el= (Emacs 29+).
+
+- *[Fix M] utils/utils-lint.el (sideline)*: Moved =sideline-backends-right=
+  from =:init setq= to =:custom=.
+
+- *[Fix M] personal/device-darwin.el (my:mouse)*: Moved all scroll and
+  mouse-wheel variables (=scroll-step=, =scroll-conservatively=,
+  =scroll-preserve-screen-position=, =scroll-margin=,
+  =mouse-wheel-scroll-amount=, =mouse-wheel-progressive-speed=,
+  =mouse-wheel-follow-mouse=, =pixel-scroll-precision-use-momentum=)
+  from =:init setq= to =:custom=.  All eight are =defcustom= variables.
+
+*** Fix N: Changelog — Japanese sections translated to English
+
+*🟡 Minor — language uniformity*
+
+- *[Fix N] Changelog*: Rewrote the =2026-03 (第2回評価修正)= section entirely in
+  English.  All prior Changelog entries are in English; the mixed-language block
+  introduced in the second evaluation pass was inconsistent with that convention.
+  Section heading renamed to =2026-03 (second evaluation pass)= to match the
+  pattern established by existing entries.
