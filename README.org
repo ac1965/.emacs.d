@@ -606,7 +606,8 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
    - Import macOS login environment (GUI/daemon)
    - Initialize *leaf*
    - Apply runtime performance knobs
-   - Load personal overlay
+   - Declare =my:modules-extra= (before personal overlay loads)
+   - Load personal overlay (personal/user.el appends to =my:modules-extra=)
    - Require =modules.el=
 
 3. After startup:
@@ -915,6 +916,10 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;; - invokes the modular configuration loader
   ;; - reports startup metrics after initialization
   ;;
+  ;; Internal helpers use the `bootstrap--` prefix (not `utils--`) because
+  ;; they are defined before the utils layer exists.  `bootstrap--safe-load-file`
+  ;; is aliased as `my/safe-load-file` for call sites in other layers.
+  ;;
   ;;; Code:
 
   (eval-when-compile
@@ -926,7 +931,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;; Internal helpers
   ;; ---------------------------------------------------------------------------
 
-  (defun utils--safe-load-file (file &optional noerror)
+  (defun bootstrap--safe-load-file (file &optional noerror)
     "Load FILE safely.
   If NOERROR is non-nil, log instead of raising."
     (when (and (stringp file) (file-exists-p file))
@@ -937,7 +942,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                   "[load] failed: %s (%s)"
                   file (error-message-string err))))))
 
-  (defalias 'my/safe-load-file #'utils--safe-load-file)
+  (defalias 'my/safe-load-file #'bootstrap--safe-load-file)
 
   ;; ---------------------------------------------------------------------------
   ;; 0) URL state (must be set BEFORE requiring url.el)
@@ -1081,7 +1086,15 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   ;; ---------------------------------------------------------------------------
   ;; 6) Personal overlay (strictly optional, safe-load only)
+  ;;
+  ;; my:modules-extra is declared here, before personal files load, so that
+  ;; personal/user.el can safely append to it via setq / append.
+  ;; (The defvar in modules.el is a no-op once this one has run — defvar never
+  ;; overwrites an already-bound variable.)
   ;; ---------------------------------------------------------------------------
+
+  (defvar my:modules-extra nil
+    "Extra module list appended by optional layers.")
 
   (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
          (personal (expand-file-name "personal/" root))
@@ -1097,14 +1110,10 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;; 7) Modules entrypoint (authoritative feature activation)
   ;; ---------------------------------------------------------------------------
 
-  (defvar my:modules-extra nil
-    "Extra module list appended by optional layers.")
-
   (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
          (lisp-dir (expand-file-name "lisp/" root)))
     (when (file-directory-p lisp-dir)
       (add-to-list 'load-path lisp-dir))
-    (require 'core-custom-ui-extras nil t)
     (require 'modules nil t))
 
   ;; ---------------------------------------------------------------------------
@@ -1330,10 +1339,6 @@ Its role is orchestration only.
       completion-corfu-org-src
       completion-orderless-org-src
       completion-lsp
-      ;; LSP abstraction layer: backend-agnostic facade over eglot/lsp-mode.
-      ;; Placed here so keybindings and UI layers can reference dev-lsp-*
-      ;; commands without depending on a specific LSP backend module.
-      dev-lsp-bridge
 
       ;; -----------------------------------------------------------------------
       ;; Org ecosystem
@@ -1356,6 +1361,12 @@ Its role is orchestration only.
       ;; -----------------------------------------------------------------------
       ;; Dev
       ;; -----------------------------------------------------------------------
+      ;; dev-lsp-bridge is the LSP abstraction facade (backend-agnostic dispatch
+      ;; wrappers for code-actions, rename, format).  Loaded first so that
+      ;; ui-keymap and personal overlays can bind dev-lsp-* commands
+      ;; without depending on a specific backend (dev-lsp-eglot, dev-lsp-mode).
+      ;; Concrete backends are activated lazily by core-switches via after-init-hook.
+      dev-lsp-bridge
       dev-ai
       dev-term
       dev-web-core
@@ -2888,8 +2899,9 @@ Runs via `after-init-hook' so all modules are loaded before activation."
 :CUSTOM_ID: core-custom-ui-extras
 :header-args:emacs-lisp: :tangle lisp/core/core-custom-ui-extras.el
 :END:
+
 #+begin_src emacs-lisp
-  ;;; core/core-custom-ui-extras.el --- User UI module extensions -*- lexical-binding: t; -*-
+  ;;; core/core-custom-ui-extras.el --- DEPRECATED: moved to personal/user.el -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -2899,19 +2911,18 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;
   ;;; Commentary:
   ;;
-  ;; Optional UI module extensions appended to the module load list.
+  ;; MIGRATION NOTE (2026-03):
+  ;; The my:modules-extra population for ui-visual-aids, orgx-typography, and
+  ;; ui-macos has been moved to personal/user.el.
   ;;
-  ;; This file:
-  ;; - appends `ui-visual-aids`, `orgx-typography`, and `ui-macos` to
-  ;;   `my:modules-extra` so they are loaded after the standard module sequence
+  ;; Rationale: injecting upper-layer (ui, orgx) module names from a core/
+  ;; module violates the "core must not depend on ui" principle.  These are
+  ;; personal presentation choices; the personal layer is the correct home.
+  ;;
+  ;; This file is intentionally empty and kept as a no-op placeholder so that
+  ;; any residual (require 'core-custom-ui-extras) calls in existing tangled
+  ;; outputs do not raise void-feature errors during the transition.
   ;;; Code:
-
-  (setq my:modules-extra
-        (delete-dups
-         (append my:modules-extra
-                 '(ui-visual-aids
-                   orgx-typography
-                   ui-macos))))
 
   (provide 'core-custom-ui-extras)
   ;;; core/core-custom-ui-extras.el ends here
@@ -4696,12 +4707,17 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;
   ;;; Commentary:
   ;;
-  ;; Completion core: orderless style and per-category overrides.
+  ;; Completion core: orderless completion style.
   ;;
   ;; This file:
-  ;; - sets `completion-styles` to orderless + basic fallback
-  ;; - configures category overrides: partial-completion for files,
-  ;;   orderless for symbols and commands
+  ;; - installs orderless and sets `completion-styles` to orderless + basic
+  ;;
+  ;; NOTE: `completion-category-overrides` is NOT set here.  The canonical,
+  ;; extended override table (file, symbol, keyword, tex, dabbrev) lives in
+  ;; completion-capf.el, which loads after this module.  Defining overrides in
+  ;; both files would cause completion-capf.el to silently win via last-writer
+  ;; semantics, making this declaration misleading.  A single authoritative
+  ;; source is clearer and easier to reason about.
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -4709,11 +4725,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (leaf orderless
     :straight t
     :custom
-    ((completion-styles . '(orderless basic))
-     (completion-category-overrides
-      . '((file    (styles . (partial-completion)))
-          (symbol  (styles . (orderless)))
-          (command (styles . (orderless)))))))
+    ((completion-styles . '(orderless basic))))
 
   (provide 'completion-core)
   ;;; completion/completion-core.el ends here
@@ -4971,6 +4983,13 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; - provides `completion--set-capfs` as a buffer-local CAPF setter
   ;; - defines CAPF stacks for: emacs-lisp, prog, text, org, shell, repl
   ;; - registers each stack on the corresponding mode hook
+  ;; - owns the canonical `completion-category-overrides` table
+  ;;
+  ;; NOTE: `completion-category-overrides` is set here and ONLY here.
+  ;; completion-core.el intentionally omits it.  This file extends the
+  ;; base orderless style (set in completion-core.el) with per-category
+  ;; rules for file, symbol, keyword, tex, and dabbrev.  Having a single
+  ;; authoritative source prevents silent last-writer collisions.
   ;;; Code:
 
   (defun completion--set-capfs (capfs)
@@ -5939,13 +5958,12 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; - falls back to `indent-region` for formatting when no LSP is active
   ;;
   ;; Load-order note:
-  ;; This module is loaded immediately after `completion-lsp` in modules.el,
-  ;; not in the dev/ section.  Reason: the unified commands declared here are
-  ;; pure dispatch wrappers — they carry no backend dependency themselves.
-  ;; Placing them after the completion layer lets ui-keymap and personal
-  ;; overlays bind `dev-lsp-*` commands without depending on any specific
-  ;; LSP backend module (dev-lsp-eglot, dev-lsp-mode).  Those backend modules
-  ;; are loaded lazily by core-switches via after-init-hook.
+  ;; Loaded first in the dev/ section, before the concrete LSP backend modules
+  ;; (dev-lsp-eglot, dev-lsp-mode).  These dispatch wrappers carry no backend
+  ;; dependency themselves; placing them in dev/ is architecturally correct.
+  ;; ui-keymap and personal overlays can bind `dev-lsp-*` commands once this
+  ;; module has loaded.  Concrete backends are activated lazily by core-switches
+  ;; via `after-init-hook`.
   ;;; Code:
 
   (defun dev-lsp-code-actions ()
@@ -7517,10 +7535,35 @@ The key files are:
   ;; idle", which fires far more frequently than intended.  Changed to 600
   ;; (10 minutes) to match the documented intent.
   ;;
+  ;; REFACTORED (2026-03 Fix B): `my:modules-extra` population for
+  ;; ui-visual-aids, orgx-typography, and ui-macos moved here from
+  ;; core/core-custom-ui-extras.el.  Core modules must not inject upper-layer
+  ;; (ui, orgx) module names; this is a personal presentation choice and
+  ;; belongs in the personal layer.  This file is loaded by init.el at step 6,
+  ;; before modules.el is required at step 7, so the extra list is fully
+  ;; populated when my/modules-load runs.
+  ;;
   ;;; Code:
 
   (setq user-full-name "YAMASHITA, Takao"
         user-mail-address "tjy1965@gmail.com")
+
+  ;; Optional UI/org module extensions.
+  ;;
+  ;; Rationale: these are personal presentation choices (visual aids, typography,
+  ;; macOS polish), not shared policy.  Declaring them here in the personal layer
+  ;; preserves the rule that core/ modules must not inject upper-layer (ui, orgx)
+  ;; references into the module load list.
+  ;;
+  ;; This runs before `modules.el` is required: init.el loads personal/user.el
+  ;; at step 6 and then requires modules at step 7, so my:modules-extra is
+  ;; populated before my/modules-load iterates the final list.
+  (setq my:modules-extra
+        (delete-dups
+         (append my:modules-extra
+                 '(ui-visual-aids
+                   orgx-typography
+                   ui-macos))))
 
   (leaf my:locale
     :straight nil
@@ -8294,3 +8337,86 @@ tangle:
 - *[Fix 11] ui-which-key.el*: Changed the =which-key-idle-delay= assignment from
   =setq= to =setopt=. All =defcustom= variables should be set via =setopt= to
   ensure setter functions and type validation are respected.
+
+** 2026-03 (architecture fixes)
+
+Four residual design-principle violations resolved.
+
+*** Fix A: modules.el — dev-lsp-bridge restored to dev/ section
+
+*🟠 Medium — layer boundary*
+
+- *[Fix A] lisp/modules.el*: Moved =dev-lsp-bridge= from the =Completion= section
+  back to the =Dev= section, as the first entry (before =dev-ai=).  The previous
+  placement after =completion-lsp= was motivated by wanting =ui-keymap= to bind
+  =dev-lsp-*= commands, but it introduced a layer boundary violation: a =dev/=
+  module was loaded inside the completion block, making the section boundary
+  misleading and the ordering non-obvious to future maintainers.
+
+  The correct solution is architectural: =dev-lsp-bridge= contains only pure
+  dispatch wrappers (=dev-lsp-code-actions=, =dev-lsp-rename=, =dev-lsp-format-buffer=)
+  that carry no backend dependency — they resolve at call time via =fboundp=.
+  Because =ui-keymap= loads after =dev-lsp-bridge= in the natural layer order
+  (=ui= < =completion= < =dev=... wait — actually =ui= < =completion= < =orgx= < =vcs= < =dev=),
+  keybindings in =ui-keymap= can safely reference =dev-lsp-*= symbols once they
+  are declared as =autoload= stubs or the module has loaded.  No ordering trick
+  is needed; placing the module in =dev/= is sufficient.
+
+  The =dev-lsp-bridge.el= Commentary is updated to document the correct rationale.
+
+*** Fix B: core-custom-ui-extras.el — moved to personal layer
+
+*🟠 Medium — layer ownership*
+
+- *[Fix B] init.el*: Removed the =(require 'core-custom-ui-extras nil t)= call.
+  The bootstrap sequence no longer loads this module explicitly.
+
+- *[Fix B] personal/user.el*: Moved the =my:modules-extra= population
+  (=ui-visual-aids=, =orgx-typography=, =ui-macos=) here.  =personal/user.el= is
+  loaded at init.el step 6; =modules.el= is required at step 7, so the extra
+  list is fully populated when =my/modules-load= runs.
+
+- *[Fix B / defvar ordering] init.el*: Moved the =(defvar my:modules-extra nil)=
+  declaration from step 7 to just before step 6 (personal overlay loading).
+  Previously the =defvar= appeared after the personal-overlay =safe-load-file=
+  calls, making the variable void when =personal/user.el= tried to =append= to it
+  and raising =Symbol's value as variable is void: my:modules-extra=.
+  Declaring it first is safe: =defvar= never overwrites an already-bound
+  variable, so the identical =defvar= in =modules.el= remains a harmless no-op.
+
+  Rationale: choosing which visual-aid and typography modules to activate is a
+  personal presentation decision, not a shared policy.  A =core/= module must not
+  inject references to =ui/= or =orgx/= modules into the load list — that inverts
+  the dependency direction the architecture explicitly forbids.  The personal
+  layer is the correct home for this kind of opt-in extension.
+
+- *[Fix B] core/core-custom-ui-extras.el*: Converted to a no-op placeholder
+  (=provide= only, no side effects).  Kept on disk so that any residual
+  =(require 'core-custom-ui-extras)= calls in existing tangled outputs do not
+  raise =void-feature= errors during the transition period.
+
+*** Fix C: completion-core.el — removed duplicate completion-category-overrides
+
+*🟡 Minor — silent last-writer collision*
+
+- *[Fix C] completion/completion-core.el*: Removed the =completion-category-overrides=
+  entry from the =leaf orderless :custom= block.  =completion-capf.el= (loaded later
+  in the same section) sets a fuller, authoritative override table covering =file=,
+  =symbol=, =keyword=, =tex=, and =dabbrev=.  Having two =setq=-equivalent assignments
+  meant the =completion-core.el= value was always silently overwritten, making it
+  dead configuration that created false confidence.
+
+- *[Fix C] completion/completion-capf.el*: Commentary updated to explicitly
+  document that this file is the *single canonical source* for
+  =completion-category-overrides=.
+
+*** Fix D: init.el — renamed utils--safe-load-file to bootstrap--safe-load-file
+
+*🟡 Minor — naming convention violation*
+
+- *[Fix D] init.el*: Renamed =utils--safe-load-file= to =bootstrap--safe-load-file=.
+  The =utils--= prefix implies the function belongs to the =utils/= layer, but it
+  is defined in =init.el=, which runs before any module layer loads.  The
+  =bootstrap--= prefix correctly communicates that this is an infrastructure
+  helper used only during the bootstrap phase.  The public alias =my/safe-load-file=
+  is unchanged, so no call sites in other layers are affected.

@@ -1,7 +1,7 @@
 # -*- mode: org; coding: utf-8; -*-
 #+TITLE: Modern Emacs Configuration — 詳細設計書
 #+AUTHOR: YAMASHITA, Takao
-#+DATE: 2026-03
+#+DATE: 2026-03 (rev.2)
 #+LANGUAGE: ja
 #+OPTIONS: toc:3 num:t ^:nil
 #+STARTUP: overview
@@ -22,16 +22,33 @@
 | 削除安全性 | =my:modules-skip= によるスキップ、=fboundp= ガード |
 | Literate Programming | =README.org= → =org-babel-tangle= → =lisp/<layer>/<module>.el= |
 | 前方互換性 | Emacs 30+ 対象、31+ 想定、=if-let*= / =when-let*= 使用 |
-| 命名規則 | 関数 =my/= or =<module>-= 、パス変数 =my:d:*= 、カスタム =<group>-= |
+| 命名規則 | 関数 =my/= or =<module>-= 、パス変数 =my:d:*= 、カスタム =<group>-= 、ブートストラップ内部 =bootstrap--= |
+
+** 改訂履歴
+
+| 版 | 日付 | 内容 |
+|----|------|------|
+| rev.1 | 2026-03 | 初版（全 81 モジュール記述） |
+| rev.2 | 2026-03 | Fix A–D + defvar 順序修正を反映 |
+
+*** rev.2 変更点
+
+- *Fix A*: =dev-lsp-bridge= を modules.el の completion セクションから dev セクション先頭へ移動。ロードインデックス #47→#58 に変更。
+- *Fix B*: =core-custom-ui-extras.el= の =my:modules-extra= 注入を =personal/user.el= に移管。core-custom-ui-extras は no-op プレースホルダー化。=init.el= で =my:modules-extra= を personal ロードより前に =defvar= するよう修正。
+- *Fix C*: =completion-core.el= から =completion-category-overrides= を削除。=completion-capf.el= を単一権威ソースとして明文化。
+- *Fix D*: =init.el= の内部ヘルパー =utils--safe-load-file= を =bootstrap--safe-load-file= に改名。=my/safe-load-file= alias は不変。
 
 ** ブート順序
 
 #+begin_example
 early-init.el
   → init.el (straight.el / leaf / org ブートストラップ)
-    → modules.el (my/modules-load)
-      → core-* → ui-* → auth-* → completion-* → orgx-* → vcs-* → dev-* → utils-*
-        → after-init-hook (core-switches: UI/LSP バンドル有効化)
+      → (defvar my:modules-extra nil)          ← personal より先に宣言
+      → personal/user.el (my:modules-extra を populate)
+      → modules.el (my/modules-load)
+          → core-* → ui-* → auth-* → completion-* → orgx-* → vcs-* → dev-* → utils-*
+          → my:modules-extra (* → ui-visual-aids, orgx-typography, ui-macos)
+            → after-init-hook (core-switches: UI/LSP バンドル有効化)
 #+end_example
 
 ** ディレクトリ構造
@@ -117,16 +134,23 @@ early-init.el
 - =org= 優先ロード (straight.el 経由)
 - macOS GUI/daemon 環境変数インポート (=exec-path-from-shell=)
 - =gcmh= によるランタイム GC 管理 (idle 5s、16MiB 閾値)
+- =my:modules-extra= 宣言（ステップ 6 の前。personal オーバーレイが append できるよう先行宣言）
 - personal オーバーレイ安全ロード (=user.el=, =<login>.el=)
 - =modules.el= 起動
 - 起動時間・GC 回数メトリクス出力 (=after-init-hook= 遅延)
+
+#+begin_example
+ステップ 6 前: (defvar my:modules-extra nil)   ← 先行宣言
+ステップ 6  : personal/user.el をロード         ← my:modules-extra に安全に append 可
+ステップ 7  : modules.el を require             ← my/modules-load が extra を読む
+#+end_example
 
 *** 公開関数
 
 | 関数 | 説明 |
 |------|------|
-| ~utils--safe-load-file (file &optional noerror)~ | ファイルを condition-case で安全ロード |
-| ~my/safe-load-file~ | ~utils--safe-load-file~ の defalias |
+| ~bootstrap--safe-load-file (file &optional noerror)~ | ファイルを condition-case で安全ロード（bootstrap フェーズ専用） |
+| ~my/safe-load-file~ | ~bootstrap--safe-load-file~ の defalias（他レイヤー向け安定 API） |
 | ~core--restore-process-output-max ()~ | =read-process-output-max= を元の値に復元 |
 | ~core--announce-startup ()~ | 起動時間・GC 回数を表示 |
 
@@ -147,7 +171,7 @@ early-init.el
 |----|----------|-----|
 | =my:modules-verbose= | =t= | per-module ロード時間を表示 |
 | =my:modules-skip= | =nil= | スキップするモジュールシンボルリスト |
-| =my:modules-extra= | =nil= | 標準リスト末尾に追記するモジュールリスト |
+| =my:modules-extra= | =nil= | 標準リスト末尾に追記するモジュールリスト（=init.el= で先行宣言・personal 層が populate） |
 
 *** 関数
 
@@ -696,14 +720,23 @@ initialisation is deferred to after-init-hook, so late load order is safe.
 
 *** 責務
 
-- appends `ui-visual-aids`, `orgx-typography`, and `ui-macos` to
-  `my:modules-extra` so they are loaded after the standard module sequence
+*DEPRECATED（2026-03 移行済み）*
+
+以前は =my:modules-extra= に =ui-visual-aids=, =orgx-typography=, =ui-macos= を追記していたが、
+この責務は =personal/user.el= に移管された。
+
+移管理由: core/ モジュールが =ui/= や =orgx/= のモジュール名をロードリストに注入することは
+「core は上位レイヤーに依存しない」原則に違反する。個人的なプレゼンテーション選択は personal 層が担うべきである。
+
+現在このファイルは =provide= のみの no-op プレースホルダー。
+既存のタングル済み出力が =(require 'core-custom-ui-extras)= しても =void-feature= にならないよう残留させる。
 
 *** メタ情報
 
 | 項目 | 値 |
 |------|-----|
 | =provide= | =core-custom-ui-extras= |
+| 状態 | no-op プレースホルダー（実質廃止） |
 
 * ui/ レイヤー
 
@@ -1302,9 +1335,14 @@ Authentication infrastructure for the configuration.
 
 *** 責務
 
-- sets `completion-styles` to orderless + basic fallback
-- configures category overrides: partial-completion for files,
-  orderless for symbols and commands
+- =orderless= をインストールし、=completion-styles= を =orderless= + =basic= フォールバックに設定する
+
+#+begin_quote
+NOTE: =completion-category-overrides= はここでは設定しない。
+カテゴリー別オーバーライドの正規テーブル（=file=, =symbol=, =keyword=, =tex=, =dabbrev=）は
+=completion-capf.el= が唯一の設定箇所として所有する。
+複数箇所に =setq= を持つと後勝ちによる無言の上書きが発生するため、単一の権威的ソースに集約する。
+#+end_quote
 
 *** メタ情報
 
@@ -1427,6 +1465,13 @@ Authentication infrastructure for the configuration.
 - provides `completion--set-capfs` as a buffer-local CAPF setter
 - defines CAPF stacks for: emacs-lisp, prog, text, org, shell, repl
 - registers each stack on the corresponding mode hook
+- *=completion-category-overrides= の単一の権威的ソース* （=file=, =symbol=, =keyword=, =tex=, =dabbrev= のカテゴリールールをここで一括設定）
+
+#+begin_quote
+NOTE: =completion-core.el= は =completion-styles= のみを担い、カテゴリーオーバーライドは設定しない。
+このファイルが orderless のベーススタイル（=completion-core.el= で設定）を拡張する形でオーバーライドを定義する。
+単一オーナー設計により後勝ちの無言衝突を防ぐ。
+#+end_quote
 
 *** メタ情報
 
@@ -2517,14 +2562,22 @@ to avoid leaking a utils-layer dependency into the org layer at load time.
 
 ** personal/user.el
 
-全ユーザー共通のパーソナライズ。=my:use-ui= / =my:use-lsp= スイッチを設定し、
-メッセージアーカイブジョブを =core-session= に登録する。
+全ユーザー共通のパーソナライズ。=my:modules-extra= へのオプションモジュール追加、
+=my:use-ui= / =my:use-lsp= スイッチ設定、メッセージアーカイブジョブを担う。
 
 *** 主な設定
 
+- *=my:modules-extra= に =ui-visual-aids=, =orgx-typography=, =ui-macos= を追記*
+  （init.el ステップ 6 でロードされ、ステップ 7 の =modules.el= require より前に実行される）
 - =my:use-ui= を =nano= または =doom= に設定
 - =my:use-lsp= を =eglot= に設定
 - =personal-messages= アーカイブジョブを =core-session= に登録 (120s 遅延、10 分周期)
+
+*** ロード順序ノート
+
+=init.el= は =my:modules-extra= を personal ロード（ステップ 6）の前に =defvar= で宣言する。
+これにより =personal/user.el= は変数が void にならず安全に =append= できる。
+=modules.el= 内の同名 =defcustom= は =defvar= 後に評価されるため no-op となり衝突しない。
 
 ** personal/<login>.el
 
@@ -2585,18 +2638,18 @@ macOS 固有設定。Homebrew PATH、フォント等。
 | 44 | =completion/completion-corfu-org-src.el= | completion | 0 | 0 | 1 |
 | 45 | =completion/completion-orderless-org-src.el= | completion | 0 | 0 | 1 |
 | 46 | =completion/completion-lsp.el= | completion | 3 | 1 | 2 |
-| 47 | =dev/dev-lsp-bridge.el= | dev | 0 | 0 | 0 |
-| 48 | =orgx/orgx-core.el= | orgx | 2 | 0 | 1 |
-| 49 | =orgx/orgx-visual.el= | orgx | 2 | 0 | 2 |
-| 50 | =orgx/orgx-extensions.el= | orgx | 1 | 0 | 0 |
-| 51 | =orgx/orgx-fold.el= | orgx | 0 | 0 | 0 |
-| 52 | =orgx/orgx-export.el= | orgx | 0 | 0 | 0 |
-| 53 | =orgx/orgx-notes-markdown.el= | orgx | 8 | 2 | 1 |
-| 54 | =orgx/orgx-auto-tangle.el= | orgx | 1 | 0 | 2 |
-| 55 | =orgx/orgx-typography.el= | orgx | 0 | 0 | 0 |
-| 56 | =vcs/vcs-magit.el= | vcs | 0 | 0 | 0 |
-| 57 | =vcs/vcs-gutter.el= | vcs | 0 | 0 | 0 |
-| 58 | =vcs/vcs-forge.el= | vcs | 0 | 0 | 0 |
+| 47 | =orgx/orgx-core.el= | orgx | 2 | 0 | 1 |
+| 48 | =orgx/orgx-visual.el= | orgx | 2 | 0 | 2 |
+| 49 | =orgx/orgx-extensions.el= | orgx | 1 | 0 | 0 |
+| 50 | =orgx/orgx-fold.el= | orgx | 0 | 0 | 0 |
+| 51 | =orgx/orgx-export.el= | orgx | 0 | 0 | 0 |
+| 52 | =orgx/orgx-notes-markdown.el= | orgx | 8 | 2 | 1 |
+| 53 | =orgx/orgx-auto-tangle.el= | orgx | 1 | 0 | 2 |
+| 54 | =orgx/orgx-typography.el= | orgx | 0 | 0 | 0 |
+| 55 | =vcs/vcs-magit.el= | vcs | 0 | 0 | 0 |
+| 56 | =vcs/vcs-gutter.el= | vcs | 0 | 0 | 0 |
+| 57 | =vcs/vcs-forge.el= | vcs | 0 | 0 | 0 |
+| 58 | =dev/dev-lsp-bridge.el= | dev | 3 | 0 | 0 |
 | 59 | =dev/dev-ai.el= | dev | 0 | 0 | 0 |
 | 60 | =dev/dev-term.el= | dev | 7 | 1 | 2 |
 | 61 | =dev/dev-web-core.el= | dev | 0 | 0 | 0 |
@@ -2628,7 +2681,7 @@ macOS 固有設定。Homebrew PATH、フォント等。
 | 関数/変数 | モジュール | 用途 |
 |-----------|---------|------|
 | ~my/ensure-directory-exists (dir)~ | early-init | ディレクトリ再帰作成 |
-| ~my/safe-load-file (file)~ | init | ファイル安全ロード |
+| ~my/safe-load-file (file)~ | init (=bootstrap--safe-load-file= の alias) | ファイル安全ロード |
 | ~core-api-session-register-job~ | core-api | バックグラウンドジョブ登録 |
 | ~core-api-session-unregister-job~ | core-api | バックグラウンドジョブ解除 |
 | ~core-tools-emacs>= (major minor)~ | core-tools | バージョン述語 |
