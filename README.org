@@ -3765,14 +3765,18 @@ No-op when `core-session-run-job' is not available."
     :straight nil
     :config
     (let ((dir (concat no-littering-var-directory "desktop/")))
-      (setq desktop-dirname dir
-            desktop-path (list dir)
-            desktop-base-file-name "desktop"
-            desktop-base-lock-name "lock"
-            desktop-restore-eager 10
-            desktop-save t
-            desktop-load-locked-desktop nil
-            desktop-auto-save-timeout 300)
+      ;; [Fix AB] All eight desktop.* vars are defcustom (desktop.el).
+      ;; Use setopt inside the let so their setters and type validation
+      ;; are respected.  The let-binding is retained because desktop-path
+      ;; must be derived from dir at runtime.
+      (setopt desktop-dirname              dir
+              desktop-path                 (list dir)
+              desktop-base-file-name       "desktop"
+              desktop-base-lock-name       "lock"
+              desktop-restore-eager        10
+              desktop-save                 t
+              desktop-load-locked-desktop  nil
+              desktop-auto-save-timeout    300)
       (my/ensure-directory-exists dir)
       (desktop-save-mode 1)))
 
@@ -5452,24 +5456,26 @@ No-op when `core-session-run-job' is not available."
     :config
     ;; Phase 1: Set a minimal fallback immediately so org-agenda-files is
     ;; never nil even if utils-org-agenda hasn't loaded yet.
-    (setq org-agenda-files
-          (list (expand-file-name "inbox.org" org-directory)))
+    ;; [Fix AA] org-agenda-files, org-todo-keywords, org-refile-targets, and
+    ;; org-capture-templates are all defcustom; use setopt in :config.
+    (setopt org-agenda-files
+            (list (expand-file-name "inbox.org" org-directory)))
 
-    (setq org-todo-keywords
-          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
-    (setq org-refile-targets
-          '((nil :maxlevel . 3)
-            (my/org-buffer-files :maxlevel . 1)
-            (org-agenda-files :maxlevel . 3)))
-    (setq org-capture-templates
-          `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
-             "* TODO %?\n %i\n %a")
-            ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
-             "* %?\nEntered on %U\n %i\n %a")
-            ("j" "Journal" entry (function org-journal-find-location)
-             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
-            ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
-             "* MEETING with %? :meeting:\n  %U\n  %a"))))
+    (setopt org-todo-keywords
+            '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
+    (setopt org-refile-targets
+            '((nil :maxlevel . 3)
+              (my/org-buffer-files :maxlevel . 1)
+              (org-agenda-files :maxlevel . 3)))
+    (setopt org-capture-templates
+            `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
+               "* TODO %?\n %i\n %a")
+              ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
+               "* %?\nEntered on %U\n %i\n %a")
+              ("j" "Journal" entry (function org-journal-find-location)
+               "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+              ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
+               "* MEETING with %? :meeting:\n  %U\n  %a"))))
 
   ;; Archive location
   (with-eval-after-load 'org
@@ -5904,8 +5910,11 @@ No-op when `core-session-run-job' is not available."
       (let ((default-directory my:d:notes))
         (consult-ripgrep)))
     :config
-    (setq consult-notes-file-dir-sources
-          (list (list "Org Notes (MD)" ?m my:d:notes))))
+    ;; [Fix AC] consult-notes-file-dir-sources is a defcustom (consult-notes.el).
+    ;; Value is runtime-derived from my:d:notes so it cannot go in :custom;
+    ;; use setopt inside :config.
+    (setopt consult-notes-file-dir-sources
+            (list (list "Org Notes (MD)" ?m my:d:notes))))
 
   (with-eval-after-load 'org-download
     (defun my/notes-markdown-org-download-setup ()
@@ -7457,17 +7466,24 @@ No-op when SCRIPT is not executable."
   (defvar utils-org-agenda--last-scan-time nil
     "Time of last successful scan.")
 
+  ;; [Fix Z] Added defgroup so defcustom vars are grouped under this module's
+  ;; own customization group rather than the external 'org-agenda group.
+  ;; Every module owning defcustom vars must declare its own defgroup.
+  (defgroup utils-org-agenda nil
+    "Cached Org agenda file scanning for the modular configuration."
+    :group 'org)
+
   (defcustom utils-org-agenda-max-depth 3
     "Maximum directory recursion depth for agenda file scanning."
-    :type 'integer :group 'org-agenda)
+    :type 'integer :group 'utils-org-agenda)
 
   (defcustom utils-org-agenda-exclude-dirs '("archive" ".git" "node_modules")
     "Directory names to skip during agenda scanning."
-    :type '(repeat string) :group 'org-agenda)
+    :type '(repeat string) :group 'utils-org-agenda)
 
   (defcustom utils-org-agenda-cache-ttl 300
     "Seconds before the cache is considered stale."
-    :type 'integer :group 'org-agenda)
+    :type 'integer :group 'utils-org-agenda)
 
   (defun utils-org-agenda--should-exclude-p (dir)
     (let ((name (file-name-nondirectory (directory-file-name dir))))
@@ -8992,3 +9008,64 @@ namespace.
 | Old name | New name |
 |---|---|
 | =my/aidermacs--append-unique-args= | =dev-ai--append-unique-args= |
+
+** 2026-03 (seventh evaluation pass)
+
+*** Fix Z: utils-org-agenda.el — added defgroup; defcustom :group corrected
+
+*🟡 Minor — missing module-owned customization group*
+
+- *[Fix Z] utils/utils-org-agenda.el*: Added =(defgroup utils-org-agenda nil ...)=
+  with =:group 'org= as the parent.  The three =defcustom= variables
+  (=utils-org-agenda-max-depth=, =utils-org-agenda-exclude-dirs=,
+  =utils-org-agenda-cache-ttl=) previously declared =:group 'org-agenda=,
+  which is the built-in Org Mode customization group.  This caused the
+  module's variables to appear under Org's own group rather than a group
+  specific to this module.
+
+  Every other module in this configuration that owns =defcustom= variables
+  declares its own =defgroup=.  =utils-org-agenda= was the sole exception.
+  All three =:group= references updated to ='utils-org-agenda=.
+
+** 2026-03 (eighth evaluation pass)
+
+*** Fix AA: orgx-core.el — org defcustom vars switched to setopt in :config
+
+*🟡 Minor — setq/setopt consistency (four variables)*
+
+- *[Fix AA] orgx/orgx-core.el*: Changed =setq= to =setopt= for
+  =org-agenda-files=, =org-todo-keywords=, =org-refile-targets=, and
+  =org-capture-templates= inside the =leaf org :config= block.  All four are
+  =defcustom= variables in =org.el= / =org-refile.el= / =org-capture.el=.
+  The values involve runtime-evaluated expressions (=org-directory=,
+  backquote templates) so they cannot be moved to =:custom= or =:pre-setq=;
+  =setopt= inside =:config= is the correct pattern for this case.
+
+  The =setq org-agenda-files= inside =orgx-core--rebuild-agenda-files= is
+  intentionally left as =setq=: that call is an internal Phase 2 state update
+  (replacing the Phase 1 fallback with the freshly scanned list), not an
+  initial configuration of a =defcustom= value.
+
+*** Fix AB: ui-window.el — desktop.el defcustom vars switched to setopt
+
+*🟡 Minor — setq/setopt consistency (eight variables)*
+
+- *[Fix AB] ui/ui-window.el*: Changed the eight =setq= assignments inside the
+  =leaf desktop :config= let-binding to a single =setopt= call.  The variables
+  =desktop-dirname=, =desktop-path=, =desktop-base-file-name=,
+  =desktop-base-lock-name=, =desktop-restore-eager=, =desktop-save=,
+  =desktop-load-locked-desktop=, and =desktop-auto-save-timeout= are all
+  =defcustom= in =desktop.el=.  The enclosing =let= is retained because
+  =desktop-path= must be derived from =dir= at runtime.
+
+*** Fix AC: orgx-notes-markdown.el — consult-notes-file-dir-sources switched to setopt
+
+*🟡 Minor — setq/setopt consistency*
+
+- *[Fix AC] orgx/orgx-notes-markdown.el*: Changed =setq consult-notes-file-dir-sources=
+  to =setopt= inside the =leaf consult-notes :config= block.
+  =consult-notes-file-dir-sources= is a =defcustom= in =consult-notes.el=.
+  The value is derived from =my:d:notes= at runtime and therefore cannot be
+  placed in =:custom= or =:pre-setq=; =setopt= inside =:config= is the correct
+  pattern for runtime-derived =defcustom= paths, consistent with how
+  =dirvish-cache-dir=, =emms-history-file=, and =org-roam-db-location= are handled.
