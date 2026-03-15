@@ -1,82 +1,136 @@
 # -*- mode: org; coding: utf-8; -*-
 #+TITLE: Modern Emacs Configuration — 詳細設計書
 #+AUTHOR: YAMASHITA, Takao
-#+DATE: 2026-03 (rev.2)
+#+DATE: 2026-03 (rev.3)
 #+LANGUAGE: ja
 #+OPTIONS: toc:3 num:t ^:nil
 #+STARTUP: overview
 
-* 概要
+* 1. 概要
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
 
-このドキュメントは =README.org= の Emacs Lisp コードブロックから抽出した詳細設計書です。
-全 81 モジュールの責務・公開 API・フック登録・設定変数をレイヤーごとに記述します。
+このドキュメントは =README.org= (Literate Programming ソース) から自動抽出した詳細設計書です。
+Fix A–AD (9ラウンド評価) をすべて反映した最終版 rev.3 です。
 
-[[file:emacs_config_layer_architecture.svg]]
+| 項目 | 数値 |
+|------|------|
+| モジュール (ロード順) | 72 |
+| タングル対象ファイル | 89 |
+| 公開 defun | 93 |
+| defcustom 変数 | 57 |
+| フック登録 | 59 |
 
 ** 設計原則
+:PROPERTIES:
+:CUSTOM_ID: design-principles
+:END:
 
 | 原則 | 内容 |
 |------|------|
-| 決定論的起動 | =modules.el= の明示的ロード順、=condition-case= によるエラー隔離 |
-| レイヤー分離 | 上位→下位方向のみ依存、依存逆転禁止 |
-| 削除安全性 | =my:modules-skip= によるスキップ、=fboundp= ガード |
-| Literate Programming | =README.org= → =org-babel-tangle= → =lisp/<layer>/<module>.el= |
-| 前方互換性 | Emacs 30+ 対象、31+ 想定、=if-let*= / =when-let*= 使用 |
-| 命名規則 | 関数 =my/= or =<module>-= 、パス変数 =my:d:*= 、カスタム =<group>-= 、ブートストラップ内部 =bootstrap--= |
+| *決定論的起動* | =modules.el= の明示的ロード順、=condition-case= によるモジュール単位エラー隔離。起動失敗が上位レイヤーに波及しない。 |
+| *レイヤー分離* | 依存は下位→上位方向のみ。core → ui → completion → orgx → dev の順。依存逆転禁止。 |
+| *削除安全性* | =my:modules-skip= でモジュールをスキップ可能。=fboundp= / =boundp= ガードにより欠損モジュールで Emacs が起動不能にならない。 |
+| *Literate Programming* | =README.org= が唯一の真実。=org-babel-tangle= → =lisp/<layer>/<module>.el=。手動編集不可。 |
+| *前方互換性* | Emacs 30+ 対象・31+ 想定。=if-let*= / =when-let*= / =and-let*= 使用。obsolete API 禁止。 |
+| *setopt 統一* | すべての =defcustom= 変数は =setopt= で設定。=leaf :custom= / =:pre-setq= を優先。=:config= 内でも =setq= ではなく =setopt=。 |
+| *命名規則* | 公開関数: =my/= or =<module>-=。内部ヘルパー: =<module>--= (double dash)。混在形 =my/<topic>--= は禁止。パス変数: =my:d:*=。 |
+| *ドキュメント* | 公開 defun はすべてドキュメント文字列を持つ。=defcustom= を持つモジュールは =defgroup= を宣言し、=:group= に自モジュールのグループを指定。 |
 
-** 改訂履歴
+** コーディングルール
+:PROPERTIES:
+:CUSTOM_ID: coding-rules
+:END:
 
-| 版 | 日付 | 内容 |
-|----|------|------|
-| rev.1 | 2026-03 | 初版（全 81 モジュール記述） |
-| rev.2 | 2026-03 | Fix A–D + defvar 順序修正を反映 |
-
-*** rev.2 変更点
-
-- *Fix A*: =dev-lsp-bridge= を modules.el の completion セクションから dev セクション先頭へ移動。ロードインデックス #47→#58 に変更。
-- *Fix B*: =core-custom-ui-extras.el= の =my:modules-extra= 注入を =personal/user.el= に移管。core-custom-ui-extras は no-op プレースホルダー化。=init.el= で =my:modules-extra= を personal ロードより前に =defvar= するよう修正。
-- *Fix C*: =completion-core.el= から =completion-category-overrides= を削除。=completion-capf.el= を単一権威ソースとして明文化。
-- *Fix D*: =init.el= の内部ヘルパー =utils--safe-load-file= を =bootstrap--safe-load-file= に改名。=my/safe-load-file= alias は不変。
+| ルール | 詳細 |
+|--------|------|
+| =lexical-binding: t= | 全モジュール必須 |
+| =(provide 'FEATURE)= | タングルファイル名と一致すること |
+| =Built-in は :straight nil= | Emacs 組み込みパッケージは =:straight nil= を宣言 |
+| =leaf= 順序 | =:straight= → =:bind= → =:hook= → =:custom= → =:config= |
+| =setopt for defcustom= | 全 =defcustom= 変数は =setopt= / =leaf :custom= で設定。=setq= は =defvar=・内部状態・一時オーバーライドのみ |
+| 公開 API のみ使用 | サードパーティの =--= プレフィックスシンボルは =fboundp= ガード下でのみ使用 |
+| named defun | 無名 lambda の =add-hook= 禁止。named defun を使うこと |
+| docstring 必須 | 公開 defun は全てドキュメント文字列を持つ |
+| =defgroup= 宣言 | =defcustom= を持つモジュールは =defgroup= を宣言 |
 
 ** ブート順序
+:PROPERTIES:
+:CUSTOM_ID: boot-sequence
+:END:
 
 #+begin_example
 early-init.el
   → init.el (straight.el / leaf / org ブートストラップ)
-      → (defvar my:modules-extra nil)          ← personal より先に宣言
-      → personal/user.el (my:modules-extra を populate)
-      → modules.el (my/modules-load)
-          → core-* → ui-* → auth-* → completion-* → orgx-* → vcs-* → dev-* → utils-*
-          → my:modules-extra (* → ui-visual-aids, orgx-typography, ui-macos)
-            → after-init-hook (core-switches: UI/LSP バンドル有効化)
+      ① (defvar my:modules-extra nil)     ← personal ロードより先に宣言 (Fix B)
+      ② personal/user.el をロード         (my:modules-extra に ui-visual-aids 等を追加)
+      ③ (require 'modules nil t)           defcustom my:modules-extra は no-op
+      ④ my/modules-load                    condition-case で隔離ロード
+          core-* (16) → ui-* (11+α) → auth-* (1) → completion-* (12)
+          → orgx-* (7) → vcs-* (3) → dev-* (13) → utils-* (9)
+          → my:modules-extra の追加モジュール
+      ⑤ after-init-hook                    core-switches: UI/LSP バンドル有効化
 #+end_example
 
 ** ディレクトリ構造
+:PROPERTIES:
+:CUSTOM_ID: directory-structure
+:END:
 
 #+begin_example
 .emacs.d/
-├── early-init.el         ; GC・ディレクトリ・UI 早期設定
-├── init.el               ; straight.el・leaf・module 起動
-├── modules.el            ; ロード順定義・エラー隔離
-├── README.org            ; Literate source (唯一の真実)
-├── lisp/core/            ; ランタイム基盤 (17 modules)
-├── lisp/ui/              ; 視覚・操作 (16 modules)
-├── lisp/auth/            ; 認証 (1 module)
-├── lisp/completion/      ; 補完 (12 modules)
-├── lisp/orgx/            ; Org 拡張 (8 modules)
-├── lisp/vcs/             ; バージョン管理 (3 modules)
-├── lisp/dev/             ; 開発ツール (15 modules)
-├── lisp/utils/           ; 汎用ヘルパー (9 modules)
-├── personal/             ; ユーザー固有設定 (最後にロード)
-├── .var/                 ; ランタイム状態 (no-littering)
-├── .etc/                 ; 設定ファイル (no-littering)
-└── .cache/               ; 一時キャッシュ・ELN
+├── early-init.el            GC・ディレクトリ定義・UI 早期設定
+├── init.el                  straight.el・leaf・module 起動
+├── modules.el               ロード順定義・エラー隔離
+├── README.org               Literate source (唯一の真実)
+├── Makefile                 ワンパス tangle → byte-compile ビルダー
+├── lisp/core/               ランタイム基盤 (16 modules)
+├── lisp/ui/                 視覚・操作 (11+α modules)
+├── lisp/auth/               認証 (1 module)
+├── lisp/completion/         補完 (12 modules)
+├── lisp/orgx/               Org 拡張 (7 modules)
+├── lisp/vcs/                バージョン管理 (3 modules)
+├── lisp/dev/                開発ツール (13 modules)
+├── lisp/utils/              汎用ヘルパー (9 modules)
+├── personal/                ユーザー固有設定
+├── .var/ (.etc/ .cache/)    no-littering: ランタイム状態 / 設定 / キャッシュ
+├── .cache/eln/              native-comp ELN キャッシュ
+└── .cache/treesit/          Tree-sitter 文法バイナリ
 #+end_example
 
-* ブートストラップファイル
+** 改訂履歴
+:PROPERTIES:
+:CUSTOM_ID: revision-history
+:END:
+
+| 版 | 日付 | 内容 |
+|----|------|------|
+| rev.1 | 2026-03 | 初版（全 81 モジュール記述） |
+| rev.2 | 2026-03 | Fix A–D 反映: dev-lsp-bridge 移動・core-custom-ui-extras personal 化・completion-category-overrides 権威ソース明確化・bootstrap-- 命名 |
+| rev.3 | 2026-03 | Fix A–AD 全反映（9ラウンド評価）。モジュール数 81→89 タングル対象・72 ロード順。setopt 統一・命名規則 my/xxx-- 廃止・docstring 50 件追加・defgroup 全モジュール整備・Coding Rules 文書化 |
+
+*** rev.3 主要変更点
+
+- *Fix E*: =ui-theme.el= の =ui-nano-palette= hard require → optional（=require nil t= + =with-eval-after-load=）
+- *Fix G–I*: =treesit-*=・=native-comp-*= 等の =setopt= 統一
+- *Fix J*: =aidermacs-extra-args= の =defvar= を使用前に移動
+- *Fix K–N*: =setq= → =setopt= 統一（=save-place-file= 等）
+- *Fix O*: =emms-directory= を =emms-all= より前に設定（=:pre-setq= 利用）
+- *Fix P–S*: =dired/transient/corfu/org-roam= の =setopt= 統一
+- *Fix T–V*: personal 層・toggle 関数の =setopt= 統一
+- *Fix W*: 公開 =defun= 50 件にドキュメント文字列追加
+- *Fix X/Y*: =my/xxx--= 形式 17 関数を =<module>--= 形式にリネーム（83 箇所）
+- *Fix Z*: =utils-org-agenda.el= に =defgroup= 追加
+- *Fix AA–AC*: =org-capture-templates= 等の =setopt= 統一
+- *Fix AD*: Coding Rules セクションに setopt・命名・docstring ルールを明文化
+
+* 2. ブートストラップファイル
+:PROPERTIES:
+:CUSTOM_ID: bootstrap
+:END:
 
 ** early-init.el
-
 :PROPERTIES:
 :CUSTOM_ID: early-init
 :END:
@@ -93,2628 +147,2069 @@ early-init.el
 - ディレクトリ定義: =my:d=, =my:d:var=, =my:d:etc=, =my:d:cache=, =my:d:eln-cache=, =my:d:treesit=
 - no-littering 互換変数 (=no-littering-var-directory= 等) の事前定義
 - macOS Homebrew ツールチェーン環境変数設定
-- =straight.el= ベースディレクトリ・プロファイル設定
-- ネイティブコンパイル ELN パス設定
-- 早期 UI デフォルト (tool-bar/menu-bar/scroll-bar 非表示、フルスクリーン)
-- auto-save / backup を初期段階で無効化（core-editing.el でも明示的に設定）
+- =straight.el= ベースディレクトリ・プロファイル設定 (=setopt= 使用)
+- ネイティブコンパイル ELN パス設定 (=setopt= 使用)
+- 早期 UI デフォルト (tool-bar/menu-bar/scroll-bar 非表示)
+- auto-save / backup を初期段階で無効化
 
-*** 公開関数・エイリアス
+*** 公開 API
 
-| 関数 | 説明 |
-|------|------|
-| ~core--ensure-directory (dir)~ | DIR を再帰作成 |
-| ~my/ensure-directory-exists~ | ~core--ensure-directory~ の defalias |
-| ~core--login-username ()~ | ログインユーザー名を返す |
-| ~core--restore-startup-state ()~ | GC / file-name-handler を復元 |
-| ~core--fullscreen-once ()~ | ウィンドウ初回フルスクリーン化（1 回のみ） |
+- =my/ensure-directory-exists= — =core--ensure-directory= の公開 alias
+- =core--ensure-directory= — 実装本体
+- =bootstrap--safe-load-file= — init.el 内部ヘルパー
+- =my/safe-load-file= — =bootstrap--safe-load-file= の公開 alias
 
-*** 主要変数
+*** 備考
 
-| 変数 | 値 | 説明 |
-|------|-----|------|
-| =my:d= | load-file-name 親ディレクトリ | 設定ルート |
-| =my:d:var= | =.var/= | ランタイム状態 |
-| =my:d:etc= | =.etc/= | 設定ファイル |
-| =my:d:cache= | =.cache/emacs/= | キャッシュ |
-| =my:d:eln-cache= | =.cache/emacs/eln-cache/= | ネイティブ ELN |
-| =my:d:treesit= | =.var/tree-sitter/= | Tree-sitter 文法 |
-| =straight-base-dir= | =my:d:cache= | straight.el ベース |
+=core--ensure-directory= が実装。=my/ensure-directory-exists= は公開 alias。
 
 ** init.el
-
 :PROPERTIES:
-:CUSTOM_ID: init
+:CUSTOM_ID: init-el
 :END:
+
+| 項目 | 内容 |
+|------|------|
+| tangle 先 | =init.el= (root) |
+| 実行タイミング | early-init.el 完了後 |
 
 *** 責務
 
-- URL 状態パス設定 (=url-configuration-directory=, =url-cookie-file= 等)
-- =straight.el= ブートストラップ (bootstrap-version 7)
-- =leaf= / =leaf-keywords= 初期化
-- =org= 優先ロード (straight.el 経由)
-- macOS GUI/daemon 環境変数インポート (=exec-path-from-shell=)
-- =gcmh= によるランタイム GC 管理 (idle 5s、16MiB 閾値)
-- =my:modules-extra= 宣言（ステップ 6 の前。personal オーバーレイが append できるよう先行宣言）
-- personal オーバーレイ安全ロード (=user.el=, =<login>.el=)
-- =modules.el= 起動
-- 起動時間・GC 回数メトリクス出力 (=after-init-hook= 遅延)
+- =straight.el= ブートストラップ (=condition-case= でフォールバック)
+- =leaf= / =leaf-keywords= インストール
+- =org= 最新版インストール (straight.el 経由)
+- =(defvar my:modules-extra nil)= — personal ロードより前に宣言
+- =personal/user.el= ロード (=my:modules-extra= populate)
+- =(require 'modules nil t)=
+- =my/modules-load= 呼び出し
 
-#+begin_example
-ステップ 6 前: (defvar my:modules-extra nil)   ← 先行宣言
-ステップ 6  : personal/user.el をロード         ← my:modules-extra に安全に append 可
-ステップ 7  : modules.el を require             ← my/modules-load が extra を読む
-#+end_example
+*** 公開 API
 
-*** 公開関数
+- =my/modules-load= — modules.el が提供
 
-| 関数 | 説明 |
-|------|------|
-| ~bootstrap--safe-load-file (file &optional noerror)~ | ファイルを condition-case で安全ロード（bootstrap フェーズ専用） |
-| ~my/safe-load-file~ | ~bootstrap--safe-load-file~ の defalias（他レイヤー向け安定 API） |
-| ~core--restore-process-output-max ()~ | =read-process-output-max= を元の値に復元 |
-| ~core--announce-startup ()~ | 起動時間・GC 回数を表示 |
+*** 備考
+
+=bootstrap--safe-load-file= は init.el 内部ヘルパー。=my/safe-load-file= として公開 alias。
 
 ** modules.el
-
 :PROPERTIES:
-:CUSTOM_ID: modules
+:CUSTOM_ID: modules-el
 :END:
+
+| 項目 | 内容 |
+|------|------|
+| tangle 先 | =modules.el= (root) |
+| 実行タイミング | init.el ステップ ③ で require |
 
 *** 責務
 
-モジュールのロード順定義・エラー隔離・スキップ・診断ログを担う中央オーケストレーター。
-フィーチャーロジックを持たない（純粋なオーケストレーション）。
+- =my:modules= (=defconst=) — 72 モジュールの宣言的ロードリスト
+- =my:modules-skip= (=defcustom=) — スキップリスト（削除安全性）
+- =my:modules-extra= (=defcustom=) — personal オーバーレイ追加リスト
+- =my/modules-load= — 全モジュールを =condition-case= で隔離ロード
+- ロード時間・成功/失敗ログを =after-init-hook= で出力
 
-*** カスタム変数
+*** 公開 API
 
-| 変数 | デフォルト | 説明 |
-|----|----------|-----|
-| =my:modules-verbose= | =t= | per-module ロード時間を表示 |
-| =my:modules-skip= | =nil= | スキップするモジュールシンボルリスト |
-| =my:modules-extra= | =nil= | 標準リスト末尾に追記するモジュールリスト（=init.el= で先行宣言・personal 層が populate） |
+- =my/modules-load=
+- =modules--should-load-p= （内部: Fix X/Y で =my/modules--should-load-p= → =modules--should-load-p= に改名）
+- =modules--require-safe=
+- =modules--format-seconds=
 
-*** 関数
+*** 備考
 
-| 関数 | 説明 |
-|------|------|
-| ~my/modules--should-load-p (feature)~ | スキップリストに含まれなければ t |
-| ~my/modules--require-safe (feature)~ | condition-case でロード、失敗時はログのみ |
-| ~my/modules--format-seconds (sec)~ | 秒数を人間可読な文字列に変換 |
-| ~my/modules-load ()~ | =my:modules= + =my:modules-extra= を順にロード |
+=my:modules-extra= defcustom の実体はここだが、init.el で =defvar= が先行宣言されるため no-op になる。
 
-* core/ レイヤー
+* 3. core/ — ランタイム基盤
+:PROPERTIES:
+:CUSTOM_ID: layer-core
+:END:
 
-ランタイム基盤・グローバルポリシー。UI に依存しない。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 17 |
-| 依存ルール | UI・auth・completion・orgx・vcs・dev・utils に依存不可 |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 1 | =core-fixes= | Minimal and version-scoped compatibility fixes for Emacs. | 0 | 0 | 0 |
+| 2 | =core-policy= | Global editing policy: enforces lexical-binding in configuration files | 1 | 0 | 1 |
+| 3 | =core-session= | Session orchestration: public facade for background job scheduling. | 5 | 3 | 0 |
+| 4 | =core-session-private= | Private implementation of the session job scheduler. | 0 | 0 | 0 |
+| 5 | =core-gc= | Safe garbage-collection hooks for long-running Emacs sessions. | 0 | 1 | 2 |
+| 6 | =core-persistence= | Backup file hygiene: automatic removal of stale backup files. | 1 | 0 | 1 |
+| 7 | =core-buffers= | Persistent *scratch* buffer: recreate it automatically when killed. | 2 | 0 | 1 |
+| 8 | =core-runtime= | Core runtime invariants: OS-level variables and startup sequencing. | 0 | 1 | 1 |
+| 9 | =core-tools= | Low-level helper utilities shared across all configuration layers. | 7 | 0 | 0 |
+| 10 | =core-treesit= | Tree-sitter infrastructure: availability, grammar management, mode rem | 5 | 3 | 1 |
+| 11 | =core-history= | Session persistence: save-place, recentf, savehist, and autorevert. | 0 | 0 | 1 |
+| 12 | =core-editing= | Editing helpers: structural editing, undo, window switching, and Dired | 0 | 0 | 0 |
+| 13 | =core-switches= | Runtime switches: selects UI bundle and LSP backend at startup. | 0 | 2 | 1 |
+| 14 | =core-custom= | custom-file path management and safe loading. | 2 | 0 | 0 |
+| 15 | =core-api= | Stable public API surface for cross-layer access to core services. | 3 | 0 | 0 |
+| 16 | =core-native= | — | 0 | 0 | 0 |
 
 ** core/core-fixes.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-fixes
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #1 |
+| tangle 先 | =lisp/core/core-fixes.el= |
+| provide | =core-fixes= |
+
 *** 責務
 
-Minimal and version-scoped compatibility fixes for Emacs.
+Minimal and version-scoped compatibility fixes for Emacs. Load-order note: core-fixes is the FIRST module loaded (see modules.el).  core-tools loads at position 9.  Therefore this file must NOT defalias to core-tools-emacs>= — that symbol is not yet defined at load time and would raise void-function. core-fixes--emacs>= is defined independently here.  core-tools.el defines its own core-tools-emacs>= separately.  Both are identical one-liners, and the duplication is deliberate: the two functions serve different namespaces (internal vs public) and avoiding the duplication via defalias requires a load-order inversion that would break the deterministic module sequence.
 
-*** ロード順序ノート
+*** 内部関数
 
-core-fixes is the FIRST module loaded (see modules.el).  core-tools loads
-at position 9.  Therefore this file must NOT defalias to core-tools-emacs>=
-— that symbol is not yet defined at load time and would raise void-function.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-fixes= |
+- =core-fixes--emacs>==
 
 ** core/core-policy.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-policy
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #2 |
+| tangle 先 | =lisp/core/core-policy.el= |
+| defgroup | =core-policy= |
+| provide | =core-policy= |
+
 *** 責務
 
-- defines the `core-policy` customization group
-- auto-inserts a `;;; -*- lexical-binding: t; -*-` header in any
-  Emacs Lisp file under `no-littering-var-directory` on `find-file-hook`
+Global editing policy: enforces lexical-binding in configuration files. This file: - defines the `core-policy` customization group - auto-inserts a `;;; -*- lexical-binding: t; -*-` header in any Emacs Lisp file under `no-littering-var-directory` on `find-file-hook`
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-policy= |
+- =my/auto-insert-lexical-binding=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =find-file-hook= | ~my/auto-insert-lexical-binding~ |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/auto-insert-lexical-binding ()~ |  | Insert lexical-binding header in internal configuration files. |
+- =find-file-hook= → =my/auto-insert-lexical-binding)=
 
 ** core/core-session.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-session
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #3 |
+| tangle 先 | =lisp/core/core-session.el= |
+| defgroup | =core-session= |
+| provide | =core-session= |
+
 *** 責務
 
-Session orchestration: public facade for background job scheduling.
+Session orchestration: public facade for background job scheduling. This file (public API): - exposes `core-session-start` / `core-session-stop` lifecycle commands - provides `core-session-register-job` / `core-session-unregister-job` for registering idle-lane or periodic-lane background tasks - delegates all implementation to `core-session-private` NOTE: External modules should require this file only; never load `core-session-private` directly.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-session= |
-| =require= | =core-session-private= |
+- =core-session-start=
+- =core-session-stop=
+- =core-session-register-job=
+- =core-session-unregister-job=
+- =core-session-run-job=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =core-session-enable-p= | =t= | Master switch for core-session jobs. |
-| =core-session-idle-delay= | =120= | Seconds of idle time before idle-lane jobs may run. |
-| =core-session-periodic-interval= | =600= | Seconds between periodic-lane job runs. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~core-session-start ()~ |  | Start the core-session scheduler. |
-| ~core-session-stop ()~ |  | Stop the core-session scheduler. |
-| ~core-session-register-job (name fn &rest plist)~ |  | Register background job NAME with function FN. |
-| ~core-session-unregister-job (name)~ |  | Unregister background job NAME. |
-| ~core-session-run-job (name)~ |  | Run job NAME immediately. |
+- =core-session-enable-p=
+- =core-session-idle-delay=
+- =core-session-periodic-interval=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~core-session--ensure-started ()~ | Ensure the scheduler is running. |
+- =core-session--ensure-started=
 
 ** core/core-session-private.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-session-private
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #4 |
+| tangle 先 | =lisp/core/core-session-private.el= |
+| provide | =core-session-private= |
+
 *** 責務
 
-- owns the job registry hash-table
-- manages idle and periodic timers
-- normalises job metadata
-- executes registered jobs
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-session-private= |
+Private implementation of the session job scheduler. This file: - owns the job registry hash-table - manages idle and periodic timers - normalises job metadata - executes registered jobs NOTE: This module is an internal detail of core-session.el. External modules must not depend on it.
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~core-session--normalize-job-meta (name fn plist)~ | Return normalized job metadata. |
-| ~core-session--register (meta)~ | Register META job entry. |
-| ~core-session--unregister (name)~ | Remove job NAME. |
-| ~core-session--jobs ()~ | Return all registered jobs. |
-| ~core-session--run-job (name)~ | Execute job NAME. |
-| ~core-session--run-all ()~ | Run all enabled jobs. |
-| ~core-session--start ()~ | Start timers for background jobs. |
-| ~core-session--stop ()~ | Stop scheduler timers. |
+- =core-session--normalize-job-meta=
+- =core-session--register=
+- =core-session--unregister=
+- =core-session--jobs=
+- =core-session--run-job=
+- =core-session--run-all=
+- =core-session--start=
+- =core-session--stop=
 
 ** core/core-gc.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-gc
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #5 |
+| tangle 先 | =lisp/core/core-gc.el= |
+| defgroup | =core-gc= |
+| provide | =core-gc= |
+
 *** 責務
 
-- triggers `garbage-collect` on `focus-out-hook` and `minibuffer-exit-hook`
-- wraps collection in `condition-case` so errors are silently discarded
-- respects `core-gc-enable-p` as a master on/off switch
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-gc= |
+Safe garbage-collection hooks for long-running Emacs sessions. This file: - triggers `garbage-collect` on `focus-out-hook` and `minibuffer-exit-hook` - wraps collection in `condition-case` so errors are silently discarded - respects `core-gc-enable-p` as a master on/off switch
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =focus-out-hook= | ~core-gc--collect~ |
-| =minibuffer-exit-hook= | ~core-gc--collect~ |
+- =focus-out-hook= → =core-gc--collect)=
+- =minibuffer-exit-hook= → =core-gc--collect)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =core-gc-enable-p= | =t= | Enable GC hooks for long-running sessions. |
+- =core-gc-enable-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~core-gc--collect ()~ | Run garbage collection safely. |
+- =core-gc--collect=
 
 ** core/core-persistence.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-persistence
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #6 |
+| tangle 先 | =lisp/core/core-persistence.el= |
+| provide | =core-persistence= |
+
 *** 責務
 
-- deletes backup files older than 7 days from the backup directory
-- resolves the directory from `my:d:var`, falling back to
-  `no-littering-var-directory`
-- runs `my/delete-old-backups` on `emacs-startup-hook`
+Backup file hygiene: automatic removal of stale backup files. This file: - deletes backup files older than 7 days from the backup directory - resolves the directory from `my:d:var`, falling back to `no-littering-var-directory` - runs `my/delete-old-backups` on `emacs-startup-hook`
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-persistence= |
+- =my/delete-old-backups=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =emacs-startup-hook= | ~my/delete-old-backups~ |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/delete-old-backups ()~ |  | Delete backup files older than 7 days. |
+- =emacs-startup-hook= → =my/delete-old-backups)=
 
 ** core/core-buffers.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-buffers
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #7 |
+| tangle 先 | =lisp/core/core-buffers.el= |
+| provide | =core-buffers= |
+
 *** 責務
 
-- watches `kill-buffer-hook` to detect *scratch* being killed
-- schedules recreation via `run-with-idle-timer 0` so the kill
-  fully completes before the new buffer is created
-- initialises the replacement buffer in `lisp-interaction-mode`
+Persistent *scratch* buffer: recreate it automatically when killed. This file: - watches `kill-buffer-hook` to detect *scratch* being killed - schedules recreation via `run-with-idle-timer 0` so the kill fully completes before the new buffer is created - initialises the replacement buffer in `lisp-interaction-mode` Design notes: - `defun` forms are at top level, not inside `leaf` blocks. Leaf is a declaration macro; embedding function definitions inside it is semantically confusing and inhibits byte-compiler analysis. - The hook function is named (core-buffers--maybe-recreate-scratch) rather than anonymous, making it debuggable and safely removable.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-buffers= |
+- =my/create-scratch-buffer=
+- =my/kill-scratch-buffer-advice=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =kill-buffer-hook= | ~core-buffers--maybe-recreate-scratch~ |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/create-scratch-buffer ()~ |  | Create or reset a `*scratch*` buffer. |
-| ~my/kill-scratch-buffer-advice (buf)~ |  | If BUF is *scratch*, recreate it shortly after kill. |
+- =kill-buffer-hook= → =core-buffers--maybe-recreate-scratch)=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~core-buffers--maybe-recreate-scratch ()~ | Recreate *scratch* if it was just killed. |
+- =core-buffers--maybe-recreate-scratch=
 
 ** core/core-runtime.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-runtime
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #8 |
+| tangle 先 | =lisp/core/core-runtime.el= |
+| defgroup | =core-runtime= |
+| provide | =core-runtime= |
+
 *** 責務
 
-- configures modifier-key variables per OS (macOS, Windows, other)
-  without registering any keybindings — UX belongs in the ui/ layer
-- defines `core-runtime--startup-init` called from `emacs-startup-hook`
-- sets performance variables (GC threshold, subprocess read chunk size)
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-runtime= |
+Core runtime invariants: OS-level variables and startup sequencing. This file: - configures modifier-key variables per OS (macOS, Windows, other) without registering any keybindings — UX belongs in the ui/ layer - defines `core-runtime--startup-init` called from `emacs-startup-hook` - sets performance variables (GC threshold, subprocess read chunk size) NOTE: This module must not introduce user-visible side effects.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~core-runtime--startup-init~ |
+- =after-init-hook= → =core-runtime--startup-init)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =core-runtime-configure-modifiers-p= | =t= | If non-nil, configure modifier key variables for the current OS. |
+- =core-runtime-configure-modifiers-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~core-runtime--configure-modifiers ()~ | Configure OS-specific modifier variables (variables only, no bindings). |
+- =core-runtime--configure-modifiers=
+- =core-runtime--startup-init=
 
 ** core/core-tools.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-tools
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #9 |
+| tangle 先 | =lisp/core/core-tools.el= |
+| provide | =core-tools= |
+
 *** 責務
 
-- `core-tools-emacs>=`: version predicate for guarded feature code
-- `core-tools-ensure-directory`: stable alias for `my/ensure-directory-exists`
-  (defined in early-init.el)
-- `core-tools-feature-present-p` / `core-tools-function-present-p`:
-  presence predicates that avoid hard `require` calls
-- `core-tools-require-if-present` / `core-tools-call-if-present`:
-  safe wrappers that no-op when a feature or function is absent
-- `core-tools-check-provide`: warns when a file omits `(provide ...)`
-- `core-tools-user-file-p`: true for files under `user-emacs-directory`
+Low-level helper utilities shared across all configuration layers. This file: - `core-tools-emacs>=`: version predicate for guarded feature code - `core-tools-ensure-directory`: stable alias for `my/ensure-directory-exists` (defined in early-init.el) - `core-tools-feature-present-p` / `core-tools-function-present-p`: presence predicates that avoid hard `require` calls - `core-tools-require-if-present` / `core-tools-call-if-present`: safe wrappers that no-op when a feature or function is absent - `core-tools-check-provide`: warns when a file omits `(provide ...)` - `core-tools-user-file-p`: true for files under `user-emacs-directory` Deduplication note: `core-fixes--emacs>=` (internal to core-fixes.el) is aliased here as the public `core-tools-emacs>=`.  This eliminates two identical implementations without breaking any existing call sites.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-tools= |
-| エイリアス | ~core-tools-ensure-directory~ → ~my/ensure-directory-exists~ |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~core-tools-feature-present-p (feature)~ |  | Return non-nil if FEATURE is loaded or locatable on `load-path'. |
-| ~core-tools-function-present-p (fn)~ |  | Return non-nil if FN is a bound function symbol. |
-| ~core-tools-require-if-present (feature)~ |  | Require FEATURE only if it is present; return the feature or nil. |
-| ~core-tools-call-if-present (fn &rest args)~ |  | Call FN with ARGS if it is bound; return nil otherwise. |
-| ~core-tools-check-provide (feature file)~ |  | Warn if FEATURE was not provided after loading FILE. |
-| ~core-tools-user-file-p (file)~ |  | Return non-nil if FILE is under `user-emacs-directory'. |
+- =core-tools-emacs>==
+- =core-tools-feature-present-p=
+- =core-tools-function-present-p=
+- =core-tools-require-if-present=
+- =core-tools-call-if-present=
+- =core-tools-check-provide=
+- =core-tools-user-file-p=
 
 ** core/core-treesit.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-treesit
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #10 |
+| tangle 先 | =lisp/core/core-treesit.el= |
+| defgroup | =core-treesit= |
+| provide | =core-treesit= |
+
 *** 責務
 
-- guards all Tree-sitter usage behind `core-treesit-enable-p`
-- remaps legacy major modes to `-ts-mode` variants when grammars are
-  available, via `core-treesit-apply-remap`
-- registers grammar source URLs with `core-treesit-register-sources`
-- provides `core-treesit-install-grammar` and `core-treesit-install-all`
-  for on-demand or bulk grammar installation
-- auto-installs missing grammars on startup when
-  `core-treesit-auto-install-p` is non-nil
+Tree-sitter infrastructure: availability, grammar management, mode remapping. This file: - guards all Tree-sitter usage behind `core-treesit-enable-p` - remaps legacy major modes to `-ts-mode` variants when grammars are available, via `core-treesit-apply-remap` - registers grammar source URLs with `core-treesit-register-sources` - provides `core-treesit-install-grammar` and `core-treesit-install-all` for on-demand or bulk grammar installation - auto-installs missing grammars on startup when `core-treesit-auto-install-p` is non-nil
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-treesit= |
+- =core-treesit-apply-remap=
+- =core-treesit-register-sources=
+- =core-treesit-install-grammar=
+- =core-treesit-install-all=
+- =core-treesit-report=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =emacs-startup-hook= | ~core-treesit--startup-init~ |
+- =emacs-startup-hook= → =core-treesit--startup-init)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =core-treesit-enable-p= | =t= | Enable Tree-sitter based major modes when available. |
-| =core-treesit-auto-install-p= | =nil= | Automatically install missing Tree-sitter grammars on startup. |
-| =core-treesit-install-languages= | ='(python javascript typescript tsx json css yaml bash t= | Languages considered by `core-treesit-install-all` and auto-install. |
+- =core-treesit-enable-p=
+- =core-treesit-auto-install-p=
+- =core-treesit-install-languages=
+
+*** 内部関数
+
+- =core-treesit--available-p=
+- =core-treesit--language-available-p=
+- =core-treesit--startup-init=
 
 ** core/core-history.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-history
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #11 |
+| tangle 先 | =lisp/core/core-history.el= |
+| provide | =core-history= |
+
 *** 責務
 
-- configures `saveplace`, `recentf`, and `savehist` with paths under
-  `no-littering-var-directory`
-- persists `my:desktop-ask-on-restore` in savehist across sessions
-- activates all three modes together in `core-history--startup-init`
-  via `emacs-startup-hook`
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-history= |
+Session persistence: save-place, recentf, savehist, and autorevert. This file: - configures `saveplace`, `recentf`, and `savehist` with paths under `no-littering-var-directory` - persists `my:desktop-ask-on-restore` in savehist across sessions - activates all three modes together in `core-history--startup-init` via `emacs-startup-hook`
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =emacs-startup-hook= | ~core-history--startup-init~ |
+- =emacs-startup-hook= → =core-history--startup-init)=
+
+*** 内部関数
+
+- =core-history--startup-init=
 
 ** core/core-editing.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-editing
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #12 |
+| tangle 先 | =lisp/core/core-editing.el= |
+| provide | =core-editing= |
+
 *** 責務
 
-- configures TRAMP with persistence paths and `scp` as the default method
-- enables `auto-save-visited-mode` for continuous auto-saving
-- sets up paredit (disabling electric-pair to avoid conflict) and puni
-- configures show-paren, undo-fu/vundo, ace-window, visual-line-mode
-- extends Dired with dired-filter and dired-subtree
-- installs expand-region for semantic text selection
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-editing= |
+Editing helpers: structural editing, undo, window switching, and Dired. This file: - configures TRAMP with persistence paths and `scp` as the default method - enables `auto-save-visited-mode` for continuous auto-saving - sets up paredit (disabling electric-pair to avoid conflict) and puni - configures show-paren, undo-fu/vundo, ace-window, visual-line-mode - replaces dired with dirvish (dirvish-override-dired-mode) - configures dirvish attributes (subtree-state, vc-state, git-msg, file-size) - installs expand-region for semantic text selection
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~core-editing--paredit-setup ()~ | Enable paredit and disable electric-pair locally (they conflict). |
-| ~core-editing--puni-minibuffer-off ()~ | Disable puni-global-mode inside the minibuffer. |
+- =core-editing--paredit-setup=
+- =core-editing--puni-minibuffer-off=
 
 ** core/core-switches.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-switches
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #13 |
+| tangle 先 | =lisp/core/core-switches.el= |
+| defgroup | =my:switches= |
+| provide | =core-switches= |
+
 *** 責務
 
-- defines `my:use-lsp` (eglot | lsp) and `my:use-ui` (none | doom | nano)
-- declares autoloads for all four enable functions so bundles load lazily
-- activates the chosen UI and LSP after `after-init-hook` fires
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-switches= |
+Runtime switches: selects UI bundle and LSP backend at startup. This file: - defines `my:use-lsp` (eglot | lsp) and `my:use-ui` (none | doom | nano) - declares autoloads for all four enable functions so bundles load lazily - activates the chosen UI and LSP after `after-init-hook` fires NOTE: Personal overlays (e.g. personal/ac1965.el) must set `my:use-ui` and `my:use-lsp` before this module runs; load order matters.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~my/sw--activate~ |
+- =after-init-hook= → =core-switches--activate)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =my:use-lsp= | ='eglot= | Which LSP client to use. One of: `eglot`, `lsp`. |
-| =my:use-ui= | ='none= | Which UI bundle to use. One of: `none`, `doom`, `nano`. |
+- =my:use-lsp=
+- =my:use-ui=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~my/sw--activate ()~ | Activate the configured UI bundle and LSP backend. |
+- =core-switches--present-p=
+- =core-switches--enable-ui=
+- =core-switches--enable-lsp=
+- =core-switches--activate=
 
 ** core/core-custom.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-custom
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #14 |
+| tangle 先 | =lisp/core/core-custom.el= |
+| provide | =core-custom= |
+
 *** 責務
 
-- resolves `custom-file` to `my:d:etc/custom.el` at load time
-- creates the directory and an empty custom.el if either is absent
-- loads custom.el silently, suppressing errors with `ignore-errors`
-- provides `my/custom-open` to visit the file interactively
-- provides `my/custom-dump-current` to inspect unsaved customisations
+custom-file path management and safe loading. This file: - resolves `custom-file` to `my:d:etc/custom.el` at load time - creates the directory and an empty custom.el if either is absent - loads custom.el silently, suppressing errors with `ignore-errors` - provides `my/custom-open` to visit the file interactively - provides `my/custom-dump-current` to inspect unsaved customisations
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-custom= |
+- =my/custom-open= =;;;###autoload=
+- =my/custom-dump-current= =;;;###autoload=
 
-*** 公開変数
+*** 内部関数
 
-| 変数名 | 説明 |
-|--------|------|
-| =my:f:custom= |  |
+- =core-custom--ensure-file=
 
 ** core/core-api.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-api
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #15 |
+| tangle 先 | =lisp/core/core-api.el= |
+| provide | =core-api= |
+
 *** 責務
 
-- re-exports session job operations as `core-api-session-*` wrappers
-- guards every call with `fboundp` so this module loads safely even
-  when `core-session` is absent or disabled
+Stable public API surface for cross-layer access to core services. This file: - re-exports session job operations as `core-api-session-*` wrappers - guards every call with `fboundp` so this module loads safely even when `core-session` is absent or disabled NOTE: Other layers should call `core-api-*` rather than depending on `core-session` directly.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-api= |
+- =core-api-session-register-job=
+- =core-api-session-unregister-job=
+- =core-api-session-run-job=
 
 ** core/core-native.el
-
 :PROPERTIES:
 :CUSTOM_ID: core-native
 :END:
 
-*** 責務
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #16 |
+| tangle 先 | =lisp/core/core-native.el= |
 
-- defines `core-native-comp-report-mode` (silent | collect | verbose)
-- collects native-comp warnings up to `core-native-comp-collect-limit`
-- emits a notice when the count exceeds `core-native-comp-warn-threshold`
-- forces verbose output in CI when `core-native-comp-ci-force-verbose` is set
-- optionally auto-saves collected warnings to a file on exit
-
-*** ロード順序ノート
-
-Loaded last in the core/ section (after core-api) so that all core
-infrastructure is available.  Native compilation is asynchronous and
-initialisation is deferred to after-init-hook, so late load order is safe.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-native= |
-
-*** フック登録
-
-| フック | 関数 |
-|--------|------|
-| =comp-async-report-warnings-errors-hook= | ~core-native--collect~ |
-| =kill-emacs-hook= | ~core-native--maybe-auto-save~ |
-| =after-init-hook= | ~core-native--startup-init~ |
-
-*** カスタム変数
-
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =core-native-comp-report-mode= | ='collect= | Native compilation reporting mode: silent, collect, or verbose. |
-| =core-native-comp-ci-force-verbose= | =t= | If non-nil, force verbose mode under CI. |
-| =core-native-comp-collect-limit= | =2000= | Maximum number of collected native-comp warning entries. |
-| =core-native-comp-warn-threshold= | =25= | Emit a notice when collected warnings exceed this number. |
-| =core-native-comp-auto-save-file= | =nil= | If non-nil, auto-save collected warnings to this file at Emacs exit. |
-| =core-native-comp-collect-min-interval= | =0.0= | Minimum interval in seconds between successive collection runs. |
-
-** core/core-custom-ui-extras.el
-
+* 4. ui/ — ビジュアル・操作
 :PROPERTIES:
-:CUSTOM_ID: core-custom-ui-extras
+:CUSTOM_ID: layer-ui
 :END:
 
-*** 責務
-
-*DEPRECATED（2026-03 移行済み）*
-
-以前は =my:modules-extra= に =ui-visual-aids=, =orgx-typography=, =ui-macos= を追記していたが、
-この責務は =personal/user.el= に移管された。
-
-移管理由: core/ モジュールが =ui/= や =orgx/= のモジュール名をロードリストに注入することは
-「core は上位レイヤーに依存しない」原則に違反する。個人的なプレゼンテーション選択は personal 層が担うべきである。
-
-現在このファイルは =provide= のみの no-op プレースホルダー。
-既存のタングル済み出力が =(require 'core-custom-ui-extras)= しても =void-feature= にならないよう残留させる。
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =core-custom-ui-extras= |
-| 状態 | no-op プレースホルダー（実質廃止） |
-
-* ui/ レイヤー
-
-視覚表現・インタラクション。削除安全（delete-safe）。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 16 |
-| 依存ルール | core に依存可。auth・completion 以降に依存不可 |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 17 | =ui-font= | Font configuration: monospace, variable-pitch, emoji, and ligatures. | 3 | 4 | 2 |
+| 18 | =ui-theme= | Theme configuration module for the UI layer. | 0 | 2 | 3 |
+| 19 | =ui-window= | Window management: zoom, desktop session, winner, and layout snapshots | 2 | 0 | 0 |
+| 20 | =ui-utils= | Miscellaneous UI utilities and integrations. | 0 | 0 | 0 |
+| 21 | =ui-health-modeline= | Displays lightweight session health indicators in the mode line. | 0 | 3 | 4 |
+| 22 | =ui-imenu= | UI integration for symbol navigation using Imenu. | 0 | 0 | 0 |
+| 23 | =ui-leader= | Hierarchical leader key infrastructure. | 1 | 3 | 0 |
+| 24 | =ui-hydra= | Optional Hydra helpers used by the UI layer. | 2 | 1 | 0 |
+| 25 | =ui-which-key= | which-key integration for leader key infrastructure. | 0 | 2 | 1 |
+| 26 | =ui-keymap= | Leader key bindings and keyboard translation helpers. | 0 | 1 | 1 |
+| 27 | =ui-global-keys= | Global keybindings registered outside the leader-key system. | 0 | 0 | 1 |
 
 ** ui/ui-font.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-font
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #17 |
+| tangle 先 | =lisp/ui/ui-font.el= |
+| defgroup | =ui-font= |
+| provide | =ui-font= |
+
 *** 責務
 
-- defines `ui-font-*` customisation variables (family, size, emoji)
-- provides OS-aware fallbacks via `ui-font--system-default`
-  and `ui-font--system-emoji`
-- applies all faces via `ui-font-apply`, hooked into `after-init-hook`
-  and `server-after-make-frame-hook`
-- enables `global-ligature-mode` for graphical frames
+Font configuration: monospace, variable-pitch, emoji, and ligatures. This file: - defines `ui-font-*` customisation variables (family, size, emoji) - provides OS-aware fallbacks via `ui-font--system-default` and `ui-font--system-emoji` - applies all faces via `ui-font-apply`, hooked into `after-init-hook` and `server-after-make-frame-hook` - enables `global-ligature-mode` for graphical frames
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-font= |
+- =ui-font-apply=
+- =ui-font-show-current= =;;;###autoload=
+- =ui-font-describe= =;;;###autoload=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-make-frame-functions= | ~ui-font--apply-to-frame~ |
-| =after-init-hook= | ~ui-font-apply~ |
+- =after-make-frame-functions= → =ui-font--apply-to-frame)=
+- =after-init-hook= → =ui-font-apply))=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =ui-font-default= | =nil= | Default monospace font family. If nil, OS-dependent fallback. |
-| =ui-font-variable-pitch= | =nil= | Variable-pitch font family. |
-| =ui-font-emoji= | =nil= | Emoji font family. |
-| =ui-font-size= | =18= | Default font size in points. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~ui-font-apply ()~ |  | Apply configured fonts to the current graphical frame. |
-| ~ui-font-show-current ()~ | ✓ | Display the currently active default font. |
-| ~ui-font-describe ()~ | ✓ | Show detailed information about the current font configuration. |
+- =ui-font-default=
+- =ui-font-variable-pitch=
+- =ui-font-emoji=
+- =ui-font-size=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~ui-font--system-default ()~ | Return the default monospace font family for the current OS. |
-| ~ui-font--system-emoji ()~ | Return the default emoji font family for the current OS. |
-| ~ui-font--apply-to-frame (frame)~ | Apply font configuration to FRAME (for daemon mode). |
-
-** ui/ui-nano-palette.el
-
-:PROPERTIES:
-:CUSTOM_ID: ui-nano-palette
-:END:
-
-*** 責務
-
-Evolved Nano palette used by the UI layer.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-nano-palette= |
-
-*** カスタム変数
-
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =nano-color-background= | ="#fafafa"= | Main editor background. |
-| =nano-color-foreground= | ="#374151"= | Primary text color. |
-| =nano-color-surface= | ="#ffffff"= | UI surface color. |
-| =nano-color-subtle= | ="#e5e7eb"= | Subtle UI surface. |
-| =nano-color-border= | ="#d1d5db"= | UI border color. |
-| =nano-color-strong= | ="#111827"= | Strong text color. |
-| =nano-color-muted= | ="#9ca3af"= | Muted text color. |
-| =nano-color-salient= | ="#2563eb"= | Primary accent color. |
-| =nano-color-popout= | ="#6b7280"= | Secondary accent color. |
-| =nano-color-success= | ="#10b981"= | Success state color. |
-| =nano-color-warning= | ="#f59e0b"= | Warning state color. |
-| =nano-color-critical= | ="#dc2626"= | Critical error color. |
-| =nano-color-info= | ="#0284c7"= | Informational color. |
-| =nano-color-highlight= | ="#e0e7ff"= | Highlight background. |
-| =nano-color-selection= | ="#e5e7eb"= | Selection background. |
-| =nano-color-cursor= | ="#2563eb"= | Cursor color. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/nano-apply-faces ()~ |  | Apply Nano palette. |
-| ~my/nano-set-palette-and-apply (&rest plist)~ |  | Override palette and apply. |
-| ~my/nano-reapply-after-theme (&rest _)~ |  | Reapply Nano palette after theme load. |
-
-*** 内部関数
-
-| 関数 | 説明 |
-|------|------|
-| ~my/nano--safe-face (face &rest args)~ | Safely apply FACE attributes. |
-
-** ui/ui-doom-modeline.el
-
-:PROPERTIES:
-:CUSTOM_ID: ui-doom-modeline
-:END:
-
-*** 責務
-
-- installs and configures nerd-icons and doom-modeline
-- sets modeline height, buffer name style, and word-count display
-- provides `my/ui-enable-doom` as the entry point called by core-switches
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-doom-modeline= |
-
-** ui/ui-nano-modeline.el
-
-:PROPERTIES:
-:CUSTOM_ID: ui-nano-modeline
-:END:
-
-*** 責務
-
-- guards initialisation with a flag to prevent repeated setup on
-  subsequent frame creation
-- configures nano-modeline padding and per-mode hooks
-- provides `my/ui-enable-nano` as the entry point called by core-switches
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-nano-modeline= |
-| =require= | =nano-modeline= |
-
-*** フック登録
-
-| フック | 関数 |
-|--------|------|
-| =prog-mode-hook= | ~nano-modeline-prog-mode~ |
-| =text-mode-hook= | ~nano-modeline-text-mode~ |
-| =after-init-hook= | ~my/ui--nano-setup~ |
+- =ui-font--system-default=
+- =ui-font--system-emoji=
+- =ui-font--apply-to-frame=
 
 ** ui/ui-theme.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-theme
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #18 |
+| tangle 先 | =lisp/ui/ui-theme.el= |
+| defgroup | =ui-theme= |
+| provide | =ui-theme= |
+
 *** 責務
 
-Theme configuration module for the UI layer.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-theme= |
-| =require= | =ui-nano-palette=, =nano-layout=, =nano-faces= |
+Theme configuration module for the UI layer. Responsibilities: - load the Nano theme (when available) - configure Nano faces via ui-nano-palette (when loaded) - apply palette overrides - configure pairing highlight faces - enable spacious padding for graphical frames Design goals: - deterministic initialization - daemon-safe frame handling - theme reload safety - Emacs 30 / 31 forward compatibility ui-nano-palette dependency: ui-theme loads safely regardless of whether ui-nano-palette is present. `ui-theme--apply-faces' calls `my/nano-apply-faces' only when fboundp, so my:use-ui='doom or 'none never forces the nano palette to load. When ui-nano-palette is loaded (nano bundle active), faces are re-applied automatically via `with-eval-after-load'.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-make-frame-functions= | ~ui-theme--apply-frame~ |
-| =enable-theme-functions= | ~ui-theme--after-theme~ |
-| =emacs-startup-hook= | ~ui-theme--init~ |
+- =after-make-frame-functions= → =ui-theme--apply-frame)=
+- =enable-theme-functions= → =ui-theme--after-theme)=
+- =emacs-startup-hook= → =ui-theme--init)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =ui-theme-enable-p= | =t= | Enable UI theme configuration. |
-| =ui-theme-line-spacing= | =0.24= | Default line spacing. |
+- =ui-theme-enable-p=
+- =ui-theme-line-spacing=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~ui-theme--safe-face (face &rest args)~ | Apply ARGS to FACE when FACE exists. |
-| ~ui-theme--apply-faces ()~ | Apply UI face policy. |
-| ~ui-theme--apply-frame (frame)~ | Apply graphical UI settings to FRAME. |
-| ~ui-theme--after-theme (&rest _)~ | Reapply UI policy after theme changes. |
-| ~ui-theme--init ()~ | Initialize UI theme configuration. |
+- =ui-theme--safe-face=
+- =ui-theme--apply-faces=
+- =ui-theme--apply-frame=
+- =ui-theme--after-theme=
+- =ui-theme--init=
 
 ** ui/ui-window.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-window
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #19 |
+| tangle 先 | =lisp/ui/ui-window.el= |
+| provide | =ui-window= |
+
 *** 責務
 
-- configures zoom for golden-ratio-style automatic window sizing
-- persists the window layout across sessions via `desktop-save-mode`
-- enables `winner-mode` for undo/redo of window configurations
-- provides `my/save-window-layout` and `my/restore-window-layout`
-  for named layout snapshots stored in `my:saved-window-config`
+Window management: zoom, desktop session, winner, and layout snapshots. This file: - configures zoom for golden-ratio-style automatic window sizing - persists the window layout across sessions via `desktop-save-mode` - enables `winner-mode` for undo/redo of window configurations - provides `my/save-window-layout` and `my/restore-window-layout` for named layout snapshots stored in `my:saved-window-config`
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-window= |
-
-*** 公開変数
-
-| 変数名 | 説明 |
-|--------|------|
-| =my:saved-window-config= |  |
+- =my/save-window-layout=
+- =my/restore-window-layout=
 
 ** ui/ui-utils.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-utils
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #20 |
+| tangle 先 | =lisp/ui/ui-utils.el= |
+| provide | =ui-utils= |
+
 *** 責務
 
-Miscellaneous UI utilities and integrations.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-utils= |
+Miscellaneous UI utilities and integrations. Provides: - mode line compaction via minions - time and battery display - Treemacs configuration - Dired icons - macOS clipboard integration This module intentionally avoids defining core UI policy.
 
 ** ui/ui-health-modeline.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-health-modeline
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #21 |
+| tangle 先 | =lisp/ui/ui-health-modeline.el= |
+| defgroup | =ui-health-modeline= |
+| provide | =ui-health-modeline= |
+
 *** 責務
 
-Displays lightweight session health indicators in the mode line.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-health-modeline= |
+Displays lightweight session health indicators in the mode line. The indicators include: - number of buffers - number of running processes - number of Eglot-managed buffers These metrics provide quick visibility into Emacs session load and background activity without introducing heavy instrumentation.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =buffer-list-update-hook= | ~ui-health--update~ |
-| =process-status-change-hook= | ~ui-health--update~ |
-| =eglot-managed-mode-hook= | ~ui-health--update~ |
-| =eglot-shutdown-hook= | ~ui-health--update~ |
+- =buffer-list-update-hook= → =ui-health--update)=
+- =process-status-change-hook= → =ui-health--update)=
+- =eglot-managed-mode-hook= → =ui-health--update)=
+- =eglot-shutdown-hook= → =ui-health--update))=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =ui-health-show-buffers-p= | =t= | If non-nil, display the number of live buffers. |
-| =ui-health-show-processes-p= | =t= | If non-nil, display the number of running processes. |
-| =ui-health-show-eglot-p= | =t= | If non-nil, display the number of Eglot-managed buffers. |
+- =ui-health-show-buffers-p=
+- =ui-health-show-processes-p=
+- =ui-health-show-eglot-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~ui-health--buffers-count ()~ | Return the number of live buffers. |
-| ~ui-health--processes-count ()~ | Return the number of active processes. |
-| ~ui-health--eglot-count ()~ | Return the number of buffers currently managed by Eglot. |
-| ~ui-health--update ()~ | Update the mode-line session health indicators. |
+- =ui-health--buffers-count=
+- =ui-health--processes-count=
+- =ui-health--eglot-count=
+- =ui-health--update=
 
 ** ui/ui-imenu.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-imenu
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #22 |
+| tangle 先 | =lisp/ui/ui-imenu.el= |
+| provide | =ui-imenu= |
+
 *** 責務
 
-UI integration for symbol navigation using Imenu.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-imenu= |
-| =require= | =imenu= |
+UI integration for symbol navigation using Imenu. Provides a side-panel symbol outline using `imenu-list'. This module does not change Imenu semantics and only adds a convenient visual index for navigating large buffers. Features: - left-side symbol tree - automatic focus on activation - lightweight integration with major modes supporting Imenu The module intentionally keeps the configuration minimal.
 
 ** ui/ui-leader.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-leader
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #23 |
+| tangle 先 | =lisp/ui/ui-leader.el= |
+| defgroup | =ui-leader= |
+| provide | =ui-leader= |
+
 *** 責務
 
-Hierarchical leader key infrastructure.
+Hierarchical leader key infrastructure. This module defines only keymaps and global installation of the root leader prefix.  It does not assign actual command bindings. The layout is intentionally stable and delete-safe: C-c SPC ├─ b  buffers ├─ w  windows ├─ p  projects ├─ s  search ├─ g  git ├─ c  code ├─ e  errors / evaluation ├─ t  toggles ├─ o  open / org ├─ m  local leader ├─ a  apps ├─ q  quit / session └─ h  help Other modules are expected to bind commands into these maps.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-leader= |
+- =ui-leader-local-key=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =ui-leader-key= | ="C-c SPC"= | Root key sequence used for the global leader key. |
-| =ui-leader-local-suffix= | ="m"= | Suffix key used for the local leader prefix. |
-| =ui-leader-enable-p= | =t= | If non-nil, install the global leader key. |
-
-*** 公開変数
-
-| 変数名 | 説明 |
-|--------|------|
-| =ui-leader-map= | Root leader keymap. |
-| =ui-leader-b-map= | Leader keymap for buffer commands. |
-| =ui-leader-w-map= | Leader keymap for window commands. |
-| =ui-leader-p-map= | Leader keymap for project commands. |
-| =ui-leader-s-map= | Leader keymap for search commands. |
-| =ui-leader-g-map= | Leader keymap for Git commands. |
-| =ui-leader-c-map= | Leader keymap for code commands. |
-| =ui-leader-e-map= | Leader keymap for error and evaluation commands. |
-| =ui-leader-t-map= | Leader keymap for toggle commands. |
-| =ui-leader-o-map= | Leader keymap for open and Org-related commands. |
-| =ui-leader-m-map= | Leader keymap for local leader commands. |
-| =ui-leader-a-map= | Leader keymap for application commands. |
-| =ui-leader-q-map= | Leader keymap for quit and session commands. |
-| =ui-leader-h-map= | Leader keymap for help commands. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~ui-leader-local-key ()~ |  | Return the full key sequence string for the local leader prefix. |
+- =ui-leader-key=
+- =ui-leader-local-suffix=
+- =ui-leader-enable-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~ui-leader--ensure-prefix-map (symbol)~ | Ensure SYMBOL names a prefix keymap and return it. |
-| ~ui-leader--define-maps ()~ | Create leader maps and install the fixed prefix hierarchy. |
-| ~ui-leader--bind-root ()~ | Bind the root leader key globally. |
+- =ui-leader--ensure-prefix-map=
+- =ui-leader--define-maps=
+- =ui-leader--bind-root=
 
 ** ui/ui-hydra.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-hydra
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #24 |
+| tangle 先 | =lisp/ui/ui-hydra.el= |
+| defgroup | =ui-hydra= |
+| provide | =ui-hydra= |
+
 *** 責務
 
-Optional Hydra helpers used by the UI layer.
+Optional Hydra helpers used by the UI layer. Hydras provide small transient keymaps for interactive adjustments such as text scaling. This module lazily defines hydras only when they are first invoked, allowing the configuration to operate correctly even when the `hydra' package is not installed.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-hydra= |
-| =require= | =hydra= |
+- =ui-hydra-define-text-scale=
+- =ui-hydra-text-scale/body=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =ui-hydra-enable-p= | =t= | If non-nil, enable optional Hydra helpers. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~ui-hydra-define-text-scale ()~ |  | Define the text scale hydra if Hydra is available. |
-| ~ui-hydra-text-scale/body ()~ |  | Activate the text scaling hydra. |
+- =ui-hydra-enable-p=
 
 ** ui/ui-which-key.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-which-key
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #25 |
+| tangle 先 | =lisp/ui/ui-which-key.el= |
+| defgroup | =ui-which-key= |
+| provide | =ui-which-key= |
+
 *** 責務
 
-which-key integration for leader key infrastructure.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-which-key= |
-| =require= | =which-key= |
+which-key integration for leader key infrastructure. Emacs 30+ includes which-key as a built-in package.  On earlier versions we install the standalone package. This module configures: - which-key activation - leader key prefix labels - idle delay configuration The module does not define leader bindings; it only enhances their discoverability in the minibuffer popup.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~ui-which-key--startup-init~ |
+- =after-init-hook= → =ui-which-key--startup-init)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =ui-which-key-enable-p= | =t= | If non-nil, enable which-key integration. |
-| =ui-which-key-idle-delay= | =0.4= | Idle delay in seconds before which-key popup appears. |
+- =ui-which-key-enable-p=
+- =ui-which-key-idle-delay=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~ui-which-key--label-leader-groups ()~ | Attach descriptive labels to leader key prefixes for which-key. |
-| ~ui-which-key--startup-init ()~ | Initialize which-key integration at startup. |
+- =ui-which-key--label-leader-groups=
+- =ui-which-key--startup-init=
 
 ** ui/ui-keymap.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-keymap
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #26 |
+| tangle 先 | =lisp/ui/ui-keymap.el= |
+| defgroup | =ui-keyboard= |
+| provide | =ui-keymap= |
+
 *** 責務
 
-Leader key bindings and keyboard translation helpers.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-keymap= |
-| =require= | =ui-leader= |
+Leader key bindings and keyboard translation helpers. This module defines: - global leader bindings - local leader bindings for major modes - optional keyboard translation (C-h → DEL) The leader key infrastructure itself is defined in `ui-leader.el`. This module only attaches commands to those maps.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~ui-keymap--startup-init~ |
+- =after-init-hook= → =ui-keymap--startup-init)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =ui-keyboard-map-c-h-to-del= | =t= | If non-nil, translate C-h to DEL (Backspace). |
+- =ui-keyboard-map-c-h-to-del=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~ui-keyboard--apply ()~ | Apply or remove keyboard translations according to configuration. |
-| ~ui-keyboard--watcher (_sym _newval _op _where)~ | Variable watcher: re-apply keyboard translation when the option changes. |
-| ~ui-keymap--bind (map key cmd)~ | Bind KEY to CMD inside MAP when MAP exists. |
-| ~ui-keymap--leader-bind (key cmd)~ | Bind KEY to CMD in the root leader map. |
-| ~ui-keymap--leader-binds ()~ | Install global leader key bindings. |
-| ~ui-keymap--dirvish-open-read-only ()~ | Open file-at-point in another window as read-only. |
-| ~ui-keymap--local-leader-binds ()~ | Install local leader bindings for specific major modes. |
-| ~ui-keymap--startup-init ()~ | Initialize UI key bindings at startup. |
+- =ui-keyboard--apply=
+- =ui-keyboard--watcher=
+- =ui-keymap--bind=
+- =ui-keymap--leader-bind=
+- =ui-keymap--leader-binds=
+- =ui-keymap--dirvish-open-read-only=
+- =ui-keymap--local-leader-binds=
+- =ui-keymap--startup-init=
 
 ** ui/ui-global-keys.el
-
 :PROPERTIES:
 :CUSTOM_ID: ui-global-keys
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #27 |
+| tangle 先 | =lisp/ui/ui-global-keys.el= |
+| provide | =ui-global-keys= |
+
 *** 責務
 
-- binds C-s, C-c b/k/o/r, C-. and C-? for common navigation/editing
-- binds macOS-style buffer navigation (s-left/right/up/down)
-- binds <f1> to `help-command`
-- defers all registrations to `after-init-hook` via
-  `ui-global-keys--startup-init`
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-global-keys= |
+Global keybindings registered outside the leader-key system. This file: - binds C-s, C-c b/k/o/r, C-. and C-? for common navigation/editing - binds macOS-style buffer navigation (s-left/right/up/down) - binds <f1> to `help-command` - defers all registrations to `after-init-hook` via `ui-global-keys--startup-init`
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~ui-global-keys--startup-init~ |
+- =after-init-hook= → =ui-global-keys--startup-init)=
 
-** ui/ui-visual-aids.el
+*** 内部関数
 
+- =ui-global-keys--startup-init=
+
+* 5. auth/ — 認証基盤
 :PROPERTIES:
-:CUSTOM_ID: ui-visual-aids
+:CUSTOM_ID: layer-auth
 :END:
 
-*** 責務
-
-- configures pulsar for transient cursor feedback on navigation commands
-- enables hl-todo with colour-coded faces (TODO, FIXME, NOTE, HACK)
-- enables rainbow-delimiters in `prog-mode` for bracket depth colouring
-- enables indent-bars in `prog-mode` for visual indentation guides
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-visual-aids= |
-
-** ui/ui-macos.el
-
-:PROPERTIES:
-:CUSTOM_ID: ui-macos
-:END:
-
-*** 責務
-
-- enables transparent titlebars (`ns-transparent-titlebar`) on macOS
-- sets `use-title-bar` for native macOS title bar rendering
-- guards all settings under `(eq system-type 'darwin)`
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =ui-macos= |
-
-* auth/ レイヤー
-
-認証・シークレット管理。UI に依存しない。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 1 |
-| 依存ルール | core に依存可。UI に依存不可 |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 28 | =auth-core= | Authentication infrastructure for the configuration. | 1 | 1 | 1 |
 
 ** auth/auth-core.el
-
 :PROPERTIES:
 :CUSTOM_ID: auth-core
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #28 |
+| tangle 先 | =lisp/auth/auth-core.el= |
+| defgroup | =auth-core= |
+| provide | =auth-core= |
+
 *** 責務
 
-Authentication infrastructure for the configuration.
+Authentication infrastructure for the configuration. Responsibilities: - verify required authentication environment variables - enable EasyPG file encryption support - enable pass-based auth-source backend The configuration is optional and activates only when the necessary external tools are available.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =auth-core= |
+- =auth-core-check-env=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~auth-core--startup-init~ |
+- =after-init-hook= → =auth-core--startup-init)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =auth-core-enable-p= | =t= | Enable authentication infrastructure. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~auth-core-check-env ()~ |  | Verify required authentication environment variables. |
+- =auth-core-enable-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~auth-core--startup-init ()~ | Initialize authentication infrastructure. |
+- =auth-core--startup-init=
 
-* completion/ レイヤー
+* 6. completion/ — 補完スタック
+:PROPERTIES:
+:CUSTOM_ID: layer-completion
+:END:
 
-補完フレームワーク・ミニバッファ UX。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 12 |
-| 依存ルール | core・ui・auth に依存可 |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 29 | =completion-core= | Completion core: orderless completion style. | 0 | 0 | 0 |
+| 30 | =completion-vertico= | Vertico minibuffer UI with posframe overlay and marginalia annotations | 0 | 0 | 1 |
+| 31 | =completion-consult= | Consult: enhanced search and cross-reference navigation. | 0 | 0 | 0 |
+| 32 | =completion-embark= | Embark contextual actions, integrated with Consult. | 0 | 0 | 0 |
+| 33 | =completion-corfu= | Corfu in-buffer popup completion with kind-icon and CAPE sources. | 0 | 0 | 1 |
+| 34 | =completion-icons= | Nerd-icons integration for ibuffer and completion annotation UIs. | 0 | 0 | 0 |
+| 35 | =completion-capf= | Mode-specific `completion-at-point-functions` (CAPF) stacks. | 0 | 0 | 9 |
+| 36 | =completion-capf-org-src= | CAPF dispatch for Org SRC edit buffers. | 0 | 0 | 1 |
+| 37 | =completion-capf-org-src-lang= | Language-specific CAPF stacks for Org SRC blocks. | 0 | 0 | 1 |
+| 38 | =completion-corfu-org-src= | Corfu tuning inside Org SRC edit buffers. | 0 | 0 | 1 |
+| 39 | =completion-orderless-org-src= | Orderless tuning inside Org SRC edit buffers. | 0 | 0 | 1 |
+| 40 | =completion-lsp= | Defensive cleanup of obsolete Eglot servers on project switches. | 1 | 1 | 2 |
 
 ** completion/completion-core.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-core
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #29 |
+| tangle 先 | =lisp/completion/completion-core.el= |
+| provide | =completion-core= |
+
 *** 責務
 
-- =orderless= をインストールし、=completion-styles= を =orderless= + =basic= フォールバックに設定する
-
-#+begin_quote
-NOTE: =completion-category-overrides= はここでは設定しない。
-カテゴリー別オーバーライドの正規テーブル（=file=, =symbol=, =keyword=, =tex=, =dabbrev=）は
-=completion-capf.el= が唯一の設定箇所として所有する。
-複数箇所に =setq= を持つと後勝ちによる無言の上書きが発生するため、単一の権威的ソースに集約する。
-#+end_quote
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-core= |
+Completion core: orderless completion style. This file: - installs orderless and sets `completion-styles` to orderless + basic NOTE: `completion-category-overrides` is NOT set here.  The canonical, extended override table (file, symbol, keyword, tex, dabbrev) lives in completion-capf.el, which loads after this module.  Defining overrides in both files would cause completion-capf.el to silently win via last-writer semantics, making this declaration misleading.  A single authoritative source is clearer and easier to reason about.
 
 ** completion/completion-vertico.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-vertico
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #30 |
+| tangle 先 | =lisp/completion/completion-vertico.el= |
+| provide | =completion-vertico= |
+
 *** 責務
 
-- initialises vertico, marginalia, and vertico-posframe exactly once
-  via `window-setup-hook` to avoid double-initialisation
-- enables posframe display only in graphical sessions
-- sets vertico candidate count and posframe border width
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-vertico= |
+Vertico minibuffer UI with posframe overlay and marginalia annotations. This file: - initialises vertico, marginalia, and vertico-posframe exactly once via `window-setup-hook` to avoid double-initialisation - enables posframe display only in graphical sessions - sets vertico candidate count and posframe border width
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =window-setup-hook= | ~completion-vertico--init~ |
+- =window-setup-hook= → =completion-vertico--init)=
+
+*** 内部関数
+
+- =completion-vertico--init=
 
 ** completion/completion-consult.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-consult
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #31 |
+| tangle 先 | =lisp/completion/completion-consult.el= |
+| provide | =completion-consult= |
+
 *** 責務
 
-- routes `xref-show-xrefs-function` and `xref-show-definitions-function`
-  through `consult-xref` for richer candidate display
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-consult= |
+Consult: enhanced search and cross-reference navigation. This file: - routes `xref-show-xrefs-function` and `xref-show-definitions-function` through `consult-xref` for richer candidate display
 
 ** completion/completion-embark.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-embark
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #32 |
+| tangle 先 | =lisp/completion/completion-embark.el= |
+| provide | =completion-embark= |
+
 *** 責務
 
-- sets `prefix-help-command` to `embark-prefix-help-command`
-- enables `consult-preview-at-point-mode` in `embark-collect` buffers
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-embark= |
+Embark contextual actions, integrated with Consult. This file: - sets `prefix-help-command` to `embark-prefix-help-command` - enables `consult-preview-at-point-mode` in `embark-collect` buffers
 
 ** completion/completion-corfu.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-corfu
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #33 |
+| tangle 先 | =lisp/completion/completion-corfu.el= |
+| provide | =completion-corfu= |
+
 *** 責務
 
-- initialises corfu, kind-icon, and cape exactly once via
-  `window-setup-hook` to prevent repeated setup on frame creation
-- enables `global-corfu-mode` and sets `tab-always-indent 'complete`
-- registers cape-elisp-symbol, cape-file, and cape-dabbrev as CAPFs
-- attaches kind-icon as a margin formatter for completion icons
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-corfu= |
-| =require= | =corfu=, =kind-icon=, =cape= |
+Corfu in-buffer popup completion with kind-icon and CAPE sources. This file: - initialises corfu, kind-icon, and cape exactly once via `window-setup-hook` to prevent repeated setup on frame creation - enables `global-corfu-mode` and sets `tab-always-indent 'complete` - registers cape-elisp-symbol, cape-file, and cape-dabbrev as CAPFs - attaches kind-icon as a margin formatter for completion icons NOTE: The `remove-hook` call targets `window-setup-hook`, not `completion-at-point-functions`.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =window-setup-hook= | ~completion-corfu--init~ |
+- =window-setup-hook= → =completion-corfu--init)=
+
+*** 内部関数
+
+- =completion-corfu--init=
 
 ** completion/completion-icons.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-icons
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #34 |
+| tangle 先 | =lisp/completion/completion-icons.el= |
+| provide | =completion-icons= |
+
 *** 責務
 
-- enables `nerd-icons-ibuffer-mode` in ibuffer buffers
-- hooks `nerd-icons-completion-marginalia-setup` into `marginalia-mode`
-- sets `marginalia-align` to `right` for consistent annotation layout
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-icons= |
+Nerd-icons integration for ibuffer and completion annotation UIs. This file: - enables `nerd-icons-ibuffer-mode` in ibuffer buffers - hooks `nerd-icons-completion-marginalia-setup` into `marginalia-mode` NOTE: marginalia-align is set in completion-vertico.el (leaf marginalia :custom block) rather than here.  Owning the setting in the leaf block that installs marginalia is cleaner than a bare setq in a downstream file.
 
 ** completion/completion-capf.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-capf
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #35 |
+| tangle 先 | =lisp/completion/completion-capf.el= |
+| provide | =completion-capf= |
+
 *** 責務
 
-- provides `completion--set-capfs` as a buffer-local CAPF setter
-- defines CAPF stacks for: emacs-lisp, prog, text, org, shell, repl
-- registers each stack on the corresponding mode hook
-- *=completion-category-overrides= の単一の権威的ソース* （=file=, =symbol=, =keyword=, =tex=, =dabbrev= のカテゴリールールをここで一括設定）
-
-#+begin_quote
-NOTE: =completion-core.el= は =completion-styles= のみを担い、カテゴリーオーバーライドは設定しない。
-このファイルが orderless のベーススタイル（=completion-core.el= で設定）を拡張する形でオーバーライドを定義する。
-単一オーナー設計により後勝ちの無言衝突を防ぐ。
-#+end_quote
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-capf= |
+Mode-specific `completion-at-point-functions` (CAPF) stacks. This file: - provides `completion--set-capfs` as a buffer-local CAPF setter - defines CAPF stacks for: emacs-lisp, prog, text, org, shell, repl - registers each stack on the corresponding mode hook - owns the canonical `completion-category-overrides` table NOTE: `completion-category-overrides` is set here and ONLY here. completion-core.el intentionally omits it.  This file extends the base orderless style (set in completion-core.el) with per-category rules for file, symbol, keyword, tex, and dabbrev.  Having a single authoritative source prevents silent last-writer collisions.
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =emacs-lisp-mode-hook= | ~completion--elisp-capfs~ |
-| =lisp-interaction-mode-hook= | ~completion--elisp-capfs~ |
-| =prog-mode-hook= | ~completion--prog-capfs~ |
-| =text-mode-hook= | ~completion--text-capfs~ |
-| =org-mode-hook= | ~completion--org-capfs~ |
-| =sh-mode-hook= | ~completion--shell-capfs~ |
-| =eshell-mode-hook= | ~completion--shell-capfs~ |
-| =ielm-mode-hook= | ~completion--repl-capfs~ |
-| =comint-mode-hook= | ~completion--repl-capfs~ |
+- =emacs-lisp-mode-hook= → =completion--elisp-capfs)=
+- =lisp-interaction-mode-hook= → =completion--elisp-capfs)=
+- =prog-mode-hook= → =completion--prog-capfs)=
+- =text-mode-hook= → =completion--text-capfs)=
+- =org-mode-hook= → =completion--org-capfs)=
+- =sh-mode-hook= → =completion--shell-capfs)=
+- =eshell-mode-hook= → =completion--shell-capfs)=
+- =ielm-mode-hook= → =completion--repl-capfs)=
+- =comint-mode-hook= → =completion--repl-capfs)=
+
+*** 内部関数
+
+- =completion--set-capfs=
+- =completion--elisp-capfs=
+- =completion--prog-capfs=
+- =completion--text-capfs=
+- =completion--org-capfs=
+- =completion--shell-capfs=
+- =completion--repl-capfs=
 
 ** completion/completion-capf-org-src.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-capf-org-src
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #36 |
+| tangle 先 | =lisp/completion/completion-capf-org-src.el= |
+| provide | =completion-capf-org-src= |
+
 *** 責務
 
-- hooks into `org-src-mode-hook` to select the right CAPF stack
-  based on the derived major mode (elisp → elisp-capfs,
-  prog → prog-capfs, otherwise → text-capfs)
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-capf-org-src= |
+CAPF dispatch for Org SRC edit buffers. This file: - hooks into `org-src-mode-hook` to select the right CAPF stack based on the derived major mode (elisp → elisp-capfs, prog → prog-capfs, otherwise → text-capfs)
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =org-src-mode-hook= | ~completion--org-src-capfs~ |
+- =org-src-mode-hook= → =completion--org-src-capfs)=
+
+*** 内部関数
+
+- =completion--org-src-capfs=
 
 ** completion/completion-capf-org-src-lang.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-capf-org-src-lang
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #37 |
+| tangle 先 | =lisp/completion/completion-capf-org-src-lang.el= |
+| provide | =completion-capf-org-src-lang= |
+
 *** 責務
 
-- provides fine-grained stacks for shell, SQL, and Python modes
-  inside Org SRC edit buffers
-- dispatches via `completion--org-src-lang-capfs` on `org-src-mode-hook`
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-capf-org-src-lang= |
+Language-specific CAPF stacks for Org SRC blocks. This file: - provides fine-grained stacks for shell, SQL, and Python modes inside Org SRC edit buffers - dispatches via `completion--org-src-lang-capfs` on `org-src-mode-hook`
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =org-src-mode-hook= | ~completion--org-src-lang-capfs~ |
+- =org-src-mode-hook= → =completion--org-src-lang-capfs)=
+
+*** 内部関数
+
+- =completion--org-src-shell-capfs=
+- =completion--org-src-sql-capfs=
+- =completion--org-src-python-capfs=
+- =completion--org-src-lang-capfs=
 
 ** completion/completion-corfu-org-src.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-corfu-org-src
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #38 |
+| tangle 先 | =lisp/completion/completion-corfu-org-src.el= |
+| provide | =completion-corfu-org-src= |
+
 *** 責務
 
-- reduces `corfu-auto-delay` to 0.1 s and `corfu-auto-prefix` to 1
-  for more responsive completion inside code blocks
-- disables `corfu-cycle` inside SRC buffers
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-corfu-org-src= |
+Corfu tuning inside Org SRC edit buffers. This file: - reduces `corfu-auto-delay` to 0.1 s and `corfu-auto-prefix` to 1 for more responsive completion inside code blocks - disables `corfu-cycle` inside SRC buffers
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =org-src-mode-hook= | ~completion--org-src-corfu-setup~ |
+- =org-src-mode-hook= → =completion--org-src-corfu-setup)=
+
+*** 内部関数
+
+- =completion--org-src-corfu-setup=
 
 ** completion/completion-orderless-org-src.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-orderless-org-src
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #39 |
+| tangle 先 | =lisp/completion/completion-orderless-org-src.el= |
+| provide | =completion-orderless-org-src= |
+
 *** 責務
 
-- sets buffer-local `completion-category-overrides` so symbol,
-  keyword, function, and variable categories use orderless, while
-  file and dabbrev use basic/partial-completion
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-orderless-org-src= |
+Orderless tuning inside Org SRC edit buffers. This file: - sets buffer-local `completion-category-overrides` so symbol, keyword, function, and variable categories use orderless, while file and dabbrev use basic/partial-completion
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =org-src-mode-hook= | ~completion--org-src-orderless-setup~ |
+- =org-src-mode-hook= → =completion--org-src-orderless-setup)=
+
+*** 内部関数
+
+- =completion--org-src-orderless-setup=
 
 ** completion/completion-lsp.el
-
 :PROPERTIES:
 :CUSTOM_ID: completion-lsp
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #40 |
+| tangle 先 | =lisp/completion/completion-lsp.el= |
+| defgroup | =completion-lsp= |
+| provide | =completion-lsp= |
+
 *** 責務
 
-Defensive cleanup of obsolete Eglot servers on project switches.
+Defensive cleanup of obsolete Eglot servers on project switches. REFACTORED (Fix 1): Replaced internal variable `eglot--servers` with the public API `eglot-current-server` + `eglot-managed-buffers`. REFACTORED (Fix 5): `eglot--project` is also an internal function. Guarded with `fboundp` to remain safe across Emacs versions.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =completion-lsp= |
+- =completion-lsp-on-project-switch=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =find-file-hook= | ~completion-lsp-on-project-switch~ |
-| =project-switch-project-hook= | ~completion-lsp-on-project-switch~ |
+- =find-file-hook= → =completion-lsp-on-project-switch)=
+- =project-switch-project-hook= → =completion-lsp-on-project-switch)=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =completion-lsp-enable-p= | =t= | Enable LSP lifecycle cleanup. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~completion-lsp-on-project-switch ()~ |  | Shutdown obsolete Eglot servers when switching projects. |
+- =completion-lsp-enable-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~completion-lsp--project-root ()~ | Return the root directory of the current project, or nil. |
-| ~completion-lsp--shutdown-stale-servers (old-root)~ | Shutdown Eglot servers whose root matches OLD-ROOT. |
+- =completion-lsp--project-root=
+- =completion-lsp--shutdown-stale-servers=
 
-* orgx/ レイヤー
+* 7. orgx/ — Org エコシステム
+:PROPERTIES:
+:CUSTOM_ID: layer-orgx
+:END:
 
-Org Mode 拡張エコシステム。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 8 |
-| 依存ルール | core・ui・completion に依存可 |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 41 | =orgx-core= | Core Org Mode configuration and directory layout. | 1 | 0 | 1 |
+| 42 | =orgx-visual= | Org visual enhancements: org-modern, pretty entities, custom faces. | 0 | 0 | 2 |
+| 43 | =orgx-extensions= | Org extension packages: journal, roam, download, toc, and cliplink. | 0 | 0 | 0 |
+| 44 | =orgx-fold= | Extra Org folding commands with Emacs version compatibility. | 3 | 0 | 0 |
+| 45 | =orgx-export= | Org export backends: Hugo, Markdown, Mermaid, and Graphviz (dot). | 0 | 0 | 0 |
+| 46 | =orgx-notes-markdown= | Lightweight Markdown note system stored under the Org directory. | 6 | 2 | 1 |
+| 47 | =orgx-auto-tangle= | Automatic `org-babel-tangle` on save for README.org. | 0 | 0 | 2 |
 
 ** orgx/orgx-core.el
-
 :PROPERTIES:
 :CUSTOM_ID: orgx-core
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #41 |
+| tangle 先 | =lisp/orgx/orgx-core.el= |
+| provide | =orgx-core= |
+
 *** 責務
 
-Core Org Mode configuration and directory layout.
+Core Org Mode configuration and directory layout. REFACTORED (Fix 2): Removed direct `directory-files-recursively` scan from module load time.  org-agenda-files is now set in two phases: 1. A minimal fallback (inbox.org) is set immediately to satisfy any code that reads org-agenda-files before after-init-hook runs. 2. After init, `utils-org-agenda-build` is called (if available) to replace the fallback with the full cached list.  This eliminates the previous layer violation where orgx-core (org layer) directly depended on utils-org-agenda (utils layer) at load time, and also removes the duplicate scan that made the cache pointless. REFACTORED (Fix C): Added (require 'cl-lib) at runtime so cl-loop in my/org-buffer-files is available when running interpreted (not only when byte-compiled).
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-core= |
+- =my/org-buffer-files=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~orgx-core--rebuild-agenda-files~ |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/org-buffer-files ()~ |  | Return a list of *.org files currently visited in live buffers. |
+- =after-init-hook= → =orgx-core--rebuild-agenda-files)=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~orgx-core--rebuild-agenda-files ()~ | Phase 2: replace agenda-files fallback with the full cached list. |
+- =orgx-core--rebuild-agenda-files=
 
 ** orgx/orgx-visual.el
-
 :PROPERTIES:
 :CUSTOM_ID: orgx-visual
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #42 |
+| tangle 先 | =lisp/orgx/orgx-visual.el= |
+| provide | =orgx-visual= |
+
 *** 責務
 
-- configures org-modern visual variables exactly once via a guard flag
-- sets heading stars, tag alignment, emphasis markers, pretty entities
-- defines custom TODO keyword faces and list/checkbox symbols
-- enables `org-modern-mode` per buffer via `org-mode-hook`
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-visual= |
-| =require= | =org-modern= |
+Org visual enhancements: org-modern, pretty entities, custom faces. This file: - configures org-modern visual variables exactly once via a guard flag - sets heading stars, tag alignment, emphasis markers, pretty entities - defines custom TODO keyword faces and list/checkbox symbols - enables `org-modern-mode` per buffer via `org-mode-hook`
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-init-hook= | ~orgx-visual--configure-once~ |
-| =org-mode-hook= | ~orgx-visual--enable-mode~ |
+- =after-init-hook= → =orgx-visual--configure-once)=
+- =org-mode-hook= → =orgx-visual--enable-mode)=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~orgx-visual--configure-once ()~ | Apply org-modern variable configuration exactly once. |
-| ~orgx-visual--enable-mode ()~ | Enable org-modern in the current org-mode buffer. |
+- =orgx-visual--configure-once=
+- =orgx-visual--enable-mode=
 
 ** orgx/orgx-extensions.el
-
 :PROPERTIES:
 :CUSTOM_ID: orgx-extensions
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #43 |
+| tangle 先 | =lisp/orgx/orgx-extensions.el= |
+| provide | =orgx-extensions= |
+
 *** 責務
 
-- configures org-journal with `my:d:org-journal` as the journal dir
-- configures org-roam with its DB under `my:d:org-roam`; defers
-  `org-roam-db-autosync-mode` via idle timer and wraps it in
-  `condition-case` to prevent startup failures
-- installs org-download, toc-org, and org-cliplink
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-extensions= |
+Org extension packages: journal, roam, download, toc, and cliplink. This file: - configures org-journal with `my:d:org-journal` as the journal dir - configures org-roam with its DB under `my:d:org-roam`; defers `org-roam-db-autosync-mode` via idle timer and wraps it in `condition-case` to prevent startup failures - installs org-download, toc-org, and org-cliplink
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~orgx--org-roam-autosync-enable ()~ | Enable org-roam autosync (called from idle timer). |
+- =orgx--org-roam-file-hash-guard=
+- =orgx--org-roam-autosync-enable=
 
 ** orgx/orgx-fold.el
-
 :PROPERTIES:
 :CUSTOM_ID: orgx-fold
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #44 |
+| tangle 先 | =lisp/orgx/orgx-fold.el= |
+| provide | =orgx-fold= |
+
 *** 責務
 
-- provides `my/org-fold-subtree`, `my/org-unfold-subtree`, and
-  `my/org-toggle-fold` as interactive commands
-- binds them to C-c f, C-c e, C-c t in `org-mode-map`
-- guards `org-fold-folded-p` with `fboundp`; falls back to
-  `outline-invisible-p` on Emacs < 29
+Extra Org folding commands with Emacs version compatibility. This file: - provides `my/org-fold-subtree`, `my/org-unfold-subtree`, and `my/org-toggle-fold` as interactive commands - binds them to C-c f, C-c e, C-c t in `org-mode-map` - guards `org-fold-folded-p` with `fboundp`; falls back to `outline-invisible-p` on Emacs < 29
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-fold= |
-| =require= | =org-fold= |
+- =my/org-fold-subtree=
+- =my/org-unfold-subtree=
+- =my/org-toggle-fold=
 
 ** orgx/orgx-export.el
-
 :PROPERTIES:
 :CUSTOM_ID: orgx-export
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #45 |
+| tangle 先 | =lisp/orgx/orgx-export.el= |
+| provide | =orgx-export= |
+
 *** 責務
 
-- installs ox-hugo with TOML front-matter for Hugo blog export
-- installs markdown-mode, markdown-preview-mode, and edit-indirect
-- configures ob-mermaid with the `mmdc` CLI path when available
-- enables ob-dot for Graphviz diagram rendering in Org Babel
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-export= |
+Org export backends: Hugo, Markdown, Mermaid, and Graphviz (dot). This file: - installs ox-hugo with TOML front-matter for Hugo blog export - installs markdown-mode, markdown-preview-mode, and edit-indirect - configures ob-mermaid with the `mmdc` CLI path when available - enables ob-dot for Graphviz diagram rendering in Org Babel
 
 ** orgx/orgx-notes-markdown.el
-
 :PROPERTIES:
 :CUSTOM_ID: orgx-notes-markdown
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #46 |
+| tangle 先 | =lisp/orgx/orgx-notes-markdown.el= |
+| defgroup | =my:notes= |
+| provide | =orgx-notes-markdown= |
+
 *** 責務
 
-Lightweight Markdown note system stored under the Org directory.
+Lightweight Markdown note system stored under the Org directory. This module provides: - notebook-style directory structure - timestamped Markdown note creation - Pandoc-based Markdown editing - consult-ripgrep integration for searching notes - org-download integration for images The system is intentionally minimal and avoids complex knowledge graph frameworks.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-notes-markdown= |
+- =my/notes-new-note=
+- =my/notes-open-root=
+- =my/markdown-toggle-live-preview=
+- =my/notes-markdown-visual-fill=
+- =my/notes-consult-ripgrep=
+- =my/notes-markdown-org-download-setup=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =markdown-mode-hook= | ~my/notes-markdown-org-download-setup~ |
+- =markdown-mode-hook= → =my/notes-markdown-org-download-setup))=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =my:notes-directory-name= | ="notes"= | Name of the notes directory located under `my:d:org'. |
-| =my:notes-default-notebooks= | ='("inbox" "work" "life" "ideas" "archive"= | Default notebook directories created under the notes root. |
-
-*** 公開変数
-
-| 変数名 | 説明 |
-|--------|------|
-| =my:d:notes= |  |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/notes-new-note (notebook title)~ |  | Create a new Markdown note in NOTEBOOK with TITLE. |
-| ~my/notes-open-root ()~ |  | Open the notes root directory in Dired. |
-| ~my/markdown-toggle-live-preview ()~ |  | Toggle live preview mode in Markdown buffers. |
-| ~my/notes-markdown-visual-fill ()~ |  | Enable centered writing layout for Markdown notes. |
-| ~my/notes-consult-ripgrep ()~ |  | Search Markdown notes using consult-ripgrep. |
-| ~my/notes-markdown-org-download-setup ()~ |  | Configure org-download integration for Markdown notes. |
+- =my:notes-directory-name=
+- =my:notes-default-notebooks=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~my/notes--ensure-root ()~ | Ensure the notes directory and default notebooks exist. |
-| ~my/notes--slugify (title)~ | Convert TITLE into a filesystem-safe slug. |
+- =orgx-notes--ensure-root=
+- =orgx-notes--slugify=
 
 ** orgx/orgx-auto-tangle.el
-
 :PROPERTIES:
 :CUSTOM_ID: orgx-auto-tangle
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #47 |
+| tangle 先 | =lisp/orgx/orgx-auto-tangle.el= |
+| provide | =orgx-auto-tangle= |
+
 *** 責務
 
-- targets only files whose name matches `my/orgx-auto-tangle-target-file`
-  ("README.org")
-- uses a buffer-local in-progress flag to prevent recursive save loops
-- registers `my/orgx-auto-tangle--maybe` in `after-save-hook` locally
-  via the named hook function `orgx-auto-tangle--install-hook`
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-auto-tangle= |
-| =require= | =ob-tangle= |
+Automatic `org-babel-tangle` on save for README.org. This file: - targets only files whose name matches `my/orgx-auto-tangle-target-file` ("README.org") - uses a buffer-local in-progress flag to prevent recursive save loops - registers `orgx-auto-tangle--maybe` in `after-save-hook` locally via the named hook function `orgx-auto-tangle--install-hook`
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =after-save-hook= | ~my/orgx-auto-tangle--maybe~ |
-| =org-mode-hook= | ~orgx-auto-tangle--install-hook~ |
+- =after-save-hook= → =orgx-auto-tangle--maybe=
+- =org-mode-hook= → =orgx-auto-tangle--install-hook)=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~orgx-auto-tangle--install-hook ()~ | Install the auto-tangle after-save hook buffer-locally. |
+- =orgx-auto-tangle--eligible-p=
+- =orgx-auto-tangle--maybe=
+- =orgx-auto-tangle--install-hook=
 
-** orgx/orgx-typography.el
-
+* 8. vcs/ — バージョン管理
 :PROPERTIES:
-:CUSTOM_ID: orgx-typography
+:CUSTOM_ID: layer-vcs
 :END:
 
-*** 責務
-
-- enables valign-mode per Org buffer for pixel-precise table alignment
-- enables org-appear-mode to auto-show emphasis markers on cursor entry
-- configures org-appear for emphasis, links, and sub/superscript markers
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =orgx-typography= |
-
-* vcs/ レイヤー
-
-バージョン管理統合。dev 層に依存しない。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 3 |
-| 依存ルール | core・ui に依存可。dev に依存不可 |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 48 | =vcs-magit= | Magit Git client configuration. | 0 | 0 | 0 |
+| 49 | =vcs-gutter= | VCS gutter indicators via diff-hl. | 0 | 0 | 0 |
+| 50 | =vcs-forge= | Magit Forge integration for GitHub/GitLab issues and pull requests. | 0 | 0 | 0 |
 
 ** vcs/vcs-magit.el
-
 :PROPERTIES:
 :CUSTOM_ID: vcs-magit
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #48 |
+| tangle 先 | =lisp/vcs/vcs-magit.el= |
+| provide | =vcs-magit= |
+
 *** 責務
 
-- enables full-frame status display via
-  `magit-display-buffer-fullframe-status-v1`
-- restores the previous window configuration when burying magit buffers
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =vcs-magit= |
+Magit Git client configuration. This file: - enables full-frame status display via `magit-display-buffer-fullframe-status-v1` - restores the previous window configuration when burying magit buffers
 
 ** vcs/vcs-gutter.el
-
 :PROPERTIES:
 :CUSTOM_ID: vcs-gutter
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #49 |
+| tangle 先 | =lisp/vcs/vcs-gutter.el= |
+| provide | =vcs-gutter= |
+
 *** 責務
 
-- enables `global-diff-hl-mode` after initialisation
-- refreshes fringe indicators on magit pre/post-refresh hooks
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =vcs-gutter= |
+VCS gutter indicators via diff-hl. This file: - enables `global-diff-hl-mode` after initialisation - refreshes fringe indicators on magit pre/post-refresh hooks
 
 ** vcs/vcs-forge.el
-
 :PROPERTIES:
 :CUSTOM_ID: vcs-forge
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #50 |
+| tangle 先 | =lisp/vcs/vcs-forge.el= |
+| provide | =vcs-forge= |
+
 *** 責務
 
-- loads forge after magit is available
+Magit Forge integration for GitHub/GitLab issues and pull requests. This file: - loads forge after magit is available
 
-*** メタ情報
+* 9. dev/ — 開発ツール
+:PROPERTIES:
+:CUSTOM_ID: layer-dev
+:END:
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =vcs-forge= |
-
-* dev/ レイヤー
-
-開発ツール・LSP・AI・ビルド支援。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 15 |
-| 依存ルール | core・ui・completion に依存可 |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 51 | =dev-lsp-bridge= | LSP abstraction layer: backend-agnostic code-actions, rename, format. | 3 | 0 | 0 |
+| 52 | =dev-ai= | AI-assisted development via aidermacs (aider.chat Emacs frontend). | 0 | 0 | 0 |
+| 53 | =dev-term= | Terminal integration helpers based on vterm. | 1 | 1 | 2 |
+| 54 | =dev-web-core= | Project infrastructure, file hygiene, and EditorConfig. | 0 | 0 | 0 |
+| 55 | =dev-build= | Build tooling: Makefile editing, compilation buffer, and ANSI colours. | 1 | 0 | 0 |
+| 56 | =dev-format= | Automatic code formatting via Apheleia (async, non-blocking). | 0 | 0 | 0 |
+| 57 | =dev-infra-modes= | Major-mode assignments for infrastructure and configuration files. | 0 | 0 | 0 |
+| 58 | =dev-docker= | Docker integration: Dockerfile, YAML, docker CLI, TRAMP containers. | 0 | 0 | 0 |
+| 59 | =dev-music= | Music playback integration for the Modern Emacs environment. | 0 | 1 | 1 |
+| 60 | =dev-sql= | SQL editing and formatting for PostgreSQL workflows. | 0 | 0 | 0 |
+| 61 | =dev-rest= | REST client: restclient and jq integration for HTTP development. | 0 | 0 | 0 |
+| 62 | =dev-navigation= | Code navigation helpers: dumb-jump, multiple-cursors, and EWW. | 4 | 0 | 3 |
+| 63 | =dev-tools= | Miscellaneous development utility commands. | 3 | 0 | 0 |
 
 ** dev/dev-lsp-bridge.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-lsp-bridge
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #51 |
+| tangle 先 | =lisp/dev/dev-lsp-bridge.el= |
+| provide | =dev-lsp-bridge= |
+
 *** 責務
 
-- provides `dev-lsp-code-actions`, `dev-lsp-rename`, and
-  `dev-lsp-format-buffer` as unified interactive commands
-- dispatches to eglot or lsp-mode at call time via `cond`/`fboundp`
-- falls back to `indent-region` for formatting when no LSP is active
+LSP abstraction layer: backend-agnostic code-actions, rename, format. This file: - provides `dev-lsp-code-actions`, `dev-lsp-rename`, and `dev-lsp-format-buffer` as unified interactive commands - dispatches to eglot or lsp-mode at call time via `cond`/`fboundp` - falls back to `indent-region` for formatting when no LSP is active Load-order note: Loaded first in the dev/ section, before the concrete LSP backend modules (dev-lsp-eglot, dev-lsp-mode).  These dispatch wrappers carry no backend dependency themselves; placing them in dev/ is architecturally correct. ui-keymap and personal overlays can bind `dev-lsp-*` commands once this module has loaded.  Concrete backends are activated lazily by core-switches via `after-init-hook`.
 
-*** ロード順序ノート
+*** 公開 API
 
-This module is loaded immediately after `completion-lsp` in modules.el,
-not in the dev/ section.  Reason: the unified commands declared here are
-pure dispatch wrappers — they carry no backend dependency themselves.
-Placing them after the completion layer lets ui-keymap and personal
-overlays bind `dev-lsp-*` commands without depending on any specific
-LSP backend module (dev-lsp-eglot, dev-lsp-mode).  Those backend modules
-are loaded lazily by core-switches via after-init-hook.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-lsp-bridge= |
+- =dev-lsp-code-actions=
+- =dev-lsp-rename=
+- =dev-lsp-format-buffer=
 
 ** dev/dev-ai.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-ai
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #52 |
+| tangle 先 | =lisp/dev/dev-ai.el= |
+| provide | =dev-ai= |
+
 *** 責務
 
-- sets up aider history and log files under `my:d:aider`
-- provides `my/aidermacs--append-unique-args` to extend CLI args
-  without duplicates
-- selects the terminal backend: vterm if available, else comint
-- configures the OpenRouter API endpoint when `OPENROUTER_API_KEY` is set,
-  falling back to `OPENAI_API_KEY` for direct OpenAI access
+AI-assisted development via aidermacs (aider.chat Emacs frontend). This file: - sets up aider history and log files under `my:d:aider` - provides `dev-ai--append-unique-args` to extend CLI args without duplicates - selects the terminal backend: vterm if available, else comint - configures the OpenRouter API endpoint when `OPENROUTER_API_KEY` is set, falling back to `OPENAI_API_KEY` for direct OpenAI access
 
-*** メタ情報
+*** 内部関数
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-ai= |
-
-*** 公開変数
-
-| 変数名 | 説明 |
-|--------|------|
-| =my:d:aider= |  |
-| =aidermacs-extra-args= | Extra command-line arguments passed to the aider process. |
+- =dev-ai--append-unique-args=
 
 ** dev/dev-term.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-term
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #53 |
+| tangle 先 | =lisp/dev/dev-term.el= |
+| defgroup | =dev-term= |
+| provide | =dev-term= |
+
 *** 責務
 
-Terminal integration helpers based on vterm.
+Terminal integration helpers based on vterm. Provides: - Nano palette integration for terminal colors (optional, ui-nano-palette) - project-scoped terminal toggling via vterm-toggle - bottom-docked terminal window display Palette integration: `dev-term-apply-palette' reads nano-color-* values via `dev-term--nano-color', which returns a safe fallback when `ui-nano-palette' is not loaded.  This module does NOT require `ui-nano-palette' at load time, preserving layer independence: the dev layer must never force-load a ui-layer module. When `ui-nano-palette' is loaded (i.e. the nano UI bundle is active), `dev-term-apply-palette' is registered via `with-eval-after-load' so the terminal faces automatically adopt the Nano colour scheme.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-term= |
+- =dev-term-apply-palette=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =enable-theme-functions= | ~dev-term--reapply-palette~ |
-| =after-make-frame-functions= | ~dev-term--frame-init~ |
+- =enable-theme-functions= → =dev-term--reapply-palette)=
+- =after-make-frame-functions= → =dev-term--frame-init))=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =dev-term-enable-p= | =t= | If non-nil enable terminal integration. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~dev-term-apply-palette ()~ |  | Apply the Nano color palette to vterm faces. |
+- =dev-term-enable-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~dev-term--nano-color (var fallback)~ | Return the value of nano-color variable VAR, or FALLBACK if unbound. |
-| ~dev-term--safe-face-set (face &rest props)~ | Safely set FACE attributes using PROPS. |
-| ~dev-term--buffer-p (buf)~ | Return non-nil if BUF is a vterm buffer. |
-| ~dev-term--reapply-palette (&rest _)~ | Reapply vterm palette after theme changes. |
-| ~dev-term--frame-init (frame)~ | Apply palette for newly created FRAME. |
-| ~dev-term--display-buffer-p (buf _action)~ | Return non-nil when BUF is a vterm terminal buffer. |
+- =dev-term--nano-color=
+- =dev-term--safe-face-set=
+- =dev-term--buffer-p=
+- =dev-term--reapply-palette=
+- =dev-term--frame-init=
+- =dev-term--display-buffer-p=
 
 ** dev/dev-web-core.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-web-core
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #54 |
+| tangle 先 | =lisp/dev/dev-web-core.el= |
+| provide | =dev-web-core= |
+
 *** 責務
 
-- configures built-in `project.el` for project-aware commands
-- enforces final newlines and removes trailing whitespace on save
-- enables `editorconfig-mode` globally for per-project style enforcement
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-web-core= |
+Project infrastructure, file hygiene, and EditorConfig. This file: - configures built-in `project.el` for project-aware commands - enforces final newlines and removes trailing whitespace on save - enables `editorconfig-mode` globally for per-project style enforcement
 
 ** dev/dev-build.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-build
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #55 |
+| tangle 先 | =lisp/dev/dev-build.el= |
+| provide | =dev-build= |
+
 *** 責務
 
-- maps Makefile variants to `makefile-gmake-mode`
-- enforces tab indentation and trailing-whitespace visibility in Makefiles
-- colourises compilation output with `ansi-color-apply-on-region`
-- sets `compile-command` to "make -k" in Makefile buffers
+Build tooling: Makefile editing, compilation buffer, and ANSI colours. This file: - maps Makefile variants to `makefile-gmake-mode` - enforces tab indentation and trailing-whitespace visibility in Makefiles - colourises compilation output with `ansi-color-apply-on-region` - sets `compile-command` to "make -k" in Makefile buffers
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-build= |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/set-make-compile-command ()~ |  | Set compile-command to \ |
+- =my/set-make-compile-command=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~dev-build--makefile-setup ()~ | Configure local settings for Makefile buffers. |
-| ~dev-build--ansi-color-compilation ()~ | Apply ANSI color codes in compilation output. |
+- =dev-build--makefile-setup=
+- =dev-build--ansi-color-compilation=
 
 ** dev/dev-format.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-format
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #56 |
+| tangle 先 | =lisp/dev/dev-format.el= |
+| provide | =dev-format= |
+
 *** 責務
 
-- registers prettierd and prettier as Apheleia formatters
-- maps TypeScript, TSX, JSON, CSS, and Markdown modes to prettierd
-- enables `apheleia-global-mode` for automatic on-save formatting
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-format= |
+Automatic code formatting via Apheleia (async, non-blocking). This file: - registers prettierd and prettier as Apheleia formatters - maps TypeScript, TSX, JSON, CSS, and Markdown modes to prettierd - enables `apheleia-global-mode` for automatic on-save formatting
 
 ** dev/dev-infra-modes.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-infra-modes
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #57 |
+| tangle 先 | =lisp/dev/dev-infra-modes.el= |
+| provide | =dev-infra-modes= |
+
 *** 責務
 
-- maps docker-compose YAML files to `docker-compose-mode`
-- maps `.env` and `.env.*` files to `dotenv-mode`
-- maps `.toml` files to `toml-mode`
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-infra-modes= |
+Major-mode assignments for infrastructure and configuration files. This file: - maps docker-compose YAML files to `docker-compose-mode` - maps `.env` and `.env.*` files to `dotenv-mode` - maps `.toml` files to `toml-mode`
 
 ** dev/dev-docker.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-docker
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #58 |
+| tangle 先 | =lisp/dev/dev-docker.el= |
+| provide | =dev-docker= |
+
 *** 責務
 
-- configures dockerfile-mode for Dockerfile and .dockerfile extensions
-- configures yaml-mode for docker-compose and generic YAML files
-- provides the `docker` transient for container/image/volume management
-- configures `tramp-container` for `docker:` remote host access
-- registers a tempel Dockerfile snippet template
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-docker= |
-
-*** 公開変数
-
-| 変数名 | 説明 |
-|--------|------|
-| =my:tempel-docker-templates= |  |
+Docker integration: Dockerfile, YAML, docker CLI, TRAMP containers. This file: - configures dockerfile-mode for Dockerfile and .dockerfile extensions - configures yaml-mode for docker-compose and generic YAML files - provides the `docker` transient for container/image/volume management - configures `tramp-container` for `docker:` remote host access - registers a tempel Dockerfile snippet template
 
 ** dev/dev-music.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-music
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #59 |
+| tangle 先 | =lisp/dev/dev-music.el= |
+| defgroup | =dev-music= |
+| provide | =dev-music= |
+
 *** 責務
 
-Music playback integration for the Modern Emacs environment.
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-music= |
-| =require= | =emms-setup= |
+Music playback integration for the Modern Emacs environment. This module integrates EMMS (Emacs Multimedia System) to provide a full-featured music player inside Emacs. Features: - external audio playback using mpv / mplayer - playlist management inside Emacs buffers - Dired integration for instant playback - ID3 metadata extraction - playback status in mode-line - directory based music library support Design principles: - relies on external players (mpv preferred) - zero interference with core layers - deterministic initialization - safe in daemon / GUI / terminal contexts External dependency: mpv Example: brew install mpv
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =dired-mode-hook= | ~dev-music--setup-dired~ |
+- =dired-mode-hook= → =dev-music--setup-dired))=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =dev-music-enable-p= | =t= | If non-nil enable EMMS music integration. |
+- =dev-music-enable-p=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~dev-music--setup-dired ()~ | Install Dired integration for EMMS. |
+- =dev-music--setup-dired=
 
 ** dev/dev-sql.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-sql
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #60 |
+| tangle 先 | =lisp/dev/dev-sql.el= |
+| provide | =dev-sql= |
+
 *** 責務
 
-- sets the default SQL product to `postgres`
-- enables `sqlind-minor-mode` for indentation in sql-mode buffers
-- configures sqlformat with `pgformatter` and auto-formats on save
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-sql= |
+SQL editing and formatting for PostgreSQL workflows. This file: - sets the default SQL product to `postgres` - enables `sqlind-minor-mode` for indentation in sql-mode buffers - configures sqlformat with `pgformatter` and auto-formats on save
 
 ** dev/dev-rest.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-rest
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #61 |
+| tangle 先 | =lisp/dev/dev-rest.el= |
+| provide | =dev-rest= |
+
 *** 責務
 
-- associates `.http` files with `restclient-mode`
-- loads `restclient-jq` after restclient for jq-based response filtering
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-rest= |
+REST client: restclient and jq integration for HTTP development. This file: - associates `.http` files with `restclient-mode` - loads `restclient-jq` after restclient for jq-based response filtering
 
 ** dev/dev-navigation.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-navigation
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #62 |
+| tangle 先 | =lisp/dev/dev-navigation.el= |
+| provide | =dev-navigation= |
+
 *** 責務
 
-- registers dumb-jump as a secondary xref backend, active only when
-  eglot is not managing the current buffer
-- forces ripgrep as the dumb-jump searcher
-- installs multiple-cursors for multi-point editing
-- provides `my/eww-search` and `my/eww-toggle-images` for EWW browsing
-- highlights the active search term in EWW pages on render
+Code navigation helpers: dumb-jump, multiple-cursors, and EWW. This file: - registers dumb-jump as a secondary xref backend, active only when eglot is not managing the current buffer - forces ripgrep as the dumb-jump searcher - installs multiple-cursors for multi-point editing - provides `my/eww-search` and `my/eww-toggle-images` for EWW browsing - highlights the active search term in EWW pages on render
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-navigation= |
+- =my/dumb-jump-backend=
+- =my/eww-after-render=
+- =my/eww-search=
+- =my/eww-toggle-images=
 
 *** フック登録
 
-| フック | 関数 |
-|--------|------|
-| =xref-backend-functions= | ~my/dumb-jump-backend~ |
-| =prog-mode-hook= | ~dev-navigation--dumb-jump-setup~ |
-| =eww-after-render-hook= | ~my/eww-after-render~ |
-
-*** 公開変数
-
-| 変数名 | 説明 |
-|--------|------|
-| =my:d:eww= |  |
-| =eww-hl-search-word= | Search term to highlight after eww renders a page. |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/eww-after-render ()~ |  | Highlight the active search word after eww renders. |
+- =xref-backend-functions= → =my/dumb-jump-backend=
+- =prog-mode-hook= → =dev-navigation--dumb-jump-setup))=
+- =eww-after-render-hook= → =my/eww-after-render))=
 
 *** 内部関数
 
-| 関数 | 説明 |
-|------|------|
-| ~dev-navigation--dumb-jump-setup ()~ | Register dumb-jump as a secondary xref backend for the current buffer. |
+- =dev-navigation--dumb-jump-setup=
 
 ** dev/dev-tools.el
-
 :PROPERTIES:
 :CUSTOM_ID: dev-tools
 :END:
 
-*** 責務
-
-- `my/open-by-vscode`: opens the current file at the current line
-  and column in VS Code via `code -r -g`
-- `my/show-env-variable`: displays an environment variable's value
-- `my/print-build-info`: renders Emacs build metadata as a
-  Markdown table in a *Build Info* buffer
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-tools= |
-
-** dev/dev-lsp-eglot.el
-
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-eglot
-:END:
-
-*** 責務
-
-- defines `my/eglot-guessable-p` to detect whether eglot can find a
-  server for the current buffer before calling `eglot-ensure`
-- hooks `my/lsp-eglot--maybe-ensure` into `prog-mode-hook`
-- provides `my/lsp-enable-eglot` as the entry point for core-switches
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-lsp-eglot= |
-
-*** フック登録
-
-| フック | 関数 |
-|--------|------|
-| =prog-mode-hook= | ~my/lsp-eglot--maybe-ensure~ |
-
-*** 内部関数
-
-| 関数 | 説明 |
+| 項目 | 内容 |
 |------|------|
-| ~my/lsp-eglot--maybe-ensure ()~ | Enable eglot in the current buffer when the project is guessable. |
-
-** dev/dev-lsp-mode.el
-
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-mode
-:END:
+| ロード順 | #63 |
+| tangle 先 | =lisp/dev/dev-tools.el= |
+| provide | =dev-tools= |
 
 *** 責務
 
-- configures lsp-mode with file watchers, response timeout, and
-  `:none` completion provider (delegated to corfu/cape)
-- hooks `lsp-deferred` into `prog-mode-hook`
-- enables lsp-ui doc and sideline overlays
-- provides `my/lsp-enable-lspmode` as the entry point for core-switches
+Miscellaneous development utility commands. This file: - `my/open-by-vscode`: opens the current file at the current line and column in VS Code via `code -r -g` - `my/show-env-variable`: displays an environment variable's value - `my/print-build-info`: renders Emacs build metadata as a Markdown table in a *Build Info* buffer
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =dev-lsp-mode= |
+- =my/open-by-vscode=
+- =my/show-env-variable=
+- =my/print-build-info=
 
-*** フック登録
+* 10. utils/ — 汎用ヘルパー
+:PROPERTIES:
+:CUSTOM_ID: layer-utils
+:END:
 
-| フック | 関数 |
-|--------|------|
-| =prog-mode-hook= | ~lsp-deferred~ |
-
-* utils/ レイヤー
-
-全層横断の狭域ヘルパー群。
-
-| 項目 | 値 |
-|------|-----|
-| モジュール数 | 9 |
-| 依存ルール | 全層に依存可（ただし循環禁止） |
+| # | モジュール | 責務 | pub | cust | hook |
+|---|-----------|------|-----|------|------|
+| 64 | =utils-path= | Path manipulation helpers for configuration modules. | 3 | 0 | 0 |
+| 65 | =utils-async= | Async shell command utilities for non-blocking subprocess execution. | 2 | 0 | 0 |
+| 66 | =utils-buffers= | Buffer management: smart kill with optional save prompt. | 1 | 0 | 0 |
+| 67 | =utils-edit= | Text editing convenience commands. | 3 | 0 | 0 |
+| 68 | =utils-dired= | Dired utility: smart RET for file-or-directory navigation. | 1 | 0 | 0 |
+| 69 | =utils-functions= | Miscellaneous interactive utility commands. | 4 | 0 | 0 |
+| 70 | =utils-org-agenda= | Provides `utils-org-agenda-build` which scans org-directory once and c | 2 | 3 | 0 |
+| 71 | =utils-lint= | Flycheck and Flymake diagnostics with sideline display. | 0 | 0 | 0 |
+| 72 | =utils-diagnostics= | Configuration diagnostic commands for troubleshooting the environment. | 3 | 0 | 0 |
 
 ** utils/utils-path.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-path
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #64 |
+| tangle 先 | =lisp/utils/utils-path.el= |
+| provide | =utils-path= |
+
 *** 責務
 
-- `utils-path-normalize`: canonicalises a path with a trailing slash
-- `utils-path-relative`: returns a child path relative to a base dir,
-  or nil when the child is not under the base
-- `utils-path-safe-name`: replaces non-alphanumeric chars with hyphens
+Path manipulation helpers for configuration modules. This file: - `utils-path-normalize`: canonicalises a path with a trailing slash - `utils-path-relative`: returns a child path relative to a base dir, or nil when the child is not under the base - `utils-path-safe-name`: replaces non-alphanumeric chars with hyphens NOTE: `my/ensure-directory-exists` is defined in early-init.el and is always available by the time this module loads.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-path= |
+- =utils-path-normalize=
+- =utils-path-relative=
+- =utils-path-safe-name=
 
 ** utils/utils-async.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-async
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #65 |
+| tangle 先 | =lisp/utils/utils-async.el= |
+| provide | =utils-async= |
+
 *** 責務
 
-- `utils-async-shell-command`: runs a command in a named output buffer
-- `utils-async-run-script`: runs an executable script with optional args,
-  guarded by `file-executable-p`
+Async shell command utilities for non-blocking subprocess execution. This file: - `utils-async-shell-command`: runs a command in a named output buffer - `utils-async-run-script`: runs an executable script with optional args, guarded by `file-executable-p`
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-async= |
+- =utils-async-shell-command=
+- =utils-async-run-script=
 
 ** utils/utils-buffers.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-buffers
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #66 |
+| tangle 先 | =lisp/utils/utils-buffers.el= |
+| provide | =utils-buffers= |
+
 *** 責務
 
-- `my/smart-kill-buffer`: prompts to save a modified file buffer before
-  killing it, then kills regardless of the user's answer
+Buffer management: smart kill with optional save prompt. This file: - `my/smart-kill-buffer`: prompts to save a modified file buffer before killing it, then kills regardless of the user's answer
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-buffers= |
-
-*** 公開関数
-
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~my/smart-kill-buffer (&optional buffer-or-name)~ |  | Kill BUFFER-OR-NAME after saving if needed. |
+- =my/smart-kill-buffer=
 
 ** utils/utils-edit.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-edit
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #67 |
+| tangle 先 | =lisp/utils/utils-edit.el= |
+| provide | =utils-edit= |
+
 *** 責務
 
-- `my/indent-buffer`: re-indents the entire buffer
-- `my/copy-whole-buffer`: copies all buffer contents to the kill ring
-- `my/join-next-line`: joins the following line onto the current one
+Text editing convenience commands. This file: - `my/indent-buffer`: re-indents the entire buffer - `my/copy-whole-buffer`: copies all buffer contents to the kill ring - `my/join-next-line`: joins the following line onto the current one
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-edit= |
+- =my/indent-buffer=
+- =my/copy-whole-buffer=
+- =my/join-next-line=
 
 ** utils/utils-dired.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-dired
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #68 |
+| tangle 先 | =lisp/utils/utils-dired.el= |
+| provide | =utils-dired= |
+
 *** 責務
 
-- `my/dired-get-file-or-dir`: navigates directories within the existing
-  dirvish session via `dirvish-find-file`, or opens files with `find-file`.
-  Falls back to `dired-find-file` when dirvish is not loaded.
+Dired utility: smart RET for file-or-directory navigation. This file: - `my/dired-get-file-or-dir`: navigates directories within the existing dirvish session via `dirvish-find-file`, or opens files with `find-file`. Falls back to `dired-find-file` when dirvish is not loaded. [FIX] Previously called `(dirvish file)` for directory navigation. `dirvish` creates a brand-new full-frame session, discarding the current session's history and layout.  `dirvish-find-file` navigates within the existing session — this is the correct API for in-session directory entry.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-dired= |
+- =my/dired-get-file-or-dir=
 
 ** utils/utils-functions.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-functions
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #69 |
+| tangle 先 | =lisp/utils/utils-functions.el= |
+| provide | =utils-functions= |
+
 *** 責務
 
-- `my/reload-config`: reloads init.el interactively
-- `my/open-emacs-config`: opens README.org for editing
-- `my/show-full-path`: displays the absolute path of the current buffer
-- `my/toggle-debug-on-error`: toggles `debug-on-error` and reports state
+Miscellaneous interactive utility commands. This file: - `my/reload-config`: reloads init.el interactively - `my/open-emacs-config`: opens README.org for editing - `my/show-full-path`: displays the absolute path of the current buffer - `my/toggle-debug-on-error`: toggles `debug-on-error` and reports state
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-functions= |
+- =my/reload-config=
+- =my/open-emacs-config=
+- =my/show-full-path=
+- =my/toggle-debug-on-error=
 
 ** utils/utils-org-agenda.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-org-agenda
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #70 |
+| tangle 先 | =lisp/utils/utils-org-agenda.el= |
+| defgroup | =utils-org-agenda= |
+| provide | =utils-org-agenda= |
+
 *** 責務
 
-Provides `utils-org-agenda-build` which scans org-directory once
-and caches the result.  Called from `orgx-core` via after-init-hook
-to avoid leaking a utils-layer dependency into the org layer at load time.
+Provides `utils-org-agenda-build` which scans org-directory once and caches the result.  Called from `orgx-core` via after-init-hook to avoid leaking a utils-layer dependency into the org layer at load time.
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-org-agenda= |
+- =utils-org-agenda-invalidate-cache=
+- =utils-org-agenda-build=
 
-*** カスタム変数
+*** defcustom 変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| =utils-org-agenda-max-depth= | =3= | Maximum directory recursion depth for agenda file scanning. |
-| =utils-org-agenda-exclude-dirs= | ='("archive" ".git" "node_modules"= | Directory names to skip during agenda scanning. |
-| =utils-org-agenda-cache-ttl= | =300= | Seconds before the cache is considered stale. |
+- =utils-org-agenda-max-depth=
+- =utils-org-agenda-exclude-dirs=
+- =utils-org-agenda-cache-ttl=
 
-*** 公開関数
+*** 内部関数
 
-| 関数 | autoload | 説明 |
-|------|---------|------|
-| ~utils-org-agenda-invalidate-cache ()~ |  | Force a rebuild on the next call to `utils-org-agenda-build`. |
-| ~utils-org-agenda-build (&optional force)~ |  | Return (and cache) the list of Org agenda files. |
+- =utils-org-agenda--should-exclude-p=
+- =utils-org-agenda--scan=
 
 ** utils/utils-lint.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-lint
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #71 |
+| tangle 先 | =lisp/utils/utils-lint.el= |
+| provide | =utils-lint= |
+
 *** 責務
 
-- installs flycheck for on-demand checking
-- enables flymake in all `prog-mode` buffers
-- configures sideline to show flycheck/flymake messages on the right
-
-*** メタ情報
-
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-lint= |
+Flycheck and Flymake diagnostics with sideline display. This file: - installs flycheck for on-demand checking - enables flymake in all `prog-mode` buffers - configures sideline to show flycheck/flymake messages on the right
 
 ** utils/utils-diagnostics.el
-
 :PROPERTIES:
 :CUSTOM_ID: utils-diagnostics
 :END:
 
+| 項目 | 内容 |
+|------|------|
+| ロード順 | #72 |
+| tangle 先 | =lisp/utils/utils-diagnostics.el= |
+| provide | =utils-diagnostics= |
+
 *** 責務
 
-- `my/print-load-path`: renders `load-path` in a dedicated view buffer
-- `my/print-feature-list`: lists all loaded features alphabetically
-- `my/check-missing-executables`: reports which external tools are absent
-  (rg, git, make, aspell, gpg, pass)
+Configuration diagnostic commands for troubleshooting the environment. This file: - `my/print-load-path`: renders `load-path` in a dedicated view buffer - `my/print-feature-list`: lists all loaded features alphabetically - `my/check-missing-executables`: reports which external tools are absent (rg, git, make, aspell, gpg, pass)
 
-*** メタ情報
+*** 公開 API
 
-| 項目 | 値 |
-|------|-----|
-| =provide= | =utils-diagnostics= |
-
-* personal/ レイヤー
-
-| 特性 | 内容 |
-|----|-----|
-| ロード順 | 全モジュール後・最後 |
-| 必須 | 任意 (optional) |
-| ルール | earlier layer に影響してはならない |
-
-** personal/user.el
-
-全ユーザー共通のパーソナライズ。=my:modules-extra= へのオプションモジュール追加、
-=my:use-ui= / =my:use-lsp= スイッチ設定、メッセージアーカイブジョブを担う。
-
-*** 主な設定
-
-- *=my:modules-extra= に =ui-visual-aids=, =orgx-typography=, =ui-macos= を追記*
-  （init.el ステップ 6 でロードされ、ステップ 7 の =modules.el= require より前に実行される）
-- =my:use-ui= を =nano= または =doom= に設定
-- =my:use-lsp= を =eglot= に設定
-- =personal-messages= アーカイブジョブを =core-session= に登録 (120s 遅延、10 分周期)
-
-*** ロード順序ノート
-
-=init.el= は =my:modules-extra= を personal ロード（ステップ 6）の前に =defvar= で宣言する。
-これにより =personal/user.el= は変数が void にならず安全に =append= できる。
-=modules.el= 内の同名 =defcustom= は =defvar= 後に評価されるため no-op となり衝突しない。
-
-** personal/<login>.el
-
-デバイス・ユーザー固有オーバーレイ。=my:use-ui=, =my:use-lsp=, フォント等を上書きする。
-
-** personal/device-darwin.el
-
-macOS 固有設定。Homebrew PATH、フォント等。
+- =my/print-load-path=
+- =my/print-feature-list=
+- =my/check-missing-executables=
 
 * 付録 A: モジュールインデックス
+:PROPERTIES:
+:CUSTOM_ID: appendix-a
+:END:
 
-#+CAPTION: 全モジュール一覧（ロード順）
-| # | モジュール | 層 | defun | defcustom | フック |
-|---|-----------|-----|-------|-----------|--------|
-| 1 | =core/core-fixes.el= | core | 0 | 0 | 0 |
-| 2 | =core/core-policy.el= | core | 1 | 0 | 1 |
-| 3 | =core/core-session.el= | core | 6 | 3 | 0 |
-| 4 | =core/core-session-private.el= | core | 8 | 0 | 0 |
-| 5 | =core/core-gc.el= | core | 1 | 1 | 2 |
-| 6 | =core/core-persistence.el= | core | 1 | 0 | 1 |
-| 7 | =core/core-buffers.el= | core | 3 | 0 | 1 |
-| 8 | =core/core-runtime.el= | core | 1 | 1 | 1 |
-| 9 | =core/core-tools.el= | core | 6 | 0 | 0 |
-| 10 | =core/core-treesit.el= | core | 0 | 3 | 1 |
-| 11 | =core/core-history.el= | core | 0 | 0 | 1 |
-| 12 | =core/core-editing.el= | core | 2 | 0 | 0 |
-| 13 | =core/core-switches.el= | core | 1 | 2 | 1 |
-| 14 | =core/core-custom.el= | core | 0 | 0 | 0 |
-| 15 | =core/core-api.el= | core | 0 | 0 | 0 |
-| 16 | =core/core-native.el= | core | 0 | 6 | 3 |
-| 17 | =core/core-custom-ui-extras.el= | core | 0 | 0 | 0 |
-| 18 | =ui/ui-font.el= | ui | 6 | 4 | 2 |
-| 19 | =ui/ui-nano-palette.el= | ui | 4 | 16 | 0 |
-| 20 | =ui/ui-doom-modeline.el= | ui | 0 | 0 | 0 |
-| 21 | =ui/ui-nano-modeline.el= | ui | 0 | 0 | 3 |
-| 22 | =ui/ui-theme.el= | ui | 5 | 2 | 3 |
-| 23 | =ui/ui-window.el= | ui | 0 | 0 | 0 |
-| 24 | =ui/ui-utils.el= | ui | 0 | 0 | 0 |
-| 25 | =ui/ui-health-modeline.el= | ui | 4 | 3 | 4 |
-| 26 | =ui/ui-imenu.el= | ui | 0 | 0 | 0 |
-| 27 | =ui/ui-leader.el= | ui | 4 | 3 | 0 |
-| 28 | =ui/ui-hydra.el= | ui | 2 | 1 | 0 |
-| 29 | =ui/ui-which-key.el= | ui | 2 | 2 | 1 |
-| 30 | =ui/ui-keymap.el= | ui | 8 | 1 | 1 |
-| 31 | =ui/ui-global-keys.el= | ui | 0 | 0 | 1 |
-| 32 | =ui/ui-visual-aids.el= | ui | 0 | 0 | 0 |
-| 33 | =ui/ui-macos.el= | ui | 0 | 0 | 0 |
-| 34 | =auth/auth-core.el= | auth | 2 | 1 | 1 |
-| 35 | =completion/completion-core.el= | completion | 0 | 0 | 0 |
-| 36 | =completion/completion-vertico.el= | completion | 0 | 0 | 1 |
-| 37 | =completion/completion-consult.el= | completion | 0 | 0 | 0 |
-| 38 | =completion/completion-embark.el= | completion | 0 | 0 | 0 |
-| 39 | =completion/completion-corfu.el= | completion | 0 | 0 | 1 |
-| 40 | =completion/completion-icons.el= | completion | 0 | 0 | 0 |
-| 41 | =completion/completion-capf.el= | completion | 0 | 0 | 9 |
-| 42 | =completion/completion-capf-org-src.el= | completion | 0 | 0 | 1 |
-| 43 | =completion/completion-capf-org-src-lang.el= | completion | 0 | 0 | 1 |
-| 44 | =completion/completion-corfu-org-src.el= | completion | 0 | 0 | 1 |
-| 45 | =completion/completion-orderless-org-src.el= | completion | 0 | 0 | 1 |
-| 46 | =completion/completion-lsp.el= | completion | 3 | 1 | 2 |
-| 47 | =orgx/orgx-core.el= | orgx | 2 | 0 | 1 |
-| 48 | =orgx/orgx-visual.el= | orgx | 2 | 0 | 2 |
-| 49 | =orgx/orgx-extensions.el= | orgx | 1 | 0 | 0 |
-| 50 | =orgx/orgx-fold.el= | orgx | 0 | 0 | 0 |
-| 51 | =orgx/orgx-export.el= | orgx | 0 | 0 | 0 |
-| 52 | =orgx/orgx-notes-markdown.el= | orgx | 8 | 2 | 1 |
-| 53 | =orgx/orgx-auto-tangle.el= | orgx | 1 | 0 | 2 |
-| 54 | =orgx/orgx-typography.el= | orgx | 0 | 0 | 0 |
-| 55 | =vcs/vcs-magit.el= | vcs | 0 | 0 | 0 |
-| 56 | =vcs/vcs-gutter.el= | vcs | 0 | 0 | 0 |
-| 57 | =vcs/vcs-forge.el= | vcs | 0 | 0 | 0 |
-| 58 | =dev/dev-lsp-bridge.el= | dev | 3 | 0 | 0 |
-| 59 | =dev/dev-ai.el= | dev | 0 | 0 | 0 |
-| 60 | =dev/dev-term.el= | dev | 7 | 1 | 2 |
-| 61 | =dev/dev-web-core.el= | dev | 0 | 0 | 0 |
-| 62 | =dev/dev-build.el= | dev | 3 | 0 | 0 |
-| 63 | =dev/dev-format.el= | dev | 0 | 0 | 0 |
-| 64 | =dev/dev-infra-modes.el= | dev | 0 | 0 | 0 |
-| 65 | =dev/dev-docker.el= | dev | 0 | 0 | 0 |
-| 66 | =dev/dev-music.el= | dev | 1 | 1 | 1 |
-| 67 | =dev/dev-sql.el= | dev | 0 | 0 | 0 |
-| 68 | =dev/dev-rest.el= | dev | 0 | 0 | 0 |
-| 69 | =dev/dev-navigation.el= | dev | 2 | 0 | 3 |
-| 70 | =dev/dev-tools.el= | dev | 0 | 0 | 0 |
-| 71 | =dev/dev-lsp-eglot.el= | dev | 1 | 0 | 1 |
-| 72 | =dev/dev-lsp-mode.el= | dev | 0 | 0 | 1 |
-| 73 | =utils/utils-path.el= | utils | 0 | 0 | 0 |
-| 74 | =utils/utils-async.el= | utils | 0 | 0 | 0 |
-| 75 | =utils/utils-buffers.el= | utils | 1 | 0 | 0 |
-| 76 | =utils/utils-edit.el= | utils | 0 | 0 | 0 |
-| 77 | =utils/utils-dired.el= | utils | 0 | 0 | 0 |
-| 78 | =utils/utils-functions.el= | utils | 0 | 0 | 0 |
-| 79 | =utils/utils-org-agenda.el= | utils | 2 | 3 | 0 |
-| 80 | =utils/utils-lint.el= | utils | 0 | 0 | 0 |
-| 81 | =utils/utils-diagnostics.el= | utils | 0 | 0 | 0 |
+ロード順・レイヤー・公開 defun 数・defcustom 数・フック数
 
-* 付録 B: 主要公開 API 早見表
+| # | モジュール | レイヤー | pub | cust | hook |
+|---|-----------|---------|-----|------|------|
+| 1 | =core-fixes= | core | 0 | 0 | 0 |
+| 2 | =core-policy= | core | 1 | 0 | 1 |
+| 3 | =core-session= | core | 5 | 3 | 0 |
+| 4 | =core-session-private= | core | 0 | 0 | 0 |
+| 5 | =core-gc= | core | 0 | 1 | 2 |
+| 6 | =core-persistence= | core | 1 | 0 | 1 |
+| 7 | =core-buffers= | core | 2 | 0 | 1 |
+| 8 | =core-runtime= | core | 0 | 1 | 1 |
+| 9 | =core-tools= | core | 7 | 0 | 0 |
+| 10 | =core-treesit= | core | 5 | 3 | 1 |
+| 11 | =core-history= | core | 0 | 0 | 1 |
+| 12 | =core-editing= | core | 0 | 0 | 0 |
+| 13 | =core-switches= | core | 0 | 2 | 1 |
+| 14 | =core-custom= | core | 2 | 0 | 0 |
+| 15 | =core-api= | core | 3 | 0 | 0 |
+| 16 | =core-native= | core | 0 | 0 | 0 |
+| 17 | =ui-font= | ui | 3 | 4 | 2 |
+| 18 | =ui-theme= | ui | 0 | 2 | 3 |
+| 19 | =ui-window= | ui | 2 | 0 | 0 |
+| 20 | =ui-utils= | ui | 0 | 0 | 0 |
+| 21 | =ui-health-modeline= | ui | 0 | 3 | 4 |
+| 22 | =ui-imenu= | ui | 0 | 0 | 0 |
+| 23 | =ui-leader= | ui | 1 | 3 | 0 |
+| 24 | =ui-hydra= | ui | 2 | 1 | 0 |
+| 25 | =ui-which-key= | ui | 0 | 2 | 1 |
+| 26 | =ui-keymap= | ui | 0 | 1 | 1 |
+| 27 | =ui-global-keys= | ui | 0 | 0 | 1 |
+| 28 | =auth-core= | auth | 1 | 1 | 1 |
+| 29 | =completion-core= | completion | 0 | 0 | 0 |
+| 30 | =completion-vertico= | completion | 0 | 0 | 1 |
+| 31 | =completion-consult= | completion | 0 | 0 | 0 |
+| 32 | =completion-embark= | completion | 0 | 0 | 0 |
+| 33 | =completion-corfu= | completion | 0 | 0 | 1 |
+| 34 | =completion-icons= | completion | 0 | 0 | 0 |
+| 35 | =completion-capf= | completion | 0 | 0 | 9 |
+| 36 | =completion-capf-org-src= | completion | 0 | 0 | 1 |
+| 37 | =completion-capf-org-src-lang= | completion | 0 | 0 | 1 |
+| 38 | =completion-corfu-org-src= | completion | 0 | 0 | 1 |
+| 39 | =completion-orderless-org-src= | completion | 0 | 0 | 1 |
+| 40 | =completion-lsp= | completion | 1 | 1 | 2 |
+| 41 | =orgx-core= | orgx | 1 | 0 | 1 |
+| 42 | =orgx-visual= | orgx | 0 | 0 | 2 |
+| 43 | =orgx-extensions= | orgx | 0 | 0 | 0 |
+| 44 | =orgx-fold= | orgx | 3 | 0 | 0 |
+| 45 | =orgx-export= | orgx | 0 | 0 | 0 |
+| 46 | =orgx-notes-markdown= | orgx | 6 | 2 | 1 |
+| 47 | =orgx-auto-tangle= | orgx | 0 | 0 | 2 |
+| 48 | =vcs-magit= | vcs | 0 | 0 | 0 |
+| 49 | =vcs-gutter= | vcs | 0 | 0 | 0 |
+| 50 | =vcs-forge= | vcs | 0 | 0 | 0 |
+| 51 | =dev-lsp-bridge= | dev | 3 | 0 | 0 |
+| 52 | =dev-ai= | dev | 0 | 0 | 0 |
+| 53 | =dev-term= | dev | 1 | 1 | 2 |
+| 54 | =dev-web-core= | dev | 0 | 0 | 0 |
+| 55 | =dev-build= | dev | 1 | 0 | 0 |
+| 56 | =dev-format= | dev | 0 | 0 | 0 |
+| 57 | =dev-infra-modes= | dev | 0 | 0 | 0 |
+| 58 | =dev-docker= | dev | 0 | 0 | 0 |
+| 59 | =dev-music= | dev | 0 | 1 | 1 |
+| 60 | =dev-sql= | dev | 0 | 0 | 0 |
+| 61 | =dev-rest= | dev | 0 | 0 | 0 |
+| 62 | =dev-navigation= | dev | 4 | 0 | 3 |
+| 63 | =dev-tools= | dev | 3 | 0 | 0 |
+| 64 | =utils-path= | utils | 3 | 0 | 0 |
+| 65 | =utils-async= | utils | 2 | 0 | 0 |
+| 66 | =utils-buffers= | utils | 1 | 0 | 0 |
+| 67 | =utils-edit= | utils | 3 | 0 | 0 |
+| 68 | =utils-dired= | utils | 1 | 0 | 0 |
+| 69 | =utils-functions= | utils | 4 | 0 | 0 |
+| 70 | =utils-org-agenda= | utils | 2 | 3 | 0 |
+| 71 | =utils-lint= | utils | 0 | 0 | 0 |
+| 72 | =utils-diagnostics= | utils | 3 | 0 | 0 |
+| | *合計 72 モジュール* | | *93* | *57* | *59* |
 
-** コア API (常に利用可能)
+* 付録 B: 命名規則リファレンス
+:PROPERTIES:
+:CUSTOM_ID: appendix-b
+:END:
 
-| 関数/変数 | モジュール | 用途 |
-|-----------|---------|------|
-| ~my/ensure-directory-exists (dir)~ | early-init | ディレクトリ再帰作成 |
-| ~my/safe-load-file (file)~ | init (=bootstrap--safe-load-file= の alias) | ファイル安全ロード |
-| ~core-api-session-register-job~ | core-api | バックグラウンドジョブ登録 |
-| ~core-api-session-unregister-job~ | core-api | バックグラウンドジョブ解除 |
-| ~core-tools-emacs>= (major minor)~ | core-tools | バージョン述語 |
-| ~core-tools-feature-present-p (f)~ | core-tools | フィーチャー存在確認 |
-| ~core-tools-require-if-present (f)~ | core-tools | 存在時のみ require |
-| ~core-tools-call-if-present (fn)~ | core-tools | 存在時のみ呼び出し |
-| =my:d= | early-init | 設定ルートディレクトリ |
-| =my:d:var= | early-init | ランタイム状態ディレクトリ |
-| =my:d:org= | orgx-core | Org ルートディレクトリ |
+| パターン | 例 | 用途 |
+|----------|-----|------|
+| =my/<n>= | =my/safe-load-file= | 公開インタラクティブコマンド・クロスモジュール公開関数 |
+| =<module>-<n>= | =core-tools-emacs>=, =ui-font-apply= | モジュール公開 API（モジュールプレフィックス付き） |
+| =<module>--<n>= | =core-custom--ensure-file=, =modules--require-safe= | モジュール内部ヘルパー（double dash = private）。=my/<topic>--= 形式は禁止。 |
+| =my:d:*= | =my:d:var=, =my:d:org=, =my:d:treesit= | ディレクトリ / パス変数 |
+| =<group>-<n>= | =core-session-enable-p=, =ui-font-size= | defcustom 変数（defgroup 名と一致） |
+| =bootstrap--*= | =bootstrap--safe-load-file= | init.el 内部ヘルパー（modules.el ロード前） |
+| =<module>-enable-p= | =core-gc-enable-p=, =dev-term-enable-p= | 機能の有効/無効フラグ defcustom |
+| =<module>-*-p= | =core-treesit-enable-p=, =ui-hydra-enable-p= | ブール述語 defcustom |
+
+* 付録 C: 主要公開 API 早見表
+:PROPERTIES:
+:CUSTOM_ID: appendix-c
+:END:
+
+** コア API（常に利用可能）
+
+| 関数 | 所在モジュール | 用途 |
+|------|--------------|------|
+| =my/ensure-directory-exists= | early-init.el | ディレクトリ作成（起動時から利用可） |
+| =core-api-session-register-job= | core-api | セッションジョブ登録ファサード |
+| =core-api-session-unregister-job= | core-api | セッションジョブ登録解除ファサード |
+| =core-api-session-run-job= | core-api | セッションジョブ即時実行ファサード |
+| =core-treesit-install-all= | core-treesit | 全 Tree-sitter 文法インストール |
+| =core-treesit-report= | core-treesit | Tree-sitter 状態レポート |
+| =my/custom-open= | core-custom | custom-file を編集用に開く |
 
 ** LSP 統一 API
 
-| 関数 | モジュール | 用途 |
-|------|---------|------|
-| ~dev-lsp-code-actions ()~ | dev-lsp-bridge | eglot/lsp-mode を抽象化したコードアクション |
-| ~dev-lsp-rename ()~ | dev-lsp-bridge | 統一リネーム |
-| ~dev-lsp-format-buffer ()~ | dev-lsp-bridge | 統一バッファフォーマット |
-| ~my/lsp-enable-eglot ()~ | dev-lsp-eglot | eglot バックエンド有効化 [autoload] |
-| ~my/lsp-enable-lspmode ()~ | dev-lsp-mode | lsp-mode バックエンド有効化 [autoload] |
+| 関数 | 用途 |
+|------|------|
+| =dev-lsp-code-actions= | eglot / lsp-mode 両対応コードアクション |
+| =dev-lsp-rename= | eglot / lsp-mode 両対応シンボルリネーム |
+| =dev-lsp-format-buffer= | eglot / lsp-mode 両対応バッファフォーマット |
 
 ** Native Compilation 診断 API
 
 | 関数 | 用途 |
 |------|------|
-| ~core-native-show-warnings ()~ | 収集した警告を *native-comp-warnings* に表示 [autoload] |
-| ~core-native-clear-warnings ()~ | 警告リストをクリア [autoload] |
-| ~core-native-warnings-count ()~ | 警告件数を返す [autoload] |
-| ~core-native-save-warnings (path)~ | 警告をファイルに保存 [autoload] |
-| ~core-native-set-mode (mode)~ | silent / collect / verbose を対話的に切り替え [autoload] |
+| =core-native-clear-warnings= | 収集済み警告をクリア |
+| =core-native-warnings-count= | 警告数を返す |
+| =core-native-show-warnings= | 警告を専用バッファに表示 |
+| =core-native-save-warnings= | 警告をファイルに保存 |
+| =core-native-set-mode= | レポートモード切替（silent/collect/verbose） |
 
 ** Org Agenda キャッシュ API
 
 | 関数 | 用途 |
 |------|------|
-| ~utils-org-agenda-build (&optional force)~ | agenda ファイルリストを返す（キャッシュ付き） |
-| ~utils-org-agenda-invalidate-cache ()~ | キャッシュを強制無効化 |
+| =utils-org-agenda-build= | Org ファイルリストをスキャン＆キャッシュして返す |
+| =utils-org-agenda-invalidate-cache= | キャッシュを強制無効化 |
+
+** Org フォールド API
+
+| 関数 | 用途 |
+|------|------|
+| =my/org-fold-subtree= | 現在位置のサブツリーを折り畳む |
+| =my/org-unfold-subtree= | 現在位置のサブツリーを展開する |
+| =my/org-toggle-fold= | 折り畳み状態をトグル |
+
+** 診断・デバッグ API
+
+| 関数 | 用途 |
+|------|------|
+| =my/print-load-path= | =load-path= を専用バッファに表示 |
+| =my/print-feature-list= | 読み込み済みフィーチャ一覧を表示 |
+| =my/check-missing-executables= | 外部ツール（rg, git, make 等）の不在チェック |
+| =my/toggle-debug-on-error= | =debug-on-error= のトグル |
+| =my/print-build-info= | Emacs ビルド情報を Markdown テーブルで表示 |
+
