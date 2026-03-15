@@ -747,8 +747,14 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                      my:d:eln-cache my:d:treesit my:d:url my:d:eww))
     (core--ensure-directory dir))
 
-  (setq treesit-install-dir my:d:treesit)
-  (setq treesit-extra-load-path (list my:d:treesit))
+  ;; [Fix G] treesit-install-dir and treesit-extra-load-path are defcustom
+  ;; variables in Emacs 29+.  Use setopt (not setq) to respect their setter
+  ;; functions and type validation.  boundp guards preserve forward
+  ;; compatibility on Emacs builds without tree-sitter support.
+  (when (boundp 'treesit-install-dir)
+    (setopt treesit-install-dir my:d:treesit))
+  (when (boundp 'treesit-extra-load-path)
+    (setopt treesit-extra-load-path (list my:d:treesit)))
 
   ;; ---------------------------------------------------------------------------
   ;; 4) straight.el base
@@ -1683,20 +1689,24 @@ Its role is orchestration only.
         (add-hook 'comp-async-report-warnings-errors-hook #'core-native--collect))))
 
   (defun core-native--apply-report-setting (mode)
+    ;; [Fix H] native-comp-async-report-warnings-errors is a defcustom.
+    ;; Use setopt (not setq) to respect its setter and type validation.
+    ;; early-init.el already uses setopt for the same variable; this
+    ;; function must remain consistent.
     (pcase mode
       ('silent
        (when (boundp 'native-comp-async-report-warnings-errors)
-         (setq native-comp-async-report-warnings-errors 'silent)))
+         (setopt native-comp-async-report-warnings-errors 'silent)))
       ('collect
        (when (boundp 'native-comp-async-report-warnings-errors)
-         (setq native-comp-async-report-warnings-errors t))
+         (setopt native-comp-async-report-warnings-errors t))
        (core-native--install-collector))
       ('verbose
        (when (boundp 'native-comp-async-report-warnings-errors)
-         (setq native-comp-async-report-warnings-errors t)))
+         (setopt native-comp-async-report-warnings-errors t)))
       (_
        (when (boundp 'native-comp-async-report-warnings-errors)
-         (setq native-comp-async-report-warnings-errors t))
+         (setopt native-comp-async-report-warnings-errors t))
        (core-native--install-collector))))
 
   (defun core-native--save-to-file (path)
@@ -2527,7 +2537,8 @@ Its role is orchestration only.
   ;; - enables `auto-save-visited-mode` for continuous auto-saving
   ;; - sets up paredit (disabling electric-pair to avoid conflict) and puni
   ;; - configures show-paren, undo-fu/vundo, ace-window, visual-line-mode
-  ;; - extends Dired with dired-filter and dired-subtree
+  ;; - replaces dired with dirvish (dirvish-override-dired-mode)
+  ;; - configures dirvish attributes (subtree-state, vc-state, git-msg, file-size)
   ;; - installs expand-region for semantic text selection
   ;;; Code:
 
@@ -3535,8 +3546,8 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;
   ;; Responsibilities:
   ;;
-  ;; - load the Nano theme
-  ;; - configure Nano faces
+  ;; - load the Nano theme (when available)
+  ;; - configure Nano faces via ui-nano-palette (when loaded)
   ;; - apply palette overrides
   ;; - configure pairing highlight faces
   ;; - enable spacious padding for graphical frames
@@ -3548,12 +3559,33 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; - theme reload safety
   ;; - Emacs 30 / 31 forward compatibility
   ;;
+  ;; ui-nano-palette dependency:
+  ;;
+  ;;   ui-theme loads safely regardless of whether ui-nano-palette is present.
+  ;;   `ui-theme--apply-faces' calls `my/nano-apply-faces' only when fboundp,
+  ;;   so my:use-ui='doom or 'none never forces the nano palette to load.
+  ;;   When ui-nano-palette is loaded (nano bundle active), faces are
+  ;;   re-applied automatically via `with-eval-after-load'.
+  ;;
   ;;; Code:
 
   (eval-when-compile
     (require 'leaf))
 
-  (require 'ui-nano-palette)
+  ;; [Fix E] Changed hard (require 'ui-nano-palette) to optional form.
+  ;; Rationale: ui-theme is loaded unconditionally (modules.el ui section)
+  ;; but ui-nano-palette is only meaningful when my:use-ui is 'nano.
+  ;; A hard require forced the nano palette to initialize even under
+  ;; my:use-ui='doom or 'none, violating the UI-replaceable design guarantee.
+  ;; ui-theme--apply-faces already guards the call with fboundp, so dropping
+  ;; the hard require has no functional consequence for the nano path.
+  (require 'ui-nano-palette nil t)
+
+  ;; When the nano palette loads later (core-switches fires after-init-hook),
+  ;; re-apply faces so the theme picks up the real palette colours.
+  (with-eval-after-load 'ui-nano-palette
+    (when (fboundp 'ui-theme--apply-faces)
+      (ui-theme--apply-faces)))
 
   (defgroup ui-theme nil
     "UI theme configuration."
@@ -7804,8 +7836,16 @@ The key files are:
   ;;
   ;;; Code:
 
-  (require 'org)
-  (require 'subr-x)
+  ;; [Fix I] Removed runtime (require 'org).
+  ;; This file is loaded via (with-eval-after-load 'org ...) in personal/user.el,
+  ;; so org is guaranteed to be loaded before this code runs.  A redundant
+  ;; top-level require defeats the deferred-load strategy and adds startup cost.
+  ;;
+  ;; [Fix I] Moved (require 'subr-x) to eval-when-compile.
+  ;; subr-x macros (when-let*, string-trim, etc.) are needed at compile time
+  ;; for macro expansion but not at runtime — Emacs inlines them.
+  (eval-when-compile
+    (require 'subr-x))
 
   (defgroup personal-messages nil
     "macOS Messages.app archiver."
@@ -8420,3 +8460,72 @@ Four residual design-principle violations resolved.
   =bootstrap--= prefix correctly communicates that this is an infrastructure
   helper used only during the bootstrap phase.  The public alias =my/safe-load-file=
   is unchanged, so no call sites in other layers are affected.
+
+** 2026-03 (第2回評価修正)
+
+*** Fix E: ui-theme.el — ui-nano-palette の hard require を optional に変更
+
+*🟠 Medium — UI-replaceable 保証の違反*
+
+- *[Fix E] ui/ui-theme.el*: =(require 'ui-nano-palette)= を
+  =(require 'ui-nano-palette nil t)= に変更。
+  =ui-theme= は =modules.el= の ui セクションに常時含まれるが、
+  =ui-nano-palette= は =my:use-ui='nano= 選択時のみ意味を持つ。
+  ハード require は =my:use-ui='doom= や ='none= の場合でも
+  nano パレットを強制ロードし、UI-replaceable 設計を破壊していた。
+
+  =ui-theme--apply-faces= はすでに =(fboundp 'my/nano-apply-faces)= で
+  ガードされているため、optional require への変更に機能的な後退はない。
+
+  =(with-eval-after-load 'ui-nano-palette ...)= を追加し、
+  nano バンドルが後から有効化された場合にフェイスを自動再適用する。
+
+  Commentary を更新し =ui-nano-palette= 依存関係のポリシーを明文化した。
+
+*** Fix F: core-editing.el — Commentary の旧 dired-filter/dired-subtree 記述を削除
+
+*🟠 Medium — Literate Programming「唯一の真実」原則の違反*
+
+- *[Fix F] core/core-editing.el*: Commentary の
+  =- extends Dired with dired-filter and dired-subtree= を
+  =- replaces dired with dirvish (dirvish-override-dired-mode)= および
+  =- configures dirvish attributes (subtree-state, vc-state, git-msg, file-size)=
+  に置き換えた。
+  =dired-filter → dirvish= 移行は 2026-03 Refactoring で実施済みだったが、
+  Commentary が古い実装を参照したままだった。
+  README.org は「唯一の真実」であるため、コードと一致しない Commentary は
+  設計原則の直接違反となる。
+
+*** Fix G: early-init.el — treesit-* 変数を setopt に統一
+
+*🟡 Minor — setq/setopt 一貫性*
+
+- *[Fix G] early-init.el*: =treesit-install-dir= と =treesit-extra-load-path= の
+  設定を =setq= から =setopt= に変更。両変数は Emacs 29+ の =defcustom= であり、
+  コーディングルール「=defcustom= 変数には =setopt= を使う」に従う。
+  =boundp= ガードにより tree-sitter サポートなしのビルドでも安全。
+
+*** Fix H: core-native.el — native-comp-async-report-warnings-errors を setopt に統一
+
+*🟡 Minor — setq/setopt 一貫性*
+
+- *[Fix H] core/core-native.el*: =core-native--apply-report-setting= 内の
+  =native-comp-async-report-warnings-errors= への代入を
+  =setq= から =setopt= に変更。
+  =early-init.el= では同変数を =setopt= で設定しており、
+  内部関数が =setq= で上書きするのは一貫性を欠いていた。
+  =defcustom= のセッター関数・型検証を経由させる。
+
+*** Fix I: personal-messages.el — 不要な runtime require を除去
+
+*🟡 Minor — 起動コストと設計意図*
+
+- *[Fix I] personal/personal-messages.el*: トップレベルの
+  =(require 'org)= を削除。このファイルは =personal/user.el= の
+  =(with-eval-after-load 'org ...)= 経由でロードされるため、
+  ロード時点で =org= はすでに存在が保証される。
+  冗長な =require= は遅延ロード戦略の意図を損なう。
+
+  =(require 'subr-x)= を =(eval-when-compile (require 'subr-x))= に移動。
+  =subr-x= のマクロ（=when-let*=, =string-trim= 等）はバイトコンパイル時に
+  展開されるため、ランタイム require は不要。
