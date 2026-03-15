@@ -1772,7 +1772,10 @@ Its role is orchestration only.
                                     '("silent" "collect" "verbose")
                                     nil t nil nil
                                     (symbol-name (core-native--mode-effective))))))
-    (setq core-native-comp-report-mode mode)
+    ;; [Fix R] core-native-comp-report-mode is a defcustom; use setopt
+    ;; so its setter and type validation are respected, consistent with
+    ;; the principle applied throughout this configuration.
+    (setopt core-native-comp-report-mode mode)
     (core-native--apply-report-setting (core-native--mode-effective))
     (message "[core-native] mode=%s (effective=%s)"
              core-native-comp-report-mode (core-native--mode-effective)))
@@ -2612,12 +2615,15 @@ Its role is orchestration only.
     (dirvish-peek-mode 1)
     ;; ls switch configuration — consolidated from the former leaf dired block.
     ;; macOS ships BSD ls; use GNU coreutils gls when available.
+    ;; [Fix P] insert-directory-program, dired-use-ls-dired, and
+    ;; dired-listing-switches are all defcustom (dired.el).  Use setopt.
     (if (and (eq system-type 'darwin) (executable-find "gls"))
-        (setq insert-directory-program "gls"
-              dired-use-ls-dired t
-              dired-listing-switches "-aBhl --group-directories-first")
-      (setq dired-use-ls-dired nil
-            dired-listing-switches "-alh")))
+        (progn
+          (setopt insert-directory-program "gls")
+          (setopt dired-use-ls-dired t)
+          (setopt dired-listing-switches "-aBhl --group-directories-first"))
+      (setopt dired-use-ls-dired nil)
+      (setopt dired-listing-switches "-alh")))
 
   (leaf expand-region :straight t :after treesit)
   (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
@@ -2628,12 +2634,14 @@ Its role is orchestration only.
              (auto-revert-verbose . nil))
     :global-minor-mode global-auto-revert-mode)
 
+  ;; [Fix P] transient-history-file, transient-levels-file, and
+  ;; transient-values-file are defcustom (transient.el).  Use setopt.
   (leaf transient
     :straight t
     :config
-    (setq transient-history-file (concat no-littering-var-directory "transient/history.el")
-          transient-levels-file  (concat no-littering-var-directory "transient/levels.el")
-          transient-values-file  (concat no-littering-var-directory "transient/values.el"))
+    (setopt transient-history-file (concat no-littering-var-directory "transient/history.el")
+            transient-levels-file  (concat no-littering-var-directory "transient/levels.el")
+            transient-values-file  (concat no-littering-var-directory "transient/values.el"))
     (my/ensure-directory-exists (concat no-littering-var-directory "transient/")))
 
   (provide 'core-editing)
@@ -4950,7 +4958,8 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     (unless completion-corfu--initialized
       (setq completion-corfu--initialized t)
       (require 'corfu)
-      (setq tab-always-indent 'complete)
+      ;; [Fix Q] tab-always-indent is a defcustom (indent.el).
+      ;; Moved to leaf corfu :custom below; removed from here.
       (global-corfu-mode 1)
       (require 'kind-icon)
       (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)
@@ -4964,7 +4973,11 @@ Runs via `after-init-hook' so all modules are loaded before activation."
 
   (add-hook 'window-setup-hook #'completion-corfu--init)
 
-  (leaf corfu :straight t :custom ((corfu-auto . t) (corfu-cycle . t)))
+  (leaf corfu :straight t
+    :custom ((corfu-auto        . t)
+             (corfu-cycle       . t)
+             ;; [Fix Q] tab-always-indent is a defcustom; belongs in :custom.
+             (tab-always-indent . 'complete)))
   (leaf kind-icon :straight t :after corfu :require t
     :custom ((kind-icon-default-face . 'corfu-default)))
   (leaf cape :straight t :after corfu)
@@ -5567,7 +5580,10 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     :straight t
     :custom ((org-roam-directory . my:d:org-roam))
     :config
-    (setq org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
+    ;; [Fix S] org-roam-db-location is a defcustom; path is runtime-evaluated
+    ;; from my:d:org-roam so it cannot go in :custom directly.  Use setopt
+    ;; inside :config to keep the setter/type-check path.
+    (setopt org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
 
     (defun orgx--org-roam-file-hash-guard (orig file)
       (condition-case err
@@ -6709,33 +6725,33 @@ Runs via `after-init-hook' so all modules are loaded before activation."
         (kbd "E")
         #'emms-play-dired)))
 
+  ;; [Fix O] emms-directory must be set BEFORE emms-all is called.
+  ;; emms-all reads emms-directory to derive history/cache/playlist paths;
+  ;; the previous code set it after emms-all, so all derived paths silently
+  ;; fell back to the EMMS default (~/.emacs.d/emms/).
+  ;;
+  ;; Fix: emms-directory (defcustom) is declared in :pre-setq so it is set
+  ;; before the package loads.  Derived paths (emms-history-file,
+  ;; emms-cache-file) depend on emms-directory at runtime, so they are
+  ;; computed and applied via setopt inside :config after emms-directory
+  ;; is known.  All remaining vars are defcustom and moved to :custom.
   (leaf emms
     :straight t
     :if dev-music-enable-p
+    :pre-setq
+    `((emms-directory . ,(expand-file-name "emms/" my:d:var)))
+    :custom
+    ((emms-source-file-default-directory . "~/Music/")
+     (emms-playlist-buffer-name          . "*EMMS Playlist*")
+     (emms-info-functions                . '(emms-info-native))
+     (emms-player-list                   . '(emms-player-mpv emms-player-mplayer)))
     :config
     (require 'emms-setup)
     (emms-all)
     (emms-default-players)
-
-    ;; Store EMMS data under my:d:var.
-    ;; Cache could technically live under my:d:cache,
-    ;; but history is persistent user data, so my:d:var
-    ;; is semantically more appropriate.
-    (setq emms-directory
-          (expand-file-name "emms/" my:d:var))
-
-    ;; Keep the default EMMS structure by deriving
-    ;; these paths from `emms-directory`.
-    (setq emms-history-file
-          (expand-file-name "history" emms-directory))
-    (setq emms-cache-file
-          (expand-file-name "cache" emms-directory))
-
-    (setq emms-source-file-default-directory "~/Music/"
-          emms-playlist-buffer-name "*EMMS Playlist*"
-          emms-info-functions '(emms-info-native)
-          emms-player-list '(emms-player-mpv emms-player-mplayer))
-
+    ;; Derive history/cache paths from emms-directory after emms-all has run.
+    (setopt emms-history-file (expand-file-name "history" emms-directory))
+    (setopt emms-cache-file   (expand-file-name "cache"   emms-directory))
     (my/ensure-directory-exists emms-directory)
     (emms-mode-line-mode 1)
     (add-hook 'dired-mode-hook #'dev-music--setup-dired))
@@ -8641,3 +8657,74 @@ Four residual design-principle violations resolved.
   introduced in the second evaluation pass was inconsistent with that convention.
   Section heading renamed to =2026-03 (second evaluation pass)= to match the
   pattern established by existing entries.
+
+** 2026-03 (fourth evaluation pass)
+
+*** Fix O: dev-music.el — emms-directory set after emms-all; logic bug
+
+*🟠 Medium — silent path misconfiguration*
+
+- *[Fix O] dev/dev-music.el*: =emms-directory= was set via =setq= after
+  =emms-all= was called.  =emms-all= internally reads =emms-directory= to derive
+  =emms-history-file=, =emms-cache-file=, and playlist paths; setting the base
+  directory after the fact left those derived paths pointing at the EMMS default
+  (=~/.emacs.d/emms/=) rather than the intended =my:d:var/emms/= location.
+
+  Fix restructures the =leaf emms= declaration:
+  - =emms-directory= (=defcustom=) is now set via =:pre-setq= so it is applied
+    before the package loads and before =emms-all= runs.
+  - =emms-source-file-default-directory=, =emms-playlist-buffer-name=,
+    =emms-info-functions=, and =emms-player-list= (all =defcustom=) are moved to
+    =:custom=, consistent with the project-wide =setopt=-for-defcustom rule.
+  - =emms-history-file= and =emms-cache-file= are derived from =emms-directory=
+    at runtime and therefore remain in =:config= as =setopt= calls executed after
+    =emms-all=.
+
+*** Fix P: core-editing.el — dired/transient defcustom vars switched to setopt
+
+*🟡 Minor — setq/setopt consistency (five variables)*
+
+- *[Fix P] core/core-editing.el (dirvish :config)*: Changed the conditional
+  =setq= assignments for =insert-directory-program=, =dired-use-ls-dired=, and
+  =dired-listing-switches= to =setopt=.  All three are =defcustom= variables
+  in =dired.el=.  A conditional branch inside =:config= is the correct location
+  because the value depends on runtime availability of =gls=; only the
+  assignment form changes.
+
+- *[Fix P] core/core-editing.el (transient :config)*: Changed =transient-history-file=,
+  =transient-levels-file=, and =transient-values-file= from =setq= to =setopt=.
+  All three are =defcustom= variables in =transient.el=.  Paths are
+  runtime-evaluated from =no-littering-var-directory= so they remain in =:config=
+  rather than =:custom= or =:pre-setq=.
+
+*** Fix Q: completion-corfu.el — tab-always-indent moved to leaf corfu :custom
+
+*🟡 Minor — setq/setopt consistency, ownership clarity*
+
+- *[Fix Q] completion/completion-corfu.el*: Removed =setq tab-always-indent 'complete=
+  from inside the =completion-corfu--init= one-shot guard function.
+  =tab-always-indent= is a =defcustom= in =indent.el=.  Burying it inside an
+  init guard made it invisible to anyone reading the =leaf corfu= declaration
+  and bypassed the =defcustom= setter.  Moved to =leaf corfu :custom= as
+  =(tab-always-indent . 'complete)= alongside =corfu-auto= and =corfu-cycle=.
+
+*** Fix R: core-native.el — core-native-set-mode switches own defcustom via setopt
+
+*🟡 Minor — setq/setopt consistency*
+
+- *[Fix R] core/core-native.el*: Changed =setq core-native-comp-report-mode mode=
+  inside =core-native-set-mode= to =setopt=.  =core-native-comp-report-mode= is
+  a =defcustom= defined in this same module.  An interactive command that mutates
+  its own =defcustom= via =setq= bypasses the setter function and type validation,
+  inconsistent with the project-wide rule established in Fixes G, H, K, M, P.
+
+*** Fix S: orgx-extensions.el — org-roam-db-location switched to setopt
+
+*🟡 Minor — setq/setopt consistency*
+
+- *[Fix S] orgx/orgx-extensions.el*: Changed =setq org-roam-db-location= to
+  =setopt= inside =leaf org-roam :config=.  =org-roam-db-location= is a
+  =defcustom= in =org-roam.el=.  The path is runtime-evaluated from
+  =my:d:org-roam= and therefore cannot be placed in =:custom= directly; =setopt=
+  inside =:config= is the correct pattern for runtime-derived =defcustom= paths,
+  consistent with how =dirvish-cache-dir= and =emms-history-file= are handled.
