@@ -1401,11 +1401,11 @@ Its role is orchestration only.
       )
     "Default set of modules to load in order.")
 
-  (defun my/modules--should-load-p (feature)
+  (defun modules--should-load-p (feature)
     "Return non-nil if FEATURE should be loaded."
     (not (memq feature my:modules-skip)))
 
-  (defun my/modules--require-safe (feature)
+  (defun modules--require-safe (feature)
     "Require FEATURE with error trapping."
     (condition-case err
         (progn (require feature) t)
@@ -1414,11 +1414,11 @@ Its role is orchestration only.
                 feature (error-message-string err))
        nil)))
 
-  ;; [R6 FIX] Renamed my:modules--format-seconds → my/modules--format-seconds.
+  ;; [R6 FIX] Renamed my:modules--format-seconds → modules--format-seconds.
   ;; Rationale: `my:` prefix is reserved for directory/path variables (my:d,
   ;; my:d:var, etc.).  All functions use `my/` prefix.  Consistent naming
   ;; eliminates confusion when grepping for either convention.
-  (defun my/modules--format-seconds (sec)
+  (defun modules--format-seconds (sec)
     "Format SEC in a compact human-readable form."
     (cond
      ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
@@ -1428,26 +1428,26 @@ Its role is orchestration only.
   (defun my/modules-load ()
     "Load all modules defined by `my:modules`, respecting options."
     (let* ((all (append my:modules my:modules-extra))
-           (final (seq-remove (lambda (m) (not (my/modules--should-load-p m))) all))
+           (final (seq-remove (lambda (m) (not (modules--should-load-p m))) all))
            (skipped (seq-remove (lambda (m) (memq m final)) all))
            (ok 0) (ng 0)
            (failed '())
            (t0 (and my:modules-verbose (current-time))))
       (dolist (mod final)
         (let ((m0 (and my:modules-verbose (current-time))))
-          (if (my/modules--require-safe mod)
+          (if (modules--require-safe mod)
               (setq ok (1+ ok))
             (setq ng (1+ ng))
             (push mod failed))
           (when my:modules-verbose
             (message "[modules] %-24s %s"
                      mod
-                     (my/modules--format-seconds
+                     (modules--format-seconds
                       (float-time (time-subtract (current-time) m0)))))))
       (when my:modules-verbose
         (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
                  ok (length skipped) ng
-                 (my/modules--format-seconds
+                 (modules--format-seconds
                   (float-time (time-subtract (current-time) t0))))
         (when skipped
           (message "[modules] skipped (%d): %s"
@@ -1732,18 +1732,21 @@ Its role is orchestration only.
 
   ;;;###autoload
   (defun core-native-clear-warnings ()
+    "Clear all collected native-comp warnings and reset the threshold flag."
     (interactive)
     (setq core-native--warnings nil core-native--warned-threshold nil)
     (message "[core-native] cleared"))
 
   ;;;###autoload
   (defun core-native-warnings-count ()
+    "Return and display the number of collected native-comp warnings."
     (interactive)
     (message "[core-native] warnings=%d" (length core-native--warnings))
     (length core-native--warnings))
 
   ;;;###autoload
   (defun core-native-show-warnings ()
+    "Display collected native-comp warnings in a *native-comp-warnings* buffer."
     (interactive)
     (if (null core-native--warnings)
         (message "[core-native] no native-comp warnings recorded")
@@ -1760,6 +1763,7 @@ Its role is orchestration only.
 
   ;;;###autoload
   (defun core-native-save-warnings (path)
+    "Save collected native-comp warnings to PATH."
     (interactive "FSave native-comp warnings to file: ")
     (core-native--save-to-file path)
     (message "[core-native] wrote %d warnings to %s"
@@ -1767,6 +1771,7 @@ Its role is orchestration only.
 
   ;;;###autoload
   (defun core-native-set-mode (mode)
+    "Set the native-comp reporting MODE (silent, collect, or verbose)."
     (interactive
      (list (intern (completing-read "core-native mode: "
                                     '("silent" "collect" "verbose")
@@ -2390,6 +2395,7 @@ Its role is orchestration only.
       (toml-mode        . toml-ts-mode)))
 
   (defun core-treesit-apply-remap ()
+    "Remap legacy major modes to their Tree-sitter `-ts-mode` variants."
     (interactive)
     (when (core-treesit--available-p)
       (dolist (pair core-treesit--mode-remap-alist)
@@ -2407,12 +2413,14 @@ Its role is orchestration only.
       (toml       . ("https://github.com/tree-sitter/tree-sitter-toml"))))
 
   (defun core-treesit-register-sources ()
+    "Register known Tree-sitter grammar source URLs in `treesit-language-source-alist'."
     (interactive)
     (when (boundp 'treesit-language-source-alist)
       (dolist (it core-treesit--language-sources)
         (add-to-list 'treesit-language-source-alist (cons (car it) (cdr it))))))
 
   (defun core-treesit-install-grammar (lang)
+    "Install the Tree-sitter grammar for LANG."
     (interactive
      (list (intern (completing-read "Install grammar: "
                                     (mapcar (lambda (x) (symbol-name (car x)))
@@ -2432,6 +2440,8 @@ Its role is orchestration only.
         (message "[treesit] install finished but not detected: %s" lang))))
 
   (defun core-treesit-install-all (&optional force)
+    "Install all grammars listed in `core-treesit-install-languages'.
+With prefix arg FORCE, reinstall grammars that are already present."
     (interactive "P")
     (unless (core-treesit--available-p)
       (user-error "Tree-sitter is not available or disabled"))
@@ -2441,6 +2451,7 @@ Its role is orchestration only.
         (ignore-errors (core-treesit-install-grammar lang)))))
 
   (defun core-treesit-report ()
+    "Report Tree-sitter availability and grammar status to the echo area."
     (interactive)
     (message "[treesit] available=%s, extra-load-path=%S"
              (if (core-treesit--available-p) "yes" "no")
@@ -2694,7 +2705,7 @@ Its role is orchestration only.
   (autoload 'my/lsp-enable-eglot   "dev/dev-lsp-eglot" "Enable Eglot LSP." t)
   (autoload 'my/lsp-enable-lspmode "dev/dev-lsp-mode"  "Enable lsp-mode LSP." t)
 
-  (defun my/sw--present-p (kind choice)
+  (defun core-switches--present-p (kind choice)
     (pcase kind
       ('ui
        (pcase choice
@@ -2716,7 +2727,7 @@ Its role is orchestration only.
          (_ nil)))
       (_ nil)))
 
-  (defun my/sw--enable-ui (choice)
+  (defun core-switches--enable-ui (choice)
     (pcase choice
       ('doom
        (cond ((fboundp 'my/ui-enable-doom) (my/ui-enable-doom) t)
@@ -2733,7 +2744,7 @@ Its role is orchestration only.
       ('none (message "[switches] UI bundle disabled.") t)
       (_ (message "[switches] Unknown UI choice: %s" choice) nil)))
 
-  (defun my/sw--enable-lsp (choice)
+  (defun core-switches--enable-lsp (choice)
     (pcase choice
       ('eglot
        (cond ((fboundp 'my/lsp-enable-eglot) (my/lsp-enable-eglot) t)
@@ -2759,29 +2770,29 @@ Its role is orchestration only.
   ;; Using a named function also satisfies the project-wide convention that
   ;; side-effecting activation is always done via named hook functions
   ;; (debuggable, removable, safe against duplicate registration).
-  (defun my/sw--activate ()
+  (defun core-switches--activate ()
     "Activate the configured UI bundle and LSP backend.
 Runs via `after-init-hook' so all modules are loaded before activation."
     (when (not (eq my:use-ui 'none))
-      (let ((present (my/sw--present-p 'ui my:use-ui)))
+      (let ((present (core-switches--present-p 'ui my:use-ui)))
         (cond
-         ((my/sw--enable-ui my:use-ui)
+         ((core-switches--enable-ui my:use-ui)
           (message "[switches] UI bundle: %s" my:use-ui))
          (present
           (message "[switches] UI seems present but could not enable: %s" my:use-ui))
          (t
           (message "[switches] UI bundle unavailable: %s" my:use-ui)))))
 
-    (let ((present (my/sw--present-p 'lsp my:use-lsp)))
+    (let ((present (core-switches--present-p 'lsp my:use-lsp)))
       (cond
-       ((my/sw--enable-lsp my:use-lsp)
+       ((core-switches--enable-lsp my:use-lsp)
         (message "[switches] LSP backend: %s" my:use-lsp))
        (present
         (message "[switches] LSP seems present but could not enable: %s" my:use-lsp))
        (t
         (message "[switches] LSP backend unavailable: %s" my:use-lsp)))))
 
-  (add-hook 'after-init-hook #'my/sw--activate)
+  (add-hook 'after-init-hook #'core-switches--activate)
 
   (provide 'core-switches)
   ;;; core/core-switches.el ends here
@@ -2821,7 +2832,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
                           (or (bound-and-true-p my:d:etc)
                               (expand-file-name ".etc" user-emacs-directory)))))
 
-  (defun my/custom--ensure-file ()
+  (defun core-custom--ensure-file ()
     (let* ((dir (file-name-directory my:f:custom)))
       (unless (file-directory-p dir)
         (condition-case err
@@ -2834,21 +2845,23 @@ Runs via `after-init-hook' so all modules are loaded before activation."
                   ";; This file is generated by Customize. Edit with care.\n\n")))))
 
   (setq custom-file my:f:custom)
-  (my/custom--ensure-file)
+  (core-custom--ensure-file)
 
   (when (file-readable-p custom-file)
     (ignore-errors (load custom-file nil 'nomessage)))
 
   ;;;###autoload
   (defun my/custom-open ()
+    "Open the custom-file for editing."
     (interactive)
-    (my/custom--ensure-file)
+    (core-custom--ensure-file)
     (find-file my:f:custom))
 
   ;;;###autoload
   (defun my/custom-dump-current ()
+    "Save a snapshot of key customisation variables to custom-file."
     (interactive)
-    (my/custom--ensure-file)
+    (core-custom--ensure-file)
     (dolist (pair
              `((inhibit-startup-screen        . ,inhibit-startup-screen)
                (frame-resize-pixelwise        . ,(bound-and-true-p frame-resize-pixelwise))
@@ -2903,14 +2916,21 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; Code:
 
   (defun core-api-session-register-job (name fn &rest plist)
+    "Register background job NAME with function FN via the session facade.
+PLIST may include :enabled and other metadata.
+No-op when `core-session-register-job' is not available."
     (when (fboundp 'core-session-register-job)
       (apply #'core-session-register-job name fn plist)))
 
   (defun core-api-session-unregister-job (name)
+    "Unregister background job NAME via the session facade.
+No-op when `core-session-unregister-job' is not available."
     (when (fboundp 'core-session-unregister-job)
       (core-session-unregister-job name)))
 
   (defun core-api-session-run-job (name)
+    "Run background job NAME immediately via the session facade.
+No-op when `core-session-run-job' is not available."
     (when (fboundp 'core-session-run-job)
       (core-session-run-job name)))
 
@@ -3226,7 +3246,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;;; Utilities
   ;;;; ---------------------------------------------------------------------------
 
-  (defun my/nano--safe-face (face &rest args)
+  (defun ui-nano--safe-face (face &rest args)
     "Safely apply FACE attributes."
     (when (facep face)
       (apply #'set-face-attribute face nil args)))
@@ -3239,7 +3259,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     "Apply Nano palette."
 
     ;; default
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'default
      :background nano-color-background
      :foreground nano-color-foreground)
@@ -3249,134 +3269,134 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     (set-cursor-color nano-color-cursor)
 
     ;; region
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'region
      :background nano-color-selection)
 
     ;; bold / italic
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'bold
      :foreground nano-color-strong
      :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'italic
      :slant 'italic)
 
     ;; font-lock
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'font-lock-comment-face
      :foreground nano-color-muted)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'font-lock-keyword-face
      :foreground nano-color-salient
      :weight 'semi-bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'font-lock-string-face
      :foreground nano-color-popout)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'font-lock-function-name-face
      :foreground nano-color-info)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'font-lock-type-face
      :foreground nano-color-salient)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'font-lock-variable-name-face
      :foreground nano-color-strong)
 
     ;; messages
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'error
      :foreground nano-color-critical
      :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'warning
      :foreground nano-color-warning
      :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'success
      :foreground nano-color-success)
 
     ;; link
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'link
      :foreground nano-color-salient
      :underline t)
 
     ;; minibuffer
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'minibuffer-prompt
      :foreground nano-color-salient
      :weight 'semi-bold)
 
     ;; mode-line
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'mode-line
      :background nano-color-subtle
      :foreground nano-color-strong
      :box `(:line-width 1 :color ,nano-color-subtle))
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'mode-line-inactive
      :background nano-color-background
      :foreground nano-color-muted
      :box `(:line-width 1 :color ,nano-color-background))
 
     ;; dired
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dired-directory
      :foreground nano-color-salient
      :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dired-symlink
      :foreground nano-color-info)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dired-ignored
      :foreground nano-color-muted)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dired-flagged
      :foreground nano-color-critical
      :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dired-marked
      :foreground nano-color-salient
      :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dired-header
      :foreground nano-color-strong
      :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dired-warning
      :foreground nano-color-warning
      :weight 'bold)
 
     ;; dirvish
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dirvish-hl-line
      :background nano-color-subtle)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dirvish-git-commit-message-face
      :foreground nano-color-muted)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dirvish-header-line-path-face
      :foreground nano-color-strong :weight 'bold)
 
-    (my/nano--safe-face
+    (ui-nano--safe-face
      'dirvish-subtree-state-face
      :foreground nano-color-salient))
 
@@ -3476,6 +3496,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
 
   ;;;###autoload
   (defun my/ui-enable-doom ()
+    "Activate the Doom modeline UI bundle."
     (interactive)
     (doom-modeline-mode 1)
     (message "[ui] Doom modeline enabled."))
@@ -3513,11 +3534,11 @@ Runs via `after-init-hook' so all modules are loaded before activation."
 
   (defvar ui--nano-modeline-initialized nil)
 
-  (defun my/ui--nano-available-p ()
+  (defun ui-nano--available-p ()
     (require 'nano-modeline nil 'noerror))
 
-  (defun my/ui--nano-setup ()
-    (when (and (not ui--nano-modeline-initialized) (my/ui--nano-available-p))
+  (defun ui-nano--setup ()
+    (when (and (not ui--nano-modeline-initialized) (ui-nano--available-p))
       (setopt nano-modeline-padding '(0.20 . 0.25))
       (add-hook 'prog-mode-hook #'nano-modeline-prog-mode)
       (add-hook 'text-mode-hook #'nano-modeline-text-mode)
@@ -3528,12 +3549,13 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
     :after nano-emacs
     :require nil
-    :init (add-hook 'after-init-hook #'my/ui--nano-setup))
+    :init (add-hook 'after-init-hook #'ui-nano--setup))
 
   ;;;###autoload
   (defun my/ui-enable-nano ()
+    "Activate the Nano modeline UI bundle."
     (interactive)
-    (my/ui--nano-setup))
+    (ui-nano--setup))
 
   (provide 'ui-nano-modeline)
   ;;; ui/ui-nano-modeline.el ends here
@@ -3759,11 +3781,13 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (defvar my:saved-window-config nil)
 
   (defun my/save-window-layout ()
+    "Save the current window configuration to `my:saved-window-config'."
     (interactive)
     (setq my:saved-window-config (window-state-get nil t))
     (message "Window configuration saved."))
 
   (defun my/restore-window-layout ()
+    "Restore the window configuration saved by `my/save-window-layout'."
     (interactive)
     (if my:saved-window-config
         (window-state-put my:saved-window-config)
@@ -5087,12 +5111,15 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (add-hook 'ielm-mode-hook #'completion--repl-capfs)
   (add-hook 'comint-mode-hook #'completion--repl-capfs)
 
-  (setq completion-category-overrides
-        '((file (styles basic partial-completion))
-          (symbol (styles orderless))
-          (keyword (styles orderless))
-          (tex (styles basic))
-          (dabbrev (styles basic))))
+  ;; [Fix T] completion-category-overrides is a defcustom (minibuffer.el).
+  ;; This file is the canonical owner (see Commentary); use setopt to
+  ;; respect the setter and type validation.
+  (setopt completion-category-overrides
+          '((file (styles basic partial-completion))
+            (symbol (styles orderless))
+            (keyword (styles orderless))
+            (tex (styles basic))
+            (dabbrev (styles basic))))
 
   (provide 'completion-capf)
   ;;; completion/completion-capf.el ends here
@@ -5647,12 +5674,15 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     (require 'org-fold)
 
     (defun my/org-fold-subtree ()
+      "Fold the subtree at point."
       (interactive) (org-fold-subtree t))
 
     (defun my/org-unfold-subtree ()
+      "Unfold (show) the subtree at point."
       (interactive) (org-show-subtree))
 
     (defun my/org-toggle-fold ()
+      "Toggle fold state of the subtree at point."
       (interactive)
       (save-excursion
         (org-back-to-heading t)
@@ -5782,7 +5812,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     (expand-file-name my:notes-directory-name my:d:org)
     "Root directory for Markdown notes.")
 
-  (defun my/notes--ensure-root ()
+  (defun orgx-notes--ensure-root ()
     "Ensure the notes directory and default notebooks exist."
     (unless (file-directory-p my:d:notes)
       (make-directory my:d:notes t))
@@ -5791,7 +5821,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
         (unless (file-directory-p dir)
           (make-directory dir t)))))
 
-  (defun my/notes--slugify (title)
+  (defun orgx-notes--slugify (title)
     "Convert TITLE into a filesystem-safe slug."
     (let* ((lower (downcase title))
            (repl (replace-regexp-in-string "[^[:alnum:]]+" "-" lower)))
@@ -5801,14 +5831,14 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     "Create a new Markdown note in NOTEBOOK with TITLE."
     (interactive
      (progn
-       (my/notes--ensure-root)
+       (orgx-notes--ensure-root)
        (let* ((choices (directory-files my:d:notes nil "^[^.]"))
               (notebook (completing-read "Notebook: " choices nil nil "inbox"))
               (title (read-string "Title: ")))
          (list notebook title))))
-    (my/notes--ensure-root)
+    (orgx-notes--ensure-root)
     (let* ((dir (expand-file-name notebook my:d:notes))
-           (slug (my/notes--slugify title))
+           (slug (orgx-notes--slugify title))
            (timestamp (format-time-string "%Y%m%d-%H%M%S"))
            (filename (format "%s-%s.md" timestamp slug))
            (path (expand-file-name filename dir)))
@@ -5827,7 +5857,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (defun my/notes-open-root ()
     "Open the notes root directory in Dired."
     (interactive)
-    (my/notes--ensure-root)
+    (orgx-notes--ensure-root)
     (dired my:d:notes))
 
   (leaf markdown-mode
@@ -5870,7 +5900,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     (defun my/notes-consult-ripgrep ()
       "Search Markdown notes using consult-ripgrep."
       (interactive)
-      (my/notes--ensure-root)
+      (orgx-notes--ensure-root)
       (let ((default-directory my:d:notes))
         (consult-ripgrep)))
     :config
@@ -5912,7 +5942,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; - targets only files whose name matches `my/orgx-auto-tangle-target-file`
   ;;   ("README.org")
   ;; - uses a buffer-local in-progress flag to prevent recursive save loops
-  ;; - registers `my/orgx-auto-tangle--maybe` in `after-save-hook` locally
+  ;; - registers `orgx-auto-tangle--maybe` in `after-save-hook` locally
   ;;   via the named hook function `orgx-auto-tangle--install-hook`
   ;;; Code:
 
@@ -5920,18 +5950,18 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (require 'ob-tangle)
 
   (defconst my/orgx-auto-tangle-target-file "README.org")
-  (defvar-local my/orgx-auto-tangle--in-progress nil)
+  (defvar-local orgx-auto-tangle--in-progress nil)
 
-  (defun my/orgx-auto-tangle--eligible-p ()
+  (defun orgx-auto-tangle--eligible-p ()
     (and (derived-mode-p 'org-mode)
          buffer-file-name
          (string= (file-name-nondirectory buffer-file-name)
                   my/orgx-auto-tangle-target-file)))
 
-  (defun my/orgx-auto-tangle--maybe ()
-    (when (and (my/orgx-auto-tangle--eligible-p)
-               (not my/orgx-auto-tangle--in-progress))
-      (let ((my/orgx-auto-tangle--in-progress t)
+  (defun orgx-auto-tangle--maybe ()
+    (when (and (orgx-auto-tangle--eligible-p)
+               (not orgx-auto-tangle--in-progress))
+      (let ((orgx-auto-tangle--in-progress t)
             (org-confirm-babel-evaluate nil)
             (inhibit-modification-hooks t))
         (condition-case err
@@ -5945,7 +5975,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; safe against duplicate registration across eval-buffer calls.
   (defun orgx-auto-tangle--install-hook ()
     "Install the auto-tangle after-save hook buffer-locally."
-    (add-hook 'after-save-hook #'my/orgx-auto-tangle--maybe nil 'local))
+    (add-hook 'after-save-hook #'orgx-auto-tangle--maybe nil 'local))
 
   (add-hook 'org-mode-hook #'orgx-auto-tangle--install-hook)
 
@@ -6035,18 +6065,21 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; Code:
 
   (defun dev-lsp-code-actions ()
+    "Run code actions at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
     (cond ((fboundp 'eglot-code-actions) (call-interactively #'eglot-code-actions))
           ((fboundp 'lsp-execute-code-action) (call-interactively #'lsp-execute-code-action))
           (t (user-error "No LSP backend available"))))
 
   (defun dev-lsp-rename ()
+    "Rename symbol at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
     (cond ((fboundp 'eglot-rename) (call-interactively #'eglot-rename))
           ((fboundp 'lsp-rename) (call-interactively #'lsp-rename))
           (t (user-error "No LSP backend available"))))
 
   (defun dev-lsp-format-buffer ()
+    "Format the current buffer via the active LSP backend or `indent-region' fallback."
     (interactive)
     (cond ((fboundp 'eglot-format-buffer) (call-interactively #'eglot-format-buffer))
           ((fboundp 'lsp-format-buffer) (call-interactively #'lsp-format-buffer))
@@ -6079,13 +6112,14 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; This file:
   ;; - defines `my/eglot-guessable-p` to detect whether eglot can find a
   ;;   server for the current buffer before calling `eglot-ensure`
-  ;; - hooks `my/lsp-eglot--maybe-ensure` into `prog-mode-hook`
+  ;; - hooks `dev-lsp-eglot--maybe-ensure` into `prog-mode-hook`
   ;; - provides `my/lsp-enable-eglot` as the entry point for core-switches
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
   (defun my/eglot-guessable-p ()
+    "Return non-nil if Eglot can guess a server for the current buffer."
     (cond ((fboundp 'eglot--guess-contact) (ignore-errors (eglot--guess-contact)))
           ((fboundp 'eglot-guess-contact) (ignore-errors (eglot-guess-contact)))
           (t nil)))
@@ -6094,17 +6128,18 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     :straight t
     :commands (eglot eglot-ensure)
     :custom ((eglot-autoreconnect . t))
-    :hook ((prog-mode . my/lsp-eglot--maybe-ensure)))
+    :hook ((prog-mode . dev-lsp-eglot--maybe-ensure)))
 
   ;;;###autoload
-  (defun my/lsp-eglot--maybe-ensure ()
+  (defun dev-lsp-eglot--maybe-ensure ()
     "Enable eglot in the current buffer when the project is guessable."
     (when (my/eglot-guessable-p) (eglot-ensure)))
 
   ;;;###autoload
   (defun my/lsp-enable-eglot ()
+    "Enable the Eglot LSP backend for all future `prog-mode' buffers."
     (interactive)
-    (add-hook 'prog-mode-hook #'my/lsp-eglot--maybe-ensure)
+    (add-hook 'prog-mode-hook #'dev-lsp-eglot--maybe-ensure)
     (message "[lsp] Eglot enabled."))
 
   (provide 'dev-lsp-eglot)
@@ -6160,6 +6195,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
 
   ;;;###autoload
   (defun my/lsp-enable-lspmode ()
+    "Enable the lsp-mode LSP backend for all future `prog-mode' buffers."
     (interactive)
     (add-hook 'prog-mode-hook #'lsp-deferred)
     (message "[lsp] lsp-mode enabled."))
@@ -6188,7 +6224,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;
   ;; This file:
   ;; - sets up aider history and log files under `my:d:aider`
-  ;; - provides `my/aidermacs--append-unique-args` to extend CLI args
+  ;; - provides `dev-ai--append-unique-args` to extend CLI args
   ;;   without duplicates
   ;; - selects the terminal backend: vterm if available, else comint
   ;; - configures the OpenRouter API endpoint when `OPENROUTER_API_KEY` is set,
@@ -6210,7 +6246,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (setenv "AIDER_ANALYTICS_LOG"      (expand-file-name "analytics.log" my:d:aider))
 
   ;; [Fix J] Moved defvar before its first use.
-  ;; my/aidermacs--append-unique-args references aidermacs-extra-args at
+  ;; dev-ai--append-unique-args references aidermacs-extra-args at
   ;; runtime; the defvar must appear before the defun to avoid a
   ;; void-variable error when the function is called interpreted.
   ;; The defvar also pre-empts aidermacs's own defvar so :config can safely
@@ -6218,7 +6254,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (defvar aidermacs-extra-args nil
     "Extra command-line arguments passed to the aider process.")
 
-  (defun my/aidermacs--append-unique-args (args)
+  (defun dev-ai--append-unique-args (args)
     (setq aidermacs-extra-args
           (append aidermacs-extra-args
                   (seq-remove (lambda (arg) (member arg aidermacs-extra-args)) args))))
@@ -6244,8 +6280,8 @@ Runs via `after-init-hook' so all modules are loaded before activation."
     ;; All post-load configuration consolidated here to ensure correct ordering.
     (let ((env-file (expand-file-name ".env" my:d:aider)))
       (when (file-exists-p env-file)
-        (my/aidermacs--append-unique-args (list "--env-file" env-file))))
-    (my/aidermacs--append-unique-args
+        (dev-ai--append-unique-args (list "--env-file" env-file))))
+    (dev-ai--append-unique-args
      (list "--input-history-file" (getenv "AIDER_INPUT_HISTORY_FILE")
            "--chat-history-file"  (getenv "AIDER_CHAT_HISTORY_FILE")
            "--llm-history-file"   (getenv "AIDER_LLM_HISTORY_FILE")))
@@ -6866,6 +6902,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (eval-when-compile (require 'leaf) (require 'subr-x))
 
   (defun my/dumb-jump-backend ()
+    "Activate dumb-jump as an xref backend when Eglot is not managing the buffer."
     (unless (and (fboundp 'eglot-managed-p) (eglot-managed-p))
       (when (fboundp 'dumb-jump-xref-activate) (dumb-jump-xref-activate))))
 
@@ -6896,13 +6933,16 @@ Runs via `after-init-hook' so all modules are loaded before activation."
       (setq eww-hl-search-word nil)))
 
   (defun my/eww-search (term)
+    "Search for TERM in EWW, highlighting the term after render."
     (interactive "sSearch terms: ")
     (setq eww-hl-search-word term)
     (eww-browse-url (concat eww-search-prefix term)))
 
   (defun my/eww-toggle-images ()
+    "Toggle image display in the current EWW buffer."
     (interactive)
-    (setq shr-inhibit-images (not shr-inhibit-images))
+    ;; [Fix V] shr-inhibit-images is a defcustom (shr.el); use setopt.
+    (setopt shr-inhibit-images (not shr-inhibit-images))
     (eww-reload))
 
   (leaf eww
@@ -6956,6 +6996,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; Code:
 
   (defun my/open-by-vscode ()
+    "Open the current file at point in VS Code using `code -r -g'."
     (interactive)
     (when (buffer-file-name)
       (async-shell-command
@@ -6963,10 +7004,12 @@ Runs via `after-init-hook' so all modules are loaded before activation."
                (buffer-file-name) (line-number-at-pos) (current-column)))))
 
   (defun my/show-env-variable (var)
+    "Display the value of environment variable VAR in the echo area."
     (interactive "sEnvironment variable: ")
     (message "%s = %s" var (or (getenv var) "Not set")))
 
   (defun my/print-build-info ()
+    "Display Emacs build metadata as a Markdown table in *Build Info*."
     (interactive)
     (let ((buf (get-buffer-create "*Build Info*")))
       (with-current-buffer buf
@@ -7134,15 +7177,18 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (eval-when-compile (require 'subr-x))
 
   (defun utils-path-normalize (path)
+    "Return PATH as an absolute directory path with trailing slash."
     (expand-file-name (file-name-as-directory path)))
 
   (defun utils-path-relative (base child)
+    "Return CHILD path relative to BASE directory, or nil if not under BASE."
     (let ((base-n (utils-path-normalize base))
           (child-n (expand-file-name child)))
       (when (string-prefix-p base-n child-n)
         (substring child-n (length base-n)))))
 
   (defun utils-path-safe-name (str)
+    "Return STR with all non-alphanumeric characters replaced by hyphens."
     (replace-regexp-in-string "[^[:alnum:]_.-]" "-" str))
 
   ;; my/ensure-directory-exists is defined in early-init.el (defalias of
@@ -7179,10 +7225,13 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; Code:
 
   (defun utils-async-shell-command (cmd &optional buf)
+    "Run shell command CMD asynchronously, output to BUF (default *Async Shell Command*)."
     (let ((buf-name (or buf "*Async Shell Command*")))
       (async-shell-command cmd buf-name)))
 
   (defun utils-async-run-script (script &optional args)
+    "Run executable SCRIPT with optional ARGS string asynchronously.
+No-op when SCRIPT is not executable."
     (when (file-executable-p script)
       (utils-async-shell-command
        (concat script (if args (concat " " args) "")))))
@@ -7255,15 +7304,18 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; Code:
 
   (defun my/indent-buffer ()
+    "Re-indent the entire buffer using `indent-region'."
     (interactive)
     (indent-region (point-min) (point-max)))
 
   (defun my/copy-whole-buffer ()
+    "Copy all buffer contents to the kill ring."
     (interactive)
     (kill-ring-save (point-min) (point-max))
     (message "Buffer copied."))
 
   (defun my/join-next-line ()
+    "Join the following line onto the end of the current line."
     (interactive)
     (join-line 1))
 
@@ -7301,6 +7353,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; Code:
 
   (defun my/dired-get-file-or-dir ()
+    "Visit file at point, or navigate into directory within the current dirvish session."
     (interactive)
     (let ((file (dired-get-file-for-visit)))
       (if (file-directory-p file)
@@ -7343,21 +7396,26 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; Code:
 
   (defun my/reload-config ()
+    "Reload init.el without restarting Emacs."
     (interactive)
     (load-file (expand-file-name "init.el" user-emacs-directory))
     (message "Configuration reloaded."))
 
   (defun my/open-emacs-config ()
+    "Open README.org (the Literate source) for editing."
     (interactive)
     (find-file (expand-file-name "README.org" user-emacs-directory)))
 
   (defun my/show-full-path ()
+    "Display the absolute file path of the current buffer in the echo area."
     (interactive)
     (message "%s" (or (buffer-file-name) "Not a file buffer.")))
 
   (defun my/toggle-debug-on-error ()
+    "Toggle `debug-on-error' and report the new state."
     (interactive)
-    (setq debug-on-error (not debug-on-error))
+    ;; [Fix V] debug-on-error is a defcustom; use setopt.
+    (setopt debug-on-error (not debug-on-error))
     (message "debug-on-error: %s" debug-on-error))
 
   (provide 'utils-functions)
@@ -7525,6 +7583,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (eval-when-compile (require 'subr-x))
 
   (defun my/print-load-path ()
+    "Display `load-path' entries in a *Load Path* view buffer."
     (interactive)
     (with-current-buffer (get-buffer-create "*Load Path*")
       (erase-buffer)
@@ -7533,6 +7592,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
       (switch-to-buffer (current-buffer))))
 
   (defun my/print-feature-list ()
+    "Display all loaded features alphabetically in a *Features* view buffer."
     (interactive)
     (with-current-buffer (get-buffer-create "*Features*")
       (erase-buffer)
@@ -7542,6 +7602,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
       (switch-to-buffer (current-buffer))))
 
   (defun my/check-missing-executables ()
+    "Report which external tools (rg, git, make, aspell, gpg, pass) are missing."
     (interactive)
     ;; [Fix #11] Renamed loop variable t → tool.
     ;; `t' is Emacs's boolean true constant; using it as a dolist variable
@@ -7619,8 +7680,10 @@ The key files are:
   ;;
   ;;; Code:
 
-  (setq user-full-name "YAMASHITA, Takao"
-        user-mail-address "tjy1965@gmail.com")
+  ;; [Fix U] user-full-name and user-mail-address are defcustom (simple.el);
+  ;; use setopt to respect setters and type validation.
+  (setopt user-full-name    "YAMASHITA, Takao"
+          user-mail-address "tjy1965@gmail.com")
 
   ;; Optional UI/org module extensions.
   ;;
@@ -7710,25 +7773,32 @@ The key files are:
   ;;; Code:
 
   ;; Identity
-  (setq user-full-name "YAMASHITA, Takao"
-        user-mail-address "tjy1965@gmail.com")
+  ;; [Fix U] user-full-name and user-mail-address are defcustom (simple.el).
+  (setopt user-full-name    "YAMASHITA, Takao"
+          user-mail-address "tjy1965@gmail.com")
 
   ;; GPG key
   (setenv "GPG_KEY_ID" "B4A5D8")
 
   ;; Org directory overrides
+  ;; my:d:org* are defvar path variables defined in orgx-core.el;
+  ;; setq is correct here (not defcustom).
   (setq my:d:org          "/Users/ac1965/Documents/org/"
         my:d:org-journal   "/Users/ac1965/Documents/org/journal/"
         my:d:org-roam      "/Users/ac1965/Documents/org/org-roam/")
 
   ;; Font preferences
-  (setq ui-font-default "JetBrains Mono"
-        ui-font-variable-pitch "Noto Sans JP"
-        ui-font-size 18)
+  ;; [Fix U] ui-font-default, ui-font-variable-pitch, ui-font-size are
+  ;; defcustom (ui-font.el); use setopt.
+  (setopt ui-font-default        "JetBrains Mono"
+          ui-font-variable-pitch "Noto Sans JP"
+          ui-font-size           18)
 
   ;; UI bundle: nano
-  (setq my:use-ui  'nano
-        my:use-lsp 'eglot)
+  ;; [Fix U] my:use-ui and my:use-lsp are defcustom (core-switches.el);
+  ;; use setopt.
+  (setopt my:use-ui  'nano
+          my:use-lsp 'eglot)
 
   (provide 'ac1965)
   ;;; personal/ac1965.el ends here
@@ -7964,7 +8034,12 @@ The key files are:
                   (personal-messages--archive-message contact text ts)
                   (cl-incf count)
                   (when (> ts (or personal-messages-last-archived 0))
-                    (setq personal-messages-last-archived ts)))))
+                    ;; [Fix V] personal-messages-last-archived is a defcustom
+                    ;; that must persist across sessions.  customize-save-variable
+                    ;; both sets the value (like setopt) and writes it to
+                    ;; custom-file so it survives Emacs restarts.
+                    (customize-save-variable
+                     'personal-messages-last-archived ts)))))
             (when (> count 0)
               (message "[personal-messages] archived %d message(s)" count)))
         (error
@@ -8142,7 +8217,7 @@ tangle:
   Also added a docstring to the function per the module structure convention.
 
 - *[Fix #4] core/core-switches.el*: Wrapped the UI + LSP activation blocks in
-  the named function =my/sw--activate= and deferred execution to
+  the named function =core-switches--activate= and deferred execution to
   =after-init-hook=.  The previous code ran both blocks at module-load time
   (during =modules.el= iteration), directly contradicting the Commentary header
   which states "activates the chosen UI and LSP after after-init-hook fires".
@@ -8330,7 +8405,7 @@ tangle:
   =my:d:org-roam= → =my:d:org=.
 
 - *[Fix B] dev-lsp-eglot.el*: Extracted the anonymous lambda passed to =add-hook=
-  into the named function =my/lsp-eglot--maybe-ensure=. This makes the hook
+  into the named function =dev-lsp-eglot--maybe-ensure=. This makes the hook
   debuggable, togglable, and safe against duplicate registration.
 
 - *[Fix C] init.el / core-session.el / core-session-private.el*: Moved bare
@@ -8394,7 +8469,7 @@ tangle:
   declarations.
 
 - *[Fix 7] dev-lsp-eglot.el (eglot leaf)*: Replaced the =:hook= lambda with the
-  previously defined =my/lsp-eglot--maybe-ensure= for consistency with Fix B.
+  previously defined =dev-lsp-eglot--maybe-ensure= for consistency with Fix B.
 
 - *[Fix 8] orgx-extensions.el*: Extracted the =run-with-idle-timer= lambda into
   the named function =orgx--org-roam-autosync-enable=.
@@ -8578,7 +8653,7 @@ Four residual design-principle violations resolved.
 *🟠 Medium — void-variable at runtime*
 
 - *[Fix J] dev/dev-ai.el*: Moved =(defvar aidermacs-extra-args nil ...)= from
-  after =my/aidermacs--append-unique-args= to before it.  The function
+  after =dev-ai--append-unique-args= to before it.  The function
   references =aidermacs-extra-args= at runtime via =setq=; when evaluated
   interpreted (not byte-compiled), the symbol was void at call time because
   =defvar= had not yet been evaluated.  The prior comment claimed the =defvar=
@@ -8728,3 +8803,192 @@ Four residual design-principle violations resolved.
   =my:d:org-roam= and therefore cannot be placed in =:custom= directly; =setopt=
   inside =:config= is the correct pattern for runtime-derived =defcustom= paths,
   consistent with how =dirvish-cache-dir= and =emms-history-file= are handled.
+
+** 2026-03 (fifth evaluation pass)
+
+*** Fix T: completion-capf.el — completion-category-overrides switched to setopt
+
+*🟡 Minor — setq/setopt consistency*
+
+- *[Fix T] completion/completion-capf.el*: Changed the top-level
+  =(setq completion-category-overrides ...)= to =setopt=.
+  =completion-category-overrides= is a =defcustom= in =minibuffer.el=.
+  This file is the canonical owner of the variable (documented in its
+  Commentary); using =setopt= is consistent with the project-wide rule.
+
+*** Fix U: personal layer — defcustom variables switched to setopt
+
+*🟡 Minor — setq/setopt consistency (seven variables)*
+
+- *[Fix U] personal/user.el*: Changed =setq user-full-name= and
+  =user-mail-address= to =setopt=.  Both are =defcustom= in =simple.el=.
+
+- *[Fix U] personal/ac1965.el*: Changed =setq= to =setopt= for
+  =user-full-name=, =user-mail-address=, =ui-font-default=,
+  =ui-font-variable-pitch=, =ui-font-size=, =my:use-ui=, and =my:use-lsp=.
+  =ui-font-*= are =defcustom= in =ui-font.el=; =my:use-ui= and =my:use-lsp=
+  are =defcustom= in =core-switches.el=.  Added a comment clarifying that
+  =my:d:org*= path variables are =defvar= (not =defcustom=), so =setq=
+  remains correct for those.
+
+*** Fix V: Toggle functions — defcustom variables switched to setopt / customize-save-variable
+
+*🟡 Minor — setq/setopt consistency*
+
+- *[Fix V] dev/dev-navigation.el (my/eww-toggle-images)*: Changed
+  =setq shr-inhibit-images= to =setopt=.  =shr-inhibit-images= is a
+  =defcustom= in =shr.el=.
+
+- *[Fix V] utils/utils-functions.el (my/toggle-debug-on-error)*: Changed
+  =setq debug-on-error= to =setopt=.  =debug-on-error= is a =defcustom=.
+
+- *[Fix V] personal/personal-messages.el (personal-messages-archive)*:
+  Changed =setq personal-messages-last-archived= to
+  =customize-save-variable=.  =personal-messages-last-archived= is a
+  =defcustom= that must persist across sessions; =customize-save-variable=
+  both sets the value (like =setopt=) and writes it to =custom-file= so
+  the timestamp survives Emacs restarts.  =setopt= alone would not persist
+  the value.
+
+*** Fix W: 50 public defun missing docstrings — all added
+
+*🟡 Minor — coding rule: public API must document its contract*
+
+Docstrings added to all 50 public functions across 19 modules.  Functions
+are grouped below by module.  Each docstring describes the function's
+contract in one or two sentences, consistent with the project convention
+established in existing documented functions.
+
+*core/core-native.el (5)*: =core-native-clear-warnings=,
+=core-native-warnings-count=, =core-native-show-warnings=,
+=core-native-save-warnings=, =core-native-set-mode=.
+
+*core/core-treesit.el (5)*: =core-treesit-apply-remap=,
+=core-treesit-register-sources=, =core-treesit-install-grammar=,
+=core-treesit-install-all=, =core-treesit-report=.
+
+*core/core-custom.el (2)*: =my/custom-open=, =my/custom-dump-current=.
+
+*core/core-api.el (3)*: =core-api-session-register-job=,
+=core-api-session-unregister-job=, =core-api-session-run-job=.
+
+*ui/ui-doom-modeline.el (1)*: =my/ui-enable-doom=.
+
+*ui/ui-nano-modeline.el (1)*: =my/ui-enable-nano=.
+
+*ui/ui-window.el (2)*: =my/save-window-layout=, =my/restore-window-layout=.
+
+*orgx/orgx-fold.el (3)*: =my/org-fold-subtree=, =my/org-unfold-subtree=,
+=my/org-toggle-fold=.
+
+*dev/dev-lsp-bridge.el (3)*: =dev-lsp-code-actions=, =dev-lsp-rename=,
+=dev-lsp-format-buffer=.
+
+*dev/dev-lsp-eglot.el (2)*: =my/eglot-guessable-p=, =my/lsp-enable-eglot=.
+
+*dev/dev-lsp-mode.el (1)*: =my/lsp-enable-lspmode=.
+
+*dev/dev-navigation.el (3)*: =my/dumb-jump-backend=, =my/eww-search=,
+=my/eww-toggle-images=.
+
+*dev/dev-tools.el (3)*: =my/open-by-vscode=, =my/show-env-variable=,
+=my/print-build-info=.
+
+*utils/utils-path.el (3)*: =utils-path-normalize=, =utils-path-relative=,
+=utils-path-safe-name=.
+
+*utils/utils-async.el (2)*: =utils-async-shell-command=,
+=utils-async-run-script=.
+
+*utils/utils-edit.el (3)*: =my/indent-buffer=, =my/copy-whole-buffer=,
+=my/join-next-line=.
+
+*utils/utils-dired.el (1)*: =my/dired-get-file-or-dir=.
+
+*utils/utils-functions.el (4)*: =my/reload-config=, =my/open-emacs-config=,
+=my/show-full-path=, =my/toggle-debug-on-error=.
+
+*utils/utils-diagnostics.el (3)*: =my/print-load-path=,
+=my/print-feature-list=, =my/check-missing-executables=.
+
+** 2026-03 (sixth evaluation pass)
+
+*** Fix X/Y: Rename 17 my/xxx-- private helpers to module-prefixed names
+
+*🟠 Medium — naming convention violation*
+
+The coding rule states that public functions use the =my/= or =<module>-=
+prefix; module-private functions (double-dash suffix) should therefore use
+the =<module>--= prefix exclusively.  Using =my/xxx--= on private helpers
+mixes the public-namespace indicator with the private-scope indicator,
+creating an ambiguous contract for readers.
+
+83 occurrences replaced across definitions, call sites, Commentary blocks,
+=:hook= arguments, and =add-hook= / =advice-add= calls.
+
+*modules.el (3 functions)*
+
+| Old name | New name |
+|---|---|
+| =my/modules--should-load-p= | =modules--should-load-p= |
+| =my/modules--require-safe= | =modules--require-safe= |
+| =my/modules--format-seconds= | =modules--format-seconds= |
+
+*core/core-switches.el (4 functions)*
+
+| Old name | New name |
+|---|---|
+| =my/sw--present-p= | =core-switches--present-p= |
+| =my/sw--enable-ui= | =core-switches--enable-ui= |
+| =my/sw--enable-lsp= | =core-switches--enable-lsp= |
+| =my/sw--activate= | =core-switches--activate= |
+
+*core/core-custom.el (1 function)*
+
+| Old name | New name |
+|---|---|
+| =my/custom--ensure-file= | =core-custom--ensure-file= |
+
+*ui/ui-nano-palette.el (1 function)*
+
+| Old name | New name |
+|---|---|
+| =my/nano--safe-face= | =ui-nano--safe-face= |
+
+*ui/ui-nano-modeline.el (2 functions)*
+
+| Old name | New name |
+|---|---|
+| =my/ui--nano-available-p= | =ui-nano--available-p= |
+| =my/ui--nano-setup= | =ui-nano--setup= |
+
+*orgx/orgx-notes-markdown.el (2 functions)*
+
+| Old name | New name |
+|---|---|
+| =my/notes--ensure-root= | =orgx-notes--ensure-root= |
+| =my/notes--slugify= | =orgx-notes--slugify= |
+
+*orgx/orgx-auto-tangle.el (2 functions + 1 defvar-local)*
+
+| Old name | New name |
+|---|---|
+| =my/orgx-auto-tangle--in-progress= | =orgx-auto-tangle--in-progress= |
+| =my/orgx-auto-tangle--eligible-p= | =orgx-auto-tangle--eligible-p= |
+| =my/orgx-auto-tangle--maybe= | =orgx-auto-tangle--maybe= |
+
+*dev/dev-lsp-eglot.el (1 function)*
+
+| Old name | New name |
+|---|---|
+| =my/lsp-eglot--maybe-ensure= | =dev-lsp-eglot--maybe-ensure= |
+
+Note: =my/lsp-eglot--maybe-ensure= was renamed to =dev-lsp-eglot--maybe-ensure=
+rather than =eglot--maybe-ensure= to avoid collision with Eglot's own internal
+namespace.
+
+*dev/dev-ai.el (1 function)*
+
+| Old name | New name |
+|---|---|
+| =my/aidermacs--append-unique-args= | =dev-ai--append-unique-args= |
