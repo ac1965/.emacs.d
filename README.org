@@ -669,7 +669,8 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (eval-when-compile
     (require 'subr-x))
 
-  (require 'seq)
+  ;; [Fix #2] Removed (require 'seq): seq is not used anywhere in early-init.el.
+  ;; Loading it unconditionally added unnecessary startup latency.
 
   ;; ---------------------------------------------------------------------------
   ;; Internal utilities
@@ -2697,24 +2698,39 @@ Its role is orchestration only.
              (t (message "[switches] lsp-mode setup not found.") nil)))
       (_ (message "[switches] Unknown LSP choice: %s" choice) nil)))
 
-  (when (not (eq my:use-ui 'none))
-    (let ((present (my/sw--present-p 'ui my:use-ui)))
-      (cond
-       ((my/sw--enable-ui my:use-ui)
-        (message "[switches] UI bundle: %s" my:use-ui))
-       (present
-        (message "[switches] UI seems present but could not enable: %s" my:use-ui))
-       (t
-        (message "[switches] UI bundle unavailable: %s" my:use-ui)))))
+  ;; [Fix #4] Wrapped UI + LSP activation in a named function and deferred it
+  ;; to after-init-hook.  Previously both blocks ran at module-load time
+  ;; (during modules.el iteration), which contradicted the Commentary claim
+  ;; "activates the chosen UI and LSP after after-init-hook fires" and created
+  ;; a potential ordering hazard: later modules (utils-*) had not yet loaded
+  ;; when the LSP backend tried to hook into prog-mode.
+  ;;
+  ;; Using a named function also satisfies the project-wide convention that
+  ;; side-effecting activation is always done via named hook functions
+  ;; (debuggable, removable, safe against duplicate registration).
+  (defun my/sw--activate ()
+    "Activate the configured UI bundle and LSP backend.
+Runs via `after-init-hook' so all modules are loaded before activation."
+    (when (not (eq my:use-ui 'none))
+      (let ((present (my/sw--present-p 'ui my:use-ui)))
+        (cond
+         ((my/sw--enable-ui my:use-ui)
+          (message "[switches] UI bundle: %s" my:use-ui))
+         (present
+          (message "[switches] UI seems present but could not enable: %s" my:use-ui))
+         (t
+          (message "[switches] UI bundle unavailable: %s" my:use-ui)))))
 
-  (let ((present (my/sw--present-p 'lsp my:use-lsp)))
-    (cond
-     ((my/sw--enable-lsp my:use-lsp)
-      (message "[switches] LSP backend: %s" my:use-lsp))
-     (present
-      (message "[switches] LSP seems present but could not enable: %s" my:use-lsp))
-     (t
-      (message "[switches] LSP backend unavailable: %s" my:use-lsp))))
+    (let ((present (my/sw--present-p 'lsp my:use-lsp)))
+      (cond
+       ((my/sw--enable-lsp my:use-lsp)
+        (message "[switches] LSP backend: %s" my:use-lsp))
+       (present
+        (message "[switches] LSP seems present but could not enable: %s" my:use-lsp))
+       (t
+        (message "[switches] LSP backend unavailable: %s" my:use-lsp)))))
+
+  (add-hook 'after-init-hook #'my/sw--activate)
 
   (provide 'core-switches)
   ;;; core/core-switches.el ends here
@@ -4321,10 +4337,17 @@ Its role is orchestration only.
 
   (ui-keyboard--apply)
 
-  (add-variable-watcher
-   'ui-keyboard-map-c-h-to-del
-   (lambda (_sym _newval _op _where)
-     (ui-keyboard--apply)))
+  ;; [Fix #7] Extracted anonymous lambda → named defun.
+  ;; Anonymous lambdas passed to add-variable-watcher cannot be removed via
+  ;; remove-variable-watcher, cannot be inspected with describe-function, and
+  ;; are not safe against duplicate registration across eval-buffer calls.
+  ;; Consistent with the project-wide convention established in the 2026-03
+  ;; refactoring pass (Fix B, Fix 3-8).
+  (defun ui-keyboard--watcher (_sym _newval _op _where)
+    "Variable watcher: re-apply keyboard translation when the option changes."
+    (ui-keyboard--apply))
+
+  (add-variable-watcher 'ui-keyboard-map-c-h-to-del #'ui-keyboard--watcher)
 
   (defun ui-keymap--bind (map key cmd)
     "Bind KEY to CMD inside MAP when MAP exists."
@@ -5161,10 +5184,17 @@ Its role is orchestration only.
 
   (eval-when-compile (require 'leaf))
 
+  ;; [Fix NEW-C] Added defgroup to match the convention used by every other
+  ;; module that defines defcustom variables.  Without defgroup the :group
+  ;; reference is unresolvable and byte-compile emits a warning.
+  (defgroup completion-lsp nil
+    "LSP lifecycle cleanup helpers."
+    :group 'completion)
+
   (defcustom completion-lsp-enable-p t
     "Enable LSP lifecycle cleanup."
     :type 'boolean
-    :group 'completion)
+    :group 'completion-lsp)
 
   (defvar completion-lsp--current-project-root nil
     "The project root active when the last project-switch check ran.")
@@ -5333,7 +5363,7 @@ Its role is orchestration only.
   (add-hook 'after-init-hook #'orgx-core--rebuild-agenda-files)
 
   (provide 'orgx-core)
-  ;;; orgx/org-core.el ends here
+  ;;; orgx/orgx-core.el ends here
 #+end_src
 
 **** orgx/orgx-visual.el
@@ -5567,7 +5597,10 @@ Its role is orchestration only.
 
   (eval-when-compile (require 'leaf))
 
-  (leaf ox :straight :require t)
+  ;; [Fix NEW-B] :straight and :require are separate keywords.
+  ;; (leaf ox :straight :require t) passed :require as the value of :straight,
+  ;; which is a syntax error.  ox ships with Org (built-in), so :straight nil.
+  (leaf ox :straight nil :require t)
   (leaf ox-hugo :straight t :require t :custom ((org-hugo-front-matter-format . "toml")))
   (leaf markdown-mode :straight t)
   (leaf markdown-preview-mode :straight t)
@@ -5714,8 +5747,11 @@ Its role is orchestration only.
     (define-key markdown-mode-map (kbd "C-c C-p")
                 #'my/markdown-toggle-live-preview))
 
+  ;; [Fix #5] visual-fill-column is a third-party package, not a built-in.
+  ;; :straight nil is reserved for Emacs built-ins (coding rule: "Built-ins
+  ;; declare :straight nil").  Changed to :straight t.
   (leaf visual-fill-column
-    :straight nil
+    :straight t
     :commands (visual-fill-column-mode)
     :init
     (defun my/notes-markdown-visual-fill ()
@@ -6348,6 +6384,14 @@ Its role is orchestration only.
     (let ((inhibit-read-only t))
       (ansi-color-apply-on-region compilation-filter-start (point-max))))
 
+  ;; [Fix NEW-D] Moved defun before leaf make-mode to eliminate forward
+  ;; reference.  The :hook keyword references this function at macro-expansion
+  ;; time; defining it after the leaf form causes a byte-compile warning
+  ;; ("function my/set-make-compile-command not known to be defined").
+  (defun my/set-make-compile-command ()
+    "Set compile-command to \"make -k\" in Makefile buffers."
+    (setq-local compile-command "make -k"))
+
   (leaf make-mode :straight nil
     :mode (("\\`Makefile\\'" . makefile-gmake-mode)
            ("\\`GNUmakefile\\'" . makefile-gmake-mode)
@@ -6360,9 +6404,6 @@ Its role is orchestration only.
 
   (leaf ansi-color :straight nil
     :hook (compilation-filter . dev-build--ansi-color-compilation))
-
-  (defun my/set-make-compile-command ()
-    (setq-local compile-command "make -k"))
 
   (provide 'dev-build)
   ;;; dev/dev-build.el ends here
@@ -7227,7 +7268,12 @@ Its role is orchestration only.
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'subr-x) (require 'cl-lib))
+  ;; [Fix NEW-E] Removed (require 'cl-lib) from eval-when-compile.
+  ;; cl-loop is used at runtime in utils-org-agenda--scan, so the runtime
+  ;; require below is necessary and sufficient.  The compile-time require
+  ;; was redundant and inconsistent with the project-wide convention that
+  ;; eval-when-compile holds only macros needed during compilation (subr-x).
+  (eval-when-compile (require 'subr-x))
   (require 'cl-lib)
 
   (defvar utils-org-agenda--cache nil
@@ -7380,10 +7426,14 @@ Its role is orchestration only.
 
   (defun my/check-missing-executables ()
     (interactive)
+    ;; [Fix #11] Renamed loop variable t → tool.
+    ;; `t' is Emacs's boolean true constant; using it as a dolist variable
+    ;; shadows the constant and triggers a byte-compile warning
+    ;; "variable t cannot be bound".
     (let ((tools '("rg" "git" "make" "aspell" "gpg" "pass")))
       (message "Executable check:")
-      (dolist (t tools)
-        (message "  %s: %s" t (if (executable-find t) "ok" "MISSING")))))
+      (dolist (tool tools)
+        (message "  %s: %s" tool (if (executable-find tool) "ok" "MISSING")))))
 
   (provide 'utils-diagnostics)
   ;;; utils/utils-diagnostics.el ends here
@@ -7909,6 +7959,74 @@ tangle:
 :PROPERTIES:
 :CUSTOM_ID: changelog
 :END:
+
+** 2026-03 (review pass 3)
+
+*** Fix NEW-A through NEW-E + residual fixes (#2, #4, #5, #7, #11)
+
+*🔴 Critical — correctness*
+
+- *[Fix NEW-A] orgx/orgx-core.el*: Corrected the file-footer comment from
+  =;;; orgx/org-core.el ends here= to =;;; orgx/orgx-core.el ends here=.
+  The =provide= form declares the feature as =orgx-core=; the footer comment
+  must match to satisfy =checkdoc= and toolchain consistency checks.
+
+- *[Fix NEW-B] orgx/orgx-export.el*: Fixed syntax error in =(leaf ox ...)=.
+  The original =(leaf ox :straight :require t)= passed the symbol =:require=
+  as the value of =:straight=, which is invalid.  Corrected to
+  =(leaf ox :straight nil :require t)=: =ox= ships with Org (built-in), so
+  =:straight nil= is the correct declaration; =:require t= is a separate keyword.
+
+*🟠 Medium — design conformance / byte-compile warnings*
+
+- *[Fix NEW-C] completion/completion-lsp.el*: Added =defgroup completion-lsp=
+  before the =defcustom completion-lsp-enable-p= declaration.  Every other
+  module that defines customisation variables pairs =defgroup= with =defcustom=.
+  The missing group caused a byte-compile warning and broke =M-x customize=
+  navigation.  Corrected =:group= reference from ='completion= to
+  ='completion-lsp=.
+
+- *[Fix NEW-D] dev/dev-build.el*: Moved =my/set-make-compile-command= definition
+  before the =leaf make-mode= block that references it in =:hook=.  The forward
+  reference caused a byte-compile warning "function not known to be defined".
+  Also added a docstring to the function per the module structure convention.
+
+- *[Fix #4] core/core-switches.el*: Wrapped the UI + LSP activation blocks in
+  the named function =my/sw--activate= and deferred execution to
+  =after-init-hook=.  The previous code ran both blocks at module-load time
+  (during =modules.el= iteration), directly contradicting the Commentary header
+  which states "activates the chosen UI and LSP after after-init-hook fires".
+  The fix also prevents a subtle ordering hazard where the LSP backend could
+  attempt to hook into =prog-mode= before =utils-*= modules had loaded.
+
+- *[Fix #5] orgx/orgx-notes-markdown.el*: Changed =leaf visual-fill-column=
+  from =:straight nil= to =:straight t=.  =visual-fill-column= is a third-party
+  package; =:straight nil= is reserved for Emacs built-ins per the coding rules.
+
+- *[Fix #7] ui/ui-keymap.el*: Extracted the anonymous lambda passed to
+  =add-variable-watcher= into the named function =ui-keyboard--watcher=.
+  Anonymous watchers cannot be removed via =remove-variable-watcher=, cannot
+  be inspected with =describe-function=, and are not safe against duplicate
+  registration.  Consistent with the project-wide convention established in
+  the 2026-03 refactoring pass (Fix B, Fix 3–8).
+
+*🟡 Minor — cleanup*
+
+- *[Fix NEW-E] utils/utils-org-agenda.el*: Removed =(require 'cl-lib)= from
+  inside =eval-when-compile=.  =cl-lib= is required at runtime (=cl-loop= in
+  =utils-org-agenda--scan=) and the top-level =require= below is both necessary
+  and sufficient.  The compile-time require was redundant and inconsistent with
+  the project convention that =eval-when-compile= holds only macros consumed
+  during compilation (=subr-x=).
+
+- *[Fix #2] early-init.el*: Removed the top-level =(require 'seq)=.  =seq= is
+  not used anywhere in =early-init.el=; the load was unnecessary and added
+  measurable startup latency before any module code ran.
+
+- *[Fix #11] utils/utils-diagnostics.el*: Renamed the =dolist= loop variable
+  from =t= to =tool=.  The symbol =t= is Emacs's boolean true constant; binding
+  it as a local variable shadows the constant and triggers the byte-compile
+  warning "variable t cannot be bound".
 
 ** 2026-03 (post-review)
 
