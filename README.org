@@ -827,6 +827,13 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;; 9) Backups / auto-save
   ;; ---------------------------------------------------------------------------
 
+  ;; Backup and auto-save are disabled at the earliest opportunity.
+  ;; auto-save-visited-mode (enabled in core-editing.el) replaces the default
+  ;; auto-save mechanism, so both nil values must be set before any package
+  ;; can activate the legacy behaviour.
+  ;; NOTE: auto-save-default is also set in core-editing.el for clarity at the
+  ;; point of auto-save-visited-mode activation; the values are identical and
+  ;; the duplication is intentional (belt-and-suspenders for early-init safety).
   (setq make-backup-files nil
         version-control nil
         delete-old-versions nil
@@ -1286,6 +1293,7 @@ Its role is orchestration only.
       core-switches
       core-custom
       core-api
+      core-native
 
       ;; -----------------------------------------------------------------------
       ;; UI (UX only; delete-safe)
@@ -1322,6 +1330,10 @@ Its role is orchestration only.
       completion-corfu-org-src
       completion-orderless-org-src
       completion-lsp
+      ;; LSP abstraction layer: backend-agnostic facade over eglot/lsp-mode.
+      ;; Placed here so keybindings and UI layers can reference dev-lsp-*
+      ;; commands without depending on a specific LSP backend module.
+      dev-lsp-bridge
 
       ;; -----------------------------------------------------------------------
       ;; Org ecosystem
@@ -1344,7 +1356,6 @@ Its role is orchestration only.
       ;; -----------------------------------------------------------------------
       ;; Dev
       ;; -----------------------------------------------------------------------
-      dev-lsp-bridge
       dev-ai
       dev-term
       dev-web-core
@@ -1559,6 +1570,11 @@ Its role is orchestration only.
   ;; - emits a notice when the count exceeds `core-native-comp-warn-threshold`
   ;; - forces verbose output in CI when `core-native-comp-ci-force-verbose` is set
   ;; - optionally auto-saves collected warnings to a file on exit
+  ;;
+  ;; Load-order note:
+  ;; Loaded last in the core/ section (after core-api) so that all core
+  ;; infrastructure is available.  Native compilation is asynchronous and
+  ;; initialisation is deferred to after-init-hook, so late load order is safe.
   ;;; Code:
 
   (eval-when-compile
@@ -5921,6 +5937,15 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;   `dev-lsp-format-buffer` as unified interactive commands
   ;; - dispatches to eglot or lsp-mode at call time via `cond`/`fboundp`
   ;; - falls back to `indent-region` for formatting when no LSP is active
+  ;;
+  ;; Load-order note:
+  ;; This module is loaded immediately after `completion-lsp` in modules.el,
+  ;; not in the dev/ section.  Reason: the unified commands declared here are
+  ;; pure dispatch wrappers — they carry no backend dependency themselves.
+  ;; Placing them after the completion layer lets ui-keymap and personal
+  ;; overlays bind `dev-lsp-*` commands without depending on any specific
+  ;; LSP backend module (dev-lsp-eglot, dev-lsp-mode).  Those backend modules
+  ;; are loaded lazily by core-switches via after-init-hook.
   ;;; Code:
 
   (defun dev-lsp-code-actions ()
@@ -8027,6 +8052,53 @@ tangle:
   from =t= to =tool=.  The symbol =t= is Emacs's boolean true constant; binding
   it as a local variable shadows the constant and triggers the byte-compile
   warning "variable t cannot be bound".
+
+** 2026-03 (compliance pass)
+
+*** Full fix list
+
+*🔴 Critical — missing module registration*
+
+- *[Fix C-1] lisp/modules.el*: Added =core-native= to the =my:modules= constant,
+  immediately after =core-api= in the core section.  =core-native.el= was tangled
+  as a fully specified module (=:tangle lisp/core/core-native.el=, =provide=,
+  Commentary, etc.) but was absent from =my:modules=, meaning it was never loaded
+  by the modular loader.  Native-compilation warning collection and CI reporting
+  were silently inactive.  Load order is safe: =core-native= defers all activation
+  to =after-init-hook=, so the late-core position introduces no ordering hazard.
+
+*🟠 Medium — module mis-placement*
+
+- *[Fix C-2] lisp/modules.el*: Moved =dev-lsp-bridge= from the =Dev= section to
+  immediately after =completion-lsp= in the =Completion= section, with an
+  explanatory comment.  Rationale: =dev-lsp-bridge= contains only pure dispatch
+  wrappers (=dev-lsp-code-actions=, =dev-lsp-rename=, =dev-lsp-format-buffer=) that
+  carry no backend dependency — they resolve at call time via =fboundp=.  Placing
+  it in the =Dev= section implied it was part of the LSP backend activation, while
+  the actual backend modules (=dev-lsp-eglot=, =dev-lsp-mode=) are loaded lazily by
+  =core-switches= via =after-init-hook=.  The correct position is after
+  =completion-lsp= so that =ui-keymap= and personal overlays can bind =dev-lsp-*=
+  commands without depending on a specific backend.
+
+- *[Fix C-2b] dev/dev-lsp-bridge.el*: Updated Commentary to document the
+  load-order rationale and clarify that this module is intentionally placed in
+  the completion section of =modules.el=.
+
+- *[Fix C-3] core/core-native.el*: Updated Commentary to document its position
+  at the end of the core section in =modules.el= and the rationale for late
+  placement (async native compilation, =after-init-hook= deferred init).
+
+*🟡 Minor — documentation / intentional duplication*
+
+- *[Fix C-4] early-init.el*: Added explanatory comment above the
+  =auto-save-default nil= / =make-backup-files nil= block.  The same
+  =auto-save-default nil= appears in =core-editing.el= alongside the
+  =auto-save-visited-mode= activation.  Both settings are intentional:
+  early-init suppresses legacy auto-save before any package can activate it;
+  core-editing restates it for clarity at the point of =auto-save-visited-mode=
+  configuration.  The duplication is now documented as deliberate
+  (belt-and-suspenders pattern) to prevent future "cleanup" that would remove
+  the early-init guard.
 
 ** 2026-03 (post-review)
 
