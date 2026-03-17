@@ -1768,6 +1768,9 @@ Its role is orchestration only.
           (insert "No warnings collected.\n")))))
 
   (defun core-native--maybe-auto-save ()
+    "Save collected native-comp warnings to file if auto-save is configured.
+Checks `core-native-comp-auto-save-file'; logs errors on failure rather than
+raising them.  Registered on `kill-emacs-hook' by `core-native--startup-init'."
     (when (and core-native-comp-auto-save-file
                (stringp core-native-comp-auto-save-file))
       (condition-case err
@@ -1832,6 +1835,10 @@ Its role is orchestration only.
              core-native-comp-report-mode (core-native--mode-effective)))
 
   (defun core-native--startup-init ()
+    "Initialize native-comp reporting and register the auto-save hook.
+Applies the effective report mode via `core-native--apply-report-setting'
+and hooks `core-native--maybe-auto-save' into `kill-emacs-hook'.
+Runs via `after-init-hook' once all modules are loaded."
     (core-native--apply-report-setting (core-native--mode-effective))
     (add-hook 'kill-emacs-hook #'core-native--maybe-auto-save))
 
@@ -2278,6 +2285,9 @@ Its role is orchestration only.
         (_ nil))))
 
   (defun core-runtime--startup-init ()
+    "Apply runtime configuration that must run after all modules are loaded.
+Configures modifier key bindings via `core-runtime--configure-modifiers'.
+Runs via `after-init-hook'."
     (core-runtime--configure-modifiers))
 
   (add-hook 'after-init-hook #'core-runtime--startup-init)
@@ -2508,6 +2518,12 @@ With prefix arg FORCE, reinstall grammars that are already present."
                  (if (core-treesit--language-available-p lang) "ok" "missing")))))
 
   (defun core-treesit--startup-init ()
+    "Initialize tree-sitter support after Emacs startup.
+Applies major-mode remappings via `core-treesit-apply-remap' and, when
+`core-treesit-auto-install-p' is non-nil, silently installs all configured
+grammars via `core-treesit-install-all'.  Errors during grammar installation
+are suppressed so a missing grammar does not abort startup.
+Runs via `emacs-startup-hook'."
     (when (core-treesit--available-p)
       (core-treesit-apply-remap)
       (when core-treesit-auto-install-p
@@ -2570,6 +2586,10 @@ With prefix arg FORCE, reinstall grammars that are already present."
     (my/ensure-directory-exists (file-name-directory (concat no-littering-var-directory "history"))))
 
   (defun core-history--startup-init ()
+    "Activate session persistence modes after Emacs startup.
+Enables `save-place-mode', `recentf-mode', and `savehist-mode'.
+Runs via `emacs-startup-hook' so that all module-configured paths are
+established before the persistence files are loaded."
     (save-place-mode +1)
     (recentf-mode +1)
     (savehist-mode +1))
@@ -2739,8 +2759,9 @@ With prefix arg FORCE, reinstall grammars that are already present."
     :group 'convenience)
 
   (defcustom my:use-lsp 'eglot
-    "Which LSP client to use. One of: `eglot`, `lsp`."
-    :type '(choice (const eglot) (const lsp)) :group 'my:switches)
+    "Which LSP client to use.  One of: `none', `eglot', `lsp'.
+Set to `none' to disable LSP activation entirely."
+    :type '(choice (const none) (const eglot) (const lsp)) :group 'my:switches)
 
   (defcustom my:use-ui 'none
     "Which UI bundle to use. One of: `none`, `doom`, `nano`."
@@ -2791,7 +2812,11 @@ With prefix arg FORCE, reinstall grammars that are already present."
       (_ (message "[switches] Unknown UI choice: %s" choice) nil)))
 
   (defun core-switches--enable-lsp (choice)
+    "Activate the LSP backend identified by CHOICE.
+Returns non-nil on success, nil on failure.  CHOICE must be one of the
+values defined in `my:use-lsp': `none', `eglot', or `lsp'."
     (pcase choice
+      ('none  (message "[switches] LSP disabled.") t)
       ('eglot
        (cond ((fboundp 'my/lsp-enable-eglot) (my/lsp-enable-eglot) t)
              ((locate-library "dev/dev-lsp-eglot")
@@ -2829,14 +2854,15 @@ Runs via `after-init-hook' so all modules are loaded before activation."
          (t
           (message "[switches] UI bundle unavailable: %s" my:use-ui)))))
 
-    (let ((present (core-switches--present-p 'lsp my:use-lsp)))
-      (cond
-       ((core-switches--enable-lsp my:use-lsp)
-        (message "[switches] LSP backend: %s" my:use-lsp))
-       (present
-        (message "[switches] LSP seems present but could not enable: %s" my:use-lsp))
-       (t
-        (message "[switches] LSP backend unavailable: %s" my:use-lsp)))))
+    (when (not (eq my:use-lsp 'none))
+      (let ((present (core-switches--present-p 'lsp my:use-lsp)))
+        (cond
+         ((core-switches--enable-lsp my:use-lsp)
+          (message "[switches] LSP backend: %s" my:use-lsp))
+         (present
+          (message "[switches] LSP seems present but could not enable: %s" my:use-lsp))
+         (t
+          (message "[switches] LSP backend unavailable: %s" my:use-lsp))))))
 
   (add-hook 'after-init-hook #'core-switches--activate)
 
@@ -4398,15 +4424,18 @@ No-op when `core-session-run-job' is not available."
   ;; does not attempt to install it.  No :config or :hook here — activation
   ;; (which-key-mode 1) and configuration are handled uniformly by
   ;; `ui-which-key--startup-init' below, which works on both branches.
+  ;; Use integer emacs-major-version rather than version<= string comparison:
+  ;; version strings like "30.0.90" (pre-release) compare unpredictably with
+  ;; the fixed string "30.0", whereas integer comparison is unambiguous.
   (leaf which-key
     :straight nil
-    :if (version<= "30.0" emacs-version))
+    :if (>= emacs-major-version 30))
 
   ;; Emacs < 30: install the standalone package from MELPA.  Activation is
   ;; still deferred to `ui-which-key--startup-init'.
   (leaf which-key
     :straight t
-    :if (version< emacs-version "30.0"))
+    :if (< emacs-major-version 30))
 
   (defun ui-which-key--label-leader-groups ()
     "Attach descriptive labels to leader key prefixes for which-key."
@@ -4640,6 +4669,10 @@ No-op when `core-session-run-job' is not available."
   ;;; Code:
 
   (defun ui-global-keys--startup-init ()
+    "Register global key bindings after all modules are loaded.
+Binds navigation, buffer management, search, and help commands to ergonomic
+keys (C-., C-c b/k/o/r/s, s-arrows, <f1>).  Runs via `after-init-hook' so
+all command symbols are defined before the bindings are established."
     (global-set-key (kbd "C-.")   #'other-window)
     (global-set-key (kbd "C-?") #'undo-redo)
     (global-set-key (kbd "C-c b") #'consult-buffer)
@@ -4923,6 +4956,12 @@ No-op when `core-session-run-job' is not available."
   (defvar completion-vertico--initialized nil)
 
   (defun completion-vertico--init ()
+    "Initialize Vertico, Marginalia, and Vertico-posframe exactly once.
+Guards repeated invocation with `completion-vertico--initialized'.
+Activates `vertico-mode' and `marginalia-mode' unconditionally; enables
+`vertico-posframe-mode' only in graphical sessions.
+Removes itself from `window-setup-hook' after first run to match the
+cleanup pattern used by `completion-corfu--init'."
     (unless completion-vertico--initialized
       (setq completion-vertico--initialized t)
 
@@ -4930,7 +4969,9 @@ No-op when `core-session-run-job' is not available."
       (marginalia-mode 1)
 
       (when (display-graphic-p)
-        (vertico-posframe-mode 1))))
+        (vertico-posframe-mode 1))
+
+      (remove-hook 'window-setup-hook #'completion-vertico--init)))
 
   (add-hook 'window-setup-hook #'completion-vertico--init)
 
@@ -5063,6 +5104,11 @@ No-op when `core-session-run-job' is not available."
   (defvar completion-corfu--initialized nil)
 
   (defun completion-corfu--init ()
+    "Initialize Corfu, kind-icon, and Cape exactly once on first frame setup.
+Guards against repeated invocation with `completion-corfu--initialized'.
+Activates `global-corfu-mode', registers kind-icon as a margin formatter,
+and prepends Cape sources (elisp-symbol, file, dabbrev) to the global CAPF list.
+Removes itself from `window-setup-hook' after the first run."
     (unless completion-corfu--initialized
       (setq completion-corfu--initialized t)
       (require 'corfu)
@@ -5165,24 +5211,31 @@ No-op when `core-session-run-job' is not available."
   ;;; Code:
 
   (defun completion--set-capfs (capfs)
+    "Set `completion-at-point-functions' buffer-locally to CAPFS."
     (setq-local completion-at-point-functions capfs))
 
   (defun completion--elisp-capfs ()
+    "Install Emacs Lisp CAPF stack: symbol, file, and dabbrev sources."
     (completion--set-capfs '(cape-elisp-symbol cape-file cape-dabbrev)))
 
   (defun completion--prog-capfs ()
+    "Augment the existing prog-mode CAPF stack with file and dabbrev sources."
     (completion--set-capfs (append completion-at-point-functions '(cape-file cape-dabbrev))))
 
   (defun completion--text-capfs ()
+    "Install text-mode CAPF stack: dabbrev and file sources."
     (completion--set-capfs '(cape-dabbrev cape-file)))
 
   (defun completion--org-capfs ()
+    "Install Org-mode CAPF stack: dabbrev, file, and TeX symbol sources."
     (completion--set-capfs '(cape-dabbrev cape-file cape-tex)))
 
   (defun completion--shell-capfs ()
+    "Install shell-mode CAPF stack: file path and dabbrev sources."
     (completion--set-capfs '(cape-file cape-dabbrev)))
 
   (defun completion--repl-capfs ()
+    "Augment the existing REPL CAPF stack with dabbrev source."
     (completion--set-capfs (append completion-at-point-functions '(cape-dabbrev))))
 
   (add-hook 'emacs-lisp-mode-hook #'completion--elisp-capfs)
@@ -5235,6 +5288,9 @@ No-op when `core-session-run-job' is not available."
   ;;; Code:
 
   (defun completion--org-src-capfs ()
+    "Select the CAPF stack appropriate for the current Org SRC edit buffer.
+Dispatches to `completion--elisp-capfs' for Emacs Lisp, `completion--prog-capfs'
+for other prog modes, and `completion--text-capfs' as a fallback."
     (cond ((derived-mode-p 'emacs-lisp-mode) (completion--elisp-capfs))
           ((derived-mode-p 'prog-mode) (completion--prog-capfs))
           (t (completion--text-capfs))))
@@ -5280,6 +5336,9 @@ No-op when `core-session-run-job' is not available."
     (completion--set-capfs (append completion-at-point-functions '(cape-file cape-dabbrev))))
 
   (defun completion--org-src-lang-capfs ()
+    "Apply a language-specific CAPF stack for the current Org SRC edit buffer.
+Handles shell, SQL, and Python modes with dedicated stacks; returns nil for
+other languages so the generic `completion--org-src-capfs' stack applies."
     (cond ((derived-mode-p 'sh-mode 'shell-mode 'eshell-mode) (completion--org-src-shell-capfs))
           ((derived-mode-p 'sql-mode) (completion--org-src-sql-capfs))
           ((derived-mode-p 'python-mode) (completion--org-src-python-capfs))
@@ -5327,6 +5386,11 @@ No-op when `core-session-run-job' is not available."
   ;;; Code:
 
   (defun completion--org-src-corfu-setup ()
+    "Configure Corfu for responsive completion inside Org SRC edit buffers.
+Enables auto-completion, reduces delay to 0.1 s, lowers prefix threshold to 1,
+and disables cycling — all as buffer-local values that leave the global
+defcustom settings intact.  Uses setq-local because setopt has no buffer-local
+variant; see Commentary for the rationale."
     ;; Buffer-local overrides: setq-local is correct here because we want
     ;; org-src-mode buffers to use faster completion settings without
     ;; changing the global defcustom values (see Commentary above).
@@ -5376,6 +5440,11 @@ No-op when `core-session-run-job' is not available."
   ;;; Code:
 
   (defun completion--org-src-orderless-setup ()
+    "Configure Orderless completion styles for the current Org SRC edit buffer.
+Sets `completion-category-overrides' buffer-locally so that symbol, keyword,
+function, and variable categories use Orderless, while file and dabbrev use
+basic/partial-completion.  Does not affect the global value owned by
+completion-capf.el.  Uses setq-local because setopt has no buffer-local variant."
     ;; Buffer-local override: does not affect the global completion-category-overrides
     ;; value owned by completion-capf.el (see Commentary above).
     (setq-local completion-category-overrides
@@ -5531,6 +5600,17 @@ No-op when `core-session-run-job' is not available."
   ;; cl-loop is used at runtime in my/org-buffer-files.
   (require 'cl-lib)
 
+  ;; Org directory path variables.
+  ;;
+  ;; Override contract: personal/<user>.el loads BEFORE modules.el via
+  ;; init.el step 6.  If the personal file calls (setq my:d:org ...) at
+  ;; that earlier point, the defvar forms below become no-ops (defvar never
+  ;; overwrites an existing binding), and the personal paths are preserved
+  ;; throughout the session.  The derived variables (my:d:org-journal etc.)
+  ;; are evaluated at orgx-core load time (#41) and therefore also receive
+  ;; the personal base path correctly, UNLESS the personal file sets them
+  ;; individually (as personal/ac1965.el does for journal and roam).
+  ;; This sequencing is intentional and must be maintained.
   (defvar my:d:org (expand-file-name "org" my:d:var))
   (defvar my:d:org-journal (expand-file-name "journal" my:d:org))
   (defvar my:d:org-roam (expand-file-name "org-roam" my:d:org))
@@ -5839,7 +5919,16 @@ No-op when `core-session-run-job' is not available."
   ;; - installs ox-hugo with TOML front-matter for Hugo blog export
   ;; - installs markdown-mode, markdown-preview-mode, and edit-indirect
   ;; - configures ob-mermaid with the `mmdc` CLI path when available
-  ;; - enables ob-dot for Graphviz diagram rendering in Org Babel
+  ;; - enables ob-dot for Graphviz diagram rendering in Org Babel (optional)
+  ;;
+  ;; ob-dot dependency note:
+  ;;
+  ;;   ob-dot is part of org-contrib, not Org core, and has no independent
+  ;;   straight.el recipe.  Graphviz Babel support is therefore optional:
+  ;;   the ob-dot leaf block activates only when `ob-dot' is already present
+  ;;   on load-path (guarded by `locate-library').  To enable dot support,
+  ;;   install org-contrib separately before starting Emacs:
+  ;;     (straight-use-package 'org-contrib)   ; or via OS package manager
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -5863,11 +5952,20 @@ No-op when `core-session-run-job' is not available."
      'org-babel-load-languages
      (append org-babel-load-languages '((mermaid . t)))))
 
-  ;; ob-dot ships with org-contrib (not Org core).  In a straight.el environment
-  ;; org-contrib must be declared separately; :straight t ensures straight.el
-  ;; manages the package rather than assuming it is a built-in.
+  ;; ob-dot is a file inside org-contrib, not an independent package.
+  ;; straight.el has no reliable recipe for org-contrib that works across all
+  ;; environments (the upstream is git.sr.ht; nongnu-elpa distribution requires
+  ;; a separate recipe override).  Rather than force-installing org-contrib and
+  ;; risking network/git failures, we treat Graphviz Babel support as optional:
+  ;; - If ob-dot is already available on load-path (e.g. via a system Org
+  ;;   installation, org-contrib from the OS package manager, or a prior manual
+  ;;   install), the :if guard activates the language.
+  ;; - If ob-dot is absent, the block is a no-op and no error is raised.
+  ;; Users who want dot support should install org-contrib independently:
+  ;;   (straight-use-package 'org-contrib)  ; or via OS package manager
   (leaf ob-dot
-    :straight t
+    :straight nil
+    :if (locate-library "ob-dot")
     :after org
     :config
     (org-babel-do-load-languages
@@ -6192,6 +6290,7 @@ No-op when `core-session-run-job' is not available."
   ;; via `after-init-hook`.
   ;;; Code:
 
+  ;;;###autoload
   (defun dev-lsp-code-actions ()
     "Run code actions at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
@@ -6199,6 +6298,7 @@ No-op when `core-session-run-job' is not available."
           ((fboundp 'lsp-execute-code-action) (call-interactively #'lsp-execute-code-action))
           (t (user-error "No LSP backend available"))))
 
+  ;;;###autoload
   (defun dev-lsp-rename ()
     "Rename symbol at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
@@ -6206,6 +6306,7 @@ No-op when `core-session-run-job' is not available."
           ((fboundp 'lsp-rename) (call-interactively #'lsp-rename))
           (t (user-error "No LSP backend available"))))
 
+  ;;;###autoload
   (defun dev-lsp-format-buffer ()
     "Format the current buffer via the active LSP backend or `indent-region' fallback."
     (interactive)
@@ -7905,9 +8006,15 @@ The key files are:
   ;; GPG key
   (setenv "GPG_KEY_ID" "B4A5D8")
 
-  ;; Org directory overrides
-  ;; my:d:org* are defvar path variables defined in orgx-core.el;
-  ;; setq is correct here (not defcustom).
+  ;; Org directory overrides.
+  ;;
+  ;; my:d:org* are defvar path variables defined in orgx-core.el (module #41).
+  ;; This file is loaded by init.el step 6 BEFORE modules.el runs, so orgx-core
+  ;; has not yet executed when these setq forms evaluate.  Setting the variables
+  ;; here causes the subsequent defvar forms in orgx-core to be no-ops (defvar
+  ;; never overwrites an existing binding), which is the intended override
+  ;; mechanism.  setq is correct because these are defvar variables, not defcustom.
+  ;; See the "Override contract" comment in orgx-core.el for the full sequence.
   (setq my:d:org          "/Users/ac1965/Documents/org/"
         my:d:org-journal   "/Users/ac1965/Documents/org/journal/"
         my:d:org-roam      "/Users/ac1965/Documents/org/org-roam/")
@@ -9441,3 +9548,204 @@ notation are not permitted in new entries.
   =:hook= and that =which-key-mode= activation is handled uniformly by
   =ui-which-key--startup-init= on both Emacs versions, eliminating the
   apparent anomaly of an empty =leaf= block.
+
+** 2026-03 (thirteenth evaluation pass)
+
+*** Fix AH: orgx-export.el — ob-dot handling corrected (two-pass fix)
+
+*🔴 Critical — runtime errors from incorrect ob-dot package declarations*
+
+Fix AF changed =ob-dot= from =:straight nil= to =:straight t=, causing
+"Could not find package ob-dot" at startup because =ob-dot= has no
+independent recipe in any straight.el repository.
+
+A subsequent Fix AH attempt added =(leaf org-contrib :straight t)= to
+provide =ob-dot= via the =org-contrib= parent package, but this triggered
+a second error: straight.el attempted to clone =org-contrib= from its
+default upstream (=git.sr.ht/~bzg/org-contrib=) and the clone failed in
+network-restricted environments.
+
+*Final resolution:*
+
+- *[Fix AH] lisp/orgx/orgx-export.el*: Removed the =org-contrib= leaf
+  declaration entirely.  Reverted =ob-dot= to =:straight nil= (correct:
+  it is a file inside =org-contrib=, not an independent package; Rule 3
+  applies to any file that is not its own recipe root).  Added
+  =:if (locate-library "ob-dot")= as the sole guard: when =ob-dot= is
+  present on =load-path= (from a system Org installation, OS package
+  manager, or prior manual =straight-use-package=), the Babel language
+  registration activates; otherwise the block is silently skipped.
+  No automatic installation is attempted.
+
+- *[Fix AH] orgx-export.el Commentary*: Added an "ob-dot dependency note"
+  section explaining that Graphviz Babel support is optional and documenting
+  how users can enable it by installing =org-contrib= independently.
+
+*Design principle established:*
+
+Do not attempt to install optional Babel language packages (=ob-dot=,
+=ob-mermaid= dependencies, etc.) from unreliable or environment-specific
+sources inside the shared module layer.  Use =locate-library= guards to
+activate already-installed packages and document the manual install step
+in Commentary.
+
+** 2026-03 (fourteenth evaluation pass)
+
+*** Fix AG: which-key version guard hardened; 18 hook-registered functions receive docstrings
+
+*🔴 Critical — which-key :if uses fragile string version comparison*
+
+- *[Fix AG] lisp/ui/ui-which-key.el*: Changed =:if (version<= "30.0"
+  emacs-version)= to =:if (>= emacs-major-version 30)= and =:if (version<
+  emacs-version "30.0")= to =:if (< emacs-major-version 30)=.
+  String-based =version<== and =version<= comparisons are unreliable for
+  pre-release version strings (e.g. ="30.0.90"=, a development snapshot of
+  Emacs 30) because the lexicographic ordering of those strings may differ
+  from semantic version ordering.  Integer comparison on =emacs-major-version=
+  is unambiguous for any Emacs 30.x build.  Added an inline comment
+  explaining the rationale.
+
+*🟠 Medium — 18 hook-registered =--= functions missing docstrings*
+
+The Coding Rules exempt private helpers (=<module>--= prefix) from the
+docstring requirement.  However, each of these 18 functions is registered
+as a top-level =add-hook= entry point, making it the authoritative
+activation path for its subsystem.  Without a docstring, =M-x
+describe-function= and debugger backtraces provide no information about
+what the hook does or why it exists.
+
+*completion/completion-capf.el (7)*
+
+- *[Fix AG] completion--set-capfs*: Documents buffer-local CAPF list installation.
+- *[Fix AG] completion--elisp-capfs*: Documents Emacs Lisp CAPF stack (symbol, file, dabbrev).
+- *[Fix AG] completion--prog-capfs*: Documents prog-mode CAPF stack augmentation.
+- *[Fix AG] completion--text-capfs*: Documents text-mode CAPF stack (dabbrev, file).
+- *[Fix AG] completion--org-capfs*: Documents Org-mode CAPF stack with cape-tex.
+- *[Fix AG] completion--shell-capfs*: Documents shell/eshell CAPF stack.
+- *[Fix AG] completion--repl-capfs*: Documents REPL dabbrev augmentation.
+
+*completion/completion-capf-org-src.el*
+
+- *[Fix AG] completion--org-src-capfs*: Documents Emacs Lisp / prog / text
+  dispatch for Org SRC edit buffers.
+
+*completion/completion-capf-org-src-lang.el*
+
+- *[Fix AG] completion--org-src-lang-capfs*: Documents shell / SQL / Python
+  specialization and nil fallback.
+
+*completion/completion-corfu-org-src.el*
+
+- *[Fix AG] completion--org-src-corfu-setup*: Documents buffer-local Corfu
+  acceleration settings and =setq-local= rationale.
+
+*completion/completion-corfu.el*
+
+- *[Fix AG] completion-corfu--init*: Documents one-shot initialization guard,
+  =global-corfu-mode=, kind-icon registration, and Cape source prepending.
+
+*completion/completion-orderless-org-src.el*
+
+- *[Fix AG] completion--org-src-orderless-setup*: Documents buffer-local
+  Orderless style overrides and =setq-local= rationale.
+
+*completion/completion-vertico.el*
+
+- *[Fix AG] completion-vertico--init*: Documents one-shot guard,
+  =vertico-mode=, =marginalia-mode=, and graphical-only posframe activation.
+
+*core/core-history.el*
+
+- *[Fix AG] core-history--startup-init*: Documents three persistence mode
+  activations and =emacs-startup-hook= timing rationale.
+
+*core/core-native.el (2)*
+
+- *[Fix AG] core-native--maybe-auto-save*: Documents conditional auto-save
+  and error suppression; notes =kill-emacs-hook= registration.
+- *[Fix AG] core-native--startup-init*: Documents report mode application
+  and =kill-emacs-hook= wiring.
+
+*core/core-runtime.el*
+
+- *[Fix AG] core-runtime--startup-init*: Documents modifier key configuration
+  deferral to =after-init-hook=.
+
+*core/core-treesit.el*
+
+- *[Fix AG] core-treesit--startup-init*: Documents mode remapping, conditional
+  grammar installation, and intentional =ignore-errors= wrapping that prevents
+  a missing grammar from aborting startup.
+
+*ui/ui-global-keys.el*
+
+- *[Fix AG] ui-global-keys--startup-init*: Documents all bound keys and
+  =after-init-hook= timing rationale.
+
+** 2026-03 (fifteenth evaluation pass)
+
+*** Fix AI: dev-lsp-bridge autoload; core-switches LSP symmetry; orgx-core path contract; vertico hook cleanup
+
+*🔴 Critical — ui-keymap uses =#'dev-lsp-*= without autoload declarations*
+
+- *[Fix AI] lisp/dev/dev-lsp-bridge.el*: Added =;;;###autoload= cookies to
+  =dev-lsp-code-actions=, =dev-lsp-rename=, and =dev-lsp-format-buffer=.
+  =ui-keymap= (module #26) binds these commands with =#'= (sharp-quote) inside
+  =ui-keymap--leader-binds=, which runs on =after-init-hook=.  At runtime this
+  is safe because =dev-lsp-bridge= (module #51) is already loaded by the time
+  =after-init-hook= fires.  However, the absence of =;;;###autoload= cookies
+  caused byte-compilation of =ui-keymap.el= to emit "function not known"
+  warnings for all three symbols, because the byte-compiler cannot verify
+  forward references without autoload stubs.  Adding the cookies creates the
+  autoload stubs that the byte-compiler requires and makes the cross-layer
+  =#'= reference fully legitimate.
+
+*🔴 Critical — =my:use-lsp= cannot express "no LSP"; missing =activate= guard*
+
+- *[Fix AI] lisp/core/core-switches.el (defcustom my:use-lsp)*: Added
+  =(const none)= to the =:type= declaration, matching the =my:use-ui= design.
+  The previous type =(choice (const eglot) (const lsp))= made it impossible to
+  express "disable LSP entirely" through the customization interface.
+
+- *[Fix AI] lisp/core/core-switches.el (core-switches--enable-lsp)*: Added
+  =('none ...)= case to the =pcase= form, printing =[switches] LSP disabled.=
+  and returning =t=.  Previously, any value not matching =eglot= or =lsp= fell
+  through to the =_= catch-all and printed "Unknown LSP choice: %s", which was
+  misleading if the user deliberately set =my:use-lsp= to =none=.  Added a
+  docstring documenting all valid CHOICE values.
+
+- *[Fix AI] lisp/core/core-switches.el (core-switches--activate)*: Wrapped the
+  LSP activation block in =(when (not (eq my:use-lsp 'none)) ...)=, identical in
+  structure to the existing UI block.  Previously the LSP branch had no such
+  guard; =core-switches--enable-lsp= was called unconditionally and then had to
+  handle =none= internally.  The guard makes =activate= the authoritative place
+  where =none= is handled for both dimensions, restoring structural symmetry
+  between the UI and LSP branches.
+
+*🟠 Medium — =personal/ac1965.el= sets =my:d:org*= before =defvar= without documentation*
+
+- *[Fix AI] lisp/orgx/orgx-core.el*: Added an "Override contract" block comment
+  above the =my:d:org*= =defvar= declarations explaining the deliberate
+  pre-load sequencing: =personal/<user>.el= loads at =init.el= step 6 before
+  =modules.el= runs, so =setq= calls in personal files execute before the
+  =defvar= forms here.  Because =defvar= never overwrites an existing binding,
+  the personal values are preserved.  The comment documents that this sequencing
+  is intentional and must be maintained.
+
+- *[Fix AI] personal/ac1965.el*: Replaced the terse two-line comment above the
+  =(setq my:d:org ...)= block with a full explanation of the pre-load override
+  mechanism, cross-referencing the "Override contract" comment in =orgx-core.el=.
+  The previous comment only stated "setq is correct here (not defcustom)" without
+  explaining why the override works or the init-time ordering it depends on.
+
+*🟠 Medium — =completion-vertico--init= does not remove itself from =window-setup-hook=*
+
+- *[Fix AI] lisp/completion/completion-vertico.el*: Added
+  =(remove-hook 'window-setup-hook #'completion-vertico--init)= at the end of
+  the initialization body inside the =unless completion-vertico--initialized=
+  guard.  =completion-corfu--init= already removes itself after first run;
+  =completion-vertico--init= did not, leaving an unnecessary hook entry that
+  fired on every subsequent =emacsclient= frame connection even though the
+  initialized guard prevented any work from being done.  The fix aligns both
+  init functions to the same one-shot cleanup pattern.  Updated the docstring
+  to document the =remove-hook= behavior and cross-reference =completion-corfu--init=.
