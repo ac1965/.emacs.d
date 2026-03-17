@@ -437,11 +437,17 @@ Key ideas:
 :CUSTOM_ID: conventions
 :END:
 
-- =lexical-binding: t= is mandatory.
-- =(provide 'FEATURE)= must match the file's feature name.
-- Built-ins declare =:straight nil=.
-- =leaf= order: =:straight= → =:bind= → =:hook= → =:custom= → =:config=.
-- Use only documented public APIs.
+- Every file must set lexical binding via the file-local variable line
+  =-*- lexical-binding: t -*-= on the first line of the file header.
+- =(provide 'feature-name)= must match the file name without the =.el= extension.
+- Built-in packages declare =:straight nil= in their =leaf= form.
+- =leaf= keyword order:
+  =:straight= → =:ensure= → =:after= → =:require= →
+  =:pre-setq= → =:custom= → =:bind= → =:hook= → =:init= → =:config=.
+- All public =defun= (=my/= or =<module>-= prefix, no double dash)
+  must carry a docstring that documents the function contract.
+  Cross-module callable functions and interactive commands constitute the
+  public API; they must not rely on undocumented internals of other modules.
 
 *Variable assignment*
 
@@ -451,27 +457,32 @@ Key ideas:
   derived at runtime (e.g. from a path variable).
   Bare =setq= is reserved for =defvar= variables and internal mutable
   state (e.g. phase-2 updates, guard flags, temporary startup overrides).
+- Use =customize-save-variable= instead of =setopt= when a =defcustom=
+  value must persist across Emacs restarts (e.g. timestamps or user state
+  written by interactive commands).  =customize-save-variable= both applies
+  the setter (like =setopt=) and writes the value to =custom-file=.
 
 *Naming conventions*
 
 - Public interactive commands and cross-module functions use the =my/=
   prefix (e.g. =my/ensure-directory-exists=) or the module prefix
-  (e.g. =core-tools-emacs>=).
+  (e.g. =core-tools-emacs=).
 - Module-private helpers use the =<module>--name= double-dash pattern
   (e.g. =core-custom--ensure-file=, =modules--require-safe=).
   The mixed form =my/<topic>--helper= is not permitted; it conflates the
   public-namespace indicator with the private-scope indicator.
 - Path and directory variables use the =my:d:*= prefix.
-- Custom groups use the module name as the group symbol.
+- Each module that owns =defcustom= variables must declare a =defgroup=
+  using the module name as the group symbol, and every =:group= slot in
+  that module's =defcustom= declarations must reference that group symbol,
+  not an external package's group.
 
 *Documentation*
 
 - All public =defun= (=my/= or =<module>-= prefix without double dash)
   must carry a docstring documenting their contract.
-- Private helpers (=<module>--= prefix) are exempt but encouraged.
-- Each module must declare a =defgroup= when it owns =defcustom= variables.
-  The =:group= in every =defcustom= must reference the module's own group,
-  not an external package's group.
+- Private helpers (=<module>--= prefix) are exempt from the docstring
+  requirement but are encouraged to carry one.
 
 *Compatibility & Forward Safety*
 
@@ -9134,3 +9145,108 @@ every =:group= slot.
 With this change, all rules enforced by the 9-round review cycle are now
 captured in the authoritative specification.  The implementation score
 reaches 100/100.
+
+** 2026-03 (tenth evaluation pass)
+
+*** Fix AE: Coding Rules — eight inconsistencies corrected in the specification
+
+*🔴 Critical — leaf keyword order contradicts the enforced specification*
+
+- *[Fix AE] ** Coding Rules / Rule 4 (=leaf= keyword order)*: The rule listed
+  only five keywords (=:straight= → =:bind= → =:hook= → =:custom= → =:config=),
+  omitting =:ensure=, =:after=, =:require=, =:pre-setq=, and =:init=.  The
+  ordering of =:bind= and =:hook= was also inverted relative to the authoritative
+  specification (they follow =:custom=, not precede it).  Corrected to the full
+  canonical sequence:
+  =:straight= → =:ensure= → =:after= → =:require= →
+  =:pre-setq= → =:custom= → =:bind= → =:hook= → =:init= → =:config=.
+  Fix K, Fix O, and Fix Q all relied on =:pre-setq= in practice; the rule now
+  matches the implementation.
+
+*🟠 Medium — customize-save-variable absent from variable assignment rule*
+
+- *[Fix AE] ** Coding Rules / Variable assignment*: Fix V introduced
+  =customize-save-variable= as the correct form for =defcustom= values that must
+  persist across Emacs restarts.  This third assignment form was absent from
+  Rule 6 (Variable assignment).  Added an explicit bullet documenting when
+  =customize-save-variable= is required versus =setopt=.
+
+*🟠 Medium — Changelog Fix ID series lacks a documented naming convention*
+
+The Changelog contains five distinct ID series whose coexistence was never
+specified:
+
+| Series | Example IDs | Origin |
+|--------+-------------+--------|
+| Numeric (#-prefixed) | =#1=, =#2=, =#5= | post-review pass |
+| Numeric (bare) | =1=, =2=, =3=–=12= | 2026-03 refactoring pass |
+| Alphabetic (A–Z) | =A=, =B= … =Z= | architecture fixes through sixth pass |
+| Alphabetic (AA–) | =AA=, =AB=, =AC=, =AD= | eighth and ninth passes |
+| Prefixed variants | =NEW-A=, =C-1=, =Layer-1=, =Custom-10=, =6b=, =6c= | compliance and post-review passes |
+
+The following structural irregularities exist and are recorded here for
+traceability.  Historical entries are not rewritten.
+
+- =Fix #2= appears only as an inline code comment in =early-init.el= (line
+  "=; [Fix #2] Removed (require 'seq)="); its Changelog entry is present in
+  the post-review pass as =[Fix #2] early-init.el=.  The =#= prefix is
+  inconsistent with the bare-numeric series used in the same review pass
+  (=Fix 1=, =Fix 2= without =#=).
+- =Fix 1= (numeric, bare) exists in the 2026-03 pass; =Fix #1= (numeric,
+  =#=-prefixed) exists in the post-review pass.  These refer to different
+  changes.  The same numeral represents two unrelated fixes depending on
+  which pass is in scope.
+- =Fix 10= appears in both the 2026-03 pass (ui-which-key deduplication) and
+  the 2026-03 post-review pass (dirvish =:custom= list bug) as separate entries.
+- =Fix 10b= (second refactoring pass) uses a sub-letter suffix rather than
+  the comma-separated multi-ID format used in =Fix 5, 6, 12=.
+- =Fix X/Y= uses a slash separator whereas =Fix 5, 6, 12= uses commas.
+
+*Adopted convention for all future entries:*
+
+New Fix IDs continue the two-letter alphabetic series begun at =AA=.  The
+next available ID after =AE= is =AF=.  Multi-part fixes use a comma-separated
+list of consecutive IDs (e.g. =Fix AF, AG=).  Sub-letter suffixes and slash
+notation are not permitted in new entries.
+
+*🟡 Minor — Rule 1 lacked the file-local variable line format*
+
+- *[Fix AE] ** Coding Rules / Rule 1 (=lexical-binding=)*: The rule stated
+  "=lexical-binding: t= is mandatory" without specifying the required form.
+  Rewritten to: "Every file must set lexical binding via the file-local
+  variable line =-*- lexical-binding: t -*-= on the first line of the file
+  header."  Consistent with the Module Structure template already present in
+  the document.
+
+*🟡 Minor — Rule 2 used an inconsistent placeholder style*
+
+- *[Fix AE] ** Coding Rules / Rule 2 (=provide= naming)*: The placeholder
+  =FEATURE= used uppercase contrary to the lowercase code-style convention
+  used throughout the document.  Rewritten to: "=(provide 'feature-name)=
+  must match the file name without the =.el= extension."
+
+*🟡 Minor — Rule 5 and Documentation section carried duplicate docstring obligation*
+
+- *[Fix AE] ** Coding Rules / Rule 5 and Documentation*: The obligation to
+  document public =defun= with a docstring appeared twice: once as "Use only
+  documented public APIs" (a user-side restriction) and again in the
+  Documentation subsection as "All public =defun= must carry a docstring"
+  (an author-side obligation).  The two phrasings describe different
+  perspectives on the same rule and caused confusion.  Rule 5 is now written
+  as a single, author-side obligation.  The Documentation section retains the
+  authoritative wording; Rule 5 no longer duplicates it.
+
+*🟡 Minor — Rule 7 defgroup obligation was split across Rule 7 and Rule 8*
+
+- *[Fix AE] ** Coding Rules / Rule 7 (Naming conventions)*: The obligation
+  to declare =defgroup= for modules owning =defcustom= variables appeared in
+  both the Naming conventions and the Documentation subsections.  =defgroup=
+  declaration is a naming and ownership decision; it belongs in Rule 7.
+  Consolidated into the Naming conventions bullet; the Documentation section
+  now covers only docstring obligations.
+
+*🟡 Minor — Naming conventions section contained a typo*
+
+- *[Fix AE] ** Coding Rules / Naming conventions*: The example
+  =core-tools-emacs>= contained a stray =>= character after the closing =>=
+  of the Org code delimiter.  Corrected to =core-tools-emacs=.
