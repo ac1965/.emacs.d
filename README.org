@@ -1040,7 +1040,11 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (dolist (pkg '(leaf leaf-keywords))
     (straight-use-package pkg))
 
-  (require 'leaf)
+  ;; leaf macros are expanded at byte-compile time; eval-and-compile ensures
+  ;; the macro definitions are available both during compilation and at runtime
+  ;; (needed for interpreted evaluation when init.el is not byte-compiled).
+  (eval-and-compile
+    (require 'leaf))
 
   (eval-when-compile
     (require 'leaf-keywords))
@@ -3570,6 +3574,15 @@ No-op when `core-session-run-job' is not available."
   ;;   subsequent frame creation
   ;; - configures nano-modeline padding and per-mode hooks
   ;; - provides `my/ui-enable-nano` as the entry point called by core-switches
+  ;;
+  ;; ui-nano-palette load responsibility:
+  ;;
+  ;;   This module does NOT require ui-nano-palette.  ui-theme.el (which is
+  ;;   always loaded via my:modules) performs `(require 'ui-nano-palette nil t)`
+  ;;   and is therefore the authoritative loader for the palette.  When the
+  ;;   palette loads, ui-theme.el applies it via `with-eval-after-load'.
+  ;;   dev-term.el also reacts to palette load via `with-eval-after-load'.
+  ;;   No other module needs to trigger the initial load.
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -3643,6 +3656,13 @@ No-op when `core-session-run-job' is not available."
   ;;   so my:use-ui='doom or 'none never forces the nano palette to load.
   ;;   When ui-nano-palette is loaded (nano bundle active), faces are
   ;;   re-applied automatically via `with-eval-after-load'.
+  ;;
+  ;;   Authoritative load path for ui-nano-palette:
+  ;;   ui-theme.el is the sole module responsible for triggering the initial
+  ;;   load of ui-nano-palette.  It is always present in my:modules, so
+  ;;   `(require 'ui-nano-palette nil t)' below runs unconditionally at startup.
+  ;;   ui-nano-modeline.el and dev-term.el react via `with-eval-after-load'
+  ;;   and must NOT require ui-nano-palette directly.
   ;;
   ;;; Code:
 
@@ -4374,12 +4394,16 @@ No-op when `core-session-run-job' is not available."
     :type 'number
     :group 'ui-which-key)
 
-  ;; Emacs 30+: built-in which-key
+  ;; Emacs 30+: which-key is built-in; declare with :straight nil so straight.el
+  ;; does not attempt to install it.  No :config or :hook here — activation
+  ;; (which-key-mode 1) and configuration are handled uniformly by
+  ;; `ui-which-key--startup-init' below, which works on both branches.
   (leaf which-key
     :straight nil
     :if (version<= "30.0" emacs-version))
 
-  ;; Emacs < 30: external package
+  ;; Emacs < 30: install the standalone package from MELPA.  Activation is
+  ;; still deferred to `ui-which-key--startup-init'.
   (leaf which-key
     :straight t
     :if (version< emacs-version "30.0"))
@@ -4659,6 +4683,14 @@ No-op when `core-session-run-job' is not available."
   ;; - enables hl-todo with colour-coded faces (TODO, FIXME, NOTE, HACK)
   ;; - enables rainbow-delimiters in `prog-mode` for bracket depth colouring
   ;; - enables indent-bars in `prog-mode` for visual indentation guides
+  ;;
+  ;; Load path:
+  ;;
+  ;;   This module is NOT in `my:modules'.  It is treated as an optional
+  ;;   presentation choice and is appended to `my:modules-extra' by
+  ;;   personal/user.el.  When personal/user.el is absent (e.g. a fresh
+  ;;   checkout without a personal overlay), this module is not loaded and
+  ;;   the rest of the configuration remains fully functional.
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -4721,6 +4753,12 @@ No-op when `core-session-run-job' is not available."
   ;; - enables transparent titlebars (`ns-transparent-titlebar`) on macOS
   ;; - sets `use-title-bar` for native macOS title bar rendering
   ;; - guards all settings under `(eq system-type 'darwin)`
+  ;;
+  ;; Load path:
+  ;;
+  ;;   This module is NOT in `my:modules'.  It is an optional macOS-only
+  ;;   presentation module appended to `my:modules-extra' by personal/user.el.
+  ;;   The configuration remains functional without it on non-macOS hosts.
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -5276,9 +5314,22 @@ No-op when `core-session-run-job' is not available."
   ;; - reduces `corfu-auto-delay` to 0.1 s and `corfu-auto-prefix` to 1
   ;;   for more responsive completion inside code blocks
   ;; - disables `corfu-cycle` inside SRC buffers
+  ;;
+  ;; Variable assignment note:
+  ;;
+  ;;   `corfu-auto', `corfu-auto-delay', `corfu-auto-prefix', and `corfu-cycle'
+  ;;   are all defcustom variables.  Coding Rules Rule 6 requires `setopt' for
+  ;;   defcustom assignment, but Rule 6 applies to global configuration.
+  ;;   Here we intentionally use `setq-local' to establish *buffer-local*
+  ;;   overrides inside org-src-mode buffers only, without affecting the global
+  ;;   value.  `setopt' does not have a buffer-local variant; `setq-local' is
+  ;;   therefore the correct and only form for this use case.
   ;;; Code:
 
   (defun completion--org-src-corfu-setup ()
+    ;; Buffer-local overrides: setq-local is correct here because we want
+    ;; org-src-mode buffers to use faster completion settings without
+    ;; changing the global defcustom values (see Commentary above).
     (setq-local corfu-auto t)
     (setq-local corfu-auto-delay 0.1)
     (setq-local corfu-auto-prefix 1)
@@ -5313,9 +5364,20 @@ No-op when `core-session-run-job' is not available."
   ;; - sets buffer-local `completion-category-overrides` so symbol,
   ;;   keyword, function, and variable categories use orderless, while
   ;;   file and dabbrev use basic/partial-completion
+  ;;
+  ;; Variable assignment note:
+  ;;
+  ;;   `completion-category-overrides' is a defcustom variable.  Coding Rules
+  ;;   Rule 6 requires `setopt' for defcustom assignment, but that rule applies
+  ;;   to global configuration.  Here `setq-local' establishes a *buffer-local*
+  ;;   override inside org-src-mode buffers only, leaving the global value
+  ;;   (set authoritatively by completion-capf.el) intact.  `setopt' has no
+  ;;   buffer-local variant; `setq-local' is therefore the correct form.
   ;;; Code:
 
   (defun completion--org-src-orderless-setup ()
+    ;; Buffer-local override: does not affect the global completion-category-overrides
+    ;; value owned by completion-capf.el (see Commentary above).
     (setq-local completion-category-overrides
                 '((symbol  (styles orderless)) (keyword (styles orderless))
                   (function (styles orderless)) (variable (styles orderless))
@@ -5501,6 +5563,13 @@ No-op when `core-session-run-job' is not available."
     (setq org-agenda-files
           (list (expand-file-name "inbox.org" org-directory)))
 
+    ;; [Fix AA exception] org-todo-keywords, org-refile-targets, and
+    ;; org-capture-templates are defcustom variables, but their values involve
+    ;; runtime-evaluated expressions (backquote with expand-file-name, function
+    ;; references via (function ...)) that cause setopt's type-checker to emit
+    ;; a spurious warning before the value is fully evaluated.  setq is therefore
+    ;; the correct form for these three assignments.  They cannot be moved to
+    ;; :custom or :pre-setq for the same reason.  See Coding Rules Rule 6.
     (setq org-todo-keywords
           '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
     (setq org-refile-targets
@@ -5794,8 +5863,11 @@ No-op when `core-session-run-job' is not available."
      'org-babel-load-languages
      (append org-babel-load-languages '((mermaid . t)))))
 
+  ;; ob-dot ships with org-contrib (not Org core).  In a straight.el environment
+  ;; org-contrib must be declared separately; :straight t ensures straight.el
+  ;; manages the package rather than assuming it is a built-in.
   (leaf ob-dot
-    :straight nil
+    :straight t
     :after org
     :config
     (org-babel-do-load-languages
@@ -6055,6 +6127,13 @@ No-op when `core-session-run-job' is not available."
   ;; - enables valign-mode per Org buffer for pixel-precise table alignment
   ;; - enables org-appear-mode to auto-show emphasis markers on cursor entry
   ;; - configures org-appear for emphasis, links, and sub/superscript markers
+  ;;
+  ;; Load path:
+  ;;
+  ;;   This module is NOT in `my:modules'.  It is treated as an optional
+  ;;   typography enhancement appended to `my:modules-extra' by personal/user.el.
+  ;;   Org functionality is complete without it; valign and org-appear are
+  ;;   purely cosmetic additions.
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -6384,22 +6463,6 @@ No-op when `core-session-run-job' is not available."
 
   (eval-when-compile (require 'leaf))
 
-  ;; ---------------------------------------------------------------------------
-  ;; [Fix 1] Removed (require 'ui-nano-palette).
-  ;;
-  ;; Rationale: dev is an upper layer; ui is a lower layer.  The architecture
-  ;; rule "lower layers must never depend on upper layers" is not violated here,
-  ;; but the symmetric rule matters: ui-nano-palette is OPTIONAL (selected via
-  ;; my:use-ui / core-switches).  A hard require in dev-term forces the nano
-  ;; palette to load even when my:use-ui is 'doom or 'none, breaking the
-  ;; LSP-backend-agnostic / UI-replaceable design guarantee.
-  ;;
-  ;; Fix: nano-color-* variables are read lazily via dev-term--nano-color,
-  ;; which checks bound-and-true-p and returns a safe default otherwise.
-  ;; palette application is wired via with-eval-after-load 'ui-nano-palette
-  ;; so it fires only when the nano bundle is actually active.
-  ;; ---------------------------------------------------------------------------
-
   (defgroup dev-term nil
     "Terminal integration helpers."
     :group 'tools)
@@ -6575,6 +6638,12 @@ No-op when `core-session-run-job' is not available."
 
   (defun dev-build--makefile-setup ()
     "Configure local settings for Makefile buffers."
+    ;; Buffer-local overrides via setq-local are correct here.  indent-tabs-mode,
+    ;; tab-width, and show-trailing-whitespace are defcustom variables, but
+    ;; Makefile syntax mandates hard tabs; forcing this globally would break other
+    ;; modes.  setq-local is the only mechanism for per-buffer defcustom overrides
+    ;; (setopt has no buffer-local variant), consistent with the approach used in
+    ;; completion-corfu-org-src.el and completion-orderless-org-src.el.
     (setq-local indent-tabs-mode t
                 tab-width 8
                 show-trailing-whitespace t))
@@ -7948,13 +8017,24 @@ The key files are:
       (shell-command-to-string
        (format "osascript -e 'tell application \"Music\" to %s'" cmd))))
 
-  (defun apple-music-play ()    (interactive) (apple-music--applescript "play"))
-  (defun apple-music-pause ()   (interactive) (apple-music--applescript "pause"))
-  (defun apple-music-next ()    (interactive) (apple-music--applescript "next track"))
-  (defun apple-music-prev ()    (interactive) (apple-music--applescript "previous track"))
-  (defun apple-music-toggle ()  (interactive) (apple-music--applescript "playpause"))
+  (defun apple-music-play ()
+    "Start playback in Apple Music."
+    (interactive) (apple-music--applescript "play"))
+  (defun apple-music-pause ()
+    "Pause playback in Apple Music."
+    (interactive) (apple-music--applescript "pause"))
+  (defun apple-music-next ()
+    "Skip to the next track in Apple Music."
+    (interactive) (apple-music--applescript "next track"))
+  (defun apple-music-prev ()
+    "Return to the previous track in Apple Music."
+    (interactive) (apple-music--applescript "previous track"))
+  (defun apple-music-toggle ()
+    "Toggle play/pause in Apple Music."
+    (interactive) (apple-music--applescript "playpause"))
 
   (defun apple-music-current ()
+    "Display the currently playing track name and artist from Apple Music."
     (interactive)
     (let* ((name   (apple-music--applescript "name of current track"))
            (artist (apple-music--applescript "artist of current track")))
@@ -9250,3 +9330,114 @@ notation are not permitted in new entries.
 - *[Fix AE] ** Coding Rules / Naming conventions*: The example
   =core-tools-emacs>= contained a stray =>= character after the closing =>=
   of the Org code delimiter.  Corrected to =core-tools-emacs=.
+
+** 2026-03 (eleventh evaluation pass)
+
+*** Fix AF: Seven design-conformance issues resolved
+
+*🔴 Critical — init.el runtime require of leaf macro*
+
+- *[Fix AF] init.el*: Changed bare =(require 'leaf)= to
+  =(eval-and-compile (require 'leaf))=.  =leaf= is a macro package; its
+  definitions are needed at byte-compile time for macro expansion and at
+  interpreted runtime when =init.el= is executed without prior compilation.
+  Every other module in the codebase wraps its =leaf= require in
+  =(eval-when-compile ...)=; =init.el= was the sole exception.
+  =eval-and-compile= is the correct form here because =init.el= itself
+  contains four =(leaf ...)= invocations that must expand in both contexts.
+  Added a comment explaining the choice.
+
+*🔴 Critical — ui-nano-palette initial load path undocumented*
+
+- *[Fix AF] lisp/ui/ui-nano-modeline.el*: Added a "ui-nano-palette load
+  responsibility" section to Commentary.  Documents that =ui-theme.el= is
+  the sole authoritative loader of =ui-nano-palette= (via
+  =(require 'ui-nano-palette nil t)=), that =ui-nano-modeline.el= must NOT
+  require it directly, and that =dev-term.el= reacts via
+  =with-eval-after-load=.  This makes the three-file load contract explicit
+  and prevents future authors from adding redundant hard requires.
+
+- *[Fix AF] lisp/ui/ui-theme.el*: Expanded the existing "ui-nano-palette
+  dependency" Commentary section with an "Authoritative load path" paragraph
+  that names =ui-theme.el= as the sole triggering module and forbids direct
+  requires in =ui-nano-modeline.el= and =dev-term.el=.
+
+*🟠 Medium — apple-music.el public defun missing docstrings*
+
+- *[Fix AF] personal/apple-music.el*: Added docstrings to all six public
+  interactive functions: =apple-music-play=, =apple-music-pause=,
+  =apple-music-next=, =apple-music-prev=, =apple-music-toggle=, and
+  =apple-music-current=.  These were missed in Fix W (50-function docstring
+  pass).
+
+*🟠 Medium — setq-local on defcustom vars without documented rationale*
+
+- *[Fix AF] lisp/completion/completion-corfu-org-src.el*: Added a
+  "Variable assignment note" section to Commentary and an inline comment
+  in =completion--org-src-corfu-setup=.  Documents that =setq-local= is
+  correct for =corfu-auto=, =corfu-auto-delay=, =corfu-auto-prefix=, and
+  =corfu-cycle= because the intent is a buffer-local override that leaves
+  the global =defcustom= value intact, and =setopt= has no buffer-local
+  variant.
+
+- *[Fix AF] lisp/completion/completion-orderless-org-src.el*: Same
+  treatment for =completion-category-overrides= in
+  =completion--org-src-orderless-setup=.  Added Commentary note and inline
+  comment.  Documents that the global value owned by =completion-capf.el=
+  is preserved.
+
+- *[Fix AF] lisp/dev/dev-build.el (dev-build--makefile-setup)*: Added
+  inline comment above the =setq-local= block explaining that hard-tab
+  indentation is a Makefile syntax requirement and that =setq-local= is
+  the only available mechanism for per-buffer =defcustom= overrides.
+  Cross-references the same pattern in the completion org-src modules.
+
+*🟠 Medium — ob-dot declared as built-in with :straight nil*
+
+- *[Fix AF] lisp/orgx/orgx-export.el (leaf ob-dot)*: Changed =:straight nil=
+  to =:straight t=.  =ob-dot= ships in =org-contrib=, not Org core; it is
+  not an Emacs built-in.  Using =:straight nil= violated Coding Rule 3
+  ("Built-in packages declare =:straight nil=") and would cause a
+  =void-feature= error in environments where =org-contrib= is not present.
+  Added a comment explaining the =org-contrib= dependency.
+
+*🟠 Medium — optional modules missing Load path documentation*
+
+- *[Fix AF] lisp/ui/ui-visual-aids.el*: Added "Load path" section to
+  Commentary.  Documents that this module is absent from =my:modules= and
+  loaded via =my:modules-extra= populated by =personal/user.el=.
+
+- *[Fix AF] lisp/ui/ui-macos.el*: Same treatment.  Notes that the module
+  is safe to omit on non-macOS hosts.
+
+- *[Fix AF] lisp/orgx/orgx-typography.el*: Same treatment.  Notes that
+  =valign= and =org-appear= are cosmetic additions and Org is fully
+  functional without them.
+
+*🟡 Minor — orgx-core.el setq exception comment missing on three variables*
+
+- *[Fix AF] lisp/orgx/orgx-core.el*: Added a "[Fix AA exception]" comment
+  block above the =setq org-todo-keywords=, =setq org-refile-targets=, and
+  =setq org-capture-templates= assignments.  These three =defcustom=
+  variables were already covered by Fix AA but lacked the inline
+  cross-reference comment that =org-agenda-files= had (via its Phase 1/2
+  comment).  All four variables are now uniformly annotated.
+
+*🟡 Minor — dev-term.el Commentary duplicated by inline Fix 1 block*
+
+- *[Fix AF] lisp/dev/dev-term.el*: Removed the standalone
+  =;; [Fix 1] Removed (require 'ui-nano-palette).= inline comment block
+  (14 lines).  The rationale it contained — optional require, dev/ui layer
+  boundary, =with-eval-after-load= wiring — is fully covered by the
+  existing "Palette integration" Commentary section.  Duplicate
+  documentation violates the Single Source of Truth principle and creates
+  a maintenance burden when either copy falls out of sync.
+
+*🟡 Minor — ui-which-key.el Emacs 30 branch intent undocumented*
+
+- *[Fix AF] lisp/ui/ui-which-key.el*: Replaced terse "; Emacs 30+: built-in
+  which-key" and "; Emacs < 30: external package" comments with full
+  explanations.  Documents that neither =leaf= branch contains =:config= or
+  =:hook= and that =which-key-mode= activation is handled uniformly by
+  =ui-which-key--startup-init= on both Emacs versions, eliminating the
+  apparent anomaly of an empty =leaf= block.
