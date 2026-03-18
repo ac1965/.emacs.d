@@ -9806,77 +9806,87 @@ what the hook does or why it exists.
 
 ** 2026-03 (nineteenth evaluation pass)
 
-*** Fix AJ, AK (applied): 10件の効率性・重複廃止リファクタリング
+*** Fix AJ, AK: 10 efficiency and duplication-elimination refactors
 
-この評価パスで確定した修正 (Fix AJ, AK) を添付の README.org に適用した。
-前回パスの出力ファイルには反映済みだったが、添付ファイルへの再適用が必要だった。
+Fixes AJ and AK confirmed in this evaluation pass have been applied to the
+attached README.org.  They had already been reflected in the previous output
+file; this pass re-applies them to the canonical source.
 
-*🟠 Medium — completion-corfu--init: 3連続 add-to-list O(n)×3*
+*🟠 Medium — completion-corfu--init: three consecutive add-to-list calls O(n)×3*
 
 - *[Fix AJ] lisp/completion/completion-corfu.el (completion-corfu--init)*:
-  3つの連続する =(add-to-list 'completion-at-point-functions ...)= を
-  単一の =setq= + =append= に置き換えた（O(n)×3 → O(1)）。
-  優先順位（elisp-symbol > file > dabbrev > 既存）を明示する。
-  =corfu-margin-formatters= への追加は =cl-pushnew= に変更し重複登録を防ぐ。
+  Replaced three consecutive =(add-to-list 'completion-at-point-functions ...)=
+  calls with a single =setq= + =append= expression (O(n)×3 → O(1)).
+  Priority order (elisp-symbol > file > dabbrev > existing) is now explicit.
+  Changed the =corfu-margin-formatters= append to =cl-pushnew= to prevent
+  duplicate registrations.
 
-*🟠 Medium — core-native: O(n) length 呼び出し × 7箇所*
+*🟠 Medium — core-native: seven O(n) length calls*
 
-- *[Fix AJ] lisp/core/core-native.el*: =core-native--count= 変数を追加し
-  =core-native--warnings= リストの長さを常時追跡する。
+- *[Fix AJ] lisp/core/core-native.el*: Introduced a =core-native--count=
+  variable that tracks the length of =core-native--warnings= continuously.
+  Replaced all seven =(length core-native--warnings)= call sites —
   =core-native--cap-collect=, =core-native--maybe-notice-threshold=,
-  =core-native--collect= (=cl-incf= で同期), =core-native-clear-warnings=
-  (=--count 0= でリセット), =core-native-warnings-count=,
-  =core-native-show-warnings=, =core-native-save-warnings= の7箇所で
-  =(length core-native--warnings)= を =core-native--count= 参照に置換した。
+  =core-native--collect= (incremented via =cl-incf=), =core-native-clear-warnings=
+  (reset to 0), =core-native-warnings-count=, =core-native-show-warnings=, and
+  =core-native-save-warnings= — with direct references to =core-native--count=.
 
-*🟠 Medium — core-native--apply-report-setting: 4アームに同一 boundp+setopt 重複*
+*🟠 Medium — core-native--apply-report-setting: identical boundp+setopt block duplicated across all four pcase arms*
 
 - *[Fix AK] lisp/core/core-native.el (core-native--apply-report-setting)*:
-  4つの =pcase= アームそれぞれに同一の =boundp= ガード付き =setopt= ブロック
-  が存在していた。2ステップ構造に整理し、=boundp= ガードを1箇所に統合した。
-  値は =(if (eq mode 'silent) 'silent t)= で決定し、コレクター起動は
-  =memq= と catch-all の2条件で制御する。
+  Consolidated the identical =boundp=-guarded =setopt= block that appeared in
+  each of the four =pcase= arms into a single location.  Restructured to a
+  two-step form: the value is determined by =(if (eq mode 'silent) 'silent t)=
+  and collector activation is controlled by two conditions — =memq= and a
+  catch-all — removing all redundancy.
 
 *🟠 Medium — core-treesit-apply-remap: dolist + add-to-list O(n)×10*
 
 - *[Fix AJ] lisp/core/core-treesit.el (core-treesit-apply-remap)*:
-  =major-mode-remap-alist= への10エントリ追加を =cl-union :test #'equal=
-  の単一マージに置き換えた。スタートアップで実行されるため起動時間短縮に寄与。
+  Replaced ten individual =add-to-list= calls against =major-mode-remap-alist=
+  with a single =cl-union :test #'equal= merge.  Because this function runs
+  at startup, the change reduces startup time proportionally.
 
 *🟠 Medium — core-treesit-register-sources: dolist + add-to-list O(n)×entries*
 
 - *[Fix AK] lisp/core/core-treesit.el (core-treesit-register-sources)*:
-  =treesit-language-source-alist= へのソース登録を =cl-union= の単一マージに
-  置き換えた。=install-all= 経由でスタートアップ時に実行される。
+  Replaced per-entry =add-to-list= calls against =treesit-language-source-alist=
+  with a single =cl-union= merge.  The function is invoked at startup via
+  =install-all=.
 
-*🟠 Medium — core-switches: 同一3分岐 cond が enable-ui/enable-lsp に4回重複*
+*🟠 Medium — core-switches: identical three-branch cond duplicated four times across enable-ui and enable-lsp*
 
-- *[Fix AK] lisp/core/core-switches.el*: =core-switches--load-and-call=
-  ヘルパーを抽出した。=enable-fn=, =library=, =not-found-msg= の3引数で
-  fboundp → locate-library+load → エラーメッセージの3段フォールバックを
-  実装する。=enable-ui= と =enable-lsp= の各アームが1行になった。
+- *[Fix AK] lisp/core/core-switches.el*: Extracted a =core-switches--load-and-call=
+  helper that accepts three arguments — =enable-fn=, =library=, and
+  =not-found-msg= — and implements the three-stage fallback (fboundp →
+  locate-library+load → error message).  Each arm of =enable-ui= and =enable-lsp=
+  is now a single call to this helper, eliminating all duplicated dispatch logic.
 
-*🟠 Medium — dev-lsp-bridge: 同一 cond ディスパッチが3コマンドに重複*
+*🟠 Medium — dev-lsp-bridge: identical cond dispatch duplicated across three commands*
 
-- *[Fix AK] lisp/dev/dev-lsp-bridge.el*: =dev-lsp--dispatch= ヘルパーを
-  追加した。=eglot-fn=, =lsp-fn=, =fallback-fn=, =error-msg= の4引数で
-  ディスパッチを統一。各コマンドが1行になりロジックの重複が解消された。
+- *[Fix AK] lisp/dev/dev-lsp-bridge.el*: Added a =dev-lsp--dispatch= helper
+  that accepts four arguments — =eglot-fn=, =lsp-fn=, =fallback-fn=, and
+  =error-msg= — and centralizes the LSP backend dispatch.  Each of the three
+  public commands is now a one-line call to this helper; all duplicated
+  dispatch logic is eliminated.
 
-*🟠 Medium — core-session--run-all: タイマー毎に中間リスト確保*
+*🟠 Medium — core-session--run-all: intermediate list allocation per timer*
 
 - *[Fix AK] lisp/core/core-session-private.el (core-session--run-all)*:
-  =core-session--jobs= 経由の中間リスト確保を廃止し、=maphash= でハッシュ
-  テーブルを直接イテレートする方式に変更した。
+  Eliminated the intermediate list allocation via =core-session--jobs= and
+  replaced it with direct hash-table iteration using =maphash=.
 
-*🟠 Medium — utils-org-agenda--scan: ディレクトリあたり directory-files 2回*
+*🟠 Medium — utils-org-agenda--scan: two directory-files calls per directory*
 
 - *[Fix AJ] lisp/utils/utils-org-agenda.el (utils-org-agenda--scan)*:
-  =directory-files= を1回の呼び出しにまとめ、=seq-filter= で =.org= ファイル
-  とサブディレクトリに分割する方式に変更。各ディレクトリの I/O を半減させる。
+  Consolidated to a single =directory-files= call per directory and split the
+  result into =.org= files and subdirectories using =seq-filter=, halving the
+  I/O per directory traversal.
 
-*🟠 Medium — my/create-scratch-buffer: 起動時に既存バッファを破壊*
+*🟠 Medium — my/create-scratch-buffer: unconditionally destroys existing buffer contents at startup*
 
 - *[Fix AJ] lisp/core/core-buffers.el (my/create-scratch-buffer)*:
-  =erase-buffer= による無条件リセットを廃止し、=fundamental-mode= かつ空
-  バッファの場合のみ初期化するよう変更した。=desktop-save= 復元内容や
-  =--eval= 書き込み内容を保護する。
+  Replaced the unconditional =erase-buffer= reset with a conditional that
+  initializes the scratch buffer only when it is in =fundamental-mode= and
+  empty.  This preserves content restored by =desktop-save= and any text
+  written by =--eval= flags.
