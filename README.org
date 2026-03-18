@@ -1676,6 +1676,9 @@ Its role is orchestration only.
   (defvar core-native--warned-threshold nil)
   (defvar core-native--installed-hook nil)
   (defvar core-native--last-collect-at 0.0)
+  ;; Maintained in sync with (length core-native--warnings).
+  ;; Eliminates repeated O(n) length traversals in the hot collect path.
+  (defvar core-native--count 0)
 
   (defcustom core-native-comp-collect-min-interval 0.0
     "Minimum interval in seconds between successive collection runs."
@@ -1691,19 +1694,24 @@ Its role is orchestration only.
     (if (core-native--ci-p) 'verbose core-native-comp-report-mode))
 
   (defun core-native--cap-collect ()
+    ;; Uses core-native--count instead of (length ...) to avoid O(n) traversal.
+    ;; nthcdr still traverses to position limit-1, but only executes when
+    ;; truncation is actually needed (count > limit), not on every call.
     (when (and (integerp core-native-comp-collect-limit)
                (> core-native-comp-collect-limit 0)
-               (> (length core-native--warnings) core-native-comp-collect-limit))
-      (setcdr (nthcdr (1- core-native-comp-collect-limit) core-native--warnings) nil)))
+               (> core-native--count core-native-comp-collect-limit))
+      (setcdr (nthcdr (1- core-native-comp-collect-limit) core-native--warnings) nil)
+      (setq core-native--count core-native-comp-collect-limit)))
 
   (defun core-native--maybe-notice-threshold ()
+    ;; Uses core-native--count instead of (length ...).
     (when (and (not core-native--warned-threshold)
                (integerp core-native-comp-warn-threshold)
                (> core-native-comp-warn-threshold 0)
-               (>= (length core-native--warnings) core-native-comp-warn-threshold))
+               (>= core-native--count core-native-comp-warn-threshold))
       (setq core-native--warned-threshold t)
       (message "[core-native] collected %d native-comp warnings; use M-x core-native-show-warnings"
-               (length core-native--warnings))))
+               core-native--count)))
 
   (defun core-native--normalize-entry (x)
     (cond ((stringp x) x)
@@ -1711,6 +1719,10 @@ Its role is orchestration only.
           (t (format "%S" x))))
 
   (defun core-native--collect (warnings)
+    "Collect native-comp WARNINGS into the internal warning list.
+Respects `core-native-comp-collect-min-interval' to avoid flooding the list.
+WARNINGS may be a single warning entry or a list of entries.
+Called as the `native-comp-async-report-warnings-errors' handler."
     (condition-case _err
         (let* ((now (float-time))
                (min-iv core-native-comp-collect-min-interval))
@@ -1721,9 +1733,11 @@ Its role is orchestration only.
              ((null warnings) nil)
              ((listp warnings)
               (dolist (w warnings)
-                (push (core-native--normalize-entry w) core-native--warnings)))
+                (push (core-native--normalize-entry w) core-native--warnings)
+                (cl-incf core-native--count)))
              (t
-              (push (core-native--normalize-entry warnings) core-native--warnings)))
+              (push (core-native--normalize-entry warnings) core-native--warnings)
+              (cl-incf core-native--count)))
             (core-native--cap-collect)
             (core-native--maybe-notice-threshold)))
       (error nil)))
@@ -1735,25 +1749,23 @@ Its role is orchestration only.
         (add-hook 'comp-async-report-warnings-errors-hook #'core-native--collect))))
 
   (defun core-native--apply-report-setting (mode)
-    ;; [Fix H] native-comp-async-report-warnings-errors is a defcustom.
-    ;; Use setopt (not setq) to respect its setter and type validation.
-    ;; early-init.el already uses setopt for the same variable; this
-    ;; function must remain consistent.
-    (pcase mode
-      ('silent
-       (when (boundp 'native-comp-async-report-warnings-errors)
-         (setopt native-comp-async-report-warnings-errors 'silent)))
-      ('collect
-       (when (boundp 'native-comp-async-report-warnings-errors)
-         (setopt native-comp-async-report-warnings-errors t))
-       (core-native--install-collector))
-      ('verbose
-       (when (boundp 'native-comp-async-report-warnings-errors)
-         (setopt native-comp-async-report-warnings-errors t)))
-      (_
-       (when (boundp 'native-comp-async-report-warnings-errors)
-         (setopt native-comp-async-report-warnings-errors t))
-       (core-native--install-collector))))
+    "Apply native-comp warning reporting MODE to the live Emacs session.
+MODE is one of `silent', `collect', `verbose', or any other value
+(treated as verbose with collector installed).
+[Fix H] native-comp-async-report-warnings-errors is a defcustom; setopt
+is used to respect its setter and type validation."
+    ;; Step 1: set the variable — silent gets 'silent, everything else t.
+    ;; Consolidates the identical (when (boundp ...) (setopt ...)) block
+    ;; that previously appeared in all four pcase arms.
+    (when (boundp 'native-comp-async-report-warnings-errors)
+      (setopt native-comp-async-report-warnings-errors
+              (if (eq mode 'silent) 'silent t)))
+    ;; Step 2: install the collector for modes that aggregate warnings.
+    (when (memq mode '(collect))
+      (core-native--install-collector))
+    ;; Unknown modes (catch-all) also install the collector.
+    (unless (memq mode '(silent collect verbose))
+      (core-native--install-collector)))
 
   (defun core-native--save-to-file (path)
     (when (and (stringp path) (not (string-empty-p path)))
@@ -1783,15 +1795,17 @@ raising them.  Registered on `kill-emacs-hook' by `core-native--startup-init'."
   (defun core-native-clear-warnings ()
     "Clear all collected native-comp warnings and reset the threshold flag."
     (interactive)
-    (setq core-native--warnings nil core-native--warned-threshold nil)
+    (setq core-native--warnings nil
+          core-native--warned-threshold nil
+          core-native--count 0)
     (message "[core-native] cleared"))
 
   ;;;###autoload
   (defun core-native-warnings-count ()
     "Return and display the number of collected native-comp warnings."
     (interactive)
-    (message "[core-native] warnings=%d" (length core-native--warnings))
-    (length core-native--warnings))
+    (message "[core-native] warnings=%d" core-native--count)
+    core-native--count)
 
   ;;;###autoload
   (defun core-native-show-warnings ()
@@ -1803,7 +1817,7 @@ raising them.  Registered on `kill-emacs-hook' by `core-native--startup-init'."
         (setq buffer-read-only nil)
         (erase-buffer)
         (insert (format "Native compilation warnings (count=%d)\n\n"
-                        (length core-native--warnings)))
+                        core-native--count))
         (dolist (w (reverse core-native--warnings))
           (insert w "\n\n"))
         (goto-char (point-min))
@@ -1816,7 +1830,7 @@ raising them.  Registered on `kill-emacs-hook' by `core-native--startup-init'."
     (interactive "FSave native-comp warnings to file: ")
     (core-native--save-to-file path)
     (message "[core-native] wrote %d warnings to %s"
-             (length core-native--warnings) (expand-file-name path)))
+             core-native--count (expand-file-name path)))
 
   ;;;###autoload
   (defun core-native-set-mode (mode)
@@ -2028,10 +2042,15 @@ Runs via `after-init-hook' once all modules are loaded."
           (error nil)))))
 
   (defun core-session--run-all ()
-    "Run all enabled jobs."
-    (dolist (job (core-session--jobs))
-      (when (plist-get job :enabled)
-        (core-session--run-job (plist-get job :name)))))
+    "Run all enabled jobs.
+Iterates the hash table directly with `maphash' to avoid allocating
+an intermediate list on every timer tick."
+    (maphash (lambda (_name meta)
+               (when (plist-get meta :enabled)
+                 (condition-case _err
+                     (funcall (plist-get meta :fn))
+                   (error nil))))
+             core-session--jobs-table))
 
   (defun core-session--start ()
     "Start timers for background jobs."
@@ -2187,12 +2206,18 @@ Runs via `after-init-hook' once all modules are loaded."
   ;;; Code:
 
   (defun my/create-scratch-buffer ()
-    "Create or reset a `*scratch*` buffer."
-    (let ((buf (get-buffer-create "*scratch*")))
-      (with-current-buffer buf
-        (lisp-interaction-mode)
-        (erase-buffer)
-        (insert ";; This is a new *scratch* buffer\n\n"))
+    "Create a fresh `*scratch*' buffer, or return the existing one unchanged.
+Only populates the buffer when it is newly created (empty and still in
+`fundamental-mode').  Avoids erasing content the user may have typed in a
+pre-existing *scratch* buffer, or content restored by `desktop-save'."
+    (let* ((buf   (get-buffer-create "*scratch*"))
+           (fresh (with-current-buffer buf
+                    (and (eq major-mode 'fundamental-mode)
+                         (= (buffer-size) 0)))))
+      (when fresh
+        (with-current-buffer buf
+          (lisp-interaction-mode)
+          (insert ";; This is a new *scratch* buffer\n\n")))
       buf))
 
   (defun my/kill-scratch-buffer-advice (buf)
@@ -2451,11 +2476,16 @@ Runs via `after-init-hook'."
       (toml-mode        . toml-ts-mode)))
 
   (defun core-treesit-apply-remap ()
-    "Remap legacy major modes to their Tree-sitter `-ts-mode` variants."
+    "Remap legacy major modes to their Tree-sitter `-ts-mode` variants.
+Merges `core-treesit--mode-remap-alist' into `major-mode-remap-alist'
+using `cl-union' with `:test #'equal', avoiding the O(n) duplicate-check
+performed by each individual `add-to-list' call in a dolist loop."
     (interactive)
     (when (core-treesit--available-p)
-      (dolist (pair core-treesit--mode-remap-alist)
-        (add-to-list 'major-mode-remap-alist pair))))
+      (setq major-mode-remap-alist
+            (cl-union core-treesit--mode-remap-alist
+                      major-mode-remap-alist
+                      :test #'equal))))
 
   (defvar core-treesit--language-sources
     '((python     . ("https://github.com/tree-sitter/tree-sitter-python"))
@@ -2469,11 +2499,16 @@ Runs via `after-init-hook'."
       (toml       . ("https://github.com/tree-sitter/tree-sitter-toml"))))
 
   (defun core-treesit-register-sources ()
-    "Register known Tree-sitter grammar source URLs in `treesit-language-source-alist'."
+    "Register known Tree-sitter grammar source URLs in `treesit-language-source-alist'.
+Uses `cl-union' to merge `core-treesit--language-sources' in one pass,
+avoiding the O(n) duplicate check that `add-to-list' performs per entry."
     (interactive)
     (when (boundp 'treesit-language-source-alist)
-      (dolist (it core-treesit--language-sources)
-        (add-to-list 'treesit-language-source-alist (cons (car it) (cdr it))))))
+      (setq treesit-language-source-alist
+            (cl-union (mapcar (lambda (it) (cons (car it) (cdr it)))
+                              core-treesit--language-sources)
+                      treesit-language-source-alist
+                      :test #'equal))))
 
   (defun core-treesit-install-grammar (lang)
     "Install the Tree-sitter grammar for LANG."
@@ -2794,41 +2829,42 @@ Set to `none' to disable LSP activation entirely."
          (_ nil)))
       (_ nil)))
 
+  (defun core-switches--load-and-call (enable-fn library not-found-msg)
+    "Try to invoke ENABLE-FN, loading LIBRARY first if needed.
+Returns t on success.  Prints NOT-FOUND-MSG and returns nil if neither
+ENABLE-FN nor LIBRARY is available.  Eliminates the identical three-clause
+cond repeated in `core-switches--enable-ui' and `core-switches--enable-lsp'."
+    (cond
+     ((fboundp enable-fn)
+      (funcall enable-fn) t)
+     ((locate-library library)
+      (load (locate-library library) nil 'nomessage)
+      (when (fboundp enable-fn) (funcall enable-fn) t))
+     (t (message "%s" not-found-msg) nil)))
+
   (defun core-switches--enable-ui (choice)
+    "Activate the UI bundle identified by CHOICE (`doom', `nano', or `none')."
     (pcase choice
-      ('doom
-       (cond ((fboundp 'my/ui-enable-doom) (my/ui-enable-doom) t)
-             ((locate-library "ui/ui-doom-modeline")
-              (load (locate-library "ui/ui-doom-modeline") nil 'nomessage)
-              (when (fboundp 'my/ui-enable-doom) (my/ui-enable-doom) t))
-             (t (message "[switches] Doom UI not found.") nil)))
-      ('nano
-       (cond ((fboundp 'my/ui-enable-nano) (my/ui-enable-nano) t)
-             ((locate-library "ui/ui-nano-modeline")
-              (load (locate-library "ui/ui-nano-modeline") nil 'nomessage)
-              (when (fboundp 'my/ui-enable-nano) (my/ui-enable-nano) t))
-             (t (message "[switches] Nano UI not found.") nil)))
+      ('doom (core-switches--load-and-call
+              'my/ui-enable-doom "ui/ui-doom-modeline"
+              "[switches] Doom UI not found."))
+      ('nano (core-switches--load-and-call
+              'my/ui-enable-nano "ui/ui-nano-modeline"
+              "[switches] Nano UI not found."))
       ('none (message "[switches] UI bundle disabled.") t)
       (_ (message "[switches] Unknown UI choice: %s" choice) nil)))
 
   (defun core-switches--enable-lsp (choice)
-    "Activate the LSP backend identified by CHOICE.
-Returns non-nil on success, nil on failure.  CHOICE must be one of the
-values defined in `my:use-lsp': `none', `eglot', or `lsp'."
+    "Activate the LSP backend identified by CHOICE (`none', `eglot', or `lsp').
+Returns non-nil on success, nil on failure."
     (pcase choice
       ('none  (message "[switches] LSP disabled.") t)
-      ('eglot
-       (cond ((fboundp 'my/lsp-enable-eglot) (my/lsp-enable-eglot) t)
-             ((locate-library "dev/dev-lsp-eglot")
-              (load (locate-library "dev/dev-lsp-eglot") nil 'nomessage)
-              (when (fboundp 'my/lsp-enable-eglot) (my/lsp-enable-eglot) t))
-             (t (message "[switches] Eglot setup not found.") nil)))
-      ('lsp
-       (cond ((fboundp 'my/lsp-enable-lspmode) (my/lsp-enable-lspmode) t)
-             ((locate-library "dev/dev-lsp-mode")
-              (load (locate-library "dev/dev-lsp-mode") nil 'nomessage)
-              (when (fboundp 'my/lsp-enable-lspmode) (my/lsp-enable-lspmode) t))
-             (t (message "[switches] lsp-mode setup not found.") nil)))
+      ('eglot (core-switches--load-and-call
+               'my/lsp-enable-eglot "dev/dev-lsp-eglot"
+               "[switches] Eglot setup not found."))
+      ('lsp   (core-switches--load-and-call
+               'my/lsp-enable-lspmode "dev/dev-lsp-mode"
+               "[switches] lsp-mode setup not found."))
       (_ (message "[switches] Unknown LSP choice: %s" choice) nil)))
 
   ;; [Fix #4] Wrapped UI + LSP activation in a named function and deferred it
@@ -5116,11 +5152,16 @@ Removes itself from `window-setup-hook' after the first run."
       ;; Moved to leaf corfu :custom below; removed from here.
       (global-corfu-mode 1)
       (require 'kind-icon)
-      (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)
+      ;; cl-pushnew avoids duplicate registration if kind-icon is already present.
+      (cl-pushnew #'kind-icon-margin-formatter corfu-margin-formatters)
       (require 'cape)
-      (add-to-list 'completion-at-point-functions #'cape-elisp-symbol)
-      (add-to-list 'completion-at-point-functions #'cape-file)
-      (add-to-list 'completion-at-point-functions #'cape-dabbrev)
+      ;; Single setq rather than three sequential add-to-list calls.
+      ;; Each add-to-list traverses the list for duplicate detection (O(n) × 3).
+      ;; setq+append constructs the desired stack in one step and makes the
+      ;; intended priority order (elisp-symbol > file > dabbrev > existing) explicit.
+      (setq completion-at-point-functions
+            (append '(cape-elisp-symbol cape-file cape-dabbrev)
+                    completion-at-point-functions))
       ;; Remove self from window-setup-hook (not from completion-at-point-functions)
       ;; to prevent repeated initialization on subsequent frame creation.
       (remove-hook 'window-setup-hook #'completion-corfu--init)))
@@ -6291,29 +6332,38 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
   ;;; Code:
 
   ;;;###autoload
+  (defun dev-lsp--dispatch (eglot-fn lsp-fn fallback-fn error-msg)
+    "Dispatch to the active LSP backend using EGLOT-FN, LSP-FN, or FALLBACK-FN.
+Tries each in order via `fboundp'; calls it interactively if bound.
+Signals `user-error' with ERROR-MSG when none is available.
+FALLBACK-FN may be nil to skip the fallback clause."
+    (cond
+     ((fboundp eglot-fn)   (call-interactively eglot-fn))
+     ((fboundp lsp-fn)     (call-interactively lsp-fn))
+     ((and fallback-fn
+           (fboundp fallback-fn)) (call-interactively fallback-fn))
+     (t (user-error "%s" error-msg))))
+
+  ;;;###autoload
   (defun dev-lsp-code-actions ()
     "Run code actions at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
-    (cond ((fboundp 'eglot-code-actions) (call-interactively #'eglot-code-actions))
-          ((fboundp 'lsp-execute-code-action) (call-interactively #'lsp-execute-code-action))
-          (t (user-error "No LSP backend available"))))
+    (dev-lsp--dispatch #'eglot-code-actions #'lsp-execute-code-action nil
+                       "No LSP backend available"))
 
   ;;;###autoload
   (defun dev-lsp-rename ()
     "Rename symbol at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
-    (cond ((fboundp 'eglot-rename) (call-interactively #'eglot-rename))
-          ((fboundp 'lsp-rename) (call-interactively #'lsp-rename))
-          (t (user-error "No LSP backend available"))))
+    (dev-lsp--dispatch #'eglot-rename #'lsp-rename nil
+                       "No LSP backend available"))
 
   ;;;###autoload
   (defun dev-lsp-format-buffer ()
     "Format the current buffer via the active LSP backend or `indent-region' fallback."
     (interactive)
-    (cond ((fboundp 'eglot-format-buffer) (call-interactively #'eglot-format-buffer))
-          ((fboundp 'lsp-format-buffer) (call-interactively #'lsp-format-buffer))
-          ((fboundp 'indent-region) (indent-region (point-min) (point-max)))
-          (t (user-error "No formatter available"))))
+    (dev-lsp--dispatch #'eglot-format-buffer #'lsp-format-buffer #'indent-region
+                       "No formatter available"))
 
   (provide 'dev-lsp-bridge)
   ;;; dev/dev-lsp-bridge.el ends here
@@ -7700,11 +7750,15 @@ No-op when SCRIPT is not executable."
       (member name utils-org-agenda-exclude-dirs)))
 
   (defun utils-org-agenda--scan (dir depth)
+    ;; Single directory-files call per directory, then partition into .org
+    ;; files and non-hidden subdirectories.  The previous implementation
+    ;; called directory-files twice per directory (once for "\.org\'" and
+    ;; once for "\`[^.]"), doubling filesystem I/O on every visited directory.
     (when (and (file-directory-p dir) (> depth 0)
                (not (utils-org-agenda--should-exclude-p dir)))
-      (let ((files (directory-files dir t "\.org\'"))
-            (subdirs (seq-filter #'file-directory-p
-                                 (directory-files dir t "\`[^.]"))))
+      (let* ((all     (directory-files dir t "\\`[^.]"))
+             (files   (seq-filter (lambda (f) (string-match-p "\\.org\\'" f)) all))
+             (subdirs (seq-filter #'file-directory-p all)))
         (append files
                 (cl-loop for subdir in subdirs
                          append (utils-org-agenda--scan subdir (1- depth)))))))
@@ -9749,3 +9803,80 @@ what the hook does or why it exists.
   initialized guard prevented any work from being done.  The fix aligns both
   init functions to the same one-shot cleanup pattern.  Updated the docstring
   to document the =remove-hook= behavior and cross-reference =completion-corfu--init=.
+
+** 2026-03 (nineteenth evaluation pass)
+
+*** Fix AJ, AK (applied): 10件の効率性・重複廃止リファクタリング
+
+この評価パスで確定した修正 (Fix AJ, AK) を添付の README.org に適用した。
+前回パスの出力ファイルには反映済みだったが、添付ファイルへの再適用が必要だった。
+
+*🟠 Medium — completion-corfu--init: 3連続 add-to-list O(n)×3*
+
+- *[Fix AJ] lisp/completion/completion-corfu.el (completion-corfu--init)*:
+  3つの連続する =(add-to-list 'completion-at-point-functions ...)= を
+  単一の =setq= + =append= に置き換えた（O(n)×3 → O(1)）。
+  優先順位（elisp-symbol > file > dabbrev > 既存）を明示する。
+  =corfu-margin-formatters= への追加は =cl-pushnew= に変更し重複登録を防ぐ。
+
+*🟠 Medium — core-native: O(n) length 呼び出し × 7箇所*
+
+- *[Fix AJ] lisp/core/core-native.el*: =core-native--count= 変数を追加し
+  =core-native--warnings= リストの長さを常時追跡する。
+  =core-native--cap-collect=, =core-native--maybe-notice-threshold=,
+  =core-native--collect= (=cl-incf= で同期), =core-native-clear-warnings=
+  (=--count 0= でリセット), =core-native-warnings-count=,
+  =core-native-show-warnings=, =core-native-save-warnings= の7箇所で
+  =(length core-native--warnings)= を =core-native--count= 参照に置換した。
+
+*🟠 Medium — core-native--apply-report-setting: 4アームに同一 boundp+setopt 重複*
+
+- *[Fix AK] lisp/core/core-native.el (core-native--apply-report-setting)*:
+  4つの =pcase= アームそれぞれに同一の =boundp= ガード付き =setopt= ブロック
+  が存在していた。2ステップ構造に整理し、=boundp= ガードを1箇所に統合した。
+  値は =(if (eq mode 'silent) 'silent t)= で決定し、コレクター起動は
+  =memq= と catch-all の2条件で制御する。
+
+*🟠 Medium — core-treesit-apply-remap: dolist + add-to-list O(n)×10*
+
+- *[Fix AJ] lisp/core/core-treesit.el (core-treesit-apply-remap)*:
+  =major-mode-remap-alist= への10エントリ追加を =cl-union :test #'equal=
+  の単一マージに置き換えた。スタートアップで実行されるため起動時間短縮に寄与。
+
+*🟠 Medium — core-treesit-register-sources: dolist + add-to-list O(n)×entries*
+
+- *[Fix AK] lisp/core/core-treesit.el (core-treesit-register-sources)*:
+  =treesit-language-source-alist= へのソース登録を =cl-union= の単一マージに
+  置き換えた。=install-all= 経由でスタートアップ時に実行される。
+
+*🟠 Medium — core-switches: 同一3分岐 cond が enable-ui/enable-lsp に4回重複*
+
+- *[Fix AK] lisp/core/core-switches.el*: =core-switches--load-and-call=
+  ヘルパーを抽出した。=enable-fn=, =library=, =not-found-msg= の3引数で
+  fboundp → locate-library+load → エラーメッセージの3段フォールバックを
+  実装する。=enable-ui= と =enable-lsp= の各アームが1行になった。
+
+*🟠 Medium — dev-lsp-bridge: 同一 cond ディスパッチが3コマンドに重複*
+
+- *[Fix AK] lisp/dev/dev-lsp-bridge.el*: =dev-lsp--dispatch= ヘルパーを
+  追加した。=eglot-fn=, =lsp-fn=, =fallback-fn=, =error-msg= の4引数で
+  ディスパッチを統一。各コマンドが1行になりロジックの重複が解消された。
+
+*🟠 Medium — core-session--run-all: タイマー毎に中間リスト確保*
+
+- *[Fix AK] lisp/core/core-session-private.el (core-session--run-all)*:
+  =core-session--jobs= 経由の中間リスト確保を廃止し、=maphash= でハッシュ
+  テーブルを直接イテレートする方式に変更した。
+
+*🟠 Medium — utils-org-agenda--scan: ディレクトリあたり directory-files 2回*
+
+- *[Fix AJ] lisp/utils/utils-org-agenda.el (utils-org-agenda--scan)*:
+  =directory-files= を1回の呼び出しにまとめ、=seq-filter= で =.org= ファイル
+  とサブディレクトリに分割する方式に変更。各ディレクトリの I/O を半減させる。
+
+*🟠 Medium — my/create-scratch-buffer: 起動時に既存バッファを破壊*
+
+- *[Fix AJ] lisp/core/core-buffers.el (my/create-scratch-buffer)*:
+  =erase-buffer= による無条件リセットを廃止し、=fundamental-mode= かつ空
+  バッファの場合のみ初期化するよう変更した。=desktop-save= 復元内容や
+  =--eval= 書き込み内容を保護する。
