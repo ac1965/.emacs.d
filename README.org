@@ -262,10 +262,14 @@ Development tooling.
 Examples:
 
 - LSP backends (eglot, lsp-mode, lsp-bridge)
-- AI-assisted editing (gptel)
+- AI-assisted editing (aidermacs via dev-ai; gptel)
 - terminal integration (vterm)
 - build and compilation helpers
 - code formatting (apheleia)
+
+Note: Org Babel + Claude API workflow integration resides in
+=personal/personal-ai.el= (personal layer), which depends on
+=utils/utils-claude.el= (utils layer) for HTTP transport.
 
 *** utils
 
@@ -280,6 +284,7 @@ Responsibilities:
 - dired and dirvish integration
 - org agenda file caching
 - lint and diagnostics tooling
+- Claude API HTTP client (utils-claude)
 
 *** personal
 
@@ -7897,6 +7902,194 @@ No-op when SCRIPT is not executable."
   ;;; utils/utils-diagnostics.el ends here
 #+end_src
 
+**** utils/utils-claude.el
+:PROPERTIES:
+:CUSTOM_ID: utils-claude
+:header-args:emacs-lisp: :tangle lisp/utils/utils-claude.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-claude.el --- Claude API HTTP client -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Low-level HTTP client for the Anthropic Claude Messages API.
+  ;; This module has no dependency on UI, Org, or any layer above utils.
+  ;;
+  ;; Public API:
+  ;;   `utils-claude-get-api-key'   — retrieve key from auth-source (.authinfo.gpg)
+  ;;   `utils-claude-request-sync' — synchronous POST, returns response text
+  ;;   `utils-claude-request'      — asynchronous POST with callback
+  ;;
+  ;; Auth-source entry format (in ~/.authinfo or ~/.authinfo.gpg):
+  ;;   machine api.anthropic.com login apikey password sk-ant-...
+  ;;
+  ;; The default model is customisable via `utils-claude-default-model'.
+  ;; The default max-tokens value is customisable via `utils-claude-max-tokens'.
+  ;;
+  ;; Error handling:
+  ;;   Both sync and async variants signal `utils-claude-error' on HTTP-level
+  ;;   failures (non-200 status) and on JSON parse errors.
+  ;;   Callers should wrap calls in `condition-case'.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'cl-lib)
+    (require 'subr-x))
+
+  (require 'url)
+  (require 'url-http)
+  (require 'json)
+  (require 'auth-source)
+
+  (defgroup utils-claude nil
+    "Claude API HTTP client for Emacs."
+    :group 'tools
+    :prefix "utils-claude-")
+
+  (defcustom utils-claude-default-model "claude-sonnet-4-5"
+    "Default Anthropic model identifier used when no model is specified."
+    :type 'string
+    :group 'utils-claude)
+
+  (defcustom utils-claude-max-tokens 4096
+    "Default maximum tokens in the completion response."
+    :type 'natnum
+    :group 'utils-claude)
+
+  (defcustom utils-claude-api-version "2023-06-01"
+    "Anthropic API version header value."
+    :type 'string
+    :group 'utils-claude)
+
+  (defcustom utils-claude-endpoint "https://api.anthropic.com/v1/messages"
+    "Endpoint URL for the Anthropic Messages API."
+    :type 'string
+    :group 'utils-claude)
+
+  (define-error 'utils-claude-error "Claude API error" 'error)
+
+  (defun utils-claude-get-api-key ()
+    "Return the Anthropic API key from auth-source, or nil if absent.
+Searches for machine=api.anthropic.com login=apikey in the
+auth-source backend (typically ~/.authinfo.gpg)."
+    (when-let* ((entry (car (auth-source-search
+                             :host "api.anthropic.com"
+                             :user "apikey"
+                             :require '(:secret)
+                             :max 1)))
+                (secret (plist-get entry :secret)))
+      (if (functionp secret) (funcall secret) secret)))
+
+  (defun utils-claude--build-headers (api-key)
+    "Return the alist of HTTP headers required by the Anthropic API.
+API-KEY is the raw secret string."
+    `(("Content-Type"      . "application/json")
+      ("x-api-key"         . ,api-key)
+      ("anthropic-version" . ,utils-claude-api-version)))
+
+  (defun utils-claude--build-body (messages &optional model max-tokens system)
+    "Return a JSON string representing the Messages API request body.
+MESSAGES is a list of plists with :role and :content keys.
+MODEL defaults to `utils-claude-default-model'.
+MAX-TOKENS defaults to `utils-claude-max-tokens'.
+SYSTEM, when non-nil, is inserted as the system prompt string."
+    (let ((payload
+           `((model      . ,(or model utils-claude-default-model))
+             (max_tokens . ,(or max-tokens utils-claude-max-tokens))
+             (messages   . ,(apply #'vector
+                                   (mapcar (lambda (m)
+                                             `((role    . ,(plist-get m :role))
+                                               (content . ,(plist-get m :content))))
+                                           messages))))))
+      (when system
+        (push `(system . ,system) payload))
+      (encode-coding-string (json-encode payload) 'utf-8)))
+
+  (defun utils-claude--parse-response (buffer)
+    "Extract the assistant text content from the HTTP response in BUFFER.
+Returns the text string on success.
+Signals `utils-claude-error' on HTTP error or unexpected JSON shape."
+    (with-current-buffer buffer
+      (goto-char (point-min))
+      (let ((status (url-http-parse-response)))
+        (unless (= status 200)
+          (signal 'utils-claude-error
+                  (list (format "HTTP %d from Anthropic API" status)))))
+      (re-search-forward "\r?\n\r?\n" nil t)
+      (let* ((json-object-type 'plist)
+             (json-array-type  'list)
+             (json-key-type    'keyword)
+             (data (condition-case err
+                       (json-read)
+                     (json-error
+                      (signal 'utils-claude-error
+                              (list (format "JSON parse error: %s"
+                                            (error-message-string err)))))))
+             (content (plist-get data :content)))
+        (or (plist-get (car content) :text)
+            (signal 'utils-claude-error
+                    (list "Unexpected response shape: no :content[0]:text"))))))
+
+  (defun utils-claude-request-sync (messages &optional model max-tokens system)
+    "Send MESSAGES to the Claude API synchronously and return the response text.
+MESSAGES is a list of plists with :role and :content string values.
+MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'.
+Signals `utils-claude-error' on failure."
+    (let* ((api-key (or (utils-claude-get-api-key)
+                        (signal 'utils-claude-error
+                                '("No API key found in auth-source"))))
+           (url-request-method "POST")
+           (url-request-extra-headers (utils-claude--build-headers api-key))
+           (url-request-data (utils-claude--build-body
+                              messages model max-tokens system))
+           (response-buffer (url-retrieve-synchronously
+                             utils-claude-endpoint t nil 30)))
+      (unwind-protect
+          (utils-claude--parse-response response-buffer)
+        (when (buffer-live-p response-buffer)
+          (kill-buffer response-buffer)))))
+
+  (defun utils-claude-request (messages callback &optional model max-tokens system)
+    "Send MESSAGES to the Claude API asynchronously and invoke CALLBACK with the result.
+CALLBACK receives the response text string on success, or a string
+beginning with \"ERROR:\" on failure.
+MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
+    (let* ((api-key (utils-claude-get-api-key))
+           (url-request-method "POST")
+           (url-request-extra-headers
+            (if api-key
+                (utils-claude--build-headers api-key)
+              (funcall callback "ERROR: No API key found in auth-source")
+              nil))
+           (url-request-data
+            (when url-request-extra-headers
+              (utils-claude--build-body messages model max-tokens system))))
+      (when url-request-extra-headers
+        (url-retrieve
+         utils-claude-endpoint
+         (lambda (status)
+           (if (plist-get status :error)
+               (funcall callback
+                        (format "ERROR: %s"
+                                (error-message-string (plist-get status :error))))
+             (condition-case err
+                 (funcall callback (utils-claude--parse-response (current-buffer)))
+               (utils-claude-error
+                (funcall callback (format "ERROR: %s" (cadr err)))))))
+         nil t))))
+
+  (provide 'utils-claude)
+  ;;; utils/utils-claude.el ends here
+#+end_src
+
 ** Personal Configuration
 :PROPERTIES:
 :CUSTOM_ID: personal-config
@@ -7921,6 +8114,7 @@ The key files are:
 | =personal/device-darwin.el= | macOS IME, mouse and scroll settings |
 | =personal/apple-music.el= | AppleScript + hydra music control |
 | =personal/personal-messages.el= | macOS Messages.app archiver |
+| =personal/personal-ai.el= | Org Babel + Claude API integration |
 
 *** personal/user.el
 :PROPERTIES:
@@ -8345,6 +8539,205 @@ The key files are:
 
   (provide 'personal-messages)
   ;;; personal/personal-messages.el ends here
+#+end_src
+
+*** personal/personal-ai.el
+:PROPERTIES:
+:CUSTOM_ID: personal-ai
+:header-args:emacs-lisp: :tangle personal/personal-ai.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/personal-ai.el --- Org Babel + Claude API integration -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Org Babel and interactive Emacs Lisp workflow integration for the
+  ;; Claude API.  This module depends on `utils-claude' (utils layer) for
+  ;; all HTTP transport and auth-source key retrieval.
+  ;;
+  ;; Org Babel integration:
+  ;;   Register the `claude' Babel language so that source blocks headed
+  ;;   with `#+begin_src claude' are evaluated by sending their body as a
+  ;;   user message and inserting the response as the block result.
+  ;;
+  ;;   Example usage in README.org:
+  ;;
+  ;;     #+begin_src claude :system "You are an Emacs Lisp refactoring expert."
+  ;;     Refactor the following function to eliminate the intermediate list:
+  ;;     (defun foo (xs) (let ((acc nil)) (dolist (x xs) (push x acc)) acc))
+  ;;     #+end_src
+  ;;
+  ;;   Supported header arguments:
+  ;;     :system  — system prompt string (default: `personal-ai-default-system')
+  ;;     :model   — model identifier (default: `utils-claude-default-model')
+  ;;     :tokens  — max_tokens integer (default: `utils-claude-max-tokens')
+  ;;
+  ;; Interactive commands:
+  ;;   `my/claude-refactor-defun'       — refactor defun at point
+  ;;   `my/claude-complete-docstring'   — generate docstring for defun at point
+  ;;   `my/claude-analyze-require-graph' — report upward-layer require violations
+  ;;
+  ;; All interactive commands insert their result into a dedicated
+  ;; `*Claude Output*' buffer rendered in `org-mode'.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'cl-lib)
+    (require 'subr-x))
+
+  (require 'ob)
+  (require 'utils-claude)
+
+  (defgroup personal-ai nil
+    "Org Babel and interactive Claude API integration."
+    :group 'org-babel
+    :prefix "personal-ai-")
+
+  (defcustom personal-ai-default-system
+    "You are an expert Emacs Lisp programmer and software architect.
+Respond in plain text. Omit preamble. Be concise and precise."
+    "Default system prompt sent with every Claude request from this module."
+    :type 'string
+    :group 'personal-ai)
+
+  (defcustom personal-ai-output-buffer "*Claude Output*"
+    "Name of the buffer used to display interactive Claude results."
+    :type 'string
+    :group 'personal-ai)
+
+  ;;; ── Org Babel language registration ────────────────────────────────────────
+
+  (defun org-babel-execute:claude (body params)
+    "Execute a Claude Babel block with BODY as the user message.
+PARAMS is the alist of header arguments from the source block.
+Returns the assistant response text as a string, suitable for
+insertion as the block result under :results value semantics."
+    (let* ((system  (or (cdr (assq :system params))
+                        personal-ai-default-system))
+           (model   (cdr (assq :model params)))
+           (tokens  (when-let* ((raw (cdr (assq :tokens params))))
+                      (if (stringp raw) (string-to-number raw) raw)))
+           (messages (list (list :role "user" :content body))))
+      (condition-case err
+          (utils-claude-request-sync messages model tokens system)
+        (utils-claude-error
+         (error "Claude Babel block failed: %s" (cadr err))))))
+
+  (add-to-list 'org-babel-load-languages '(claude . t))
+
+  ;;; ── Private helpers ─────────────────────────────────────────────────────────
+
+  (defun personal-ai--show-result (header text)
+    "Display HEADER and TEXT in `personal-ai-output-buffer' in org-mode."
+    (let ((buf (get-buffer-create personal-ai-output-buffer)))
+      (with-current-buffer buf
+        (unless (derived-mode-p 'org-mode)
+          (org-mode))
+        (goto-char (point-max))
+        (unless (bobp)
+          (insert "\n\n"))
+        (insert (format "* %s\n\n%s\n" header text))
+        (goto-char (point-max)))
+      (pop-to-buffer buf)))
+
+  (defun personal-ai--defun-at-point ()
+    "Return the top-level defun source string surrounding point, or nil."
+    (save-excursion
+      (condition-case nil
+          (progn
+            (beginning-of-defun)
+            (let ((beg (point)))
+              (end-of-defun)
+              (buffer-substring-no-properties beg (point))))
+        (error nil))))
+
+  ;;; ── Interactive commands ────────────────────────────────────────────────────
+
+  (defun my/claude-refactor-defun ()
+    "Send the top-level defun at point to Claude and display refactoring suggestions.
+Instructs Claude to preserve the public interface and docstring, and to
+apply this configuration's coding rules: lexical-binding, named defun
+for hooks, setopt for defcustom, setq for defvar and internal state."
+    (interactive)
+    (let ((src (personal-ai--defun-at-point)))
+      (unless src
+        (user-error "No defun found at point"))
+      (message "Sending defun to Claude...")
+      (utils-claude-request
+       (list (list :role "user"
+                   :content (format "Refactor the following Emacs Lisp function.\n\
+Preserve its public interface and docstring.\n\
+Apply these rules: lexical-binding, named defun (no lambdas in hooks),\n\
+setopt for defcustom, setq for defvar and internal state.\n\n%s" src)))
+       (lambda (result)
+         (personal-ai--show-result
+          (format "Refactor: %s"
+                  (and (string-match "(def[a-z]+ \\([^ \n(]+\\)" src)
+                       (match-string 1 src)))
+          result))
+       nil nil personal-ai-default-system)))
+
+  (defun my/claude-complete-docstring ()
+    "Generate a docstring for the top-level defun at point and display it.
+The response contains only the docstring body text, ready for insertion
+between the argument list and the first expression of the defun."
+    (interactive)
+    (let ((src (personal-ai--defun-at-point)))
+      (unless src
+        (user-error "No defun found at point"))
+      (message "Requesting docstring from Claude...")
+      (utils-claude-request
+       (list (list :role "user"
+                   :content (format "Write a concise Emacs Lisp docstring for the \
+following function.\nOutput only the docstring text (no surrounding quotes, \
+no code fence).\nFirst line: single sentence summary ending with a period.\n\
+Subsequent lines: describe arguments and return value.\n\n%s" src)))
+       (lambda (result)
+         (personal-ai--show-result
+          (format "Docstring: %s"
+                  (and (string-match "(def[a-z]+ \\([^ \n(]+\\)" src)
+                       (match-string 1 src)))
+          result))
+       nil nil "You are an Emacs Lisp documentation expert. Be concise.")))
+
+  (defun my/claude-analyze-require-graph ()
+    "Analyze require statements in the current buffer and report layer violations.
+Detects upward-layer dependencies relative to the 10-layer architecture:
+early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal.
+Results are displayed in `personal-ai-output-buffer'."
+    (interactive)
+    (unless buffer-file-name
+      (user-error "Buffer is not visiting a file"))
+    (let* ((src  (buffer-substring-no-properties (point-min) (point-max)))
+           (file (file-name-nondirectory buffer-file-name)))
+      (message "Analyzing require graph in %s..." file)
+      (utils-claude-request
+       (list (list :role "user"
+                   :content (format "Analyze the following Emacs Lisp module (%s) \
+for dependency issues.\n\
+Layer order (low to high): early-init, core, ui, auth, completion, \
+orgx, vcs, dev, utils, personal.\n\
+Rules: a module must not require a module from a higher layer.\n\
+List every (require ...) or (load ...) call, identify its layer, \
+and flag any upward-layer dependency.\n\
+Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
+                                    file src)))
+       (lambda (result)
+         (personal-ai--show-result
+          (format "Require graph: %s" file)
+          result))
+       nil nil personal-ai-default-system)))
+
+  (provide 'personal-ai)
+  ;;; personal/personal-ai.el ends here
 #+end_src
 
 * Makefile
@@ -9890,3 +10283,74 @@ file; this pass re-applies them to the canonical source.
   initializes the scratch buffer only when it is in =fundamental-mode= and
   empty.  This preserves content restored by =desktop-save= and any text
   written by =--eval= flags.
+
+** 2026-03 (twentieth evaluation pass)
+
+*** Fix AL: utils/utils-claude.el — new module: Claude API HTTP client
+
+🟠 Medium — new infrastructure module
+
+- *[Fix AL] utils/utils-claude.el (new)*: Added a low-level Claude API HTTP
+  client to the =utils= layer.  The module exposes three public functions:
+  =utils-claude-get-api-key= (retrieves the Anthropic API key from
+  =auth-source=, machine =api.anthropic.com=, login =apikey=);
+  =utils-claude-request-sync= (synchronous POST to the Messages API,
+  returns the assistant text string); and =utils-claude-request= (asynchronous
+  variant accepting a callback).
+
+  Layer placement rationale: the =utils= layer is the correct home because the
+  module has zero dependency on UI, Org, completion, or any layer above utils.
+  It requires only built-in packages (=url=, =url-http=, =json=, =auth-source=)
+  and may be required by any upper-layer module without creating a dependency
+  inversion.  This separates it from =dev-ai= (aidermacs) and =gptel=, which
+  are development-tooling concerns in the =dev= layer.
+
+  A dedicated =define-error= form (=utils-claude-error=) covers all failure
+  paths (HTTP non-200, JSON parse error, missing API key) so callers can trap
+  errors precisely with =condition-case=.
+
+  Four =defcustom= variables are declared under the =utils-claude= =defgroup=:
+  =utils-claude-default-model=, =utils-claude-max-tokens=,
+  =utils-claude-api-version=, and =utils-claude-endpoint=.  All follow the
+  =setopt= convention (Rule 6) and carry type annotations.
+
+  The =*** utils= layer overview and the =*** dev= note are updated to document
+  the placement decision and the separation from =dev-ai= and =gptel=.
+
+*** Fix AM: personal/personal-ai.el — new module: Org Babel + Claude API integration
+
+🟠 Medium — new personal-layer module
+
+- *[Fix AM] personal/personal-ai.el (new)*: Added an Org Babel and interactive
+  workflow integration module to the =personal= layer.  The module depends on
+  =utils-claude= (utils layer) for all HTTP transport; it contains no direct
+  HTTP code.
+
+  *Org Babel language registration*: =org-babel-execute:claude= is registered
+  via =add-to-list 'org-babel-load-languages= so that =#+begin_src claude=
+  source blocks evaluate by sending their body as the user message and
+  returning the assistant response as the block result.  Supported header
+  arguments: =:system= (system prompt), =:model= (model identifier), =:tokens=
+  (max_tokens integer).  The function returns the result string directly,
+  consistent with Babel =:results value= semantics.
+
+  *Interactive commands* (three public =my/= functions, each with a docstring):
+
+  | Command | Behaviour |
+  |---------+-----------|
+  | =my/claude-refactor-defun= | Sends the =defun= at point with a refactoring prompt; result displayed in =*Claude Output*= |
+  | =my/claude-complete-docstring= | Requests a docstring for the =defun= at point; result displayed in =*Claude Output*= |
+  | =my/claude-analyze-require-graph= | Sends the current buffer with a layer-order analysis prompt; flags upward-layer dependencies |
+
+  *Private helpers*: =personal-ai--show-result= and =personal-ai--defun-at-point=
+  follow the =personal-ai--= double-dash naming convention (Rule 7).
+
+  Layer placement rationale: (a) Org Babel integration is a personal workflow
+  choice, not shared policy; (b) =org-babel-execute:claude= must be defined
+  after Org loads, and the personal layer loads last; (c) the module is
+  optional and must not affect the shared module load order.  The four
+  concrete use cases addressed — README.org generation, Lisp refactoring,
+  require-graph analysis, and docstring completion — are all author-specific
+  workflows appropriate to the personal layer.
+
+  The personal overview table is updated to include =personal/personal-ai.el=.
