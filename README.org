@@ -5702,6 +5702,14 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
           '((nil :maxlevel . 3)
             (my/org-buffer-files :maxlevel . 1)
             (org-agenda-files :maxlevel . 3)))
+    ;; [Fix AN] org-capture-templates: blog post template added.
+    ;; my:f:capture-blog-file points to the single-file ox-hugo source
+    ;; (all-posts.org or blog.org).  The template inserts under "* blog"
+    ;; to match the file+olp target used by ox-hugo's per-subtree export.
+    ;; EXPORT_FILE_NAME is generated via org-id-new, matching the existing
+    ;; UUID-derived slug convention in all-posts.org.
+    ;; Personal overrides to my:f:capture-blog-file (e.g. pointing to
+    ;; all-posts.org) must be set in personal/<user>.el before orgx-core loads.
     (setq org-capture-templates
           `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
              "* TODO %?\n %i\n %a")
@@ -5710,7 +5718,10 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
             ("j" "Journal" entry (function org-journal-find-location)
              "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
-             "* MEETING with %? :meeting:\n  %U\n  %a"))))
+             "* MEETING with %? :meeting:\n  %U\n  %a")
+            ("b" "Blog post" entry
+             (file+olp my:f:capture-blog-file "blog")
+             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_FILE_NAME: %(org-id-new)\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
 
   ;; Archive location
   (with-eval-after-load 'org
@@ -8263,9 +8274,15 @@ The key files are:
   ;; never overwrites an existing binding), which is the intended override
   ;; mechanism.  setq is correct because these are defvar variables, not defcustom.
   ;; See the "Override contract" comment in orgx-core.el for the full sequence.
+  ;;
+  ;; my:f:capture-blog-file must also be overridden here: the default value
+  ;; ("blog.org") does not exist and contains no "* blog" heading.  The actual
+  ;; ox-hugo single-file source is all-posts.org, which carries a "* blog"
+  ;; top-level heading required by the (file+olp ... "blog") capture target.
   (setq my:d:org          "/Users/ac1965/Documents/org/"
         my:d:org-journal   "/Users/ac1965/Documents/org/journal/"
-        my:d:org-roam      "/Users/ac1965/Documents/org/org-roam/")
+        my:d:org-roam      "/Users/ac1965/Documents/org/org-roam/"
+        my:f:capture-blog-file "/Users/ac1965/Documents/devel/repos/mysite/all-posts.org")
 
   ;; Font preferences
   ;; [Fix U] ui-font-default, ui-font-variable-pitch, ui-font-size are
@@ -10354,3 +10371,46 @@ file; this pass re-applies them to the canonical source.
   workflows appropriate to the personal layer.
 
   The personal overview table is updated to include =personal/personal-ai.el=.
+
+** 2026-03 (twenty-first evaluation pass)
+*** Fix AN: orgx/orgx-core.el + personal/ac1965.el — blog post capture template
+
+🟡 Minor — feature addition
+
+- *[Fix AN] orgx/orgx-core.el (=org-capture-templates=)*: Added a blog post
+  capture template with key =b=, matching the =C-c c b= workflow documented at
+  the top of =all-posts.org=.
+
+  The template target is =(file+olp my:f:capture-blog-file "blog")=, which
+  inserts a new subtree under the =* blog= heading.  This structure is
+  mandatory for ox-hugo per-subtree export: each post subtree must be a direct
+  child of =* blog= so that =org-hugo-section= and =EXPORT_HUGO_*= properties
+  are resolved correctly.
+
+  The =entry= capture type generates the heading line automatically from the
+  template string.  The template string therefore begins with =* TODO %^{Title}=
+  (one asterisk; =org-capture= adjusts the level to match the target).  The
+  property drawer follows immediately as literal =\n=-separated lines.
+
+  The property drawer fields match the conventions observed in =all-posts.org=:
+
+  | Property | Value | Rationale |
+  |----------------------+-----------------------------+-------------------------------|
+  | =EXPORT_FILE_NAME=   | =%(org-id-new)=             | UUID short-slug, matching existing entries |
+  | =EXPORT_DATE=        | =%<%Y-%m-%d %H:%M:%S>=      | Timestamp format identical to existing entries |
+  | =EXPORT_HUGO_TAGS=   | =%^{Tags}=                  | Interactive prompt; space-delimited as Hugo expects |
+  | =EXPORT_HUGO_CATEGORIES= | =%^{Category}=          | Interactive prompt; single category per post |
+  | =EXPORT_HUGO_LASTMOD=    | (empty)                 | Populated by ox-hugo at export time |
+
+  The =setq= form for =org-capture-templates= is preserved (Rule 6 backquote
+  exception, documented since Fix AA).
+
+- *[Fix AN] personal/ac1965.el (=my:f:capture-blog-file=)*: Added
+  =my:f:capture-blog-file= to the =setq= block that overrides =my:d:org*= path
+  variables.  The default value in =orgx-core= resolves to =blog.org=, which
+  does not exist and contains no =* blog= heading.  The actual ox-hugo
+  single-file source for this machine is =all-posts.org=, which carries the
+  =* blog= top-level heading required by the =(file+olp ... "blog")= capture
+  target.  Without this override, =org-capture= raises
+  =org-find-olp: Heading not found on level 1: blog= at capture time.
+  The variable is a =defvar= (not =defcustom=), so =setq= is correct (Rule 6).
