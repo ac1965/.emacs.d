@@ -1,4 +1,3 @@
-
 # -*- mode: org; coding: utf-8; -*-
 #+TITLE: Modern Emacs Configuration
 #+AUTHOR: YAMASHITA, Takao
@@ -1407,6 +1406,7 @@ Its role is orchestration only.
       orgx-export
       orgx-notes-markdown
       orgx-auto-tangle
+      orgx-auto-hugo
 
       ;; -----------------------------------------------------------------------
       ;; VCS
@@ -6259,6 +6259,72 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
   ;;; orgx/orgx-auto-tangle.el ends here
 #+end_src
 
+**** orgx/orgx-auto-hugo.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-auto-hugo
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-auto-hugo.el
+:END:
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-auto-hugo.el --- Automatic ox-hugo export on save -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Automatic ox-hugo all-subtrees export on save for the Hugo blog source file.
+  ;;
+  ;; This file:
+  ;; - targets only the file identified by `my:f:capture-blog-file`
+  ;; - uses a buffer-local in-progress flag to prevent recursive save loops
+  ;; - calls `org-hugo-export-wim-to-md` with :all-subtrees t on each save
+  ;; - registers `orgx-auto-hugo--maybe` in `after-save-hook` buffer-locally
+  ;;   via the named hook function `orgx-auto-hugo--install-hook`
+  ;; - depends on ox-hugo being loaded (orgx-export loads it earlier in the
+  ;;   orgx layer, so the dependency flows downward correctly)
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+  (require 'ox-hugo)
+
+  (defvar-local orgx-auto-hugo--in-progress nil
+    "Non-nil while an ox-hugo export triggered by `after-save-hook' is running.
+Prevents recursive export loops when ox-hugo writes intermediate files.")
+
+  (defun orgx-auto-hugo--eligible-p ()
+    "Return non-nil when the current buffer is the Hugo blog source file."
+    (and (derived-mode-p 'org-mode)
+         buffer-file-name
+         (bound-and-true-p my:f:capture-blog-file)
+         (string= (file-truename buffer-file-name)
+                  (file-truename my:f:capture-blog-file))))
+
+  (defun orgx-auto-hugo--maybe ()
+    "Export all Hugo subtrees when the current buffer is the blog source file."
+    (when (and (orgx-auto-hugo--eligible-p)
+               (not orgx-auto-hugo--in-progress))
+      (let ((orgx-auto-hugo--in-progress t))
+        (condition-case err
+            (progn
+              (message "[orgx-auto-hugo] exporting all subtrees...")
+              (org-hugo-export-wim-to-md :all-subtrees)
+              (message "[orgx-auto-hugo] export complete."))
+          (error
+           (message "[orgx-auto-hugo] error: %s" (error-message-string err)))))))
+
+  (defun orgx-auto-hugo--install-hook ()
+    "Install the auto-hugo after-save hook buffer-locally."
+    (add-hook 'after-save-hook #'orgx-auto-hugo--maybe nil 'local))
+
+  (add-hook 'org-mode-hook #'orgx-auto-hugo--install-hook)
+
+  (provide 'orgx-auto-hugo)
+  ;;; orgx/orgx-auto-hugo.el ends here
+#+end_src
+
 **** orgx/orgx-typography.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-typography
@@ -10414,3 +10480,33 @@ file; this pass re-applies them to the canonical source.
   target.  Without this override, =org-capture= raises
   =org-find-olp: Heading not found on level 1: blog= at capture time.
   The variable is a =defvar= (not =defcustom=), so =setq= is correct (Rule 6).
+
+** 2026-03 (twenty-second evaluation pass)
+*** Fix AO: orgx/orgx-auto-hugo.el — new module: automatic ox-hugo export on save
+
+🟡 Minor — feature addition
+
+- *[Fix AO] orgx/orgx-auto-hugo.el (new)*: Added a new module to the =orgx=
+  layer that automatically runs =org-hugo-export-wim-to-md :all-subtrees= when
+  the Hugo blog source file is saved.
+
+  The module follows the same structure as =orgx-auto-tangle.el=:
+
+  | Element | Value | Rationale |
+  |---------+-------+-----------|
+  | Eligibility predicate | =orgx-auto-hugo--eligible-p= | Compares =buffer-file-name= to =my:f:capture-blog-file= via =file-truename= to handle symlinks |
+  | Guard flag | =defvar-local orgx-auto-hugo--in-progress= | Prevents recursive export loops if ox-hugo triggers a buffer save internally |
+  | Worker function | =orgx-auto-hugo--maybe= | Runs =org-hugo-export-wim-to-md= with =:all-subtrees= inside =condition-case= |
+  | Hook registration | =orgx-auto-hugo--install-hook= | Named =defun= added to =org-mode-hook=; installs =after-save-hook= buffer-locally |
+
+  The =file-truename= comparison (rather than =string==) ensures that symlinks
+  to =all-posts.org= resolve correctly.  =bound-and-true-p= guards against the
+  case where =my:f:capture-blog-file= has not yet been bound (e.g. the orgx
+  layer loading before the personal override has run).
+
+  Layer dependency: =orgx-auto-hugo= depends on =ox-hugo=, which is loaded by
+  =orgx-export= earlier in the =orgx= layer.  The dependency flows downward
+  within the layer and does not violate the no-upward-dependency invariant.
+
+  =orgx-auto-hugo= is registered in =my:modules= immediately after
+  =orgx-auto-tangle=.
