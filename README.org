@@ -6265,7 +6265,7 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
 :header-args:emacs-lisp: :tangle lisp/orgx/orgx-auto-hugo.el
 :END:
 #+begin_src emacs-lisp
-  ;;; orgx/orgx-auto-hugo.el --- Automatic ox-hugo export on save -*- lexical-binding: t; -*-
+  ;;; orgx/orgx-auto-hugo.el --- Automatic ox-hugo export on capture finalize -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -6275,51 +6275,69 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
   ;;
   ;;; Commentary:
   ;;
-  ;; Automatic ox-hugo all-subtrees export on save for the Hugo blog source file.
+  ;; Automatic ox-hugo all-subtrees export triggered by org-capture finalization.
   ;;
   ;; This file:
-  ;; - targets only the file identified by `my:f:capture-blog-file`
-  ;; - uses a buffer-local in-progress flag to prevent recursive save loops
-  ;; - calls `org-hugo-export-wim-to-md` with :all-subtrees t on each save
-  ;; - registers `orgx-auto-hugo--maybe` in `after-save-hook` buffer-locally
-  ;;   via the named hook function `orgx-auto-hugo--install-hook`
+  ;; - exports only when a blog post capture entry is finalized via C-c C-c
+  ;; - does NOT export on auto-save or manual save during capture editing
+  ;; - does NOT export when capture is aborted via C-c C-k
+  ;; - detects the target file via `my:f:capture-blog-file` at finalize time
+  ;; - uses a guard flag to prevent re-entrant export calls
   ;; - depends on ox-hugo being loaded (orgx-export loads it earlier in the
   ;;   orgx layer, so the dependency flows downward correctly)
+  ;;
+  ;; Design rationale:
+  ;;
+  ;; The previous design registered `orgx-auto-hugo--maybe` on `after-save-hook`
+  ;; buffer-locally.  This caused ox-hugo export to run on every auto-save
+  ;; event during capture editing, including transient saves that occur before
+  ;; the entry is complete.  The correct trigger is capture finalization: only
+  ;; after C-c C-c has committed the entry is the file in a consistent state
+  ;; for export.
+  ;;
+  ;; `org-capture-after-finalize-hook` runs after the captured entry has been
+  ;; inserted and the capture buffer has been closed.  `org-note-abort` is
+  ;; non-nil when the capture was aborted; the hook runs in both cases, so
+  ;; the abort condition must be checked explicitly.
+  ;;
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
   (require 'ox-hugo)
 
-  (defvar-local orgx-auto-hugo--in-progress nil
-    "Non-nil while an ox-hugo export triggered by `after-save-hook' is running.
-Prevents recursive export loops when ox-hugo writes intermediate files.")
+  (defvar orgx-auto-hugo--in-progress nil
+    "Non-nil while an ox-hugo export triggered by capture finalization is running.
+Prevents re-entrant export calls if ox-hugo causes a secondary finalize event.")
 
-  (defun orgx-auto-hugo--eligible-p ()
-    "Return non-nil when the current buffer is the Hugo blog source file."
-    (and (derived-mode-p 'org-mode)
-         buffer-file-name
-         (bound-and-true-p my:f:capture-blog-file)
-         (string= (file-truename buffer-file-name)
+  (defun orgx-auto-hugo--blog-capture-p ()
+    "Return non-nil when the just-finalized capture targeted the blog source file.
+Reads `org-capture-last-stored-marker' to determine the destination file."
+    (and (bound-and-true-p my:f:capture-blog-file)
+         (markerp org-capture-last-stored-marker)
+         (marker-buffer org-capture-last-stored-marker)
+         (buffer-file-name (marker-buffer org-capture-last-stored-marker))
+         (string= (file-truename
+                   (buffer-file-name
+                    (marker-buffer org-capture-last-stored-marker)))
                   (file-truename my:f:capture-blog-file))))
 
-  (defun orgx-auto-hugo--maybe ()
-    "Export all Hugo subtrees when the current buffer is the blog source file."
-    (when (and (orgx-auto-hugo--eligible-p)
-               (not orgx-auto-hugo--in-progress))
+  (defun orgx-auto-hugo--on-capture-finalize ()
+    "Export all Hugo subtrees after a blog post capture entry is finalized.
+Does nothing when capture was aborted or the target is not the blog source file."
+    (when (and (not org-note-abort)
+               (not orgx-auto-hugo--in-progress)
+               (orgx-auto-hugo--blog-capture-p))
       (let ((orgx-auto-hugo--in-progress t))
         (condition-case err
             (progn
-              (message "[orgx-auto-hugo] exporting all subtrees...")
-              (org-hugo-export-wim-to-md :all-subtrees)
+              (message "[orgx-auto-hugo] capture finalized — exporting all subtrees...")
+              (with-current-buffer (marker-buffer org-capture-last-stored-marker)
+                (org-hugo-export-wim-to-md :all-subtrees))
               (message "[orgx-auto-hugo] export complete."))
           (error
            (message "[orgx-auto-hugo] error: %s" (error-message-string err)))))))
 
-  (defun orgx-auto-hugo--install-hook ()
-    "Install the auto-hugo after-save hook buffer-locally."
-    (add-hook 'after-save-hook #'orgx-auto-hugo--maybe nil 'local))
-
-  (add-hook 'org-mode-hook #'orgx-auto-hugo--install-hook)
+  (add-hook 'org-capture-after-finalize-hook #'orgx-auto-hugo--on-capture-finalize)
 
   (provide 'orgx-auto-hugo)
   ;;; orgx/orgx-auto-hugo.el ends here
@@ -8348,7 +8366,7 @@ The key files are:
   (setq my:d:org          "/Users/ac1965/Documents/org/"
         my:d:org-journal   "/Users/ac1965/Documents/org/journal/"
         my:d:org-roam      "/Users/ac1965/Documents/org/org-roam/"
-        my:f:capture-blog-file "/Users/ac1965/Documents/devel/repos/mysite/all-posts.org")
+        my:f:capture-blog-file "/Users/ac1965/Projects/mysite/all-posts.org")
 
   ;; Font preferences
   ;; [Fix U] ui-font-default, ui-font-variable-pitch, ui-font-size are
@@ -10510,3 +10528,57 @@ file; this pass re-applies them to the canonical source.
 
   =orgx-auto-hugo= is registered in =my:modules= immediately after
   =orgx-auto-tangle=.
+
+** 2026-03 (twenty-third evaluation pass)
+*** Fix AP: orgx/orgx-auto-hugo.el — replace after-save export with capture-finalize export
+
+🟠 Medium — behavioral correctness / capture lifecycle
+
+- *[Fix AP] orgx/orgx-auto-hugo.el*: Replaced the =after-save-hook= based
+  export trigger with =org-capture-after-finalize-hook=.
+
+  *Root cause.* The previous design registered =orgx-auto-hugo--maybe= on
+  =after-save-hook= buffer-locally via =orgx-auto-hugo--install-hook= on
+  =org-mode-hook=.  During a blog post capture session the capture buffer
+  opens =my:f:capture-blog-file= in =org-mode=, which caused the hook to be
+  installed.  Every subsequent auto-save event (=auto-save-mode=,
+  =real-auto-save-mode=, or explicit =C-x s=) then triggered a full
+  =org-hugo-export-wim-to-md :all-subtrees= call before the entry was
+  complete.  This produced partial exports, unnecessary I/O, and visible
+  interruptions during editing.
+
+  *Fix.* The module now registers one global function on
+  =org-capture-after-finalize-hook=.  This hook fires exactly once per
+  capture session — after =C-c C-c= commits the entry or after =C-c C-k=
+  aborts it.  Two guards are checked before exporting:
+
+  | Guard | Expression | Purpose |
+  |-------+------------+---------|
+  | Abort check | =(not org-note-abort)= | Skips export when capture is aborted via =C-c C-k= |
+  | Target check | =orgx-auto-hugo--blog-capture-p= | Confirms the stored marker's buffer file matches =my:f:capture-blog-file= |
+
+  The target check uses =org-capture-last-stored-marker= (set by
+  =org-capture= after a successful finalization) to identify the destination
+  buffer, then compares its =buffer-file-name= against =my:f:capture-blog-file=
+  via =file-truename=.  This handles symlinks and avoids exporting when an
+  unrelated capture (Todo, Note, Journal) is finalized.
+
+  *Removed elements.*
+
+  | Removed | Reason |
+  |---------+--------|
+  | =defvar-local orgx-auto-hugo--in-progress= | No longer buffer-local; changed to plain =defvar= because the hook is global |
+  | =orgx-auto-hugo--eligible-p= | Replaced by =orgx-auto-hugo--blog-capture-p= which inspects the finalize marker rather than the current buffer |
+  | =orgx-auto-hugo--install-hook= | Superfluous; =org-capture-after-finalize-hook= is global and requires no per-buffer installation |
+  | =(add-hook 'org-mode-hook ...)= | Removed with =orgx-auto-hugo--install-hook= |
+
+  *Added elements.*
+
+  | Added | Purpose |
+  |-------+---------|
+  | =orgx-auto-hugo--blog-capture-p= | Predicate that reads =org-capture-last-stored-marker= to verify the destination file |
+  | =orgx-auto-hugo--on-capture-finalize= | Worker function registered on =org-capture-after-finalize-hook=; performs abort check, target check, and export |
+
+  The export runs =with-current-buffer (marker-buffer org-capture-last-stored-marker)=
+  to ensure =org-hugo-export-wim-to-md= operates on the blog file buffer even
+  if point has moved to a different buffer by the time the hook fires.
