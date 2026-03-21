@@ -6391,6 +6391,119 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;;; orgx/orgx-typography.el ends here
 #+end_src
 
+**** orgx/orgx-roam-ui.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-roam-ui
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-roam-ui.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-roam-ui.el --- org-roam-ui graph visualiser -*- lexical-binding: t; -*-
+
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Interactive graph visualiser for org-roam nodes, served via a local
+  ;; WebSocket server and viewed in a browser.
+  ;;
+  ;; This file:
+  ;; - loads org-roam-ui after org-roam is available
+  ;; - sets sync-theme, follow, and update-on-save via setopt in :config
+  ;; - opens the UI automatically via a one-shot idle timer (8 s) so that
+  ;;   org-roam autosync (orgx-extensions, 5 s timer) has already fired
+  ;;
+  ;; Load path: appended to `my:modules-extra' by personal/user.el.
+  ;; This module must not appear in the canonical `my:modules' list; it is
+  ;; a personal presentation choice.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf org-roam-ui
+    :straight t
+    :after org-roam
+    :config
+    (setopt org-roam-ui-sync-theme    t
+            org-roam-ui-follow        t
+            org-roam-ui-update-on-save t)
+
+    (defun orgx-roam-ui--open-deferred ()
+      "Open org-roam-ui after org-roam autosync has settled."
+      (condition-case err
+          (when (fboundp 'org-roam-ui-open)
+            (org-roam-ui-open)
+            (message "[org-roam-ui] graph opened"))
+        (error
+         (message "[org-roam-ui] open failed: %s"
+                  (error-message-string err)))))
+
+    (run-with-idle-timer 8 nil #'orgx-roam-ui--open-deferred))
+
+  (provide 'orgx-roam-ui)
+  ;;; orgx/orgx-roam-ui.el ends here
+#+end_src
+
+**** orgx/orgx-brain.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-brain
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-brain.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-brain.el --- org-brain knowledge graph -*- lexical-binding: t; -*-
+
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; org-brain provides a mind-map / wiki view of Org files as interconnected
+  ;; entries, complementing org-roam's backlink-centric graph.
+  ;;
+  ;; This file:
+  ;; - sets org-brain-path to my:d:org-roam so both tools share the same
+  ;;   note directory without duplication
+  ;; - binds `my/brain-visualize' under the personal key prefix
+  ;;
+  ;; Load path: appended to `my:modules-extra' by personal/user.el.
+  ;; This module must not appear in the canonical `my:modules' list.
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (defgroup orgx-brain nil
+    "org-brain knowledge graph integration."
+    :group 'org
+    :prefix "orgx-brain-")
+
+  (leaf org-brain
+    :straight t
+    :after org
+    :config
+    ;; org-brain-path is a defcustom; the value is runtime-evaluated from
+    ;; my:d:org-roam, so setopt is used here rather than :custom.
+    (setopt org-brain-path my:d:org-roam)
+
+    (defun my/brain-visualize ()
+      "Open org-brain visualisation for the entry at point or prompt."
+      (interactive)
+      (condition-case err
+          (org-brain-visualize (org-brain-entry-at-pt))
+        (error
+         (call-interactively #'org-brain-visualize))))
+
+    (with-eval-after-load 'org-brain
+      (keymap-set org-brain-visualize-mode-map "j" #'forward-button)
+      (keymap-set org-brain-visualize-mode-map "k" #'backward-button)))
+
+  (provide 'orgx-brain)
+  ;;; orgx/orgx-brain.el ends here
+#+end_src
+
 *** dev/
 :PROPERTIES:
 :CUSTOM_ID: dev-modules
@@ -8269,6 +8382,8 @@ The key files are:
          (append my:modules-extra
                  '(ui-visual-aids
                    orgx-typography
+                   orgx-roam-ui
+                   orgx-brain
                    ui-macos))))
 
   (leaf my:locale
@@ -10582,3 +10697,47 @@ file; this pass re-applies them to the canonical source.
   The export runs =with-current-buffer (marker-buffer org-capture-last-stored-marker)=
   to ensure =org-hugo-export-wim-to-md= operates on the blog file buffer even
   if point has moved to a different buffer by the time the hook fires.
+** 2026-03 (twenty-fourth evaluation pass)
+*** Fix AQ: orgx/orgx-roam-ui.el — new module: org-roam-ui graph visualiser via my:modules-extra
+
+🟡 Minor — new feature / optional module
+
+- *[Fix AQ] orgx/orgx-roam-ui.el (new)*: Added =orgx-roam-ui= as a new
+  optional module under =lisp/orgx/=, loaded exclusively via =my:modules-extra=
+  populated by =personal/user.el=.  The module configures =org-roam-ui= with
+  =sync-theme t=, =follow t=, and =update-on-save t= via =setopt= in =:config=
+  (values are booleans, not paths, so =:custom= would be acceptable, but
+  =setopt= is used for consistency with other =defcustom= assignments in this
+  layer).  Auto-open on startup is implemented via a named function
+  =orgx-roam-ui--open-deferred= scheduled with an 8-second one-shot idle
+  timer; this fires after =orgx--org-roam-autosync-enable= (5-second timer in
+  =orgx-extensions.el=) has settled, ensuring the DB is ready before the UI
+  connects.  The timer callback is wrapped in =condition-case= following the
+  delete-safe pattern established for =orgx--org-roam-autosync-enable=.
+
+*** Fix AR: orgx/orgx-brain.el — new module: org-brain knowledge graph via my:modules-extra
+
+🟡 Minor — new feature / optional module
+
+- *[Fix AR] orgx/orgx-brain.el (new)*: Added =orgx-brain= as a new optional
+  module under =lisp/orgx/=, loaded via =my:modules-extra=.  Sets
+  =org-brain-path= to =my:d:org-roam= via =setopt= inside =:config= (runtime
+  path, cannot go in =:custom=; same rationale as =org-roam-db-location= in Fix
+  S).  Declares =defgroup orgx-brain= as the module owns the
+  =org-brain-path= customisation.  Provides =my/brain-visualize= as the single
+  public interactive command, with a =condition-case= fallback to
+  =call-interactively= when no entry exists at point.  Key bindings in
+  =org-brain-visualize-mode-map= use =keymap-set= (Emacs 29+ API, consistent
+  with Fix C).  The module is appended between =orgx-typography= and =ui-macos=
+  in =personal/ac1965.el= to preserve the layer ordering invariant.
+
+*** Fix AS: personal/ac1965.el — append orgx-roam-ui and orgx-brain to my:modules-extra
+
+🟡 Minor — configuration / module registration
+
+- *[Fix AS] personal/ac1965.el (my:modules-extra)*: Added =orgx-roam-ui= and
+  =orgx-brain= to the =my:modules-extra= list in =personal/ac1965.el=.  Both
+  symbols are inserted between =orgx-typography= and =ui-macos= to keep orgx-
+  layer extras grouped together.  The surrounding =delete-dups= / =append=
+  pattern is unchanged; no other module files are modified.
+
