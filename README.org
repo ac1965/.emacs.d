@@ -5855,6 +5855,26 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
 
   (leaf org-journal :straight t :custom ((org-journal-dir . my:d:org-journal)))
 
+  (defun orgx--org-roam-file-hash-guard (orig file)
+    "Guard `org-roam-db--file-hash' against errors on ORIG called with FILE.
+  Returns nil on error so the DB sync skips the problematic file instead
+  of aborting the entire autosync run."
+    (condition-case err
+        (funcall orig file)
+      (error
+       (message "[org-roam] skip hash: %s (%s)" file (error-message-string err))
+       nil)))
+
+  (defun orgx--org-roam-autosync-enable ()
+    "Enable org-roam autosync (called from idle timer)."
+    (condition-case err
+        (when (fboundp 'org-roam-db-autosync-mode)
+          (org-roam-db-autosync-mode 1)
+          (message "[org-roam] autosync enabled (delayed)"))
+      (error
+       (message "[org-roam] autosync failed: %s"
+                (error-message-string err)))))
+
   (leaf org-roam
     :straight t
     :custom ((org-roam-directory . my:d:org-roam))
@@ -5863,23 +5883,6 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
     ;; from my:d:org-roam so it cannot go in :custom directly.  Use setopt
     ;; inside :config to keep the setter/type-check path.
     (setopt org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
-
-    (defun orgx--org-roam-file-hash-guard (orig file)
-      (condition-case err
-          (funcall orig file)
-        (error
-         (message "[org-roam] skip hash: %s (%s)" file (error-message-string err))
-         nil)))
-
-    (defun orgx--org-roam-autosync-enable ()
-      "Enable org-roam autosync (called from idle timer)."
-      (condition-case err
-          (when (fboundp 'org-roam-db-autosync-mode)
-            (org-roam-db-autosync-mode 1)
-            (message "[org-roam] autosync enabled (delayed)"))
-        (error
-         (message "[org-roam] autosync failed: %s"
-                  (error-message-string err)))))
 
     (with-eval-after-load 'org-roam
       (when (fboundp 'org-roam-db--file-hash)
@@ -6409,38 +6412,59 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;; WebSocket server and viewed in a browser.
   ;;
   ;; This file:
-  ;; - loads org-roam-ui after org-roam is available
-  ;; - sets sync-theme, follow, and update-on-save via setopt in :config
-  ;; - opens the UI automatically via a one-shot idle timer (8 s) so that
-  ;;   org-roam autosync (orgx-extensions, 5 s timer) has already fired
+  ;; - installs simple-httpd, websocket, and org-roam-ui via
+  ;;   straight-use-package at top level (outside any with-eval-after-load
+  ;;   wrapper) so all three are on load-path before org-roam is required
+  ;; - defers configuration to with-eval-after-load 'org-roam
+  ;; - opens the UI via a one-shot idle timer (8 s) after org-roam autosync
+  ;;   (orgx-extensions, 5 s timer) has settled
   ;;
-  ;; Load path: appended to `my:modules-extra' by personal/user.el.
-  ;; This module must not appear in the canonical `my:modules' list; it is
-  ;; a personal presentation choice.
+  ;; Why leaf :after is not used:
+  ;;   leaf :after wraps both the :straight install and :config inside
+  ;;   with-eval-after-load 'org-roam.  org-roam is already a loaded feature
+  ;;   by the time orgx-roam-ui.el is required (it loads via orgx-extensions
+  ;;   earlier in my:modules-extra), so with-eval-after-load fires immediately
+  ;;   and synchronously.  At that instant straight has not yet built
+  ;;   simple-httpd or websocket, so (require 'org-roam-ui) inside the wrapper
+  ;;   fails with "Cannot open load file: simple-httpd".
+  ;;
+  ;;   Installing all three packages at top level guarantees they are built
+  ;;   and on load-path for the entire session before any deferred eval runs.
+  ;;
+  ;; Load path: appended to my:modules-extra by personal/user.el.
+  ;; This module must not appear in the canonical my:modules list.
   ;;
   ;;; Code:
 
-  (eval-when-compile (require 'leaf))
+  ;; Install dependencies synchronously at top level.
+  (straight-use-package 'simple-httpd)
+  (straight-use-package 'websocket)
+  (straight-use-package
+   '(org-roam-ui
+     :type git
+     :host github
+     :repo "org-roam/org-roam-ui"
+     :branch "main"
+     :files ("*.el" "out")))
 
-  (leaf org-roam-ui
-    :straight t
-    :after org-roam
-    :config
-    (setopt org-roam-ui-sync-theme    t
-            org-roam-ui-follow        t
-            org-roam-ui-update-on-save t)
+  (defun orgx-roam-ui--open-deferred ()
+    "Open org-roam-ui after org-roam autosync has settled.
+  Scheduled via an 8-second idle timer so that the org-roam database
+  autosync (5-second timer in orgx-extensions) has completed first."
+    (condition-case err
+        (when (fboundp 'org-roam-ui-open)
+          (org-roam-ui-open)
+          (message "[org-roam-ui] graph opened"))
+      (error
+       (message "[org-roam-ui] open failed: %s"
+                (error-message-string err)))))
 
-    (defun orgx-roam-ui--open-deferred ()
-      "Open org-roam-ui after org-roam autosync has settled."
-      (condition-case err
-          (when (fboundp 'org-roam-ui-open)
-            (org-roam-ui-open)
-            (message "[org-roam-ui] graph opened"))
-        (error
-         (message "[org-roam-ui] open failed: %s"
-                  (error-message-string err)))))
-
-    (run-with-idle-timer 8 nil #'orgx-roam-ui--open-deferred))
+  (with-eval-after-load 'org-roam
+    (when (require 'org-roam-ui nil t)
+      (setopt org-roam-ui-sync-theme     t
+              org-roam-ui-follow         t
+              org-roam-ui-update-on-save t)
+      (run-with-idle-timer 8 nil #'orgx-roam-ui--open-deferred)))
 
   (provide 'orgx-roam-ui)
   ;;; orgx/orgx-roam-ui.el ends here
@@ -10741,3 +10765,54 @@ file; this pass re-applies them to the canonical source.
   layer extras grouped together.  The surrounding =delete-dups= / =append=
   pattern is unchanged; no other module files are modified.
 
+** 2026-03 (twenty-fifth evaluation pass)
+*** Fix AW: orgx/orgx-extensions.el + orgx/orgx-roam-ui.el — fix simple-httpd load failure
+
+🔴 Critical — load-order defect; error reported as "[org-roam] autosync failed"
+
+- *[Fix AW] orgx/orgx-extensions.el (=orgx--org-roam-file-hash-guard=,
+  =orgx--org-roam-autosync-enable=)*: Moved both =defun= forms from inside the
+  =leaf org-roam :config= block to top level.  Coding rule: =defun= at top
+  level, never inside =leaf= blocks.  The functions are referenced by
+  =advice-add= and =run-with-idle-timer= respectively; both call sites remain
+  inside the =leaf= block and are unaffected by the move.
+
+- *[Fix AW] orgx/orgx-roam-ui.el*: Replaced =leaf org-roam-ui :straight t
+  :after org-roam= with three top-level =straight-use-package= calls and a
+  =with-eval-after-load 'org-roam= wrapper.
+
+  *Precise root cause.*  The error was reported as:
+
+  : [org-roam] autosync failed: Cannot open load file: No such file or directory, simple-httpd
+
+  The =condition-case= in =orgx--org-roam-autosync-enable= caught the error,
+  so the message prefix was =[org-roam]= not =[org-roam-ui]=.  The actual
+  failure site was inside the =with-eval-after-load 'org-roam= wrapper
+  registered by =leaf org-roam-ui :after org-roam=.
+
+  Load sequence that caused the failure:
+
+  1. =orgx-extensions= loads and installs =org-roam= via =leaf :straight t=.
+     At this point =org-roam= is a loaded feature (added to =features=).
+  2. =orgx-roam-ui= loads later (via =my:modules-extra=).  =leaf org-roam-ui
+     :after org-roam= registers a =with-eval-after-load 'org-roam= wrapper.
+     Because =org-roam= is *already* in =features=, Emacs fires the wrapper
+     *immediately and synchronously* at =with-eval-after-load= call time.
+  3. The wrapper calls =(straight-use-package 'org-roam-ui)= which invokes
+     =(require 'org-roam-ui)=.  =org-roam-ui.el= contains top-level
+     =(require 'simple-httpd)=.  =simple-httpd= has not been built by
+     straight yet, so the require fails.
+  4. The error propagates up through the idle timer callback into the
+     =condition-case= in =orgx--org-roam-autosync-enable=, which formats it
+     as =[org-roam] autosync failed=.
+
+  *Fix.*  Calling =straight-use-package= for all three packages
+  (=simple-httpd=, =websocket=, =org-roam-ui=) at module top level guarantees
+  they are cloned, built, and on =load-path= before any =with-eval-after-load=
+  wrapper fires.  The configuration is deferred via an explicit
+  =with-eval-after-load 'org-roam= block which calls =(require 'org-roam-ui
+  nil t)= — at which point =simple-httpd= and =websocket= are already
+  available.
+
+  =defun orgx-roam-ui--open-deferred= is defined at top level (consistent
+  with the same fix applied to =orgx-extensions= in this pass).%
