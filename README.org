@@ -6417,9 +6417,14 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;; - installs simple-httpd, websocket, and org-roam-ui via
   ;;   straight-use-package at top level (outside any with-eval-after-load
   ;;   wrapper) so all three are on load-path before org-roam is required
-  ;; - defers configuration to with-eval-after-load 'org-roam
+  ;; - requires all three packages unconditionally at top level so that
+  ;;   load-path registration is guaranteed regardless of straight-base-dir
+  ;;   configuration
+  ;; - defers setopt configuration to with-eval-after-load 'org-roam
   ;; - opens the UI via a one-shot idle timer (8 s) after org-roam autosync
   ;;   (orgx-extensions, 5 s timer) has settled
+  ;; - uses a defvar guard to prevent duplicate timer registration if
+  ;;   org-roam is force-reloaded during the session
   ;;
   ;; Why leaf :after is not used:
   ;;   leaf :after wraps both the :straight install and :config inside
@@ -6438,11 +6443,14 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;;
   ;;; Code:
 
-  ;; Install dependencies synchronously at top level.
+  ;; Install and load dependencies synchronously at top level.
+  ;; All three packages must be on load-path before any deferred eval runs.
   (straight-use-package 'simple-httpd)
   (require 'simple-httpd)
+
   (straight-use-package 'websocket)
   (require 'websocket)
+
   (straight-use-package
    '(org-roam-ui
      :type git
@@ -6450,6 +6458,12 @@ Does nothing when capture was aborted or the target is not the blog source file.
      :repo "org-roam/org-roam-ui"
      :branch "main"
      :files ("*.el" "out")))
+  (require 'org-roam-ui)
+
+  (defvar orgx-roam-ui--timer-registered nil
+    "Non-nil when the idle timer for `orgx-roam-ui--open-deferred' has been
+  registered.  Guards against duplicate timer registration when org-roam is
+  force-reloaded during the same session.")
 
   (defun orgx-roam-ui--open-deferred ()
     "Open org-roam-ui after org-roam autosync has settled.
@@ -6464,11 +6478,12 @@ Does nothing when capture was aborted or the target is not the blog source file.
                 (error-message-string err)))))
 
   (with-eval-after-load 'org-roam
-    (when (require 'org-roam-ui nil t)
-      (setopt org-roam-ui-sync-theme     t
-              org-roam-ui-follow         t
-              org-roam-ui-update-on-save t)
-      (run-with-idle-timer 8 nil #'orgx-roam-ui--open-deferred)))
+    (setopt org-roam-ui-sync-theme     t
+            org-roam-ui-follow         t
+            org-roam-ui-update-on-save t)
+    (unless orgx-roam-ui--timer-registered
+      (run-with-idle-timer 8 nil #'orgx-roam-ui--open-deferred)
+      (setq orgx-roam-ui--timer-registered t)))
 
   (provide 'orgx-roam-ui)
   ;;; orgx/orgx-roam-ui.el ends here
