@@ -1450,6 +1450,7 @@ Its role is orchestration only.
       utils-org-agenda
       utils-lint
       utils-diagnostics
+      utils-scratch
       )
     "Default set of modules to load in order.")
 
@@ -8137,6 +8138,115 @@ No-op when SCRIPT is not executable."
   ;;; utils/utils-diagnostics.el ends here
 #+end_src
 
+**** utils/utils-scratch.el
+:PROPERTIES:
+:CUSTOM_ID: utils-scratch
+:header-args:emacs-lisp: :tangle lisp/utils/utils-scratch.el
+:END:
+
+Manages the =*scratch*= buffer lifecycle and provides a command to
+create additional scratch buffers.
+
+Two facilities:
+
+1. *Auto-recreation*: =scratch--ensure-exists= is registered on
+   =buffer-list-update-hook=.  The hook fires after every buffer-list
+   change, so when =*scratch*= is killed the function recreates it in
+   =lisp-interaction-mode= before any subsequent command can observe
+   its absence.  The =unless (get-buffer "*scratch*")= guard keeps the
+   hot path to a single hash lookup on the common case.
+
+2. *Multi-scratch*: =my/scratch-new= creates =*scratch-N*= (N = 2, 3,
+   …) by scanning upward from 2 until a free name is found.  Each
+   buffer is initialised in =lisp-interaction-mode= with
+   =scratch-initial-message= as its content.
+
+Design notes:
+
+- =buffer-list-update-hook= is preferred over =kill-buffer-hook=
+  because the latter runs inside the being-killed buffer's context;
+  creating a same-named buffer from that context introduces ordering
+  hazards.  The update hook runs after the kill is complete.
+- The hook function =scratch--ensure-exists= is a named =defun= at top
+  level (no anonymous lambda on hooks; coding rule 4).
+- =scratch-initial-message= is a =defcustom=; its owning =defgroup= is
+  declared in this module (coding rule 7).
+- All =defcustom= assignments use =setopt=; =defvar= assignments use
+  =setq= (coding rule 6).
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-scratch.el --- Scratch buffer management -*- lexical-binding: t -*-
+
+  ;; Copyright (C) 2024  YAMASHITA, Takao
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+
+  ;;; Commentary:
+
+  ;; Provides two facilities:
+  ;;
+  ;; 1. Auto-recreation: registers `scratch--ensure-exists' on
+  ;;    `buffer-list-update-hook'.  When *scratch* is killed it is
+  ;;    recreated in `lisp-interaction-mode' before control returns to
+  ;;    any subsequent command.
+  ;;
+  ;; 2. Multi-scratch: `my/scratch-new' creates *scratch-N* (N >= 2) and
+  ;;    switches to it.
+
+  ;;; Code:
+
+  (defgroup scratch nil
+    "Scratch buffer management."
+    :group 'convenience
+    :prefix "scratch-")
+
+  (defcustom scratch-initial-message
+    ";; This buffer is for text that is not saved.\n\n"
+    "Initial content inserted into a newly created scratch buffer."
+    :type 'string
+    :group 'scratch)
+
+  ;;; Internal helpers
+
+  (defun scratch--ensure-exists ()
+    "Recreate *scratch* if it does not currently exist.
+  Registered on `buffer-list-update-hook'.  The guard keeps the common
+  case to a single hash lookup so repeated hook invocations are cheap."
+    (unless (get-buffer "*scratch*")
+      (with-current-buffer (get-buffer-create "*scratch*")
+        (lisp-interaction-mode)
+        (when (zerop (buffer-size))
+          (insert scratch-initial-message)))))
+
+  ;;; Public commands
+
+  (defun my/scratch-new ()
+    "Create and switch to a new scratch buffer named *scratch-N*.
+  N is the smallest integer >= 2 for which the name is not already in
+  use.  The buffer is initialised in `lisp-interaction-mode'."
+    (interactive)
+    (let* ((n 2)
+           (name (format "*scratch-%d*" n)))
+      (while (get-buffer name)
+        (setq n (1+ n))
+        (setq name (format "*scratch-%d*" n)))
+      (switch-to-buffer (get-buffer-create name))
+      (lisp-interaction-mode)
+      (when (zerop (buffer-size))
+        (insert scratch-initial-message))
+      (message "Created %s" name)))
+
+  ;;; Setup
+
+  (defun scratch--setup ()
+    "Register the scratch auto-recreation hook."
+    (add-hook 'buffer-list-update-hook #'scratch--ensure-exists))
+
+  (scratch--setup)
+
+  (provide 'utils-scratch)
+  ;;; utils/utils-scratch.el ends here
+#+end_src
+
 **** utils/utils-claude.el
 :PROPERTIES:
 :CUSTOM_ID: utils-claude
@@ -10818,4 +10928,47 @@ file; this pass re-applies them to the canonical source.
   available.
 
   =defun orgx-roam-ui--open-deferred= is defined at top level (consistent
-  with the same fix applied to =orgx-extensions= in this pass).%
+  with the same fix applied to =orgx-extensions= in this pass).
+
+** 2026-04 (twenty-sixth evaluation pass)
+*** Fix AX: utils/utils-scratch.el — new module: scratch buffer lifecycle management
+
+🟡 Minor — new feature / utils layer
+
+- *[Fix AX] utils/utils-scratch.el (new)*: Added =utils-scratch= as a new
+  module in the =utils= layer.  The module addresses two requirements:
+
+  *Requirement 1 — Auto-recreation of =*scratch*=.*
+  =scratch--ensure-exists= is registered on =buffer-list-update-hook= via the
+  named setup function =scratch--setup=.  The hook fires after every
+  buffer-list change; when =*scratch*= has been killed the function recreates
+  it in =lisp-interaction-mode= and inserts =scratch-initial-message= if the
+  buffer is empty.  The =unless (get-buffer "*scratch*")= guard keeps the
+  common case to a single hash lookup so repeated invocations on the hot-path
+  hook are cheap.
+
+  =buffer-list-update-hook= is used in preference to =kill-buffer-hook=
+  because the latter executes inside the context of the buffer being killed;
+  creating a same-named buffer from within that context introduces ordering
+  hazards.  The update hook fires after the kill is complete and the
+  buffer list has settled.
+
+  *Requirement 2 — Multiple independent scratch buffers.*
+  =my/scratch-new= (public interactive command, =my/= prefix per coding rule 7)
+  scans upward from N=2 until it finds a name =*scratch-N*= not currently in
+  use, creates the buffer, switches to it, sets =lisp-interaction-mode=, and
+  inserts =scratch-initial-message= if the buffer is empty.  Repeated
+  invocations each produce a distinct buffer: =*scratch-2*=, =*scratch-3*=, etc.
+
+  | Element | Value | Rule |
+  |---------+-------+------|
+  | Hook function | =scratch--ensure-exists= | Named =defun=; no anonymous lambda on hooks (rule 4) |
+  | Public command | =my/scratch-new= | =my/= prefix for interactive cross-module command (rule 7) |
+  | Setup function | =scratch--setup= | Named =defun= at top level; called once at module load |
+  | Custom variable | =scratch-initial-message= | =defcustom=; =setopt=-compatible; =:group 'scratch= (rule 7) |
+  | Group declaration | =defgroup scratch= | Module owns its =defcustom=; declares own =defgroup= (rule 7) |
+  | Provide symbol | =utils-scratch= | Matches file name without =.el= (rule 2) |
+
+  =utils-scratch= is appended to =my:modules= immediately after
+  =utils-diagnostics=, preserving the existing utils layer load order.
+k
