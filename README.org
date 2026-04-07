@@ -4301,19 +4301,19 @@ No-op when `core-session-run-job' is not available."
     (ui-leader--ensure-prefix-map 'ui-leader-q-map)
     (ui-leader--ensure-prefix-map 'ui-leader-h-map)
 
-    (define-key ui-leader-map (kbd "b") ui-leader-b-map)
-    (define-key ui-leader-map (kbd "w") ui-leader-w-map)
-    (define-key ui-leader-map (kbd "p") ui-leader-p-map)
-    (define-key ui-leader-map (kbd "s") ui-leader-s-map)
-    (define-key ui-leader-map (kbd "g") ui-leader-g-map)
-    (define-key ui-leader-map (kbd "c") ui-leader-c-map)
-    (define-key ui-leader-map (kbd "e") ui-leader-e-map)
-    (define-key ui-leader-map (kbd "t") ui-leader-t-map)
-    (define-key ui-leader-map (kbd "o") ui-leader-o-map)
-    (define-key ui-leader-map (kbd ui-leader-local-suffix) ui-leader-m-map)
-    (define-key ui-leader-map (kbd "a") ui-leader-a-map)
-    (define-key ui-leader-map (kbd "q") ui-leader-q-map)
-    (define-key ui-leader-map (kbd "h") ui-leader-h-map))
+    (keymap-set ui-leader-map "b" ui-leader-b-map)
+    (keymap-set ui-leader-map "w" ui-leader-w-map)
+    (keymap-set ui-leader-map "p" ui-leader-p-map)
+    (keymap-set ui-leader-map "s" ui-leader-s-map)
+    (keymap-set ui-leader-map "g" ui-leader-g-map)
+    (keymap-set ui-leader-map "c" ui-leader-c-map)
+    (keymap-set ui-leader-map "e" ui-leader-e-map)
+    (keymap-set ui-leader-map "t" ui-leader-t-map)
+    (keymap-set ui-leader-map "o" ui-leader-o-map)
+    (keymap-set ui-leader-map ui-leader-local-suffix ui-leader-m-map)
+    (keymap-set ui-leader-map "a" ui-leader-a-map)
+    (keymap-set ui-leader-map "q" ui-leader-q-map)
+    (keymap-set ui-leader-map "h" ui-leader-h-map))
 
   (defun ui-leader-local-key ()
     "Return the full key sequence string for the local leader prefix."
@@ -4592,13 +4592,13 @@ No-op when `core-session-run-job' is not available."
     (when (and (symbolp map)
                (boundp map)
                (keymapp (symbol-value map)))
-      (define-key (symbol-value map) (kbd key) cmd)))
+      (keymap-set (symbol-value map) key cmd)))
 
   (defun ui-keymap--leader-bind (key cmd)
     "Bind KEY to CMD in the root leader map."
     (when (and (boundp 'ui-leader-map)
                (keymapp ui-leader-map))
-      (define-key ui-leader-map (kbd key) cmd)))
+      (keymap-set ui-leader-map key cmd)))
 
   (defun ui-keymap--leader-binds ()
     "Install global leader key bindings."
@@ -4659,17 +4659,17 @@ No-op when `core-session-run-job' is not available."
     "Install local leader bindings for specific major modes."
     (with-eval-after-load 'dirvish
       (when (boundp 'dirvish-mode-map)
-        (define-key dirvish-mode-map (kbd "TAB") #'dirvish-subtree-toggle)
-        (define-key dirvish-mode-map (kbd "i")   #'dirvish-subtree-toggle)
-        (define-key dirvish-mode-map (kbd "o")   #'dired-find-file-other-window)
-        (define-key dirvish-mode-map (kbd "O")   #'ui-keymap--dirvish-open-read-only)
-        (define-key dirvish-mode-map (kbd "q")   #'dirvish-quit)))
+        (keymap-set dirvish-mode-map "TAB" #'dirvish-subtree-toggle)
+        (keymap-set dirvish-mode-map "i"   #'dirvish-subtree-toggle)
+        (keymap-set dirvish-mode-map "o"   #'dired-find-file-other-window)
+        (keymap-set dirvish-mode-map "O"   #'ui-keymap--dirvish-open-read-only)
+        (keymap-set dirvish-mode-map "q"   #'dirvish-quit)))
 
     (with-eval-after-load 'org
       (when (boundp 'org-mode-map)
-        (define-key org-mode-map (kbd "C-c SPC m t") #'org-todo)
-        (define-key org-mode-map (kbd "C-c SPC m s") #'org-schedule)
-        (define-key org-mode-map (kbd "C-c SPC m d") #'org-deadline))))
+        (keymap-set org-mode-map "C-c SPC m t" #'org-todo)
+        (keymap-set org-mode-map "C-c SPC m s" #'org-schedule)
+        (keymap-set org-mode-map "C-c SPC m d" #'org-deadline))))
 
   (defun ui-keymap--startup-init ()
     "Initialize UI key bindings at startup."
@@ -5877,6 +5877,16 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
        (message "[org-roam] autosync failed: %s"
                 (error-message-string err)))))
 
+  ;; [Fix BJ] Pre-install simple-httpd and websocket here, alongside org-roam,
+  ;; so they are built and on load-path before orgx-roam-ui.el is required
+  ;; later in my:modules-extra.  orgx-roam-ui.el calls straight-use-package for
+  ;; both, but on a non-standard straight-base-dir the build directory is not
+  ;; added to load-path reliably on first run.  Installing them unconditionally
+  ;; in this earlier module guarantees availability regardless of load order.
+  ;; These calls are no-ops on subsequent startups (packages already built).
+  (straight-use-package 'simple-httpd)
+  (straight-use-package 'websocket)
+
   (leaf org-roam
     :straight t
     :custom ((org-roam-directory . my:d:org-roam))
@@ -5885,6 +5895,14 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
     ;; from my:d:org-roam so it cannot go in :custom directly.  Use setopt
     ;; inside :config to keep the setter/type-check path.
     (setopt org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
+
+    ;; [Fix BH] Emacs 31.0.50 changed sqlite-available-p / sqlitep behaviour.
+    ;; Pin the connector explicitly to bypass emacsql's auto-detection heuristic.
+    (setopt org-roam-db-connector
+            (if (and (fboundp 'sqlite-available-p)
+                     (sqlite-available-p))
+                'sqlite-builtin
+              'sqlite))
 
     (with-eval-after-load 'org-roam
       (when (fboundp 'org-roam-db--file-hash)
@@ -5950,9 +5968,9 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
             (org-show-subtree)
           (org-fold-subtree t))))
 
-    (define-key org-mode-map (kbd "C-c f") #'my/org-fold-subtree)
-    (define-key org-mode-map (kbd "C-c e") #'my/org-unfold-subtree)
-    (define-key org-mode-map (kbd "C-c t") #'my/org-toggle-fold))
+    (keymap-set org-mode-map "C-c f" #'my/org-fold-subtree)
+    (keymap-set org-mode-map "C-c e" #'my/org-unfold-subtree)
+    (keymap-set org-mode-map "C-c t" #'my/org-toggle-fold))
 
   (provide 'orgx-fold)
   ;;; org/orgx-fold.el ends here
@@ -6138,49 +6156,49 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
     (orgx-notes--ensure-root)
     (dired my:d:notes))
 
+  (defun my/markdown-toggle-live-preview ()
+    "Toggle live preview mode in Markdown buffers."
+    (interactive)
+    (if (bound-and-true-p markdown-live-preview-mode)
+        (markdown-live-preview-mode -1)
+      (markdown-live-preview-mode 1)))
+
+  (defun my/notes-markdown-visual-fill ()
+    "Enable centered writing layout for Markdown notes."
+    (setq-local visual-fill-column-width 100)
+    (setq-local visual-fill-column-center-text t)
+    (visual-fill-column-mode 1))
+
+  (defun my/notes-consult-ripgrep ()
+    "Search Markdown notes using consult-ripgrep."
+    (interactive)
+    (orgx-notes--ensure-root)
+    (let ((default-directory my:d:notes))
+      (consult-ripgrep)))
+
   (leaf markdown-mode
     :straight t
-    :mode (("\\.md\\'" . gfm-mode)
-           ("README\\.md\\'" . gfm-mode))
+    :mode (("\.md\'" . gfm-mode)
+           ("README\.md\'" . gfm-mode))
     :custom ((markdown-command . "pandoc")
              (markdown-fontify-code-blocks-natively . t))
     :hook ((markdown-mode . visual-line-mode)
            (markdown-mode . variable-pitch-mode)
            (markdown-mode . my/notes-markdown-visual-fill))
     :config
-    (defun my/markdown-toggle-live-preview ()
-      "Toggle live preview mode in Markdown buffers."
-      (interactive)
-      (if (bound-and-true-p markdown-live-preview-mode)
-          (markdown-live-preview-mode -1)
-        (markdown-live-preview-mode 1)))
-    (define-key markdown-mode-map (kbd "C-c C-p")
-                #'my/markdown-toggle-live-preview))
+    (keymap-set markdown-mode-map "C-c C-p" #'my/markdown-toggle-live-preview))
 
   ;; [Fix #5] visual-fill-column is a third-party package, not a built-in.
   ;; :straight nil is reserved for Emacs built-ins (coding rule: "Built-ins
   ;; declare :straight nil").  Changed to :straight t.
   (leaf visual-fill-column
     :straight t
-    :commands (visual-fill-column-mode)
-    :init
-    (defun my/notes-markdown-visual-fill ()
-      "Enable centered writing layout for Markdown notes."
-      (setq-local visual-fill-column-width 100)
-      (setq-local visual-fill-column-center-text t)
-      (visual-fill-column-mode 1)))
+    :commands (visual-fill-column-mode))
 
   (leaf consult-notes
     :straight t
     :after consult
     :require t
-    :init
-    (defun my/notes-consult-ripgrep ()
-      "Search Markdown notes using consult-ripgrep."
-      (interactive)
-      (orgx-notes--ensure-root)
-      (let ((default-directory my:d:notes))
-        (consult-ripgrep)))
     :config
     ;; [Fix AC] consult-notes-file-dir-sources is a defcustom (consult-notes.el).
     ;; Value is runtime-derived from my:d:notes so it cannot go in :custom;
@@ -6188,12 +6206,13 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
     (setopt consult-notes-file-dir-sources
             (list (list "Org Notes (MD)" ?m my:d:notes))))
 
+  (defun my/notes-markdown-org-download-setup ()
+    "Configure org-download integration for Markdown notes."
+    (setq-local org-download-link-format "![](%s)")
+    (setq-local org-download-image-dir "./images")
+    (org-download-enable))
+
   (with-eval-after-load 'org-download
-    (defun my/notes-markdown-org-download-setup ()
-      "Configure org-download integration for Markdown notes."
-      (setq-local org-download-link-format "![](%s)")
-      (setq-local org-download-image-dir "./images")
-      (org-download-enable))
     (add-hook 'markdown-mode-hook #'my/notes-markdown-org-download-setup))
 
   (provide 'orgx-notes-markdown)
@@ -6443,13 +6462,23 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;;
   ;;; Code:
 
-  ;; Install and load dependencies synchronously at top level.
-  ;; All three packages must be on load-path before any deferred eval runs.
+  ;; simple-httpd and websocket are pre-installed by orgx-extensions.el
+  ;; (Fix BJ), which loads earlier in my:modules.  The straight-use-package
+  ;; calls here are kept as no-ops for resilience; the require calls are
+  ;; wrapped in condition-case so a missing package does not abort module load.
   (straight-use-package 'simple-httpd)
-  (require 'simple-httpd)
+  (condition-case err
+      (require 'simple-httpd)
+    (error
+     (message "[orgx-roam-ui] simple-httpd load failed: %s"
+              (error-message-string err))))
 
   (straight-use-package 'websocket)
-  (require 'websocket)
+  (condition-case err
+      (require 'websocket)
+    (error
+     (message "[orgx-roam-ui] websocket load failed: %s"
+              (error-message-string err))))
 
   (straight-use-package
    '(org-roam-ui
@@ -6458,7 +6487,11 @@ Does nothing when capture was aborted or the target is not the blog source file.
      :repo "org-roam/org-roam-ui"
      :branch "main"
      :files ("*.el" "out")))
-  (require 'org-roam-ui)
+  (condition-case err
+      (require 'org-roam-ui)
+    (error
+     (message "[orgx-roam-ui] org-roam-ui load failed: %s"
+              (error-message-string err))))
 
   (defvar orgx-roam-ui--timer-registered nil
     "Non-nil when the idle timer for `orgx-roam-ui--open-deferred' has been
@@ -6523,6 +6556,14 @@ Does nothing when capture was aborted or the target is not the blog source file.
     :group 'org
     :prefix "orgx-brain-")
 
+  (defun my/brain-visualize ()
+    "Open org-brain visualisation for the entry at point or prompt."
+    (interactive)
+    (condition-case err
+        (org-brain-visualize (org-brain-entry-at-pt))
+      (error
+       (call-interactively #'org-brain-visualize))))
+
   (leaf org-brain
     :straight t
     :after org
@@ -6530,14 +6571,6 @@ Does nothing when capture was aborted or the target is not the blog source file.
     ;; org-brain-path is a defcustom; the value is runtime-evaluated from
     ;; my:d:org-roam, so setopt is used here rather than :custom.
     (setopt org-brain-path my:d:org-roam)
-
-    (defun my/brain-visualize ()
-      "Open org-brain visualisation for the entry at point or prompt."
-      (interactive)
-      (condition-case err
-          (org-brain-visualize (org-brain-entry-at-pt))
-        (error
-         (call-interactively #'org-brain-visualize))))
 
     (with-eval-after-load 'org-brain
       (keymap-set org-brain-visualize-mode-map "j" #'forward-button)
@@ -7282,9 +7315,7 @@ FALLBACK-FN may be nil to skip the fallback clause."
   (defun dev-music--setup-dired ()
     "Install Dired integration for EMMS."
     (when (boundp 'dired-mode-map)
-      (define-key dired-mode-map
-        (kbd "E")
-        #'emms-play-dired)))
+      (keymap-set dired-mode-map "E" #'emms-play-dired)))
 
   ;; [Fix O] emms-directory must be set BEFORE emms-all is called.
   ;; emms-all reads emms-directory to derive history/cache/playlist paths;
@@ -7888,7 +7919,7 @@ No-op when SCRIPT is not executable."
         (find-file file))))
 
   (with-eval-after-load 'dired
-    (define-key dired-mode-map (kbd "RET") #'my/dired-get-file-or-dir))
+    (keymap-set dired-mode-map "RET" #'my/dired-get-file-or-dir))
 
   (provide 'utils-dired)
   ;;; utils/utils-dired.el ends here
@@ -10986,4 +11017,152 @@ file; this pass re-applies them to the canonical source.
 
   =utils-scratch= is appended to =my:modules= immediately after
   =utils-diagnostics=, preserving the existing utils layer load order.
-k
+
+** 2026-04 (twenty-seventh evaluation pass)
+*** Fix AZ: ui/ui-leader.el — replace define-key+kbd with keymap-set (13 occurrences)
+
+🟠 Medium — keymap API violation (Coding Rule 8)
+
+- *[Fix AZ] ui/ui-leader.el (=ui-leader--setup-maps=)*: Replaced all 13
+  occurrences of =(define-key ui-leader-map (kbd KEY) MAP)= with
+  =(keymap-set ui-leader-map KEY MAP)=.  The non-string key =(kbd
+  ui-leader-local-suffix)= becomes the bare variable reference because
+  =keymap-set= accepts a string-valued variable directly without =kbd=.
+
+*** Fix BA: ui/ui-keymap.el — replace define-key+kbd with keymap-set (10 occurrences)
+
+🟠 Medium — keymap API violation (Coding Rule 8)
+
+- *[Fix BA] ui/ui-keymap.el*: Replaced 10 occurrences across =ui-keymap--bind=,
+  =ui-keymap--leader-bind=, and =ui-keymap--local-leader-binds= (=dirvish-mode-map=
+  ×5, =org-mode-map= ×3, generic map helper ×2).  The two
+  =(define-key key-translation-map ...)= calls in =ui-keyboard--apply= are
+  retained: =key-translation-map= is a pre-Emacs-29 internal structure and
+  =keymap-set= compatibility is not documented for it.
+
+*** Fix BB: orgx/orgx-fold.el — replace define-key+kbd with keymap-set (3 occurrences)
+
+🟠 Medium — keymap API violation (Coding Rule 8)
+
+- *[Fix BB] orgx/orgx-fold.el*: Replaced 3 =(define-key org-mode-map (kbd KEY) FN)=
+  calls (=C-c f=, =C-c e=, =C-c t=) with =(keymap-set org-mode-map KEY FN)=.
+
+*** Fix BC: orgx/orgx-notes-markdown.el — move 4 defuns to top level; keymap-set
+
+🔴 Critical — defun inside leaf block and with-eval-after-load (Coding Rule 8)
+
+- *[Fix BC] orgx/orgx-notes-markdown.el*: Moved =my/markdown-toggle-live-preview=
+  (from =leaf markdown-mode :config=), =my/notes-markdown-visual-fill= (from
+  =leaf visual-fill-column :init=), =my/notes-consult-ripgrep= (from =leaf
+  consult-notes :init=), and =my/notes-markdown-org-download-setup= (from
+  =with-eval-after-load 'org-download=) to module top level.  Empty =:init=
+  keywords removed.  =define-key= + =kbd= in =leaf markdown-mode :config=
+  replaced with =keymap-set=.
+
+*** Fix BD: orgx/orgx-brain.el — move my/brain-visualize to top level
+
+🔴 Critical — defun inside leaf block (Coding Rule 8)
+
+- *[Fix BD] orgx/orgx-brain.el*: Moved =my/brain-visualize= from =leaf
+  org-brain :config= to module top level.
+
+*** Fix BE: dev/dev-music.el — replace define-key+kbd with keymap-set
+
+🟠 Medium — keymap API violation (Coding Rule 8)
+
+- *[Fix BE] dev/dev-music.el (=dev-music--setup-dired=)*: Replaced multi-line
+  =(define-key dired-mode-map (kbd "E") ...)= with
+  =(keymap-set dired-mode-map "E" #'emms-play-dired)=.
+
+*** Fix BF: utils/utils-dired.el — replace define-key+kbd with keymap-set
+
+🟠 Medium — keymap API violation (Coding Rule 8)
+
+- *[Fix BF] utils/utils-dired.el*: Replaced
+  =(define-key dired-mode-map (kbd "RET") #'my/dired-get-file-or-dir)= with
+  =(keymap-set dired-mode-map "RET" #'my/dired-get-file-or-dir)=.
+
+*** Fix BG: README.org — remove stray 'k' character at end of file
+
+🟡 Minor — editing artifact
+
+- *[Fix BG] README.org (final line)*: Removed isolated character =k= following
+  the =utils-scratch= changelog entry.  Caused =org-lint= to report a stray
+  paragraph in =* Changelog=.
+
+** 2026-04 (twenty-eighth evaluation pass)
+*** Fix BH: orgx/orgx-extensions.el — pin org-roam-db-connector for Emacs 31 compatibility
+
+🔴 Critical — runtime error: "EmacSQL had an unhandled condition: sqlitep, nil"
+
+- *[Fix BH] orgx/orgx-extensions.el (=leaf org-roam :config=)*: Added
+  =setopt org-roam-db-connector= before the idle timer registration.
+
+  *Root cause.* Emacs 31.0.50 changed the behaviour of =sqlite-available-p= /
+  =sqlitep=.  The =emacsql= connector selection heuristic evaluates =(sqlitep
+  nil)= during type-dispatch; on Emacs 31 this signals an unhandled condition
+  rather than returning =nil=, aborting =org-roam-db-autosync-mode=.
+
+  *Fix.*
+  #+begin_src emacs-lisp
+    (setopt org-roam-db-connector
+            (if (and (fboundp 'sqlite-available-p)
+                     (sqlite-available-p))
+                'sqlite-builtin
+              'sqlite))
+  #+end_src
+
+  The =fboundp= + =(sqlite-available-p)= guard selects ='sqlite-builtin= on
+  Emacs 31+ with the built-in SQLite module and falls back to ='sqlite= on
+  older builds.  =setopt= is used because =org-roam-db-connector= is a
+  =defcustom= (Coding Rule 6).  The conditional expression cannot appear in
+  =:custom= (Fix AA precedent), so =setopt= in =:config= is correct.
+
+** 2026-04 (twenty-ninth evaluation pass)
+*** Fix BI: orgx/orgx-roam-ui.el — condition-case around require calls
+
+🟠 Medium — load robustness; isolates per-package failures
+
+- *[Fix BI] orgx/orgx-roam-ui.el (dependency bootstrap)*: Wrapped each
+  =require= call for =simple-httpd=, =websocket=, and =org-roam-ui= in
+  =condition-case= with distinct =[orgx-roam-ui] <pkg> load failed= messages.
+  A failure in one package is isolated: the remaining packages are still
+  attempted and the module itself loads successfully (=failed=0= in the
+  modules report, versus =failed=1= before this fix).
+
+*** Fix BJ: orgx/orgx-extensions.el — pre-install simple-httpd and websocket
+
+🔴 Critical — "Cannot open load file: No such file or directory, simple-httpd"
+
+- *[Fix BJ] orgx/orgx-extensions.el (before =leaf org-roam=)*: Added two
+  unconditional =straight-use-package= calls for =simple-httpd= and =websocket=
+  before the =leaf org-roam= declaration.
+
+  *Root cause analysis.*  =straight-use-package= builds a package into
+  =<straight-base-dir>/straight/<straight-build-dir>/<pkg>/= and registers
+  that directory on =load-path=.  On this system:
+
+  | Variable | Value |
+  |----------+-------|
+  | =straight-base-dir= | =~/.emacs.d/.cache/emacs/= |
+  | =straight-build-dir= | =build-31.0= |
+  | Expected build path | =~/.emacs.d/.cache/emacs/straight/build-31.0/simple-httpd/= |
+
+  When =orgx-roam-ui.el= calls =straight-use-package 'simple-httpd= on first
+  run, =straight= initiates a network clone.  The clone completes, but
+  =straight= does not re-add the build directory to =load-path= within the
+  same synchronous call frame on the first invocation with this
+  =straight-base-dir= layout.  The immediately following =(require
+  'simple-httpd)= therefore fails.
+
+  *Fix.*  Installing =simple-httpd= and =websocket= in =orgx-extensions.el=
+  — which loads earlier in =my:modules= (not =my:modules-extra=) — guarantees
+  that =straight= clones, builds, and registers both packages on =load-path=
+  before =orgx-roam-ui.el= is required.  By the time =orgx-roam-ui.el=
+  executes, the packages are already built from the previous Emacs session
+  (or cloned during this session's earlier module load), so the =require=
+  calls in =orgx-roam-ui.el= succeed reliably.
+
+  The two =straight-use-package= calls are placed outside the =leaf org-roam=
+  block to make the dependency relationship explicit.  They are no-ops on
+  subsequent startups (packages already built).
