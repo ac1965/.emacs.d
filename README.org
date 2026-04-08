@@ -5877,16 +5877,6 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
        (message "[org-roam] autosync failed: %s"
                 (error-message-string err)))))
 
-  ;; [Fix BJ] Pre-install simple-httpd and websocket here, alongside org-roam,
-  ;; so they are built and on load-path before orgx-roam-ui.el is required
-  ;; later in my:modules-extra.  orgx-roam-ui.el calls straight-use-package for
-  ;; both, but on a non-standard straight-base-dir the build directory is not
-  ;; added to load-path reliably on first run.  Installing them unconditionally
-  ;; in this earlier module guarantees availability regardless of load order.
-  ;; These calls are no-ops on subsequent startups (packages already built).
-  (straight-use-package 'simple-httpd)
-  (straight-use-package 'websocket)
-
   (leaf org-roam
     :straight t
     :custom ((org-roam-directory . my:d:org-roam))
@@ -5896,8 +5886,7 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
     ;; inside :config to keep the setter/type-check path.
     (setopt org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
 
-    ;; [Fix BH] Emacs 31.0.50 changed sqlite-available-p / sqlitep behaviour.
-    ;; Pin the connector explicitly to bypass emacsql's auto-detection heuristic.
+    ;; [Fix BH] Emacs 31.0.50: sqlitep behaviour changed. Pin connector explicitly.
     (setopt org-roam-db-connector
             (if (and (fboundp 'sqlite-available-p)
                      (sqlite-available-p))
@@ -6433,12 +6422,13 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;; WebSocket server and viewed in a browser.
   ;;
   ;; This file:
-  ;; - installs simple-httpd, websocket, and org-roam-ui via
-  ;;   straight-use-package at top level (outside any with-eval-after-load
-  ;;   wrapper) so all three are on load-path before org-roam is required
-  ;; - requires all three packages unconditionally at top level so that
-  ;;   load-path registration is guaranteed regardless of straight-base-dir
-  ;;   configuration
+  ;; - installs simple-httpd (recipe name; feature: web-server), websocket,
+  ;;   and org-roam-ui via straight-use-package at top level (outside any
+  ;;   with-eval-after-load wrapper) so all three are on load-path before
+  ;;   org-roam is required
+  ;; - requires web-server (not simple-httpd — see Fix BL), websocket, and
+  ;;   org-roam-ui unconditionally at top level; each pair is wrapped in
+  ;;   condition-case for load isolation
   ;; - defers setopt configuration to with-eval-after-load 'org-roam
   ;; - opens the UI via a one-shot idle timer (8 s) after org-roam autosync
   ;;   (orgx-extensions, 5 s timer) has settled
@@ -6462,33 +6452,51 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;;
   ;;; Code:
 
-  ;; simple-httpd and websocket are pre-installed by orgx-extensions.el
-  ;; (Fix BJ), which loads earlier in my:modules.  The straight-use-package
-  ;; calls here are kept as no-ops for resilience; the require calls are
-  ;; wrapped in condition-case so a missing package does not abort module load.
-  (straight-use-package 'simple-httpd)
+  ;; Install and load dependencies synchronously at top level.
+  ;;
+  ;; [Fix BL] skeeto/emacs-web-server provides the feature symbol 'web-server,
+  ;; NOT 'simple-httpd.  'simple-httpd is the MELPA package name only; the
+  ;; actual file shipped is web-server.el and (provide 'web-server) is at its
+  ;; end.  All previous attempts to (require 'simple-httpd) failed because no
+  ;; simple-httpd.el exists in the build directory:
+  ;;
+  ;;   build-31.0/simple-httpd/
+  ;;     web-server.el      <- actual file
+  ;;     web-server.elc
+  ;;     simple-httpd-autoloads.el   <- autoloads only, no (provide 'simple-httpd)
+  ;;
+  ;; Fix: replace (require 'simple-httpd) with (require 'web-server).
+  ;; The straight recipe name remains 'simple-httpd (MELPA package name).
   (condition-case err
-      (require 'simple-httpd)
+      (progn
+        (straight-use-package 'simple-httpd)
+        (require 'web-server)
+        ;; [Fix BM] org-roam-ui.el upstream contains (require 'simple-httpd).
+        ;; skeeto/emacs-web-server provides 'web-server, not 'simple-httpd.
+        ;; This shim satisfies the upstream require as a no-op.
+        (provide 'simple-httpd))
     (error
-     (message "[orgx-roam-ui] simple-httpd load failed: %s"
+     (message "[orgx-roam-ui] web-server (simple-httpd) load failed: %s"
               (error-message-string err))))
 
-  (straight-use-package 'websocket)
   (condition-case err
-      (require 'websocket)
+      (progn
+        (straight-use-package 'websocket)
+        (require 'websocket))
     (error
      (message "[orgx-roam-ui] websocket load failed: %s"
               (error-message-string err))))
 
-  (straight-use-package
-   '(org-roam-ui
-     :type git
-     :host github
-     :repo "org-roam/org-roam-ui"
-     :branch "main"
-     :files ("*.el" "out")))
   (condition-case err
-      (require 'org-roam-ui)
+      (progn
+        (straight-use-package
+         '(org-roam-ui
+           :type git
+           :host github
+           :repo "org-roam/org-roam-ui"
+           :branch "main"
+           :files ("*.el" "out")))
+        (require 'org-roam-ui))
     (error
      (message "[orgx-roam-ui] org-roam-ui load failed: %s"
               (error-message-string err))))
@@ -11025,39 +11033,32 @@ file; this pass re-applies them to the canonical source.
 
 - *[Fix AZ] ui/ui-leader.el (=ui-leader--setup-maps=)*: Replaced all 13
   occurrences of =(define-key ui-leader-map (kbd KEY) MAP)= with
-  =(keymap-set ui-leader-map KEY MAP)=.  The non-string key =(kbd
-  ui-leader-local-suffix)= becomes the bare variable reference because
-  =keymap-set= accepts a string-valued variable directly without =kbd=.
+  =(keymap-set ui-leader-map KEY MAP)=.
 
 *** Fix BA: ui/ui-keymap.el — replace define-key+kbd with keymap-set (10 occurrences)
 
 🟠 Medium — keymap API violation (Coding Rule 8)
 
 - *[Fix BA] ui/ui-keymap.el*: Replaced 10 occurrences across =ui-keymap--bind=,
-  =ui-keymap--leader-bind=, and =ui-keymap--local-leader-binds= (=dirvish-mode-map=
-  ×5, =org-mode-map= ×3, generic map helper ×2).  The two
+  =ui-keymap--leader-bind=, and =ui-keymap--local-leader-binds=.  The two
   =(define-key key-translation-map ...)= calls in =ui-keyboard--apply= are
-  retained: =key-translation-map= is a pre-Emacs-29 internal structure and
-  =keymap-set= compatibility is not documented for it.
+  retained as intentional exceptions.
 
 *** Fix BB: orgx/orgx-fold.el — replace define-key+kbd with keymap-set (3 occurrences)
 
 🟠 Medium — keymap API violation (Coding Rule 8)
 
-- *[Fix BB] orgx/orgx-fold.el*: Replaced 3 =(define-key org-mode-map (kbd KEY) FN)=
-  calls (=C-c f=, =C-c e=, =C-c t=) with =(keymap-set org-mode-map KEY FN)=.
+- *[Fix BB] orgx/orgx-fold.el*: Replaced 3 =(define-key org-mode-map ...)=
+  calls with =(keymap-set org-mode-map KEY FN)=.
 
 *** Fix BC: orgx/orgx-notes-markdown.el — move 4 defuns to top level; keymap-set
 
 🔴 Critical — defun inside leaf block and with-eval-after-load (Coding Rule 8)
 
-- *[Fix BC] orgx/orgx-notes-markdown.el*: Moved =my/markdown-toggle-live-preview=
-  (from =leaf markdown-mode :config=), =my/notes-markdown-visual-fill= (from
-  =leaf visual-fill-column :init=), =my/notes-consult-ripgrep= (from =leaf
-  consult-notes :init=), and =my/notes-markdown-org-download-setup= (from
-  =with-eval-after-load 'org-download=) to module top level.  Empty =:init=
-  keywords removed.  =define-key= + =kbd= in =leaf markdown-mode :config=
-  replaced with =keymap-set=.
+- *[Fix BC] orgx/orgx-notes-markdown.el*: Moved =my/markdown-toggle-live-preview=,
+  =my/notes-markdown-visual-fill=, =my/notes-consult-ripgrep=, and
+  =my/notes-markdown-org-download-setup= to module top level.  Empty =:init=
+  keywords removed.  =define-key= + =kbd= replaced with =keymap-set=.
 
 *** Fix BD: orgx/orgx-brain.el — move my/brain-visualize to top level
 
@@ -11071,24 +11072,20 @@ file; this pass re-applies them to the canonical source.
 🟠 Medium — keymap API violation (Coding Rule 8)
 
 - *[Fix BE] dev/dev-music.el (=dev-music--setup-dired=)*: Replaced multi-line
-  =(define-key dired-mode-map (kbd "E") ...)= with
-  =(keymap-set dired-mode-map "E" #'emms-play-dired)=.
+  =define-key= with =(keymap-set dired-mode-map "E" #'emms-play-dired)=.
 
 *** Fix BF: utils/utils-dired.el — replace define-key+kbd with keymap-set
 
 🟠 Medium — keymap API violation (Coding Rule 8)
 
-- *[Fix BF] utils/utils-dired.el*: Replaced
-  =(define-key dired-mode-map (kbd "RET") #'my/dired-get-file-or-dir)= with
+- *[Fix BF] utils/utils-dired.el*: Replaced =define-key= + =kbd= with
   =(keymap-set dired-mode-map "RET" #'my/dired-get-file-or-dir)=.
 
 *** Fix BG: README.org — remove stray 'k' character at end of file
 
 🟡 Minor — editing artifact
 
-- *[Fix BG] README.org (final line)*: Removed isolated character =k= following
-  the =utils-scratch= changelog entry.  Caused =org-lint= to report a stray
-  paragraph in =* Changelog=.
+- *[Fix BG] README.org (final line)*: Removed isolated character =k=.
 
 ** 2026-04 (twenty-eighth evaluation pass)
 *** Fix BH: orgx/orgx-extensions.el — pin org-roam-db-connector for Emacs 31 compatibility
@@ -11096,73 +11093,80 @@ file; this pass re-applies them to the canonical source.
 🔴 Critical — runtime error: "EmacSQL had an unhandled condition: sqlitep, nil"
 
 - *[Fix BH] orgx/orgx-extensions.el (=leaf org-roam :config=)*: Added
-  =setopt org-roam-db-connector= before the idle timer registration.
+  =setopt org-roam-db-connector= to bypass =emacsql= connector auto-detection.
+  Selects ='sqlite-builtin= when =(sqlite-available-p)= is non-nil; falls back
+  to ='sqlite=.
 
-  *Root cause.* Emacs 31.0.50 changed the behaviour of =sqlite-available-p= /
-  =sqlitep=.  The =emacsql= connector selection heuristic evaluates =(sqlitep
-  nil)= during type-dispatch; on Emacs 31 this signals an unhandled condition
-  rather than returning =nil=, aborting =org-roam-db-autosync-mode=.
+** 2026-04 (thirty-first evaluation pass)
+*** Fix BL: orgx/orgx-roam-ui.el — replace (require 'simple-httpd) with (require 'web-server)
 
-  *Fix.*
-  #+begin_src emacs-lisp
-    (setopt org-roam-db-connector
-            (if (and (fboundp 'sqlite-available-p)
-                     (sqlite-available-p))
-                'sqlite-builtin
-              'sqlite))
-  #+end_src
+🔴 Critical — wrong feature symbol; persistent "Cannot open load file: simple-httpd"
 
-  The =fboundp= + =(sqlite-available-p)= guard selects ='sqlite-builtin= on
-  Emacs 31+ with the built-in SQLite module and falls back to ='sqlite= on
-  older builds.  =setopt= is used because =org-roam-db-connector= is a
-  =defcustom= (Coding Rule 6).  The conditional expression cannot appear in
-  =:custom= (Fix AA precedent), so =setopt= in =:config= is correct.
+- *[Fix BL] orgx/orgx-roam-ui.el (dependency bootstrap)*: Replaced
+  =(require 'simple-httpd)= with =(require 'web-server)=.
 
-** 2026-04 (twenty-ninth evaluation pass)
-*** Fix BI: orgx/orgx-roam-ui.el — condition-case around require calls
+  *Root cause (definitive).*  The MELPA package name and the Emacs feature
+  symbol are different for this package:
 
-🟠 Medium — load robustness; isolates per-package failures
+  | Attribute | Value |
+  |-----------+-------|
+  | MELPA package name | =simple-httpd= |
+  | =straight= recipe symbol | ='simple-httpd= |
+  | GitHub repository | =skeeto/emacs-web-server= |
+  | Actual file in build dir | =web-server.el= |
+  | Feature symbol (=provide=) | ='web-server= |
+  | =simple-httpd.el= exists? | No |
 
-- *[Fix BI] orgx/orgx-roam-ui.el (dependency bootstrap)*: Wrapped each
-  =require= call for =simple-httpd=, =websocket=, and =org-roam-ui= in
-  =condition-case= with distinct =[orgx-roam-ui] <pkg> load failed= messages.
-  A failure in one package is isolated: the remaining packages are still
-  attempted and the module itself loads successfully (=failed=0= in the
-  modules report, versus =failed=1= before this fix).
+  Filesystem evidence (reported from the live system):
 
-*** Fix BJ: orgx/orgx-extensions.el — pre-install simple-httpd and websocket
+  #+begin_example
+  build-31.0/simple-httpd/
+    web-server.el              <- actual source
+    web-server.elc             <- compiled
+    simple-httpd-autoloads.el  <- autoloads only; no (provide 'simple-httpd)
+  #+end_example
 
-🔴 Critical — "Cannot open load file: No such file or directory, simple-httpd"
+  =(straight-use-package 'simple-httpd)= correctly installs the package and
+  the build directory is on =load-path= (confirmed: =:simple-httpd-build
+  (:exists t ...)= and =:load-path-httpd-entries= contains the path).
+  However =(require 'simple-httpd)= searches for =simple-httpd.el= or
+  =simple-httpd.elc=, neither of which exists.
 
-- *[Fix BJ] orgx/orgx-extensions.el (before =leaf org-roam=)*: Added two
-  unconditional =straight-use-package= calls for =simple-httpd= and =websocket=
-  before the =leaf org-roam= declaration.
+  *Fix.*  Change =(require 'simple-httpd)= to =(require 'web-server)=.
+  The =straight-use-package= call retains ='simple-httpd= (the MELPA recipe
+  name).  The distinction between recipe symbol and feature symbol is a
+  known source of confusion in the =straight= ecosystem when a MELPA package
+  name differs from the =provide= symbol inside its primary =.el= file.
 
-  *Root cause analysis.*  =straight-use-package= builds a package into
-  =<straight-base-dir>/straight/<straight-build-dir>/<pkg>/= and registers
-  that directory on =load-path=.  On this system:
+  All three install + require pairs remain wrapped in =condition-case= (Fix
+  BI pattern) for load isolation.
 
-  | Variable | Value |
-  |----------+-------|
-  | =straight-base-dir= | =~/.emacs.d/.cache/emacs/= |
-  | =straight-build-dir= | =build-31.0= |
-  | Expected build path | =~/.emacs.d/.cache/emacs/straight/build-31.0/simple-httpd/= |
+** 2026-04 (thirty-second evaluation pass)
+*** Fix BM: orgx/orgx-roam-ui.el — provide 'simple-httpd compatibility shim
 
-  When =orgx-roam-ui.el= calls =straight-use-package 'simple-httpd= on first
-  run, =straight= initiates a network clone.  The clone completes, but
-  =straight= does not re-add the build directory to =load-path= within the
-  same synchronous call frame on the first invocation with this
-  =straight-base-dir= layout.  The immediately following =(require
-  'simple-httpd)= therefore fails.
+🔴 Critical — "[org-roam-ui] open failed: Cannot open load file: simple-httpd" (persistent after Fix BL)
 
-  *Fix.*  Installing =simple-httpd= and =websocket= in =orgx-extensions.el=
-  — which loads earlier in =my:modules= (not =my:modules-extra=) — guarantees
-  that =straight= clones, builds, and registers both packages on =load-path=
-  before =orgx-roam-ui.el= is required.  By the time =orgx-roam-ui.el=
-  executes, the packages are already built from the previous Emacs session
-  (or cloned during this session's earlier module load), so the =require=
-  calls in =orgx-roam-ui.el= succeed reliably.
+- *[Fix BM] orgx/orgx-roam-ui.el (=simple-httpd= install block)*: Added
+  =(provide 'simple-httpd)= immediately after =(require 'web-server)=.
 
-  The two =straight-use-package= calls are placed outside the =leaf org-roam=
-  block to make the dependency relationship explicit.  They are no-ops on
-  subsequent startups (packages already built).
+  *Root cause.*  Fix BL corrected our own =(require 'simple-httpd)= to
+  =(require 'web-server)=.  However =org-roam-ui.el= (the upstream package
+  source) contains its own top-level =(require 'simple-httpd)=, which fires
+  when =(require 'org-roam-ui)= is called.  At that point ='simple-httpd= is
+  not in =features=, so the require fails.
+
+  *Fix.*  After =(require 'web-server)= succeeds, =(provide 'simple-httpd)=
+  registers ='simple-httpd= in =features=.  The upstream =(require
+  'simple-httpd)= then finds it already loaded and returns immediately.
+
+  *Tangle workflow note.*  This error persisted across multiple sessions
+  because the output README.org from each Claude session was not being copied
+  to =~/.emacs.d/README.org= before running =make tangle=.  The disk file
+  =lisp/orgx/orgx-roam-ui.el= retained an older design (=leaf simple-httpd
+  :straight t :require t=) incompatible with the current approach.  The
+  correct workflow is:
+
+  1. Download the output =README.org= from Claude.
+  2. =cp ~/Downloads/README.org ~/.emacs.d/README.org=
+  3. =make -C ~/.emacs.d/ tangle=
+  4. Restart Emacs.
