@@ -954,24 +954,28 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;; init.el --- Main initialization entry point -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
   ;; License: GNU GPL v3 or later
   ;;
   ;; Category: core
   ;;
   ;;; Commentary:
+  ;;
   ;; Primary initialization sequence for Emacs 30+.
   ;;
-  ;; This file:
-  ;; - bootstraps straight.el, leaf, and Org
-  ;; - establishes core performance and runtime defaults
-  ;; - loads personal overlays safely
-  ;; - invokes the modular configuration loader
-  ;; - reports startup metrics after initialization
+  ;; Responsibilities of this file:
+  ;;   1. Bootstrap straight.el, leaf, and Org
+  ;;   2. Establish URL state directory layout (must precede `url' load)
+  ;;   3. Import macOS login environment on GUI/daemon sessions
+  ;;   4. Temporarily expand process I/O and GC thresholds for startup
+  ;;   5. Configure core built-ins at policy level
+  ;;   6. Safely load personal overlays
+  ;;   7. Delegate feature activation to modules.el
+  ;;   8. Report startup metrics
   ;;
-  ;; Internal helpers use the `bootstrap--` prefix (not `utils--`) because
-  ;; they are defined before the utils layer exists.  `bootstrap--safe-load-file`
-  ;; is aliased as `my/safe-load-file` for call sites in other layers.
+  ;; Internal helpers carry the `bootstrap--' prefix, not `utils--', because
+  ;; they are defined before the utils layer exists.  `bootstrap--safe-load-file'
+  ;; is aliased as `my/safe-load-file' for callers in other layers.
   ;;
   ;;; Code:
 
@@ -980,13 +984,13 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
     (require 'seq)
     (require 'cl-lib))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Internal helpers
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; Internal helpers
+  ;;; -------------------------------------------------------------------------
 
   (defun bootstrap--safe-load-file (file &optional noerror)
-    "Load FILE safely.
-  If NOERROR is non-nil, log instead of raising."
+    "Load FILE safely, reporting but not raising errors by default.
+  When NOERROR is non-nil, emit a message instead of signaling."
     (when (and (stringp file) (file-exists-p file))
       (condition-case err
           (load file nil 'nomessage)
@@ -997,40 +1001,41 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   (defalias 'my/safe-load-file #'bootstrap--safe-load-file)
 
-  ;; ---------------------------------------------------------------------------
-  ;; 0) URL state (must be set BEFORE requiring url.el)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 1. URL state directory layout
+  ;;;    Must be configured before `url' is required anywhere.
+  ;;; -------------------------------------------------------------------------
 
   (defvar core--url-state-dir
     (file-name-as-directory
      (or (bound-and-true-p my:d:url)
-         (expand-file-name "url/" user-emacs-directory))))
+         (expand-file-name "url/" user-emacs-directory)))
+    "Root directory for url.el runtime state files.")
 
   (setopt url-configuration-directory core--url-state-dir
-          url-cookie-file (expand-file-name "cookies" core--url-state-dir)
-          url-history-file (expand-file-name "history" core--url-state-dir)
-          url-cache-directory (expand-file-name "cache/" core--url-state-dir))
+          url-cookie-file              (expand-file-name "cookies" core--url-state-dir)
+          url-history-file             (expand-file-name "history" core--url-state-dir)
+          url-cache-directory          (expand-file-name "cache/"  core--url-state-dir))
 
   (dolist (d (list url-configuration-directory url-cache-directory))
     (make-directory d t))
 
   (require 'url)
 
-  ;; ---------------------------------------------------------------------------
-  ;; 1) Bootstrap straight.el (deterministic package management)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 2. Bootstrap straight.el — deterministic package management
+  ;;; -------------------------------------------------------------------------
 
   (defvar bootstrap-version 7)
 
-  (let* ((base (or (bound-and-true-p straight-base-dir)
-                   user-emacs-directory))
-         (bootstrap-file
-          (expand-file-name "straight/repos/straight.el/bootstrap.el" base)))
+  (let* ((base           (or (bound-and-true-p straight-base-dir)
+                             user-emacs-directory))
+         (bootstrap-file (expand-file-name
+                          "straight/repos/straight.el/bootstrap.el" base)))
     (unless (file-exists-p bootstrap-file)
-      (let ((buf
-             (url-retrieve-synchronously
-              "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-              'silent 'inhibit-cookies)))
+      (let ((buf (url-retrieve-synchronously
+                  "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
+                  'silent 'inhibit-cookies)))
         (unless (buffer-live-p buf)
           (user-error "[straight] failed to retrieve install.el"))
         (with-current-buffer buf
@@ -1038,16 +1043,15 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
           (eval-print-last-sexp))))
     (load bootstrap-file nil 'nomessage))
 
-  ;; ---------------------------------------------------------------------------
-  ;; 2) leaf / org bootstrap (minimal, infrastructure-only)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 3. leaf and leaf-keywords bootstrap
+  ;;; -------------------------------------------------------------------------
 
   (dolist (pkg '(leaf leaf-keywords))
     (straight-use-package pkg))
 
-  ;; leaf macros are expanded at byte-compile time; eval-and-compile ensures
-  ;; the macro definitions are available both during compilation and at runtime
-  ;; (needed for interpreted evaluation when init.el is not byte-compiled).
+  ;; `eval-and-compile' makes leaf macros available during byte-compilation
+  ;; and during interpreted evaluation when init.el is not pre-compiled.
   (eval-and-compile
     (require 'leaf))
 
@@ -1057,21 +1061,25 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (when (fboundp 'leaf-keywords-init)
     (leaf-keywords-init))
 
+  ;;; -------------------------------------------------------------------------
+  ;;; 4. Org bootstrap
+  ;;;    straight.el must manage Org to avoid version conflicts with built-ins.
+  ;;; -------------------------------------------------------------------------
+
   (straight-use-package 'org)
   (require 'org)
 
-  ;; ---------------------------------------------------------------------------
-  ;; 3) macOS login environment import (GUI/daemon only)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 5. macOS login environment import (GUI and daemon sessions only)
+  ;;; -------------------------------------------------------------------------
 
   (leaf exec-path-from-shell
     :straight t
     :when (and (eq system-type 'darwin)
                (or (daemonp) (memq window-system '(mac ns))))
     :config
-    ;; [R7 FIX] exec-path-from-shell-* are defcustom; use setopt.
     (setopt exec-path-from-shell-check-startup-files nil
-            exec-path-from-shell-arguments '("-l" "-i"))
+            exec-path-from-shell-arguments           '("-l" "-i"))
     (exec-path-from-shell-copy-envs
      '("PATH" "LANG"
        "PASSWORD_STORE_DIR"
@@ -1080,24 +1088,23 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
        "OPENAI_API_KEY"))
     (exec-path-from-shell-initialize))
 
-  ;; ---------------------------------------------------------------------------
-  ;; 4) Runtime performance knobs (temporary expansion + safe restoration)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 6. Startup performance knobs
+  ;;;    Expand thresholds during init, restore them when idle after startup.
+  ;;; -------------------------------------------------------------------------
 
-  (defconst core-default-read-process-output-max
-    (* 4 1024 1024)
-    "Temporary large process output size during startup.")
+  (defconst core-default-read-process-output-max (* 4 1024 1024)
+    "Enlarged process read buffer applied during Emacs startup.")
 
   (defvar core--orig-read-process-output-max
-    (and (boundp 'read-process-output-max)
-         read-process-output-max))
+    (and (boundp 'read-process-output-max) read-process-output-max)
+    "Original value of `read-process-output-max', saved before startup expansion.")
 
   (when (boundp 'read-process-output-max)
     (setq read-process-output-max core-default-read-process-output-max))
 
-  ;; [R2 FIX] Extracted anonymous lambda → named defun.
   (defun core--restore-process-output-max ()
-    "Restore read-process-output-max to its pre-startup value."
+    "Restore `read-process-output-max' to its pre-startup value."
     (when (boundp 'read-process-output-max)
       (setq read-process-output-max core--orig-read-process-output-max)))
 
@@ -1106,31 +1113,33 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (leaf gcmh
     :straight t
     :custom
-    ((gcmh-idle-delay . 5)
+    ((gcmh-idle-delay          . 5)
      (gcmh-high-cons-threshold . 16777216))
     :config
     (gcmh-mode 1))
 
-  ;; ---------------------------------------------------------------------------
-  ;; 5) Core built-ins (policy-level, no feature activation here)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 7. Core built-in policy settings
+  ;;;    Configures UI-neutral defaults only.  No feature activation here.
+  ;;;    Visual settings (themes, fonts, modeline) belong in the ui/ layer.
+  ;;; -------------------------------------------------------------------------
 
   (leaf emacs
     :straight nil
     :custom
-    ((inhibit-startup-screen . t)
-     (inhibit-startup-message . t)
-     (initial-scratch-message . nil)
-     (initial-major-mode . 'fundamental-mode)
-     (use-short-answers . t)
-     (create-lockfiles . nil)
-     (idle-update-delay . 0.2)
-     (ring-bell-function . #'ignore)
+    ((inhibit-startup-screen    . t)
+     (inhibit-startup-message   . t)
+     (initial-scratch-message   . nil)
+     (initial-major-mode        . 'fundamental-mode)
+     (use-short-answers         . t)
+     (create-lockfiles          . nil)
+     (idle-update-delay         . 0.2)
+     (ring-bell-function        . #'ignore)
      (display-line-numbers-type . 'relative)
-     (frame-title-format . t)
-     (confirm-kill-emacs . #'y-or-n-p))
+     (frame-title-format        . t)
+     (confirm-kill-emacs        . #'y-or-n-p))
     :hook
-    ((prog-mode . display-line-numbers-mode))
+    ((prog-mode-hook . display-line-numbers-mode))
     :config
     (when (fboundp 'window-divider-mode)
       (window-divider-mode 1))
@@ -1141,21 +1150,20 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
     (dolist (k '("C-z" "C-x C-z" "C-x C-c"))
       (keymap-global-unset k)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; 6) Personal overlay (strictly optional, safe-load only)
-  ;;
-  ;; my:modules-extra is declared here, before personal files load, so that
-  ;; personal/user.el can safely append to it via setq / append.
-  ;; (The defvar in modules.el is a no-op once this one has run — defvar never
-  ;; overwrites an already-bound variable.)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 8. Personal overlay (optional, isolated via safe-load)
+  ;;;
+  ;;;    my:modules-extra is declared here, before any personal files load,
+  ;;;    so that personal/user.el may safely extend it via setq/append.
+  ;;;    The defvar in modules.el is a no-op once this binding exists.
+  ;;; -------------------------------------------------------------------------
 
   (defvar my:modules-extra nil
-    "Extra module list appended by optional layers.")
+    "Extra module list appended by personal overlay files.")
 
-  (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
+  (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
          (personal (expand-file-name "personal/" root))
-         (user (ignore-errors (user-login-name))))
+         (user     (ignore-errors (user-login-name))))
     (when (file-directory-p personal)
       (add-to-list 'load-path personal))
     (my/safe-load-file (expand-file-name "user.el" personal) t)
@@ -1163,30 +1171,28 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
       (my/safe-load-file
        (expand-file-name (concat user ".el") personal) t)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; 7) Modules entrypoint (authoritative feature activation)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 9. Modules entrypoint — authoritative feature activation
+  ;;; -------------------------------------------------------------------------
 
-  (let* ((root (or (bound-and-true-p my:d) user-emacs-directory))
+  (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
          (lisp-dir (expand-file-name "lisp/" root)))
     (when (file-directory-p lisp-dir)
       (add-to-list 'load-path lisp-dir))
     (require 'modules nil t))
 
-  ;; ---------------------------------------------------------------------------
-  ;; 8) Startup metrics (diagnostic only)
-  ;; ---------------------------------------------------------------------------
+  ;;; -------------------------------------------------------------------------
+  ;;; 10. Startup metrics (diagnostic, emitted after the event loop settles)
+  ;;; -------------------------------------------------------------------------
 
   (defun core--announce-startup ()
-    "Report startup time and GC count."
+    "Report startup elapsed time and GC count."
     (message "Emacs ready in %.2f seconds with %d GCs."
-             (float-time
-              (time-subtract after-init-time before-init-time))
+             (float-time (time-subtract after-init-time before-init-time))
              gcs-done))
 
-  ;; [R2 FIX] Extracted anonymous lambda → named defun.
   (defun core--schedule-startup-announcement ()
-    "Schedule startup metrics report after the event loop settles."
+    "Schedule `core--announce-startup' after the event loop becomes idle."
     (run-with-idle-timer 0 nil #'core--announce-startup))
 
   (add-hook 'after-init-hook #'core--schedule-startup-announcement)
