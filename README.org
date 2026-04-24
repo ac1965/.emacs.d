@@ -6,7 +6,7 @@
 #+OPTIONS: toc:3 num:t
 #+STARTUP: overview
 #+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
-#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments link
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
 #+LATEX_COMPILER: lualatex
 #+LATEX_CLASS_OPTIONS: [11pt]
 #+LATEX_HEADER: \usepackage[a4paper,margin=20mm]{geometry}
@@ -1064,12 +1064,16 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (setq process-adaptive-read-buffering nil)
 
   ;; GCMH
+  ;; NOTE: `gcmh-high-cons-threshold' requires a runtime expression
+  ;; `(* 128 1024 1024)'.  `leaf :custom' quotes cdr positions verbatim, so
+  ;; a sexp placed there is assigned as a list literal and triggers
+  ;;   Wrong type argument: integerp, nil
+  ;; inside `gcmh-mode'.  Set via `setopt' in `:config' instead.
   (leaf gcmh
     :straight t
-    :custom
-    ((gcmh-idle-delay . 5)
-     (gcmh-high-cons-threshold . (* 128 1024 1024)))
     :config
+    (setopt gcmh-idle-delay 5)
+    (setopt gcmh-high-cons-threshold (* 128 1024 1024))
     (gcmh-mode 1))
 
   ;;; -------------------------------------------------------------------------
@@ -11118,3 +11122,51 @@ file; this pass re-applies them to the canonical source.
   2. =cp ~/Downloads/README.org ~/.emacs.d/README.org=
   3. =make -C ~/.emacs.d/ tangle=
   4. Restart Emacs.
+
+** 2026-04 (thirty-third evaluation pass)
+*** Fix BN: core-runtime — move gcmh runtime expression from :custom to :config setopt
+
+🔴 Critical — startup error: "Wrong type argument: integerp, nil" / "Attempt modify list"
+
+- *[Fix BN] core/core-runtime (=leaf gcmh=)*: Removed the =:custom= keyword
+  from the =gcmh= leaf block and moved the two variable assignments into
+  =:config= as =setopt= calls.  Before:
+
+  #+begin_src emacs-lisp
+    (leaf gcmh
+      :straight t
+      :custom
+      ((gcmh-idle-delay . 5)
+       (gcmh-high-cons-threshold . (* 128 1024 1024)))
+      :config
+      (gcmh-mode 1))
+  #+end_src
+
+  After:
+
+  #+begin_src emacs-lisp
+    (leaf gcmh
+      :straight t
+      :config
+      (setopt gcmh-idle-delay 5)
+      (setopt gcmh-high-cons-threshold (* 128 1024 1024))
+      (gcmh-mode 1))
+  #+end_src
+
+  *Root cause.*  =leaf :custom= quotes the cdr of each pair verbatim; it does
+  not evaluate sexps placed there.  The value =(* 128 1024 1024)= was
+  therefore assigned to =gcmh-high-cons-threshold= as the literal list
+  =(* 128 1024 1024)= rather than the integer =134217728=.  When =gcmh-mode=
+  is enabled, gcmh performs arithmetic on =gcmh-high-cons-threshold= inside
+  the idle timer, which fails with =Wrong type argument: integerp, nil=.
+  =leaf= reports the preceding expansion failure as =Error occurs in leaf
+  block: gcmh / Attempt modify list; Please check your specification=.
+
+  *Why the fix is correct.*  Both =gcmh-idle-delay= and
+  =gcmh-high-cons-threshold= are declared via =defcustom= upstream, so
+  =setopt= is the canonical setter (coding rule 6: =setopt= for =defcustom=,
+  =setq= for =defvar=).  Placing them in =:config= causes the sexp to be
+  evaluated at leaf-expansion time, producing the intended integer.  This
+  matches the precedent already documented in the project (Org agenda
+  variables, =org-roam-db-connector= in Fix BH) for any leaf variable whose
+  value requires runtime evaluation (backquote, function call, arithmetic).
