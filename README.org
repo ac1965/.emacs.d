@@ -713,11 +713,11 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;
   ;;; Code:
 
+  ;;
+  ;; Optimized version (macOS-focused, low I/O, fast startup)
+
   (eval-when-compile
     (require 'subr-x))
-
-  ;; [Fix #2] Removed (require 'seq): seq is not used anywhere in early-init.el.
-  ;; Loading it unconditionally added unnecessary startup latency.
 
   ;; ---------------------------------------------------------------------------
   ;; Internal utilities
@@ -746,7 +746,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
         package-quickstart nil)
 
   ;; ---------------------------------------------------------------------------
-  ;; 2) Base directories (root, .var/.etc, lisp load-path)
+  ;; 2) Base directories
   ;; ---------------------------------------------------------------------------
 
   (defvar my:d
@@ -762,17 +762,13 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (defconst my:d:etc  (expand-file-name ".etc/" my:d))
   (defconst my:d:lisp (expand-file-name "lisp/" my:d))
 
-  (when (and (boundp 'my:d:lisp)
-             (file-directory-p my:d:lisp))
-    (dolist (dir
-           (sort
-            (directory-files my:d:lisp t "\\`[^.]")
-            #'string<))
-    (when (file-directory-p dir)
-      (add-to-list 'load-path dir))))
+  (when (file-directory-p my:d:lisp)
+    (add-to-list 'load-path my:d:lisp)
+    (let ((default-directory my:d:lisp))
+      (normal-top-level-add-subdirs-to-load-path)))
 
   ;; ---------------------------------------------------------------------------
-  ;; 3) State directories (.cache, ELN, Tree-sitter, URL/EWW)
+  ;; 3) State directories
   ;; ---------------------------------------------------------------------------
 
   (defconst my:d:cache
@@ -793,10 +789,6 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                      my:d:eln-cache my:d:treesit my:d:url my:d:eww))
     (core--ensure-directory dir))
 
-  ;; [Fix G] treesit-install-dir and treesit-extra-load-path are defcustom
-  ;; variables in Emacs 29+.  Use setopt (not setq) to respect their setter
-  ;; functions and type validation.  boundp guards preserve forward
-  ;; compatibility on Emacs builds without tree-sitter support.
   (when (boundp 'treesit-install-dir)
     (setopt treesit-install-dir my:d:treesit))
   (when (boundp 'treesit-extra-load-path)
@@ -822,22 +814,11 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                         (and (file-directory-p "/usr/local")   "/usr/local")))
               (bin  (expand-file-name "bin" brew)))
     (when (file-directory-p bin)
-      (let* ((path  (or (getenv "PATH") ""))
-             (parts (split-string path ":" t)))
-        (unless (member bin parts)
+      (let ((path (or (getenv "PATH") "")))
+        (unless (string-prefix-p bin path)
           (setenv "PATH" (concat bin ":" path))))
-      (let* ((gcc-candidates (directory-files bin t "^gcc-[0-9]+$"))
-             (gcc-pairs
-              (mapcar (lambda (path)
-                        (when (string-match "gcc-\\([0-9]+\\)$" path)
-                          (cons (string-to-number (match-string 1 path))
-                                path)))
-                      gcc-candidates))
-             (gcc-sorted
-              (sort (delq nil gcc-pairs)
-                    (lambda (a b) (> (car a) (car b))))))
-        (when-let* ((latest (cdr (car gcc-sorted))))
-          (setenv "CC" latest)))))
+      (let ((gcc (car (directory-files bin t "^gcc-[0-9]+$" t))))
+        (when gcc (setenv "CC" gcc)))))
 
   ;; ---------------------------------------------------------------------------
   ;; 6) Native compilation
@@ -850,6 +831,8 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                   (delq my:d:eln-cache native-comp-eln-load-path))
             native-comp-async-report-warnings-errors 'silent))
 
+  (setq native-comp-deferred-compilation t)
+
   ;; ---------------------------------------------------------------------------
   ;; 7) no-littering compatibility
   ;; ---------------------------------------------------------------------------
@@ -858,35 +841,27 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (defvar no-littering-var-directory (file-name-as-directory my:d:var))
 
   ;; ---------------------------------------------------------------------------
-  ;; 8) Startup performance (GC + file-name-handler deferral)
+  ;; 8) Startup performance
   ;; ---------------------------------------------------------------------------
 
-  (defvar core--orig-file-name-handler-alist file-name-handler-alist
-    "Original `file-name-handler-alist' saved for restoration.")
+  (defvar core--orig-file-name-handler-alist file-name-handler-alist)
 
   (defun core--restore-startup-state ()
     "Restore GC and file handler settings after startup."
     (setq file-name-handler-alist core--orig-file-name-handler-alist
-          gc-cons-threshold 16777216
+          gc-cons-threshold (* 128 1024 1024)
           gc-cons-percentage 0.1))
 
   (setq file-name-handler-alist nil
-        gc-cons-threshold most-positive-fixnum
+        gc-cons-threshold (* 512 1024 1024)
         gc-cons-percentage 0.6)
 
-  (add-hook 'emacs-startup-hook #'core--restore-startup-state)
+  (add-hook 'after-init-hook #'core--restore-startup-state)
 
   ;; ---------------------------------------------------------------------------
   ;; 9) Backups / auto-save
   ;; ---------------------------------------------------------------------------
 
-  ;; Backup and auto-save are disabled at the earliest opportunity.
-  ;; auto-save-visited-mode (enabled in core-editing.el) replaces the default
-  ;; auto-save mechanism, so both nil values must be set before any package
-  ;; can activate the legacy behaviour.
-  ;; NOTE: auto-save-default is also set in core-editing.el for clarity at the
-  ;; point of auto-save-visited-mode activation; the values are identical and
-  ;; the duplication is intentional (belt-and-suspenders for early-init safety).
   (setq make-backup-files nil
         version-control nil
         delete-old-versions nil
@@ -905,6 +880,8 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
           window-divider-default-right-width 16
           window-divider-default-places 'right-only)
 
+  (setq inhibit-compacting-font-caches t)
+
   (dolist (it '((internal-border-width . 8)
                 (tool-bar-lines . 0)))
     (add-to-list 'default-frame-alist it)
@@ -915,14 +892,9 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (setq initial-frame-alist
         (assq-delete-all 'fullscreen initial-frame-alist))
 
-  (defvar core--did-fullscreen nil
-    "Non-nil after fullscreen has been applied once.")
+  (defvar core--did-fullscreen nil)
 
-  ;; [R1 FIX] Extracted anonymous lambda → named defun.
-  ;; Rationale: named hooks are debuggable, togglable, and safe against
-  ;; duplicate registration.  Consistent with project-wide convention.
   (defun core--fullscreen-once ()
-    "Apply fullscreen exactly once on window setup."
     (unless core--did-fullscreen
       (setq core--did-fullscreen t)
       (set-frame-parameter nil 'fullscreen 'fullboth)))
@@ -988,8 +960,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;; -------------------------------------------------------------------------
 
   (defun bootstrap--safe-load-file (file &optional noerror)
-    "Load FILE safely, reporting but not raising errors by default.
-  When NOERROR is non-nil, emit a message instead of signaling."
+    "Safely load FILE.  Report but do not raise errors by default."
     (when (and (stringp file) (file-exists-p file))
       (condition-case err
           (load file nil 'nomessage)
@@ -1001,20 +972,20 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (defalias 'my/safe-load-file #'bootstrap--safe-load-file)
 
   ;;; -------------------------------------------------------------------------
-  ;;; 1. URL state directory layout
-  ;;;    Must be configured before `url' is required anywhere.
+  ;;; 1. URL state directory (must precede url load)
   ;;; -------------------------------------------------------------------------
 
   (defvar core--url-state-dir
     (file-name-as-directory
      (or (bound-and-true-p my:d:url)
-         (expand-file-name "url/" user-emacs-directory)))
-    "Root directory for url.el runtime state files.")
+         (expand-file-name "url/" user-emacs-directory))))
 
   (setopt url-configuration-directory core--url-state-dir
           url-cookie-file              (expand-file-name "cookies" core--url-state-dir)
           url-history-file             (expand-file-name "history" core--url-state-dir)
-          url-cache-directory          (expand-file-name "cache/"  core--url-state-dir))
+          url-cache-directory          (expand-file-name "cache/" core--url-state-dir)
+          url-queue-timeout            5
+          url-request-timeout          5)
 
   (dolist (d (list url-configuration-directory url-cache-directory))
     (make-directory d t))
@@ -1022,35 +993,35 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   (require 'url)
 
   ;;; -------------------------------------------------------------------------
-  ;;; 2. Bootstrap straight.el — deterministic package management
+  ;;; 2. straight.el bootstrap
   ;;; -------------------------------------------------------------------------
 
   (defvar bootstrap-version 7)
 
-  (let* ((base           (or (bound-and-true-p straight-base-dir)
-                             user-emacs-directory))
-         (bootstrap-file (expand-file-name
-                          "straight/repos/straight.el/bootstrap.el" base)))
+  (let* ((base (or (bound-and-true-p straight-base-dir)
+                   user-emacs-directory))
+         (bootstrap-file
+          (expand-file-name
+           "straight/repos/straight.el/bootstrap.el" base)))
     (unless (file-exists-p bootstrap-file)
+      ;; Network access only on first run
       (let ((buf (url-retrieve-synchronously
                   "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
                   'silent 'inhibit-cookies)))
         (unless (buffer-live-p buf)
-          (user-error "[straight] failed to retrieve install.el"))
+          (user-error "[straight] bootstrap failed"))
         (with-current-buffer buf
           (goto-char (point-max))
           (eval-print-last-sexp))))
     (load bootstrap-file nil 'nomessage))
 
   ;;; -------------------------------------------------------------------------
-  ;;; 3. leaf and leaf-keywords bootstrap
+  ;;; 3. leaf bootstrap
   ;;; -------------------------------------------------------------------------
 
   (dolist (pkg '(leaf leaf-keywords))
     (straight-use-package pkg))
 
-  ;; `eval-and-compile' makes leaf macros available during byte-compilation
-  ;; and during interpreted evaluation when init.el is not pre-compiled.
   (eval-and-compile
     (require 'leaf))
 
@@ -1062,14 +1033,13 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   ;;; -------------------------------------------------------------------------
   ;;; 4. Org bootstrap
-  ;;;    straight.el must manage Org to avoid version conflicts with built-ins.
   ;;; -------------------------------------------------------------------------
 
   (straight-use-package 'org)
   (require 'org)
 
   ;;; -------------------------------------------------------------------------
-  ;;; 5. macOS login environment import (GUI and daemon sessions only)
+  ;;; 5. macOS environment import
   ;;; -------------------------------------------------------------------------
 
   (leaf exec-path-from-shell
@@ -1078,49 +1048,32 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
                (or (daemonp) (memq window-system '(mac ns))))
     :config
     (setopt exec-path-from-shell-check-startup-files nil
-            exec-path-from-shell-arguments           '("-l" "-i"))
+            exec-path-from-shell-arguments '("-l"))
+
     (exec-path-from-shell-copy-envs
      '("PATH" "LANG"
-       "PASSWORD_STORE_DIR"
-       "GPG_KEY_ID"
-       "OPENROUTER_API_KEY"
-       "OPENAI_API_KEY"))
-    (exec-path-from-shell-initialize))
+       "OPENAI_API_KEY"
+       "OPENROUTER_API_KEY")))
 
   ;;; -------------------------------------------------------------------------
   ;;; 6. Startup performance knobs
-  ;;;    Expand thresholds during init, restore them when idle after startup.
   ;;; -------------------------------------------------------------------------
 
-  (defconst core-default-read-process-output-max (* 4 1024 1024)
-    "Enlarged process read buffer applied during Emacs startup.")
+  ;; LSP and subprocess optimization
+  (setq read-process-output-max (* 4 1024 1024))
+  (setq process-adaptive-read-buffering nil)
 
-  (defvar core--orig-read-process-output-max
-    (and (boundp 'read-process-output-max) read-process-output-max)
-    "Original value of `read-process-output-max', saved before startup expansion.")
-
-  (when (boundp 'read-process-output-max)
-    (setq read-process-output-max core-default-read-process-output-max))
-
-  (defun core--restore-process-output-max ()
-    "Restore `read-process-output-max' to its pre-startup value."
-    (when (boundp 'read-process-output-max)
-      (setq read-process-output-max core--orig-read-process-output-max)))
-
-  (add-hook 'after-init-hook #'core--restore-process-output-max)
-
+  ;; GCMH
   (leaf gcmh
     :straight t
     :custom
-    ((gcmh-idle-delay          . 5)
-     (gcmh-high-cons-threshold . 16777216))
+    ((gcmh-idle-delay . 5)
+     (gcmh-high-cons-threshold . (* 128 1024 1024)))
     :config
     (gcmh-mode 1))
 
   ;;; -------------------------------------------------------------------------
-  ;;; 7. Core built-in policy settings
-  ;;;    Configures UI-neutral defaults only.  No feature activation here.
-  ;;;    Visual settings (themes, fonts, modeline) belong in the ui/ layer.
+  ;;; 7. Core built-in policy
   ;;; -------------------------------------------------------------------------
 
   (leaf emacs
@@ -1150,15 +1103,10 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
       (keymap-global-unset k)))
 
   ;;; -------------------------------------------------------------------------
-  ;;; 8. Personal overlay (optional, isolated via safe-load)
-  ;;;
-  ;;;    my:modules-extra is declared here, before any personal files load,
-  ;;;    so that personal/user.el may safely extend it via setq/append.
-  ;;;    The defvar in modules.el is a no-op once this binding exists.
+  ;;; 8. Personal overlay
   ;;; -------------------------------------------------------------------------
 
-  (defvar my:modules-extra nil
-    "Extra module list appended by personal overlay files.")
+  (defvar my:modules-extra nil)
 
   (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
          (personal (expand-file-name "personal/" root))
@@ -1171,7 +1119,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
        (expand-file-name (concat user ".el") personal) t)))
 
   ;;; -------------------------------------------------------------------------
-  ;;; 9. Modules entrypoint — authoritative feature activation
+  ;;; 9. Modules entrypoint
   ;;; -------------------------------------------------------------------------
 
   (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
@@ -1181,20 +1129,15 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
     (require 'modules nil t))
 
   ;;; -------------------------------------------------------------------------
-  ;;; 10. Startup metrics (diagnostic, emitted after the event loop settles)
+  ;;; 10. Startup metrics
   ;;; -------------------------------------------------------------------------
 
   (defun core--announce-startup ()
-    "Report startup elapsed time and GC count."
     (message "Emacs ready in %.2f seconds with %d GCs."
              (float-time (time-subtract after-init-time before-init-time))
              gcs-done))
 
-  (defun core--schedule-startup-announcement ()
-    "Schedule `core--announce-startup' after the event loop becomes idle."
-    (run-with-idle-timer 0 nil #'core--announce-startup))
-
-  (add-hook 'after-init-hook #'core--schedule-startup-announcement)
+  (run-with-idle-timer 0 nil #'core--announce-startup)
 
   (provide 'init)
   ;;; init.el ends here
@@ -5473,7 +5416,7 @@ variant; see Commentary for the rationale."
   ;;
   ;; Category: completion
   ;;
-  ;;; Commentary:
+    ;;; Commentary:
   ;;
   ;; Orderless tuning inside Org SRC edit buffers.
   ;;
@@ -5490,14 +5433,14 @@ variant; see Commentary for the rationale."
   ;;   override inside org-src-mode buffers only, leaving the global value
   ;;   (set authoritatively by completion-capf.el) intact.  `setopt' has no
   ;;   buffer-local variant; `setq-local' is therefore the correct form.
-  ;;; Code:
+    ;;; Code:
 
   (defun completion--org-src-orderless-setup ()
     "Configure Orderless completion styles for the current Org SRC edit buffer.
-Sets `completion-category-overrides' buffer-locally so that symbol, keyword,
-function, and variable categories use Orderless, while file and dabbrev use
-basic/partial-completion.  Does not affect the global value owned by
-completion-capf.el.  Uses setq-local because setopt has no buffer-local variant."
+  Sets `completion-category-overrides' buffer-locally so that symbol, keyword,
+  function, and variable categories use Orderless, while file and dabbrev use
+  basic/partial-completion.  Does not affect the global value owned by
+  completion-capf.el.  Uses setq-local because setopt has no buffer-local variant."
     ;; Buffer-local override: does not affect the global completion-category-overrides
     ;; value owned by completion-capf.el (see Commentary above).
     (setq-local completion-category-overrides
@@ -6291,7 +6234,7 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
   ;;
   ;; Category: org
   ;;
-  ;;; Commentary:
+    ;;; Commentary:
   ;;
   ;; Automatic ox-hugo all-subtrees export triggered by org-capture finalization.
   ;;
@@ -6318,18 +6261,18 @@ completion-capf.el.  Uses setq-local because setopt has no buffer-local variant.
   ;; non-nil when the capture was aborted; the hook runs in both cases, so
   ;; the abort condition must be checked explicitly.
   ;;
-  ;;; Code:
+    ;;; Code:
 
   (eval-when-compile (require 'leaf))
   (require 'ox-hugo)
 
   (defvar orgx-auto-hugo--in-progress nil
     "Non-nil while an ox-hugo export triggered by capture finalization is running.
-Prevents re-entrant export calls if ox-hugo causes a secondary finalize event.")
+  Prevents re-entrant export calls if ox-hugo causes a secondary finalize event.")
 
   (defun orgx-auto-hugo--blog-capture-p ()
     "Return non-nil when the just-finalized capture targeted the blog source file.
-Reads `org-capture-last-stored-marker' to determine the destination file."
+  Reads `org-capture-last-stored-marker' to determine the destination file."
     (and (bound-and-true-p my:f:capture-blog-file)
          (markerp org-capture-last-stored-marker)
          (marker-buffer org-capture-last-stored-marker)
@@ -6341,7 +6284,7 @@ Reads `org-capture-last-stored-marker' to determine the destination file."
 
   (defun orgx-auto-hugo--on-capture-finalize ()
     "Export all Hugo subtrees after a blog post capture entry is finalized.
-Does nothing when capture was aborted or the target is not the blog source file."
+  Does nothing when capture was aborted or the target is not the blog source file."
     (when (and (not org-note-abort)
                (not orgx-auto-hugo--in-progress)
                (orgx-auto-hugo--blog-capture-p))
@@ -6614,7 +6557,7 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;;
   ;; Category: dev
   ;;
-  ;;; Commentary:
+    ;;; Commentary:
   ;;
   ;; LSP abstraction layer: backend-agnostic code-actions, rename, format.
   ;;
@@ -6631,14 +6574,14 @@ Does nothing when capture was aborted or the target is not the blog source file.
   ;; ui-keymap and personal overlays can bind `dev-lsp-*` commands once this
   ;; module has loaded.  Concrete backends are activated lazily by core-switches
   ;; via `after-init-hook`.
-  ;;; Code:
+    ;;; Code:
 
-  ;;;###autoload
+    ;;;###autoload
   (defun dev-lsp--dispatch (eglot-fn lsp-fn fallback-fn error-msg)
     "Dispatch to the active LSP backend using EGLOT-FN, LSP-FN, or FALLBACK-FN.
-Tries each in order via `fboundp'; calls it interactively if bound.
-Signals `user-error' with ERROR-MSG when none is available.
-FALLBACK-FN may be nil to skip the fallback clause."
+  Tries each in order via `fboundp'; calls it interactively if bound.
+  Signals `user-error' with ERROR-MSG when none is available.
+  FALLBACK-FN may be nil to skip the fallback clause."
     (cond
      ((fboundp eglot-fn)   (call-interactively eglot-fn))
      ((fboundp lsp-fn)     (call-interactively lsp-fn))
@@ -6646,21 +6589,21 @@ FALLBACK-FN may be nil to skip the fallback clause."
            (fboundp fallback-fn)) (call-interactively fallback-fn))
      (t (user-error "%s" error-msg))))
 
-  ;;;###autoload
+    ;;;###autoload
   (defun dev-lsp-code-actions ()
     "Run code actions at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
     (dev-lsp--dispatch #'eglot-code-actions #'lsp-execute-code-action nil
                        "No LSP backend available"))
 
-  ;;;###autoload
+    ;;;###autoload
   (defun dev-lsp-rename ()
     "Rename symbol at point via the active LSP backend (eglot or lsp-mode)."
     (interactive)
     (dev-lsp--dispatch #'eglot-rename #'lsp-rename nil
                        "No LSP backend available"))
 
-  ;;;###autoload
+    ;;;###autoload
   (defun dev-lsp-format-buffer ()
     "Format the current buffer via the active LSP backend or `indent-region' fallback."
     (interactive)
@@ -7783,7 +7726,7 @@ FALLBACK-FN may be nil to skip the fallback clause."
   ;;
   ;; Category: utils
   ;;
-  ;;; Commentary:
+    ;;; Commentary:
   ;;
   ;; Async shell command utilities for non-blocking subprocess execution.
   ;;
@@ -7791,7 +7734,7 @@ FALLBACK-FN may be nil to skip the fallback clause."
   ;; - `utils-async-shell-command`: runs a command in a named output buffer
   ;; - `utils-async-run-script`: runs an executable script with optional args,
   ;;   guarded by `file-executable-p`
-  ;;; Code:
+    ;;; Code:
 
   (defun utils-async-shell-command (cmd &optional buf)
     "Run shell command CMD asynchronously, output to BUF (default *Async Shell Command*)."
@@ -7800,13 +7743,13 @@ FALLBACK-FN may be nil to skip the fallback clause."
 
   (defun utils-async-run-script (script &optional args)
     "Run executable SCRIPT with optional ARGS string asynchronously.
-No-op when SCRIPT is not executable."
+  No-op when SCRIPT is not executable."
     (when (file-executable-p script)
       (utils-async-shell-command
        (concat script (if args (concat " " args) "")))))
 
   (provide 'utils-async)
-  ;;; utils/utils-async.el ends here
+    ;;; utils/utils-async.el ends here
 #+end_src
 
 **** utils/utils-buffers.el
