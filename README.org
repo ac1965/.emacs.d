@@ -9162,7 +9162,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- Default target (no args) ------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload
 all: onepass-init
 
 # ---- One-pass (early+init env) : tangle -> incremental compile ---------------
@@ -9227,6 +9227,14 @@ tangle:
 	  --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
 	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
 	  --eval "(org-babel-tangle-file \"$(ORG)\")"
+
+# ---- reload : purge .elc then re-tangle --------------------------------------
+# Use this after replacing README.org with a new Claude output to guarantee
+# that stale byte-compiled modules cannot shadow the freshly tangled .el files.
+# This target is the operational fix for the Fix BM / Fix BO class of incident
+# (stale on-disk modules producing warnings that do not exist in source).
+reload: clean tangle
+	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
 #+end_src
 
 * Changelog
@@ -11170,3 +11178,79 @@ file; this pass re-applies them to the canonical source.
   matches the precedent already documented in the project (Org agenda
   variables, =org-roam-db-connector= in Fix BH) for any leaf variable whose
   value requires runtime evaluation (backquote, function call, arithmetic).
+
+** 2026-04 (thirty-fourth evaluation pass)
+*** Fix BO: tangle-workflow — 14 spurious "Missing lexical-binding" warnings from stale on-disk modules
+
+🟠 Medium — workflow / stale tangle output (not a source defect)
+
+- *[Fix BO] tangle-workflow (core/*, ui/ui-global-keys, completion/*)*: Emacs
+  reported =Missing 'lexical-binding' cookie= for 14 modules on startup:
+
+  | Layer      | File                                         |
+  |------------+----------------------------------------------|
+  | core       | =core-session-private.el=                    |
+  | core       | =core-buffers.el=                            |
+  | core       | =core-runtime.el=                            |
+  | core       | =core-treesit.el=                            |
+  | core       | =core-history.el=                            |
+  | core       | =core-switches.el=                           |
+  | core       | =core-api.el=                                |
+  | core       | =core-native.el=                             |
+  | ui         | =ui-global-keys.el=                          |
+  | completion | =completion-vertico.el=                      |
+  | completion | =completion-corfu.el=                        |
+  | completion | =completion-capf-org-src.el=                 |
+  | completion | =completion-capf-org-src-lang.el=            |
+  | completion | =completion-corfu-org-src.el=                |
+
+  *Verification.*  Every corresponding =#+begin_src emacs-lisp= block in the
+  current =README.org= carries the cookie on its first source line in the
+  canonical form:
+
+  #+begin_example
+  ;;; <relative-path> --- <short description> -*- lexical-binding: t; -*-
+  #+end_example
+
+  A clean batch tangle of the uploaded =README.org= under =emacs --batch -Q=
+  was performed and the first line of every one of the 14 produced =.el=
+  files was inspected byte-for-byte.  Each line 1 contains the
+  =-*- lexical-binding: t; -*-= specifier in the position required by
+  =(elisp)Selecting Lisp Dialect= (within the first line, inside
+  =-*- ... -*-= markers).  Byte-compilation of the tangled tree produces no
+  =Missing 'lexical-binding' cookie= warning.  Coding rule 1 is therefore
+  *not* violated at the source level, and no source block requires editing.
+
+  *Root cause.*  Identical in shape to Fix BM.  The output =README.org= from
+  a preceding Claude session was not copied to =~/.emacs.d/README.org= before
+  =make tangle= was invoked, so the on-disk =.el= files retained an older
+  revision that predated the cookie additions in those 14 modules.  In
+  addition, =.elc= files byte-compiled from that older revision continued to
+  trigger the warning even after a subsequent partial re-tangle, because
+  Emacs loads the =.elc= in preference to the =.el= when the =.elc= is
+  newer.
+
+  *Remediation (operational, not source).*
+  1. =cp ~/Downloads/README.org ~/.emacs.d/README.org=
+  2. =make -C ~/.emacs.d reload= (see below)
+  3. Restart Emacs.
+
+  After remediation, the 14 warnings disappear without any change to the
+  literate source.
+
+  *Preventive measure applied in this pass.*  A new =reload= target is
+  added to =Makefile= (tangled from the =* Makefile= section):
+
+  #+begin_example
+  reload: clean tangle
+  #+end_example
+
+  =reload= first deletes all =*.elc= files under =lisp/= and =personal/=
+  (via the existing =clean= target), then re-tangles =README.org= from
+  scratch.  This makes "apply latest README" a single deterministic step
+  and closes the failure mode that produced both Fix BM and Fix BO.
+
+  *Follow-up (not applied in this pass).*  Consider a pre-tangle sanity
+  check that fails loudly when the on-disk =README.org= mtime is older
+  than =~/Downloads/README.org=, to detect the "forgot to copy" case
+  before it wastes a session.  Recorded here for future evaluation.

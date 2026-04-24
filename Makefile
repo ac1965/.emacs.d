@@ -55,7 +55,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- Default target (no args) ------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload
 all: onepass-init
 
 # ---- One-pass (early+init env) : tangle -> incremental compile ---------------
@@ -120,3 +120,11 @@ tangle:
 	  --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
 	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
 	  --eval "(org-babel-tangle-file \"$(ORG)\")"
+
+# ---- reload : purge .elc then re-tangle --------------------------------------
+# Use this after replacing README.org with a new Claude output to guarantee
+# that stale byte-compiled modules cannot shadow the freshly tangled .el files.
+# This target is the operational fix for the Fix BM / Fix BO class of incident
+# (stale on-disk modules producing warnings that do not exist in source).
+reload: clean tangle
+	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
