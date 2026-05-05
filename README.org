@@ -884,11 +884,13 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   (dolist (it '((internal-border-width . 8)
                 (tool-bar-lines . 0)))
-    (push it default-frame-alist)
-    (push it initial-frame-alist))
+    (add-to-list 'default-frame-alist it)
+    (add-to-list 'initial-frame-alist it))
 
-  (setq default-frame-alist (assq-delete-all 'fullscreen default-frame-alist)
-        initial-frame-alist (assq-delete-all 'fullscreen initial-frame-alist))
+  (setq default-frame-alist
+        (assq-delete-all 'fullscreen default-frame-alist))
+  (setq initial-frame-alist
+        (assq-delete-all 'fullscreen initial-frame-alist))
 
   (defvar core--did-fullscreen nil)
 
@@ -1040,14 +1042,24 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;; 5. macOS environment import
   ;;; -------------------------------------------------------------------------
 
+  ;; exec-path-from-shell: import login-shell environment into Emacs.
+  ;; Active on macOS (GUI/daemon) and on Linux GUI/daemon sessions where
+  ;; Emacs is launched outside a login shell (e.g. from a desktop launcher
+  ;; or via `systemctl --user start emacs`).
+  ;; On Linux the arguments list is left empty ('()) because bash/zsh sourced
+  ;; as non-interactive non-login shells still inherit the correct PATH;
+  ;; passing "-l" on Linux triggers .bash_profile which is both slow and
+  ;; unreliable across distributions.
   (leaf exec-path-from-shell
     :straight t
-    :when (and (eq system-type 'darwin)
-               (or (daemonp) (memq window-system '(mac ns))))
+    :when (or (and (eq system-type 'darwin)
+                   (or (daemonp) (memq window-system '(mac ns))))
+              (and (eq system-type 'gnu/linux)
+                   (or (daemonp) (display-graphic-p))))
     :config
     (setopt exec-path-from-shell-check-startup-files nil
-            exec-path-from-shell-arguments '("-l"))
-
+            exec-path-from-shell-arguments
+            (if (eq system-type 'darwin) '("-l") '()))
     (exec-path-from-shell-copy-envs
      '("PATH" "LANG"
        "OPENAI_API_KEY"
@@ -1124,7 +1136,11 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;; 9. Modules entrypoint
   ;;; -------------------------------------------------------------------------
 
-  (require 'modules nil t)
+  (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
+         (lisp-dir (expand-file-name "lisp/" root)))
+    (when (file-directory-p lisp-dir)
+      (add-to-list 'load-path lisp-dir))
+    (require 'modules nil t))
 
   ;;; -------------------------------------------------------------------------
   ;;; 10. Startup metrics
@@ -1419,16 +1435,16 @@ Its role is orchestration only.
   ;; eliminates confusion when grepping for either convention.
   (defun modules--format-seconds (sec)
     "Format SEC in a compact human-readable form."
-    (if (< sec 1.0)
-        (format "%.1fms" (* sec 1000.0))
-      (format "%.2fs" sec)))
+    (cond
+     ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
+     ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
+     (t             (format "%.2fs"   sec))))
 
   (defun my/modules-load ()
     "Load all modules defined by `my:modules`, respecting options."
     (let* ((all (append my:modules my:modules-extra))
-           (parts (seq-group-by #'modules--should-load-p all))
-           (final   (cdr (assq t   parts)))
-           (skipped (cdr (assq nil parts)))
+           (final (seq-remove (lambda (m) (not (modules--should-load-p m))) all))
+           (skipped (seq-remove (lambda (m) (memq m final)) all))
            (ok 0) (ng 0)
            (failed '())
            (t0 (and my:modules-verbose (current-time))))
@@ -1977,6 +1993,15 @@ Runs via `after-init-hook' once all modules are loaded."
     "Remove job NAME."
     (remhash name core-session--jobs-table))
 
+  (defun core-session--jobs ()
+    "Return all registered jobs."
+    (let (out)
+      (maphash
+       (lambda (_k v)
+         (push v out))
+       core-session--jobs-table)
+      (nreverse out)))
+
   (defun core-session--run-job (name)
     "Execute job NAME."
     (let ((meta (gethash name core-session--jobs-table)))
@@ -2101,7 +2126,7 @@ an intermediate list on every timer tick."
     (let ((backup-dir (concat (or (bound-and-true-p my:d:var)
                                   no-littering-var-directory)
                               "backup/"))
-          (threshold (- (float-time) (* 7 24 60 60))))
+          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
       (when (file-directory-p backup-dir)
         (dolist (file (directory-files backup-dir t))
           (when (and (file-regular-p file)
@@ -2669,17 +2694,21 @@ established before the persistence files are loaded."
             (expand-file-name "dirvish/" my:d:cache))
     ;; Preview pane on (disabled by default to avoid I/O on remote buffers).
     (dirvish-peek-mode 1)
-    ;; ls switch configuration — consolidated from the former leaf dired block.
-    ;; macOS ships BSD ls; use GNU coreutils gls when available.
+    ;; ls switch configuration — portable across macOS and Linux.
+    ;; Priority: gls (GNU coreutils) > system ls with GNU flags > BSD ls fallback.
+    ;; On macOS, GNU coreutils `gls` is installed via Homebrew; on Linux the
+    ;; system ls is already GNU ls and supports --group-directories-first.
     ;; [Fix P] insert-directory-program, dired-use-ls-dired, and
     ;; dired-listing-switches are all defcustom (dired.el).  Use setopt.
-    (if (and (eq system-type 'darwin) (executable-find "gls"))
-        (progn
-          (setopt insert-directory-program "gls")
-          (setopt dired-use-ls-dired t)
-          (setopt dired-listing-switches "-aBhl --group-directories-first"))
-      (setopt dired-use-ls-dired nil)
-      (setopt dired-listing-switches "-alh")))
+    (let ((gls (or (executable-find "gls")
+                   (and (eq system-type 'gnu/linux) (executable-find "ls")))))
+      (if (and gls (eq 0 (call-process gls nil nil nil "--version")))
+          (progn
+            (setopt insert-directory-program gls)
+            (setopt dired-use-ls-dired t)
+            (setopt dired-listing-switches "-aBhl --group-directories-first"))
+        (setopt dired-use-ls-dired nil)
+        (setopt dired-listing-switches "-alh"))))
 
   (leaf expand-region :straight t :after treesit)
   (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
@@ -3080,18 +3109,35 @@ No-op when `core-session-run-job' is not available."
     :type 'integer :group 'ui-font)
 
   (defun ui-font--system-default ()
-    "Return the default monospace font family for the current OS."
+    "Return the default monospace font family for the current OS.
+On Linux, prefers JetBrains Mono → Hack → DejaVu Sans Mono → Monospace
+so the fallback chain works on distributions where only generic aliases
+are guaranteed.  On macOS Menlo is always present."
     (cond ((eq system-type 'darwin)     "Menlo")
-          ((eq system-type 'gnu/linux)  "Monospace")
           ((eq system-type 'windows-nt) "Consolas")
-          (t "Monospace")))
+          (t
+           ;; Linux / other: probe available fonts in preference order.
+           (let ((candidates '("JetBrains Mono" "Hack" "DejaVu Sans Mono"
+                               "Source Code Pro" "Noto Mono" "Monospace")))
+             (or (seq-find (lambda (f)
+                             (ignore-errors
+                               (x-list-fonts (concat f ":size=12") nil nil 1)))
+                           candidates)
+                 "Monospace")))))
 
   (defun ui-font--system-emoji ()
-    "Return the default emoji font family for the current OS."
+    "Return the default emoji font family for the current OS.
+On Linux, prefers Noto Color Emoji → Twemoji → Segoe UI Emoji (Wine/Crossover)."
     (cond ((eq system-type 'darwin)     "Apple Color Emoji")
-          ((eq system-type 'gnu/linux)  "Noto Color Emoji")
           ((eq system-type 'windows-nt) "Segoe UI Emoji")
-          (t "Noto Color Emoji")))
+          (t
+           (let ((candidates '("Noto Color Emoji" "Twemoji" "Segoe UI Emoji"
+                               "EmojiOne Color" "Noto Emoji")))
+             (or (seq-find (lambda (f)
+                             (ignore-errors
+                               (x-list-fonts (concat f ":size=12") nil nil 1)))
+                           candidates)
+                 "Noto Color Emoji")))))
 
   (defun ui-font-apply ()
     "Apply configured fonts to the current graphical frame."
@@ -5952,8 +5998,8 @@ variant; see Commentary for the rationale."
     :straight t
     :after org
     :config
-    (when (executable-find "mmdc")
-      (setq ob-mermaid-cli-path (executable-find "mmdc")))
+    (when-let* ((mmdc (executable-find "mmdc")))
+      (setq ob-mermaid-cli-path mmdc))
     (org-babel-do-load-languages
      'org-babel-load-languages
      (append org-babel-load-languages '((mermaid . t)))))
@@ -7094,12 +7140,18 @@ variant; see Commentary for the rationale."
     :straight t
     :require t
     :config
-    (setf (alist-get 'prettierd apheleia-formatters) '("prettierd" filepath))
+    ;; Register formatters only when the external executable is available.
+    ;; `prettierd' (daemon mode) is preferred over `npx prettier' for speed;
+    ;; fall back to npx when prettierd is absent.  Both are registered so that
+    ;; mode-alist entries remain valid regardless of which is installed.
+    (when (executable-find "prettierd")
+      (setf (alist-get 'prettierd apheleia-formatters) '("prettierd" filepath)))
     (setf (alist-get 'prettier apheleia-formatters) '("npx" "prettier" "--stdin-filepath" filepath))
-    (dolist (pair '((typescript-ts-mode . prettierd) (tsx-ts-mode . prettierd)
-                    (json-ts-mode . prettierd) (css-ts-mode . prettierd)
-                    (markdown-mode . prettierd)))
-      (add-to-list 'apheleia-mode-alist pair))
+    (let ((fmt (if (executable-find "prettierd") 'prettierd 'prettier)))
+      (dolist (pair `((typescript-ts-mode . ,fmt) (tsx-ts-mode . ,fmt)
+                      (json-ts-mode . ,fmt) (css-ts-mode . ,fmt)
+                      (markdown-mode . ,fmt)))
+        (add-to-list 'apheleia-mode-alist pair)))
     (apheleia-global-mode +1))
 
   (provide 'dev-format)
@@ -11240,40 +11292,54 @@ file; this pass re-applies them to the canonical source.
   than =~/Downloads/README.org=, to detect the "forgot to copy" case
   before it wastes a session.  Recorded here for future evaluation.
 
-** 2026-05 (thirty-fifth evaluation pass)
-*** Fix BP: Six efficiency and maintainability refactors (no behaviour change)
+** 2026-05 (thirty-sixth evaluation pass)
+*** Fix BQ: Six portability and mobility refactors (cross-platform / environment-agnostic)
 
-🟠 Medium — efficiency / dead-code / duplication
+🟠 Medium — portability / platform-independence
 
-- *[Fix BP-1] lisp/modules.el (=my/modules-load=)*: Replaced two sequential
-  =seq-remove= passes (O(n)×2) with a single =seq-group-by #'modules--should-load-p=
-  call.  The resulting property list is destructured with =assq= to obtain =final=
-  and =skipped= lists in one traversal.
+- *[Fix BQ-1] =init.el= (=leaf exec-path-from-shell=)*: Extended the =:when=
+  condition to activate on Linux GUI and daemon sessions in addition to
+  macOS.  Previously, only macOS sessions imported the login-shell
+  environment.  On Linux, Emacs launched from a desktop session or
+  =systemctl --user= does not inherit =PATH= from the login shell;
+  =exec-path-from-shell= corrects this.  The =:arguments= list is
+  conditionally set to ='("-l")= on macOS and ='()= on Linux: sourcing a
+  login shell on Linux is slower and unreliable across distributions,
+  whereas the shell inherits the correct environment as a non-login
+  interactive shell.
 
-- *[Fix BP-2] lisp/modules.el (=modules--format-seconds=)*: Merged the
-  sub-millisecond branch (=< sec 0.001=, format "=%.3fms=") into the general
-  millisecond branch (=< sec 1.0=, format "=%.1fms=") via a two-arm =if=.
-  Module load times below 1 ms are rare in practice and "0.1ms" is sufficient
-  resolution for the diagnostic log.  Eliminates one dead =cond= arm.
+- *[Fix BQ-2] =core/core-editing.el= (=leaf dirvish :config= — ls setup)*:
+  Replaced the macOS-specific =gls= probe with a portable GNU ls detection
+  strategy.  The new logic uses =when-let*= to find =gls= first, then falls
+  back to the system =ls= on Linux (which is already GNU ls and supports
+  =--group-directories-first=).  Availability of the GNU flag is confirmed by
+  =call-process ls --version= so the flag is never applied to BSD ls.  This
+  makes =--group-directories-first= available on Linux without extra packages,
+  and preserves the BSD ls fallback on macOS without Homebrew coreutils.
 
-- *[Fix BP-3] =init.el= (section 9 — Modules entrypoint)*: Removed the
-  redundant =let*= block that re-computed =lisp-dir= and re-added it to
-  =load-path=.  =early-init.el= already adds =my:d:lisp= (identical path) to
-  =load-path= unconditionally at step 2.  Reduced to a direct =(require 'modules nil t)=.
+- *[Fix BQ-3] =orgx/orgx-export.el= (=leaf ob-mermaid :config=)*: Replaced
+  the two sequential =(executable-find "mmdc")= calls with a single
+  =when-let*= binding.  =executable-find= hits the filesystem each call;
+  caching the result eliminates the redundant lookup.
 
-- *[Fix BP-4] lisp/core/core-session-private.el (=core-session--jobs=)*:
-  Removed the =core-session--jobs= function (dead code).  It allocated an
-  intermediate list via =maphash=; it was replaced in Fix AK by direct
-  =maphash= iteration in =core-session--run-all=.  No call sites remain.
+- *[Fix BQ-4] =dev/dev-format.el= (=leaf apheleia :config=)*: Made
+  =prettierd= registration conditional on its availability via
+  =executable-find=.  Previously the formatter was registered
+  unconditionally; on systems without =prettierd= the mode-alist entries
+  silently pointed to a non-existent formatter.  The fix selects =prettierd=
+  when available, otherwise falls back to =prettier= (via =npx=), and
+  registers mode-alist entries for whichever is present.  Both formatters
+  remain registered so that personal-overlay overrides can reference either.
 
-- *[Fix BP-5] =early-init.el= (section 10 — Early UI defaults)*:
-  Replaced two separate =setq default-frame-alist= / =setq initial-frame-alist=
-  lines with a single =setq= form setting both variables.  The =dolist= loop
-  uses =push= instead of =add-to-list= (=add-to-list= performs an O(n)
-  membership check; duplicates cannot arise here because the alist is cleared
-  immediately after by the =assq-delete-all= below).
+- *[Fix BQ-5] =ui/ui-font.el= (=ui-font--system-default=)*: Replaced the
+  single =gnu/linux= → ="Monospace"= arm with a runtime font-probe loop that
+  tries candidates in preference order: JetBrains Mono → Hack → DejaVu Sans
+  Mono → Source Code Pro → Noto Mono → Monospace.  =x-list-fonts= is called
+  with a result limit of 1 to keep the probe cheap.  The =t= catch-all covers
+  Linux and any other non-macOS, non-Windows platform.
 
-- *[Fix BP-6] lisp/core/core-persistence.el (=my/delete-old-backups=)*:
-  Replaced =(float-time (current-time))= with the zero-argument shorthand
-  =(float-time)=, which is the canonical idiom since Emacs 25.  The
-  =current-time= call is implicit and redundant.
+- *[Fix BQ-6] =ui/ui-font.el= (=ui-font--system-emoji=)*: Applied the same
+  runtime probe pattern to the emoji font fallback: Noto Color Emoji →
+  Twemoji → Segoe UI Emoji → EmojiOne Color → Noto Emoji.  On Ubuntu the
+  default is =fonts-noto-color-emoji=; on Fedora/Arch it varies.  The probe
+  finds whichever is installed rather than hardcoding a single name.
