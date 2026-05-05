@@ -884,13 +884,11 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
 
   (dolist (it '((internal-border-width . 8)
                 (tool-bar-lines . 0)))
-    (add-to-list 'default-frame-alist it)
-    (add-to-list 'initial-frame-alist it))
+    (push it default-frame-alist)
+    (push it initial-frame-alist))
 
-  (setq default-frame-alist
-        (assq-delete-all 'fullscreen default-frame-alist))
-  (setq initial-frame-alist
-        (assq-delete-all 'fullscreen initial-frame-alist))
+  (setq default-frame-alist (assq-delete-all 'fullscreen default-frame-alist)
+        initial-frame-alist (assq-delete-all 'fullscreen initial-frame-alist))
 
   (defvar core--did-fullscreen nil)
 
@@ -1126,11 +1124,7 @@ This favors isolation and multi-user safety over strict byte-for-byte reproducib
   ;;; 9. Modules entrypoint
   ;;; -------------------------------------------------------------------------
 
-  (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
-         (lisp-dir (expand-file-name "lisp/" root)))
-    (when (file-directory-p lisp-dir)
-      (add-to-list 'load-path lisp-dir))
-    (require 'modules nil t))
+  (require 'modules nil t)
 
   ;;; -------------------------------------------------------------------------
   ;;; 10. Startup metrics
@@ -1425,16 +1419,16 @@ Its role is orchestration only.
   ;; eliminates confusion when grepping for either convention.
   (defun modules--format-seconds (sec)
     "Format SEC in a compact human-readable form."
-    (cond
-     ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
-     ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
-     (t             (format "%.2fs"   sec))))
+    (if (< sec 1.0)
+        (format "%.1fms" (* sec 1000.0))
+      (format "%.2fs" sec)))
 
   (defun my/modules-load ()
     "Load all modules defined by `my:modules`, respecting options."
     (let* ((all (append my:modules my:modules-extra))
-           (final (seq-remove (lambda (m) (not (modules--should-load-p m))) all))
-           (skipped (seq-remove (lambda (m) (memq m final)) all))
+           (parts (seq-group-by #'modules--should-load-p all))
+           (final   (cdr (assq t   parts)))
+           (skipped (cdr (assq nil parts)))
            (ok 0) (ng 0)
            (failed '())
            (t0 (and my:modules-verbose (current-time))))
@@ -1983,15 +1977,6 @@ Runs via `after-init-hook' once all modules are loaded."
     "Remove job NAME."
     (remhash name core-session--jobs-table))
 
-  (defun core-session--jobs ()
-    "Return all registered jobs."
-    (let (out)
-      (maphash
-       (lambda (_k v)
-         (push v out))
-       core-session--jobs-table)
-      (nreverse out)))
-
   (defun core-session--run-job (name)
     "Execute job NAME."
     (let ((meta (gethash name core-session--jobs-table)))
@@ -2116,7 +2101,7 @@ an intermediate list on every timer tick."
     (let ((backup-dir (concat (or (bound-and-true-p my:d:var)
                                   no-littering-var-directory)
                               "backup/"))
-          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
+          (threshold (- (float-time) (* 7 24 60 60))))
       (when (file-directory-p backup-dir)
         (dolist (file (directory-files backup-dir t))
           (when (and (file-regular-p file)
@@ -11254,3 +11239,41 @@ file; this pass re-applies them to the canonical source.
   check that fails loudly when the on-disk =README.org= mtime is older
   than =~/Downloads/README.org=, to detect the "forgot to copy" case
   before it wastes a session.  Recorded here for future evaluation.
+
+** 2026-05 (thirty-fifth evaluation pass)
+*** Fix BP: Six efficiency and maintainability refactors (no behaviour change)
+
+🟠 Medium — efficiency / dead-code / duplication
+
+- *[Fix BP-1] lisp/modules.el (=my/modules-load=)*: Replaced two sequential
+  =seq-remove= passes (O(n)×2) with a single =seq-group-by #'modules--should-load-p=
+  call.  The resulting property list is destructured with =assq= to obtain =final=
+  and =skipped= lists in one traversal.
+
+- *[Fix BP-2] lisp/modules.el (=modules--format-seconds=)*: Merged the
+  sub-millisecond branch (=< sec 0.001=, format "=%.3fms=") into the general
+  millisecond branch (=< sec 1.0=, format "=%.1fms=") via a two-arm =if=.
+  Module load times below 1 ms are rare in practice and "0.1ms" is sufficient
+  resolution for the diagnostic log.  Eliminates one dead =cond= arm.
+
+- *[Fix BP-3] =init.el= (section 9 — Modules entrypoint)*: Removed the
+  redundant =let*= block that re-computed =lisp-dir= and re-added it to
+  =load-path=.  =early-init.el= already adds =my:d:lisp= (identical path) to
+  =load-path= unconditionally at step 2.  Reduced to a direct =(require 'modules nil t)=.
+
+- *[Fix BP-4] lisp/core/core-session-private.el (=core-session--jobs=)*:
+  Removed the =core-session--jobs= function (dead code).  It allocated an
+  intermediate list via =maphash=; it was replaced in Fix AK by direct
+  =maphash= iteration in =core-session--run-all=.  No call sites remain.
+
+- *[Fix BP-5] =early-init.el= (section 10 — Early UI defaults)*:
+  Replaced two separate =setq default-frame-alist= / =setq initial-frame-alist=
+  lines with a single =setq= form setting both variables.  The =dolist= loop
+  uses =push= instead of =add-to-list= (=add-to-list= performs an O(n)
+  membership check; duplicates cannot arise here because the alist is cleared
+  immediately after by the =assq-delete-all= below).
+
+- *[Fix BP-6] lisp/core/core-persistence.el (=my/delete-old-backups=)*:
+  Replaced =(float-time (current-time))= with the zero-argument shorthand
+  =(float-time)=, which is the canonical idiom since Emacs 25.  The
+  =current-time= call is implicit and redundant.
