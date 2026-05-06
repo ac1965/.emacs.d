@@ -55,7 +55,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- Default target (no args) ------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies
 all: onepass-init
 
 # ---- One-pass (early+init env) : tangle -> incremental compile ---------------
@@ -128,3 +128,24 @@ tangle:
 # (stale on-disk modules producing warnings that do not exist in source).
 reload: clean tangle
 	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
+
+# ---- check-cookies : verify lexical-binding cookie on line 1 of every .el ---
+# Run after `make tangle` to confirm all output files have the cookie.
+# Exits 0 if all pass, 1 and lists offenders if any are missing.
+check-cookies:
+	@echo "[check-cookies] scanning $(LISPDIR) ..."
+	@fail=0; \
+	 for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
+	   line1=$$(head -1 "$$f"); \
+	   if ! echo "$$line1" | grep -q 'lexical-binding: t'; then \
+	     echo "  MISSING: $$f"; \
+	     echo "    line1: $$line1"; \
+	     fail=1; \
+	   fi; \
+	 done; \
+	 if [ $$fail -eq 0 ]; then \
+	   echo "[check-cookies] all files OK"; \
+	 else \
+	   echo "[check-cookies] FAILED — run: make reload"; \
+	   exit 1; \
+	 fi

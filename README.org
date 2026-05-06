@@ -25,29 +25,7 @@
 設定は Org Mode と Babel を用いたリテラルプログラミングシステムとして構成されている。
 ソースコードブロックは Emacs Lisp モジュールへと tangle（展開）される。
 
-#+begin_src mermaid :file tangle-flow.svg :exports results
-  flowchart LR
-    src["README.org\n(single source of truth)"]
-
-    subgraph tangle ["org-babel-tangle"]
-        direction TB
-        T(["extract\nsrc blocks"])
-    end
-
-    src --> tangle
-
-    tangle --> ei["early-init.el"]
-    tangle --> ii["init.el"]
-    tangle --> mo["lisp/modules.el"]
-    tangle --> mods["lisp/&lt;layer&gt;/&lt;module&gt;.el\n(89+ files)"]
-
-    style src  fill:#EEEDFE,stroke:#534AB7,color:#3C3489
-    style T    fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    style ei   fill:#FAEEDA,stroke:#BA7517,color:#633806
-    style ii   fill:#FAEEDA,stroke:#BA7517,color:#633806
-    style mo   fill:#FAEEDA,stroke:#BA7517,color:#633806
-    style mods fill:#FAECE7,stroke:#993C1D,color:#712B13
-#+end_src
+[[file:tangle-flow.svg]]
 
 =README.org= が唯一の真実のソースであり、=.el= ファイルはすべて生成物である。
 これにより、ドキュメントとコードの乖離が構造的に不可能になる。
@@ -9397,7 +9375,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- Default target (no args) ------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies
 all: onepass-init
 
 # ---- One-pass (early+init env) : tangle -> incremental compile ---------------
@@ -9470,6 +9448,27 @@ tangle:
 # (stale on-disk modules producing warnings that do not exist in source).
 reload: clean tangle
 	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
+
+# ---- check-cookies : verify lexical-binding cookie on line 1 of every .el ---
+# Run after `make tangle` to confirm all output files have the cookie.
+# Exits 0 if all pass, 1 and lists offenders if any are missing.
+check-cookies:
+	@echo "[check-cookies] scanning $(LISPDIR) ..."
+	@fail=0; \
+	 for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
+	   line1=$$(head -1 "$$f"); \
+	   if ! echo "$$line1" | grep -q 'lexical-binding: t'; then \
+	     echo "  MISSING: $$f"; \
+	     echo "    line1: $$line1"; \
+	     fail=1; \
+	   fi; \
+	 done; \
+	 if [ $$fail -eq 0 ]; then \
+	   echo "[check-cookies] all files OK"; \
+	 else \
+	   echo "[check-cookies] FAILED — run: make reload"; \
+	   exit 1; \
+	 fi
 #+end_src
 
 * Changelog
@@ -11650,3 +11649,48 @@ Short =C-c f/F= aliases retained for single-hand access.  The former
   wrapper.  Together with Fix BP-1 this ensures the mermaid language is
   registered in =org-babel-load-languages= before any =.org= file is
   opened.
+
+** 2026-05 (fortieth evaluation pass)
+*** Fix BQ: Makefile — add check-cookies target; document stale-tangle root cause
+
+🟡 Minor — operational tooling
+
+- *[Fix BQ] Makefile (check-cookies target)*: Added a =check-cookies= target
+  that scans every =.el= file under =LISPDIR= and reports any file whose
+  first line does not contain the =-*- lexical-binding: t -*-= cookie.
+  The target exits 1 and lists offenders when any are found, exits 0
+  otherwise.  Run it after =make tangle= to verify the output before
+  restarting Emacs:
+
+  #+begin_example
+  make tangle && make check-cookies
+  #+end_example
+
+  Root-cause analysis for the recurring cookie warnings (16 files in the
+  thirty-seventh pass, 17 files in the fortieth pass):
+
+  All 17 affected =.el= files have correct =;;; <module> --- <summary>
+  -*- lexical-binding: t; -*-= headers on their first code line inside
+  =README.org=.  The cookie is present in the source.  Emacs accepts the
+  two-space leading indent that =org-babel-tangle= preserves (the
+  =#+begin_src= delimiter is at column 0; tangle strips 0 characters;
+  the two-space indent of the code body is written verbatim to the output
+  file).  The warnings arise solely because the =.el= files on disk were
+  written by an earlier tangle pass that predates the addition of the
+  =;;; <module>= headers.
+
+  Remediation procedure (definitive):
+
+  1. =make tangle= — regenerate all =.el= files from the current
+     =README.org=.  If the Makefile on disk is older than the current
+     =README.org= (i.e., it lacks the =reload= or =check-cookies= targets),
+     tangle =README.org= first to regenerate the Makefile, then run
+     =make reload=.
+  2. =make check-cookies= — confirm every =.el= file has the cookie on
+     line 1.
+  3. Restart Emacs — the running session holds stale module state from
+     before the tangle; a restart is required to load the regenerated files.
+
+  The =:lexical t= header arg in =#+PROPERTY: header-args:emacs-lisp= does
+  not inject the cookie into tangle output; it is an annotation only.  The
+  cookie must appear explicitly in the first code line of each source block.
