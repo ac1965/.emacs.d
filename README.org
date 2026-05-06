@@ -2,7 +2,7 @@
 #+TITLE: Modern Emacs Configuration
 #+AUTHOR: YAMASHITA, Takao
 #+EMAIL: tjy1965@gmail.com
-#+LANGUAGE: ja
+#+LANGUAGE: en
 #+OPTIONS: toc:3 num:t
 #+STARTUP: overview
 #+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
@@ -20,54 +20,54 @@
 :CUSTOM_ID: overview
 :END:
 
-このリポジトリは、モダンな Emacs 設定を実装したものである。
+This repository implements a modern, deterministic Emacs configuration.
 
-設定は Org Mode と Babel を用いたリテラルプログラミングシステムとして構成されている。
-ソースコードブロックは Emacs Lisp モジュールへと tangle（展開）される。
+The configuration is structured as a literate programming system using Org Mode and Babel.
+Source blocks are tangled into Emacs Lisp modules.
 
 [[file:tangle-flow.svg]]
 
-=README.org= が唯一の真実のソースであり、=.el= ファイルはすべて生成物である。
-これにより、ドキュメントとコードの乖離が構造的に不可能になる。
+=README.org= is the single source of truth; all =.el= files are generated artifacts.
+Divergence between documentation and code is structurally impossible.
 
-主要な設計目標:
+Primary design goals:
 
-- 決定論的な起動（同一の入力から常に同一の結果）
-- 明示的な依存関係管理（暗黙的な自動検出を排除）
-- 削除安全なモジュールアーキテクチャ（任意モジュールを除去しても残りが動作する）
-- Emacs 31+ との前方互換性
-- 長期的な発展を見据えたメンテナビリティ
-- LSP バックエンド非依存性（eglot / lsp-mode / lsp-bridge を切り替え可能）
+- Deterministic startup (identical inputs always produce identical results)
+- Explicit dependency management (no implicit auto-discovery)
+- Delete-safe module architecture (removing any module leaves the rest functional)
+- Forward compatibility with Emacs 31+
+- Maintainability for long-term evolution
+- LSP backend agnosticism (eglot / lsp-mode / lsp-bridge are interchangeable)
 
 [[file:demo.png]]
 
-** アーキテクチャ
+** Architecture
 :PROPERTIES:
 :CUSTOM_ID: architecture
 :END:
 
 [[file:emacs_config_layer_architecture.svg]]
 
-この設定は厳格な 10 層アーキテクチャに従う。各層は固有の責務を持ち、
-依存関係は一方向にのみ流れる。
+The configuration follows a strict 10-layer architecture.
+Each layer owns a distinct responsibility domain; dependencies flow in one direction only.
 
 #+begin_example
-layer 10: personal      （ユーザー固有。他の層を変更しない）
-layer  9: utils         （汎用ユーティリティ）
-layer  8: dev           （言語・LSP・AI 支援）
-layer  7: vcs           （Magit, Forge, diff-hl）
-layer  6: orgx          （Org 拡張）
-layer  5: completion    （vertico/corfu/consult/embark）
-layer  4: auth          （auth-source, EasyPG）
-layer  3: ui            （テーマ・フォント・ウィンドウ）
-layer  2: core          （ランタイム基盤 + policy）
-layer  1: early-init    （package.el 無効化・GC 最適化）
+layer 10: personal      (user-specific; must not modify lower layers)
+layer  9: utils         (general-purpose utilities)
+layer  8: dev           (language modes, LSP, AI assistance)
+layer  7: vcs           (Magit, Forge, diff-hl)
+layer  6: orgx          (Org extensions)
+layer  5: completion    (vertico/corfu/consult/embark)
+layer  4: auth          (auth-source, EasyPG)
+layer  3: ui            (themes, fonts, windows)
+layer  2: core          (runtime foundations + policy)
+layer  1: early-init    (disable package.el, GC optimisation)
 #+end_example
 
-ロード順序（上から下へ、依存関係は下向きにのみ流れる）:
+Load order (top to bottom; dependencies flow downward only):
 
 1. early-init
-2. core（policy サブ層を含む）
+2. core (includes policy sub-layer)
 3. ui
 4. auth
 5. completion
@@ -77,66 +77,65 @@ layer  1: early-init    （package.el 無効化・GC 最適化）
 9. utils
 10. personal
 
-不変条件（Invariants）:
+Invariants:
 
-- 上位層は下位層に依存してよい
-- 下位層は上位層に依存してはならない（依存方向の逆転禁止）
-- 依存関係の自動検出は行わない
-- 副作用はすべて明示的に記述する
-- LSP バックエンド（eglot / lsp-mode / lsp-bridge）は =core-switches= で選択する
+- Upper layers may depend on lower layers
+- Lower layers must never depend on upper layers
+- No auto-discovery of dependencies
+- All side effects are explicit
+- The LSP backend (eglot / lsp-mode / lsp-bridge) is selected via =core-switches=
 
-** 起動プロセス
+** Boot Process
 :PROPERTIES:
 :CUSTOM_ID: boot
 :END:
 
-起動は Emacs の標準初期化シーケンスに従い、3 段階で構成される。
+Startup follows the standard Emacs initialisation sequence in three stages.
 
 *** early-init.el
 
-パッケージ初期化より前に実行されるフェーズ。フレームが描画される前に実行されるため、
-ここでの設定はフリッカー（画面のちらつき）を防ぐ。
+Runs before package initialisation and before the frame is rendered, preventing flicker.
 
-責務:
+Responsibilities:
 
-- =package.el= の自動初期化を無効化
-- GC（ガベージコレクション）とファイルハンドラーを最適化
-- ディレクトリレイアウトを設定（=my:d:var=, =my:d:cache=, =my:d:etc=）
-- ネイティブコンパイルのパスを準備
-- tree-sitter のパスを準備
-- 早期 UI デフォルト値を設定（ツールバー非表示等）
+- Disable =package.el= auto-initialisation
+- Optimise GC and file-handler-alist for startup
+- Configure directory layout (=my:d:var=, =my:d:cache=, =my:d:etc=)
+- Prepare native compilation paths
+- Prepare tree-sitter grammar paths
+- Apply early UI defaults (disable toolbar, etc.)
 
 *** init.el
 
-最小限のブートストラップファイル。
+Minimal bootstrap file.
 
-責務:
+Responsibilities:
 
-- =straight.el= をブートストラップ
-- macOS ログイン環境変数をインポート
-- =leaf= を初期化
-- ランタイムパフォーマンス設定を適用
-- 個人オーバーレイ（=personal/<user>.el=）をロード
-- =modules.el= を起動
+- Bootstrap =straight.el=
+- Import macOS login-shell environment variables
+- Initialise =leaf=
+- Apply runtime performance settings
+- Load personal overlay (=personal/<user>.el=)
+- Start =modules.el=
 
 *** modules.el
 
-オーケストレーション層。このファイルが「唯一の権威ある起動順序」を定義する。
+Orchestration layer.  This file defines the single authoritative load order.
 
-責務:
+Responsibilities:
 
-- 正規のロード順序を定義（=core → ui → auth → completion → orgx → vcs → dev → utils=）
-- モジュール単位のエラー分離（=condition-case= により一つの失敗が他を止めない）
-- =my:modules-skip= による任意モジュールの安全なスキップ
-- =my:modules-verbose= が非 nil のとき、モジュールごとのロード時間を報告
-- 層間の依存方向の逆転を防止
+- Define the canonical load order (=core → ui → auth → completion → orgx → vcs → dev → utils=)
+- Per-module error isolation via =condition-case= (one failure does not abort the rest)
+- Safe module skipping via =my:modules-skip=
+- Per-module load-time reporting when =my:modules-verbose= is non-nil
+- Prevent dependency inversion between layers
 
-** ディレクトリレイアウト
+** Directory Layout
 :PROPERTIES:
 :CUSTOM_ID: directory-layout
 :END:
 
-リポジトリは以下のレイアウトに従う。
+The repository follows this layout.
 
 #+begin_example
 .emacs.d/
@@ -153,158 +152,157 @@ layer  1: early-init    （package.el 無効化・GC 最適化）
 │   ├── vcs/
 │   ├── dev/
 │   └── utils/
-├── .var/        （ランタイム状態）
-├── .cache/      （一時キャッシュ）
-└── .etc/        （外部リソース）
+├── .var/        (runtime state)
+├── .cache/      (transient caches)
+└── .etc/        (external resources)
 #+end_example
 
-ディレクトリの役割:
+Directory roles:
 
-| ディレクトリ | 役割 |
-|--------------+------|
-| =lisp/=      | モジュールソースコード |
-| =.var/=      | ランタイム状態（パッケージが書き込むデータ） |
-| =.cache/=    | 一時キャッシュ（削除しても再生成される） |
-| =.etc/=     | 外部リソース（テーマファイル等） |
+| Directory  | Role |
+|------------+------|
+| =lisp/=    | Module source code |
+| =.var/=    | Runtime state (data written by packages) |
+| =.cache/=  | Transient caches (safe to delete; regenerated automatically) |
+| =.etc/=    | External resources (theme files, etc.) |
 
-** 層の定義
+** Layer Definitions
 :PROPERTIES:
 :CUSTOM_ID: layers
 :END:
 
 *** core
 
-ランタイムの基盤設定。すべての他の層が依存する最下位の機能層。
+Runtime foundation.  The lowest functional layer; all other layers depend on it.
 
-責務:
+Responsibilities:
 
-- 環境設定とディレクトリレイアウトの確立
-- パス管理と =load-path= の構築
-- ネイティブコンパイルと =eln-cache= の設定
-- tree-sitter グラマー管理
-- セッション永続化と履歴管理
-- GC チューニングと起動パフォーマンス
+- Establish environment configuration and directory layout
+- Path management and =load-path= construction
+- Native compilation and =eln-cache= configuration
+- Tree-sitter grammar management
+- Session persistence and history management
+- GC tuning and startup performance
 
-コアモジュールは UI に依存してはならない。
+Core modules must not depend on the ui layer.
 
 *** policy
 
-グローバル動作ポリシー（core 層の一部としてロードされる）。
+Global behavioural policy (loaded as part of the core layer).
 
-責務:
+Responsibilities:
 
-- 空白文字・末尾空白のルール
-- インデント標準とタブポリシー
-- エディタ安全性制約（=require-final-newline= 等）
+- Whitespace and trailing-whitespace rules
+- Indentation standards and tab policy
+- Editor safety constraints (=require-final-newline=, etc.)
 
-Policy モジュールは UI またはパッケージ機能を有効化してはならない。
+Policy modules must not activate UI or package features.
 
 *** ui
 
-視覚的な外観とインタラクション。
+Visual appearance and user interaction.
 
-責務:
+Responsibilities:
 
-- テーマ・フォント
-- ウィンドウ動作
-- UI ヘルパーとリーダーキー
+- Themes and fonts
+- Window behaviour
+- UI helpers and leader key infrastructure
 
 [[file:emacs_keybindings_cheatsheet.svg]]
 
 *** completion
 
-補完フレームワークとミニバッファ UX。
+Completion framework and minibuffer UX.
 
-責務:
+Responsibilities:
 
-- ミニバッファ UI（vertico, marginalia）
-- ポップアップ補完（corfu, cape）
-- 検索とナビゲーション（consult, embark）
-- アイコン統合（nerd-icons, kind-icon）
-- Org SRC ブロック補完統合
+- Minibuffer UI (vertico, marginalia)
+- Popup completion (corfu, cape)
+- Search and navigation (consult, embark)
+- Icon integration (nerd-icons, kind-icon)
+- Org SRC block completion integration
 
-=capf-org-src= ファミリーは協調動作し、Org ソースブロック内で言語固有の補完を提供する。
+The =capf-org-src= family works cooperatively to provide language-specific completion inside Org source blocks.
 
 *** auth
 
-認証とシークレット管理。
+Authentication and secrets management.
 
-責務:
+Responsibilities:
 
-- =auth-source= バックエンドの設定
-- EasyPG ファイル暗号化サポート
-- pass ベースのクレデンシャル参照
-- 環境変数の検証
+- Configure =auth-source= backends
+- EasyPG file encryption support
+- =pass=-based credential lookup
+- Environment variable verification
 
-Auth モジュールは UI に依存してはならない。
+Auth modules must not depend on the ui layer.
 
 *** orgx
 
-拡張 Org Mode 機能。
+Extended Org Mode functionality.
 
-責務:
+Responsibilities:
 
-- アジェンダと TODO 設定
-- ジャーナリング（org-journal）とノートキャプチャ
-- org-roam 知識グラフ統合
-- エクスポートバックエンド（ox-hugo, LaTeX/LuaLaTeX）
-- ビジュアル強化（org-modern）
-- 保存時の自動 tangle
+- Agenda and TODO configuration
+- Journaling (org-journal) and note capture
+- org-roam knowledge graph integration
+- Export backends (ox-hugo, LaTeX/LuaLaTeX)
+- Visual enhancements (org-modern)
+- Auto-tangle on save
 
 *** vcs
 
-バージョン管理統合。
+Version control integration.
 
-責務:
+Responsibilities:
 
-- Magit 設定
-- ガター差分インジケーター（diff-hl）
-- GitHub/GitLab Forge 統合
+- Magit configuration
+- Gutter diff indicators (diff-hl)
+- GitHub/GitLab Forge integration
 
-VCS モジュールは dev 層に依存してはならない。
+VCS modules must not depend on the dev layer.
 
 *** dev
 
-開発ツール。
+Development tooling.
 
-責務:
+Responsibilities:
 
-- LSP バックエンド（eglot, lsp-mode, lsp-bridge）
-- AI 支援編集（aidermacs, gptel）
-- ターミナル統合（vterm）
-- コードフォーマット（apheleia）
+- LSP backends (eglot, lsp-mode, lsp-bridge)
+- AI-assisted editing (aidermacs, gptel)
+- Terminal integration (vterm)
+- Code formatting (apheleia)
 
-Org Babel + Claude API ワークフロー統合は =personal/personal-ai.el= に存在し、
-HTTP トランスポートのために =utils/utils-claude.el= に依存する。
+Org Babel + Claude API workflow integration lives in =personal/personal-ai.el= and depends on =utils/utils-claude.el= for HTTP transport.
 
 *** utils
 
-層を横断して使用される汎用ユーティリティ。
+General-purpose utilities used across layers.
 
-責務:
+Responsibilities:
 
-- パスとディレクトリヘルパー
-- 非同期シェルコマンドユーティリティ
-- バッファ管理と ibuffer 設定
-- dired と dirvish 統合
-- Claude API HTTP クライアント（utils-claude）
+- Path and directory helpers
+- Async shell command utilities
+- Buffer management and ibuffer configuration
+- dired and dirvish integration
+- Claude API HTTP client (utils-claude)
 
 *** personal
 
-ユーザー固有のカスタマイズ。
+User-specific customisation.
 
-ルール:
+Rules:
 
-- オプショナル（なくても動作する）
-- 最後にロードされる
-- 下位層に影響を与えてはならない
+- Optional (the system functions without it)
+- Loaded last
+- Must not modify lower layers
 
-** モジュール構造
+** Module Structure
 :PROPERTIES:
 :CUSTOM_ID: module-structure
 :END:
 
-各モジュールは予測可能な構造に従う。
+Each module follows a predictable structure.
 
 #+begin_example
 ;;; module-name.el --- description -*- lexical-binding: t; -*-
@@ -328,19 +326,19 @@ Explanation of responsibilities.
 ;;; module-name.el ends here
 #+end_example
 
-モジュールの要件:
+Module requirements:
 
-- 決定論的（同一入力から同一出力）
-- 冪等（複数回評価しても副作用が重複しない）
-- バイトコンパイル安全
-- デーモンモード安全
+- Deterministic (identical inputs produce identical outputs)
+- Idempotent (repeated evaluation does not duplicate side effects)
+- Safe under byte compilation
+- Safe under daemon mode
 
-** パッケージ管理
+** Package Management
 :PROPERTIES:
 :CUSTOM_ID: packages
 :END:
 
-パッケージは =leaf= マクロを用いて宣言する。
+Packages are declared using the =leaf= macro.
 
 #+begin_src emacs-lisp
   (leaf vertico
@@ -349,7 +347,7 @@ Explanation of responsibilities.
     ((vertico-count . 15)))
 #+end_src
 
-=leaf= のキーワード順序（コーディングルール 4）:
+=leaf= keyword order (Coding Rule 4):
 
 #+begin_example
 :straight → :ensure → :after → :require →
@@ -361,98 +359,96 @@ Explanation of responsibilities.
 :CUSTOM_ID: tangling
 :END:
 
-Org Babel が Emacs Lisp ブロックをモジュールファイルに展開する。
+Org Babel expands Emacs Lisp blocks into module files.
 
-- 各モジュールは =lisp/<layer>/<module>.el= に展開される
-- ディレクトリは自動的に作成される（=:mkdirp yes=）
+- Each module is tangled to =lisp/<layer>/<module>.el=
+- Directories are created automatically (=:mkdirp yes=)
 
 *Tangling can be performed vi*:
 
 #+begin_example
 1. EMACS=/Applications/Emacs.app/Contents/MacOS/Emacs make -C ~/.emacs.d/ reload   # clean + tangle
-2. Emacs を再起動
+2. Restart Emacs
 #+end_example
 
-=reload= ターゲットは =*.elc= ファイルを削除してから再 tangle する。
-「cp を忘れて古い README.org から tangle した」という失敗を防ぐ。
+The =reload= target purges =*.elc= files before re-tangling, preventing the failure mode of tangling from a stale =README.org= because the =cp= step was skipped.
 
-** 設計原則
+** Design Principles
 :PROPERTIES:
 :CUSTOM_ID: design-tenets
 :END:
 
-*** 決定論的動作
+*** Deterministic Behaviour
 
-起動は毎回同一の結果を生成しなければならない。
-=my:modules= リストが唯一の権威ある起動順序を定義する。
+Startup must produce identical results on every invocation.
+The =my:modules= list is the single authoritative load order.
 
-*** 明示的な依存関係
+*** Explicit Dependencies
 
-モジュールは依存関係を明示的に =require= する。暗黙的な自動検出は行わない。
+Modules =require= their dependencies explicitly.  No implicit auto-discovery.
 
-*** 層の所有権
+*** Layer Ownership
 
-各層はドメインを所有し、他の層を変更しない。
+Each layer owns its domain and does not modify other layers.
 
-*** 削除安全性
+*** Delete Safety
 
-モジュールを削除してもシステムが壊れてはならない。
-=condition-case= によるエラー分離がこれを実現する。
+Removing a module must not break the system.
+=condition-case= error isolation implements this guarantee.
 
-*** 前方互換性
+*** Forward Compatibility
 
-Emacs 31+ での変更を先取りする。
-=setopt=、=keymap-set=、=if-let*=、=when-let*= を優先的に使用する。
+Anticipate changes in Emacs 31+.
+Prefer =setopt=, =keymap-set=, =if-let*=, and =when-let*=.
 
-** コーディングルール
+** Coding Rules
 :PROPERTIES:
 :CUSTOM_ID: conventions
 :END:
 
-すべてのファイルはレキシカルバインディングを宣言し、=provide= シンボルはファイル名と
-一致する。組み込みパッケージは =:straight nil= を使用する。=leaf= キーワード順序を
-遵守する。公開 =defun= は docstring を持つ。=defcustom= には =setopt=、=defvar= には
-=setq= を使用する。命名規則（=my/=、=<module>-=、=<module>--=、=my:d:*=）を遵守する。
-=keymap-set= API（Emacs 29+）を使用する。
+All files declare lexical binding; =provide= symbols match file names.
+Built-in packages use =:straight nil=.  Observe the =leaf= keyword order.
+All public =defun= carry a docstring.  Use =setopt= for =defcustom=, =setq= for =defvar=.
+Observe naming conventions (=my/=, =<module>-=, =<module>--=, =my:d:*=).
+Use the =keymap-set= API (Emacs 29+).
 
-詳細は [[#modular-loader-and-core-suite][モジュールローダー & Core スイート]] を参照。
+See [[#modular-loader-and-core-suite][Modular Loader & Core Suite]] for full details.
 
-** ライセンス
+** License
 
-この設定は GNU General Public License v3 の下でリリースされる。
+This configuration is released under the GNU General Public License v3.
 
-詳細は LICENSE ファイルを参照。
+See the LICENSE file for details.
 
-** インストール
+** Installation
 :PROPERTIES:
 :CUSTOM_ID: installation
 :END:
 
-*** 必要条件
+*** Prerequisites
 :PROPERTIES:
 :CUSTOM_ID: prerequisites
 :END:
 
-*必須*
-- Emacs 30+（ネイティブコンパイル付き）
+*Required*
+- Emacs 30+ (with native compilation)
 - Git
 - GNU Make
-- GCC 10+（=libgccjit=）
+- GCC 10+ (=libgccjit=)
 
-*推奨*
+*Recommended*
 - ripgrep (=rg=)
-- aspell または hunspell
+- aspell or hunspell
 - pass + GnuPG
-- Homebrew（macOS）
+- Homebrew (macOS)
 
 * Configuration
 :PROPERTIES:
 :CUSTOM_ID: structure
 :END:
 
-この Emacs 設定は *モジュール設計* で **Emacs 30+** を対象とする。
-各層は明確に定義された責務を持ち、動作の予測可能性、
-UI の交換可能性、個人カスタマイズの分離を保証する。
+This Emacs configuration uses a *modular design* targeting **Emacs 30+**.
+Each layer has a clearly defined responsibility domain, ensuring behavioural predictability, UI replaceability, and isolation of personal customisation.
 
 - =early-init.el= → earliest bootstrap (performance, paths, UI defaults)
 - =init.el=       → package bootstrap, global defaults, module entrypoint
@@ -466,18 +462,18 @@ UI の交換可能性、個人カスタマイズの分離を保証する。
 
 *** Overview
 
-**** 目的
+**** Purpose
 
-フィーチャーを有効化する前に Emacs を準備する、クリーンで高速なブートストラップを提供する。
+Provide a clean, fast bootstrap that prepares Emacs before any feature is activated.
 
-初期化は 2 段階に分割される:
+Initialisation is split into two stages:
 
 - =early-init.el= — pre-package bootstrap (directories, performance guards, early UI).
 - =init.el= — package bootstrap (*straight.el + leaf*), runtime setup, and module entrypoint.
 
-インフラが最初に確立され、フィーチャーロジックは後で起動される。
+Infrastructure is established first; feature logic is activated afterwards.
 
-**** 責務
+**** Responsibilities
 
 This bootstrap layer:
 
@@ -492,28 +488,28 @@ This bootstrap layer:
   - =personal/<login-name>.el=
   - =lisp/modules.el=
 
-**** 再現性
+**** Reproducibility
 
-共有層は再現可能:
+Shared layers are reproducible:
 
 - =early-init.el=
 - =init.el=
 - =lisp/=
 
-個人オーバーレイは意図的にユーザースコープである:
+Personal overlays are intentionally user-scoped:
 
 : personal/<login-name>.el
 
-これはバイト単位の再現性よりも分離とマルチユーザー安全性を優先する。
+This prioritises isolation and multi-user safety over byte-for-byte reproducibility.
 
-**** モジュールマップ
+**** Module Map
 
 | File            | Role |
 |-----------------+--------------------------------------------|
 | =early-init.el= | Pre-init infrastructure & performance guards |
 | =init.el=       | Package bootstrap & module activation      |
 
-**** 起動フロー
+**** Boot Flow
 
 1. =early-init.el=
    - Establish directories
@@ -535,7 +531,7 @@ This bootstrap layer:
 3. After startup:
    - Print elapsed time and GC count.
 
-**** 主要な設定値
+**** Key Configuration Values
 
 - =package-enable-at-startup= :: =nil=
 - =straight-base-dir= :: under =.cache/=
@@ -543,7 +539,7 @@ This bootstrap layer:
 - =read-process-output-max= :: 4 MiB (temporary)
 - =gcmh-high-cons-threshold= :: 16 MiB
 
-**** 使用ガイドライン
+**** Usage Guidelines
 
 - Keep =early-init.el= infrastructure-only.
 - Put shared behavior in modules via =modules.el=.
@@ -551,7 +547,7 @@ This bootstrap layer:
 - Restart Emacs after toolchain upgrades.
 - The configuration root is relocatable; state directories regenerate automatically.
 
-**** トラブルシューティング
+**** Troubleshooting
 
 - Native compilation fails on macOS →
   Ensure Homebrew =libgccjit= is installed and visible.
@@ -567,47 +563,39 @@ This bootstrap layer:
 :header-args:emacs-lisp: :tangle early-init.el
 :END:
 
-**** early-init.el の設計
+**** early-init.el Design Notes
 
-Emacs が =package.el= を初期化する前に実行される。フレームが描画される前に実行されるため、
-ここでの設定はフリッカーを防ぐ。起動シーケンスの最初のフェーズとして、インフラ確立
-のみを行い、フィーチャーのロードは一切行わない。
+Runs before =package.el= initialisation and before the frame is rendered, preventing flicker.
+As the first phase of the startup sequence, it establishes infrastructure only and loads no features.
 
-**ディレクトリ基盤の確立**
+**Establishing Directory Foundations**
 
-=file-chase-links= はシンボリックリンクを解決する。=~/.emacs.d= がシンボリックリンクで
-あっても実体パスを取得できるため、設定が任意のディレクトリに relocatable となる。
-=XDG_CACHE_HOME= を優先することで Linux の XDG 規格に準拠する（macOS では
-=~/.emacs.d/.cache/emacs/= になる）。=defconst= を使用するのは後から変更されるべき
-でないためである。
+=file-chase-links= resolves symbolic links, making the configuration relocatable regardless of whether =~/.emacs.d= is itself a symlink.
+Honouring =XDG_CACHE_HOME= follows the Linux XDG specification (on macOS this resolves to =~/.emacs.d/.cache/emacs/=).
+=defconst= is used because these values must not be changed after initialisation.
 
-**straight.el のベースディレクトリ設定**
+**straight.el Base Directory Configuration**
 
-=straight-build-dir= にバージョン番号を含めることで（=build-31.0= 等）、Emacs を
-バージョンアップした際にビルド済みパッケージが混在しない。この設定は *early-init.el で
-行う必要がある* — =straight.el= 自身がブートストラップ前にこの変数を参照するから。
+Including the Emacs version in =straight-build-dir= (e.g. =build-31.0=) prevents built packages from different Emacs versions from mixing.
+This must be set in =early-init.el= because =straight.el= reads this variable before its own bootstrap runs.
 
-**GC チューニング戦略**
+**GC Tuning Strategy**
 
-起動時に =file-name-handler-alist= を空にするのは重要な最適化である。このリストは
-=require= や =load= の度に各エントリと照合されるため、多数のモジュールを読み込む際の
-オーバーヘッドが無視できない。TRAMP のハンドラーも含まれるため、=after-init-hook= で
-=core--orig-file-name-handler-alist= から復元する（復元を忘れると TRAMP が動作しない）。
+Clearing =file-name-handler-alist= at startup is a significant optimisation: every =require= and =load= call consults this list, so the overhead accumulates across many modules.
+The list includes the TRAMP handler and must be restored in =after-init-hook= from =core--orig-file-name-handler-alist=; failure to restore it breaks TRAMP.
 
-後続の =core-runtime.el= で gcmh を使い、アイドル時の GC を管理する二段構えになっている。
+A second stage of GC management uses gcmh in =core-runtime.el= to handle idle-time garbage collection.
 
-**no-littering との互換性確保**
+**Compatibility with no-littering**
 
-=no-littering.el= はロード時にこれらの変数を参照してパスを設定する。=early-init.el= で
-事前に設定しておくことで、=no-littering= が読み込まれた瞬間に正しいパスが使われる。
-順序が逆だと =no-littering= がデフォルトの =~/.emacs.d/= 以下にファイルを置いてしまう。
+=no-littering.el= reads these path variables at load time to configure its directories.
+Setting them in =early-init.el= ensures that =no-littering= uses the correct paths from the moment it loads.
+If the order were reversed, =no-littering= would place files under the default =~/.emacs.d/=.
 
-**早期 UI 設定（フリッカー防止）**
+**Early UI Configuration (Flicker Prevention)**
 
-=default-frame-alist= と =initial-frame-alist= の両方に設定するのは、最初のフレーム
-（initial）とその後のフレーム（default）で異なるパラメータが適用されるからである。
-ツールバーを =early-init.el= で無効化しないと、GUI が描画されてから消えるため
-視覚的なちらつきが発生する。
+Both =default-frame-alist= and =initial-frame-alist= must be set because Emacs applies different parameter sets to the first frame (initial) and subsequent frames (default).
+Disabling the toolbar in =early-init.el= prevents it from appearing briefly before disappearing, which would produce a visible flicker.
 
 
 #+begin_src emacs-lisp
@@ -840,35 +828,33 @@ Emacs が =package.el= を初期化する前に実行される。フレームが
 :header-args:emacs-lisp: :tangle init.el
 :END:
 
-**** init.el の設計
+**** init.el Design Notes
 
-インフラ（=early-init.el=）を確立した後、フィーチャーのロジックを起動する段階。
-責務は明確に分割されており、ブートストラップのみを行い、設定の本体は =modules.el= に委譲する。
+Activates feature logic after infrastructure (=early-init.el=) has been established.
+Responsibilities are cleanly separated: this file performs bootstrap only and delegates configuration to =modules.el=.
 
-**URL 状態ディレクトリ（=url.el= より前に設定）**
+**URL State Directory (must precede =url.el= load)**
 
-=url.el= は初回ロード時にこれらの変数のデフォルト値でファイルを作成しようとする。
-=require 'url= の前に変数を設定しなければ、=~/.emacs.d/url/= にファイルが作られてしまう。
-順序が重要であり、コメントにも "must precede url load" とある。
+=url.el= attempts to create files using the default values of these variables on first load.
+The variables must be set before any =(require 'url)= call, otherwise files are created under =~/.emacs.d/url/=.
+Load order is critical here, as the inline comment notes.
 
-**straight.el ブートストラップ**
+**straight.el Bootstrap**
 
-=(bound-and-true-p straight-base-dir)= を使うのは =early-init.el= で設定した値を
-尊重するためである。=boundp= だけでは =nil= にバインドされた変数も =t= を返すので
-=bound-and-true-p= が正確。初回起動時のみネットワークにアクセスし、以降はローカルの
-=bootstrap.el= をロードするだけである。
+=(bound-and-true-p straight-base-dir)= respects the value set in =early-init.el=.
+Plain =boundp= returns =t= even for variables bound to =nil=, so =bound-and-true-p= is the correct predicate.
+Network access occurs only on the first startup; subsequent starts load the local =bootstrap.el= directly.
 
-**macOS 環境変数のインポート**
+**macOS Environment Variable Import**
 
-macOS の GUI アプリはシェルのプロファイルを読まないため、=PATH= が =/usr/bin:/bin= 程度
-しかない。=exec-path-from-shell= はログインシェルを起動して環境変数を取得する。
-=(daemonp)= の条件が重要 — =emacs --daemon= で起動した場合もこれが必要。
+macOS GUI applications do not read shell profiles, so =PATH= is typically limited to =/usr/bin:/bin=.
+=exec-path-from-shell= launches a login shell to retrieve environment variables.
+The =(daemonp)= condition is important: the same import is required when Emacs starts as a daemon.
 
-**起動時間報告**
+**Startup Time Reporting**
 
-=before-init-time= は Emacs が起動した時刻、=after-init-time= は =after-init-hook= が
-完了した時刻。=gcs-done= は GC 回数のカウンター。この数字が大きい場合は
-=early-init.el= の GC 閾値が低すぎる可能性がある。
+=before-init-time= records when Emacs started; =after-init-time= records when =after-init-hook= completed.
+=gcs-done= counts garbage collection cycles; a high value suggests the GC threshold in =early-init.el= is set too low.
 
 
 #+begin_src emacs-lisp
@@ -1104,15 +1090,14 @@ macOS の GUI アプリはシェルのプロファイルを読まないため、
 
 *** Overview
 
-この設定は厳格に層化され、明示的に順序付けられた
-モジュールロードアーキテクチャを使用する。
+The configuration uses a strictly layered, explicitly ordered module-loading architecture.
 
-共有動作は一元化されたエントリポイントからのみ有効化される。
-モジュールは暗黙的に検出されたり、ディレクトリスキャンでロードされたりすることはない。
+Shared behaviour is activated only from the centralised entry point.
+Modules are never discovered implicitly or loaded by directory scanning.
 
-目標は決定論的で再現可能かつ検査可能な起動である。
+The goal is a deterministic, reproducible, and inspectable startup.
 
-**** アーキテクチャ
+**** Architecture
 
 Initialization is segmented into three stages:
 
@@ -1123,7 +1108,7 @@ Initialization is segmented into three stages:
 Only =modules.el= enables shared configuration modules.
 Earlier stages prepare the environment but do not activate features.
 
-**** 責務モデル
+**** Responsibility Model
 
 Directories define bounded responsibility domains:
 
@@ -1137,10 +1122,10 @@ Directories define bounded responsibility domains:
 | =vcs/=        | Version control |
 | =utils/=      | Narrow helpers |
 
-依存関係は厳密に下向きに流れる。
-上位層は下位層に依存してよい。逆は禁止。
+Dependencies flow strictly downward.
+Upper layers may depend on lower layers; the reverse is prohibited.
 
-**** 権威ある起動点
+**** Authoritative Entry Point
 
 =modules.el= defines:
 
@@ -1149,10 +1134,10 @@ Directories define bounded responsibility domains:
 - Skip and extension mechanisms
 - Load timing diagnostics
 
-オーケストレーションのみを含む。
-フィーチャーロジックはモジュールファイル内に存在する。
+Contains orchestration only.
+Feature logic resides inside the individual module files.
 
-**** ロード順序
+**** Load Order
 
 1. =core=
 2. =ui=
@@ -1162,36 +1147,36 @@ Directories define bounded responsibility domains:
 6. =vcs=
 7. =utils=
 
-この順序は依存方向をエンコードする。
+This order encodes the dependency direction.
 
-**** モジュール制約
+**** Module Constraints
 
-決定論を保つために:
+To preserve determinism:
 
 - No directory scanning
 - No wildcard expansion
 - No environment-based conditionals
 - No personal or host-specific logic
 
-各モジュールは以下を満たさなければならない:
+Each module must:
 
 - Provide exactly one feature
 - Be idempotent
 - Avoid uncontrolled global side effects
 - Remain safe under batch, byte-compilation, native-comp, and daemon contexts
 
-**** ローダーの非責務
+**** Loader Non-Responsibilities
 
-ローダーは以下を行わない:
+The loader does not:
 
 - Perform bootstrap or package initialization
 - Establish runtime foundations
 - Define hooks, advice, keybindings, or UI behavior
 - Encode user- or host-specific policy
 
-その役割はオーケストレーションのみ。
+Its sole role is orchestration.
 
-**** メリット
+**** Benefits
 
 - Inspectable startup
 - Predictable dependency flow
@@ -1205,30 +1190,26 @@ Directories define bounded responsibility domains:
 :header-args:emacs-lisp: :tangle lisp/modules.el
 :END:
 
-**** modules.el の設計
+**** modules.el Design Notes
 
-中央オーケストレーション層。このファイルの設計が「削除安全性」と「決定論的起動」の
-核心を実装する。
+Central orchestration layer.  This file's design implements the core of delete-safety and deterministic startup.
 
-**モジュール定義とスキップ機能**
+**Module Definition and Skip Mechanism**
 
-=my:modules-skip= と =my:modules-extra= を =defcustom= にすることで、=customize= UI
-から設定でき、=personal/<user>.el= から =setopt= で上書きできる。
-=my:modules-skip= に ='(dev-docker dev-music)= を追加すれば Docker/音楽関連モジュールを
-スキップできる。=my:modules-extra= でパーソナルモジュールを末尾に追加できる。
+Declaring =my:modules-skip= and =my:modules-extra= as =defcustom= allows them to be set from the =customize= UI or overridden with =setopt= in =personal/<user>.el=.
+Adding ='(dev-docker dev-music)= to =my:modules-skip= skips those modules silently.
+=my:modules-extra= appends personal modules at the end of the load sequence.
 
-**エラー分離ローディング（削除安全性の核心実装）**
+**Error-Isolated Loading (core implementation of delete-safety)**
 
-=condition-case= が =error= を捕捉することで、一つのモジュールが失敗しても
-後続のモジュールのロードを継続する。注意: =condition-case= は =error= シグナルのみ
-捕捉する。=quit=（=C-g=）は伝播する — ユーザーによる中断は尊重すべき設計。
+=condition-case= catches =error= signals so that one module failure does not abort subsequent loading.
+Note: =condition-case= catches only =error= signals.  =quit= (=C-g=) propagates — user interruption is intentionally respected.
 
-**負荷計測と診断**
+**Load Measurement and Diagnostics**
 
-=my:modules-verbose= が非 nil のとき、各モジュールの読み込み時間を ms 単位で報告する。
-=%-24s= は 24 文字の左揃えフォーマットで、モジュール名の長さを揃えて読みやすくする。
-=(current-time)= と =float-time=、=time-subtract= の組み合わせでサブミリ秒精度の
-計測が可能。
+When =my:modules-verbose= is non-nil, load time is reported for each module in milliseconds.
+=%-24s= left-aligns the module name in a 24-character field for readable alignment.
+Combining =(current-time)=, =float-time=, and =time-subtract= yields sub-millisecond precision.
 
 
 #+begin_src emacs-lisp
@@ -1459,13 +1440,11 @@ Directories define bounded responsibility domains:
 
 ***** core-fixes.el
 
-互換性修正層。現時点では活性化された修正コードが存在しないが、将来のバージョン固有の
-修正を追加するためのプレースホルダーとして機能する。
+Compatibility fix layer.  No active fix code exists at this time; the module serves as a placeholder for future version-specific corrections.
 
-=core-fixes--emacs>== は =core-tools.el= にも同名で定義されている（意図的重複）。
-=core-fixes= は最初にロードされるモジュールであり、=core-tools= のシンボルはまだ
-存在しない。=defalias= で参照すると void-function エラーになるため、ロード順序の
-制約を守るために重複定義を選択している。
+=core-fixes--emacs>== is also defined under the same name in =core-tools.el= (intentional duplication).
+=core-fixes= is the first module loaded, so =core-tools= symbols do not yet exist.
+Using =defalias= would raise a void-function error; the duplicate definition is therefore the correct choice to respect load-order constraints.
 
 #+begin_src emacs-lisp
   ;;; core/core-fixes.el --- Compatibility & hotfix layer -*- lexical-binding: t; -*-
@@ -1814,21 +1793,18 @@ Runs via `after-init-hook' once all modules are loaded."
 :header-args:emacs-lisp: :tangle lisp/core/core-session.el
 :END:
 
-***** core-session.el — ファサードパターン
+***** core-session.el — Facade Pattern
 
-外部モジュールに対する公開 API ファサードを提供し、実装詳細（=core-session-private.el=）
-を隠蔽する。
+Provides a public API facade for external modules, hiding the implementation details in =core-session-private.el=.
 
 #+begin_example
-外部モジュール → core-session（公開 API）
-                      ↓ require
-              core-session-private（実装詳細）
+external modules → core-session (public API)
+                         ↓ require
+                 core-session-private (implementation details)
 #+end_example
 
-タイマー管理では =run-at-time= による周期実行（定期ジョブ、600秒ごと）と
-=run-with-idle-timer= によるアイドル実行（120秒アイドル後）の二車線設計を採用する。
-=(require 'core-session-private)= を外部から呼ぶことを禁止することで、
-実装詳細のカプセル化が保たれる。
+Timer management uses a two-channel design: =run-at-time= for periodic jobs (every 600 s) and =run-with-idle-timer= for idle-triggered work (after 120 s of inactivity).
+Prohibiting external callers from issuing =(require 'core-session-private)= directly preserves implementation encapsulation.
 
 #+begin_src emacs-lisp
   ;;; core/core-session.el --- Session orchestration (public facade) -*- lexical-binding: t; -*-
@@ -2051,15 +2027,14 @@ an intermediate list on every timer tick."
 :header-args:emacs-lisp: :tangle lisp/core/core-gc.el
 :END:
 
-***** core-gc.el — 段階的 GC 管理
+***** core-gc.el — Staged GC Management
 
-フォーカスが外れたとき（他アプリに切り替えたとき）とミニバッファを閉じたとき
-（コマンド完了後）に GC を実行する。これらのタイミングはユーザーが「一息ついている」
-瞬間であり、GC による遅延を感じにくい。
+GC runs when focus leaves Emacs (switching to another application) and when the minibuffer closes (after command completion).
+These moments correspond to natural pauses in user activity, minimising perceived latency from garbage collection.
 
-=core-runtime.el= の gcmh との役割分担:
-- =core-gc.el= → 明示的なトリガーポイントで GC
-- =gcmh= → アイドルタイマーベースの自動 GC 管理（=focus-out-hook= と =minibuffer-exit-hook=）
+Division of responsibility with gcmh in =core-runtime.el=:
+- =core-gc.el= — GC at explicit trigger points
+- =gcmh= — idle-timer-based automatic GC management (=focus-out-hook= and =minibuffer-exit-hook=)
 
 #+begin_src emacs-lisp
   ;;; core/core-gc.el --- Safe garbage collection helpers -*- lexical-binding: t; -*-
@@ -2550,13 +2525,13 @@ Runs via `emacs-startup-hook'."
 :header-args:emacs-lisp: :tangle lisp/core/core-history.el
 :END:
 
-***** core-history.el — セッション永続化
+***** core-history.el — Session Persistence
 
-=:pre-setq= は =leaf= の展開時点で評価される（パッケージロード前）。バッククォート +
-コンマにより =no-littering-var-directory= の値が展開時に評価される。
+=:pre-setq= is evaluated at =leaf= macro-expansion time (before the package loads).
+The backquote + comma form causes =no-littering-var-directory= to be evaluated at expansion time.
 
-3 つのモードを =emacs-startup-hook= でまとめて有効化するのは、全モジュールのパス設定が
-完了してからファイルを読み込むためである（=after-init-hook= ではパスが未確定の場合がある）。
+The three persistence modes are enabled together in =emacs-startup-hook= so that all module path configuration has completed before their files are read.
+Using =after-init-hook= instead risks loading files before paths are fully established.
 
 #+begin_src emacs-lisp
   ;;; core/core-history.el --- Session persistence & autorevert -*- lexical-binding: t; -*-
@@ -2749,14 +2724,12 @@ established before the persistence files are loaded."
 :header-args:emacs-lisp: :tangle lisp/core/core-switches.el
 :END:
 
-***** core-switches.el — LSP/UI バックエンド選択
+***** core-switches.el — LSP/UI Backend Selection
 
-=autoload= で関数を宣言することで、実際にその関数が呼ばれるまで =dev-lsp-eglot.el= が
-ロードされない。=core-switches.el= は =dev= 層のモジュールに依存することなく、後で
-条件に応じてロードを発動できる（依存方向の逆転なし）。
+Declaring functions via =autoload= defers loading of =dev-lsp-eglot.el= until the function is actually called.
+=core-switches.el= can therefore trigger a conditional load of a dev-layer module without directly depending on it, preserving the downward-only dependency direction.
 
-=after-init-hook= で発動することで、=personal/<user>.el= で設定した =my:use-lsp= の値が
-確実に参照される（個人設定がモジュールロード中に反映される）。
+Activating via =after-init-hook= guarantees that the =my:use-lsp= value set in =personal/<user>.el= has been applied before the backend selection runs.
 
 #+begin_src emacs-lisp
   ;;; core/core-switches.el --- Bridge layer for optional subsystems -*- lexical-binding: t; -*-
@@ -4015,12 +3988,11 @@ No-op when `core-session-run-job' is not available."
 :header-args:emacs-lisp: :tangle lisp/ui/ui-health-modeline.el
 :END:
 
-***** ui-health-modeline.el — セッション状態表示
+***** ui-health-modeline.el — Session Status Display
 
-=featurep= と =fboundp= の二重確認は、eglot が存在しない環境でのエラーを防ぐ。
-=ignore-errors= は eglot がバッファに対応していない場合のエラーを抑制する。
-この関数はモードライン更新の度に呼ばれるため、軽量である必要がある（=length=
-の O(n) は許容範囲）。
+The double check via =featurep= and =fboundp= prevents errors in environments where eglot is absent.
+=ignore-errors= suppresses errors when eglot has no connection for the current buffer.
+This function is called on every mode-line update and must remain lightweight (=length= at O(n) is acceptable).
 
 #+begin_src emacs-lisp
   ;;; ui/ui-health-modeline.el --- Session health indicators -*- lexical-binding: t; -*-
@@ -4172,18 +4144,15 @@ No-op when `core-session-run-job' is not available."
 :header-args:emacs-lisp: :tangle lisp/ui/ui-leader.el
 :END:
 
-***** ui-leader.el — リーダーキー基盤
+***** ui-leader.el — Leader Key Infrastructure
 
-Fix BR-1 で =C-c SPC= から =M-SPC= に変更された（3キー → 2キー）。
-=M-SPC= は標準 Emacs で未使用、macOS に遮断されない、親指+スペースバーで
-人間工学的に快適。
+Changed from =C-c SPC= to =M-SPC= in Fix BR-1 (3 keys → 2 keys).
+=M-SPC= is unused by stock Emacs, is not intercepted by macOS, and is ergonomically comfortable as a thumb + spacebar chord.
 
-=make-sparse-keymap= は空のキーマップを作成する。スパースマップはバインディングが
-少ない場合にメモリ効率が良い。=keymap-set= は Emacs 29+ の新 API（=define-key= +
-=kbd= の組み合わせを置き換える）。
+=make-sparse-keymap= creates an empty keymap.  Sparse maps are memory-efficient when bindings are few.
+=keymap-set= is the Emacs 29+ API that replaces the =define-key= + =kbd= combination.
 
-サブマップの連鎖: =M-SPC b l= → =ui-leader-map["b"]= → =ui-leader-b-map["l"]= →
-=ibuffer= という二段引き。
+Submap chaining: =M-SPC b l= → =ui-leader-map["b"]= → =ui-leader-b-map["l"]= → =ibuffer= (two-level indirection).
 
 #+begin_src emacs-lisp
   ;;; lisp/ui/ui-leader.el --- Leader key infrastructure -*- lexical-binding: t; -*-
@@ -4542,19 +4511,18 @@ to reduce keystroke overhead for all leader-prefixed commands."
 :header-args:emacs-lisp: :tangle lisp/ui/ui-keymap.el
 :END:
 
-***** ui-keymap.el — バインディング戦略
+***** ui-keymap.el — Binding Strategy
 
-Fix BR のキーストローク削減の設計原則:
+Design principles behind the Fix BR keystroke reduction:
 
-| 戦略 | 実装例 |
-|------+--------|
-| リーダー短縮 | =C-c SPC= → =M-SPC= (−1キー) |
-| 高頻度コマンドを最上位に | =M-SPC RET= = consult-buffer (5→3キー) |
-| 短い global 経路が存在する場合は削除 | =next-buffer= は =s-→= (2キー) の方が短い |
+| Strategy | Example |
+|----------+---------|
+| Shorten leader | =C-c SPC= → =M-SPC= (−1 key) |
+| Promote high-frequency commands to top level | =M-SPC RET= = consult-buffer (5→3 keys) |
+| Remove bindings where a shorter global path exists | =next-buffer= via =s-→= (2 keys) is shorter |
 
-=ui-keymap--bind= は =map= をシンボルとして受け取り、=keymapp= でキーマップであること
-を確認してから =keymap-set= する。この防御的チェックにより、=ui-leader.el= が
-ロードされていない状態でも安全に動作する。
+=ui-keymap--bind= receives =map= as a symbol and verifies it is a keymap via =keymapp= before calling =keymap-set=.
+This defensive check ensures safe operation even when =ui-leader.el= has not been loaded.
 
 #+begin_src emacs-lisp
   ;;; ui/ui-keymap.el --- Leader and local-leader bindings -*- lexical-binding: t; -*-
@@ -5426,17 +5394,16 @@ Removes itself from `window-setup-hook' after the first run."
 :header-args:emacs-lisp: :tangle lisp/completion/completion-capf-org-src.el
 :END:
 
-***** completion-capf-org-src.el — Org SRC ブロック補完
+***** completion-capf-org-src.el — Org SRC Block Completion
 
-=org-in-src-block-p= でカーソル位置を確認し、=org-element-property= でブロックの
-言語を取得する。Python のブロックでは Python の補完、Elisp ブロックでは Elisp の
-補完が動く。
+=org-in-src-block-p= checks the cursor position; =org-element-property= retrieves the block language.
+Python blocks receive Python completion; Elisp blocks receive Elisp completion.
 
-=capf-org-src= ファミリーの協調関係:
-- =completion-capf-org-src.el= → ブロック検出とディスパッチ
-- =completion-capf-org-src-lang.el= → 言語別 CAPF 選択
-- =completion-corfu-org-src.el= → corfu との統合
-- =completion-orderless-org-src.el= → orderless フィルタリングの適用
+Cooperation within the =capf-org-src= family:
+- =completion-capf-org-src.el= — block detection and dispatch
+- =completion-capf-org-src-lang.el= — per-language CAPF selection
+- =completion-corfu-org-src.el= — corfu integration
+- =completion-orderless-org-src.el= — orderless filter application
 
 #+begin_src emacs-lisp
   ;;; completion/completion-capf-org-src.el --- CAPF switching for Org SRC blocks -*- lexical-binding: t; -*-
@@ -5636,10 +5603,10 @@ variant; see Commentary for the rationale."
 :header-args:emacs-lisp: :tangle lisp/completion/completion-lsp.el
 :END:
 
-***** completion-lsp.el — バックエンド非依存 CAPF
+***** completion-lsp.el — Backend-Agnostic CAPF
 
-LSP バックエンド非依存設計の補完側実装。=core-switches= で選択したバックエンドに
-応じて、適切な CAPF 関数を =completion-at-point-functions= に追加する:
+The completion-side implementation of the LSP-backend-agnostic design.
+Adds the appropriate CAPF function to =completion-at-point-functions= based on the backend selected via =core-switches=:
 - eglot → =eglot-completion-at-point=
 - lsp-mode → =lsp-completion-at-point=
 
@@ -8661,15 +8628,15 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
 *** Overview
 
-=personal/= ディレクトリはユーザーおよびデバイス固有のオーバーレイを含む。
+The =personal/= directory contains user- and device-specific overlays.
 
-これらのファイルは:
+These files are:
 
-- *バージョン管理対象外*（または共有コミットから除外）
-- *安全に編集可能*（他のユーザーに影響しない）
-- *モジュール後にロード*（ローカルオーバーライドを可能にする）
+- *Excluded from version control* (or excluded from shared commits)
+- *Safe to edit* (changes do not affect other users)
+- *Loaded after modules* (enabling local overrides)
 
-主要なファイル:
+Key files:
 
 | File | Purpose |
 |------+---------|
@@ -10018,7 +9985,7 @@ Four residual design-principle violations resolved.
 
 *🟡 Minor — language uniformity*
 
-- *[Fix N] Changelog*: Rewrote the =2026-03 (第2回評価修正)= section entirely in
+- *[Fix N] Changelog*: Rewrote the =2026-03 (second evaluation pass)= section entirely in
   English.  All prior Changelog entries are in English; the mixed-language block
   introduced in the second evaluation pass was inconsistent with that convention.
   Section heading renamed to =2026-03 (second evaluation pass)= to match the
@@ -11694,3 +11661,39 @@ Short =C-c f/F= aliases retained for single-hand access.  The former
   The =:lexical t= header arg in =#+PROPERTY: header-args:emacs-lisp= does
   not inject the cookie into tangle output; it is an annotation only.  The
   cookie must appear explicitly in the first code line of each source block.
+
+** 2026-05 (forty-first evaluation pass)
+*** Fix BR: README.org — translate all prose from Japanese to English
+
+🟡 Minor — documentation language consistency
+
+- *[Fix BR] README.org (all prose sections)*: Translated 367 lines of
+  Japanese prose to English throughout the document.  Sections covered:
+
+  - =* Overview= — design goals, architecture diagram caption
+  - =** Architecture= — 10-layer table, load order, invariants
+  - =** Boot Process= — early-init, init, modules responsibilities
+  - =** Directory Layout= — directory tree annotations, role table
+  - =** Layer Definitions= — all 8 layer descriptions and constraints
+  - =** Module Structure= — module requirements
+  - =** Package Management= — =leaf= keyword order note, tangle workflow
+  - =** Design Principles= — all five sub-sections
+  - =** Coding Rules= — summary paragraph and cross-reference
+  - =** License= and =** Installation= — all body text and prerequisites
+  - =** Core Bootstrap= — Purpose, Responsibilities, Reproducibility,
+    Module Map, Boot Flow, Usage Guidelines, Troubleshooting sub-sections
+  - =**** early-init.el Design Notes= — five annotated sub-sections
+    (directory foundations, straight.el base dir, GC tuning,
+    no-littering compatibility, early UI / flicker prevention)
+  - =**** init.el Design Notes= — four annotated sub-sections
+    (URL state, straight.el bootstrap, macOS env import, startup timing)
+  - =*** modules.el= overview and =**** modules.el Design Notes= —
+    three annotated sub-sections (module definition/skip, error isolation,
+    load measurement)
+  - Per-module design notes for =core-fixes=, =core-session=, =core-gc=,
+    =core-history=, =core-switches=, =ui-health-modeline=, =ui-leader=,
+    =ui-keymap=, =completion-capf-org-src=, =completion-lsp=, =personal/=
+
+  The =#+LANGUAGE= keyword was updated from =ja= to =en=.
+  All Emacs Lisp source blocks are unchanged.
+  No functional behaviour is altered by this pass.
