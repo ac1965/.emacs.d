@@ -121,14 +121,6 @@ tangle:
 	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
 	  --eval "(org-babel-tangle-file \"$(ORG)\")"
 
-# ---- reload : purge .elc then re-tangle --------------------------------------
-# Use this after replacing README.org with a new Claude output to guarantee
-# that stale byte-compiled modules cannot shadow the freshly tangled .el files.
-# This target is the operational fix for the Fix BM / Fix BO class of incident
-# (stale on-disk modules producing warnings that do not exist in source).
-reload: clean tangle
-	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
-
 # ---- check-cookies : verify lexical-binding cookie on line 1 of every .el ---
 # Run after `make tangle` to confirm all output files have the cookie.
 # Exits 0 if all pass, 1 and lists offenders if any are missing.
@@ -149,3 +141,11 @@ check-cookies:
 	   echo "[check-cookies] FAILED — run: make reload"; \
 	   exit 1; \
 	 fi
+
+# ---- reload : purge .elc then re-tangle --------------------------------------
+# Use this after replacing README.org with a new Claude output to guarantee
+# that stale byte-compiled modules cannot shadow the freshly tangled .el files.
+# This target is the operational fix for the Fix BM / Fix BO class of incident
+# (stale on-disk modules producing warnings that do not exist in source).
+reload: clean tangle check-cookies
+	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
