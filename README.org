@@ -26,27 +26,27 @@
 ソースコードブロックは Emacs Lisp モジュールへと tangle（展開）される。
 
 #+begin_src mermaid :file tangle-flow.svg :exports results
-flowchart LR
-    src["README.org\n(single source of truth)"]
+  flowchart LR
+  src["README.org\n(single source of truth)"]
 
-    subgraph tangle ["org-babel-tangle"]
-        direction TB
-        T(["extract\nsrc blocks"])
-    end
+      subgraph tangle ["org-babel-tangle"]
+          direction TB
+          T(["extract\nsrc blocks"])
+      end
 
-    src --> tangle
+      src --> tangle
 
-    tangle --> ei["early-init.el"]
-    tangle --> ii["init.el"]
-    tangle --> mo["lisp/modules.el"]
-    tangle --> mods["lisp/&lt;layer&gt;/&lt;module&gt;.el\n(89+ files)"]
+      tangle --> ei["early-init.el"]
+      tangle --> ii["init.el"]
+      tangle --> mo["lisp/modules.el"]
+      tangle --> mods["lisp/&lt;layer&gt;/&lt;module&gt;.el\n(89+ files)"]
 
-    style src  fill:#EEEDFE,stroke:#534AB7,color:#3C3489
-    style T    fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    style ei   fill:#FAEEDA,stroke:#BA7517,color:#633806
-    style ii   fill:#FAEEDA,stroke:#BA7517,color:#633806
-    style mo   fill:#FAEEDA,stroke:#BA7517,color:#633806
-    style mods fill:#FAECE7,stroke:#993C1D,color:#712B13
+      style src  fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+      style T    fill:#E1F5EE,stroke:#0F6E56,color:#085041
+      style ei   fill:#FAEEDA,stroke:#BA7517,color:#633806
+      style ii   fill:#FAEEDA,stroke:#BA7517,color:#633806
+      style mo   fill:#FAEEDA,stroke:#BA7517,color:#633806
+      style mods fill:#FAECE7,stroke:#993C1D,color:#712B13
 #+end_src
 
 =README.org= が唯一の真実のソースであり、=.el= ファイルはすべて生成物である。
@@ -467,7 +467,7 @@ Emacs 31+ での変更を先取りする。
 - pass + GnuPG
 - Homebrew（macOS）
 
-* 設定ファイル
+* Configuration
 :PROPERTIES:
 :CUSTOM_ID: structure
 :END:
@@ -6145,8 +6145,17 @@ LSP バックエンド非依存設計の補完側実装。=core-switches= で選
   ;; This file:
   ;; - installs ox-hugo with TOML front-matter for Hugo blog export
   ;; - installs markdown-mode, markdown-preview-mode, and edit-indirect
-  ;; - configures ob-mermaid with the `mmdc` CLI path when available
+  ;; - registers mermaid as an Org Babel language via ob-mermaid + mmdc CLI
   ;; - enables ob-dot for Graphviz diagram rendering in Org Babel (optional)
+  ;;
+  ;; ob-mermaid dependency note:
+  ;;
+  ;;   ob-mermaid requires the mmdc CLI from @mermaid-js/mermaid-cli.
+  ;;   Install via: npm install -g @mermaid-js/mermaid-cli
+  ;;            or: brew install mermaid-cli  (macOS)
+  ;;   The private function `orgx-export--mermaid-cli-path' probes PATH
+  ;;   and ~/.npm-global/bin as a fallback.  When mmdc is absent the
+  ;;   language is still registered; only :file output blocks fail.
   ;;
   ;; ob-dot dependency note:
   ;;
@@ -6169,15 +6178,35 @@ LSP バックエンド非依存設計の補完側実装。=core-switches= で選
   (leaf markdown-preview-mode :straight t)
   (leaf edit-indirect :straight t)
 
+  ;; ob-mermaid prerequisites (one of):
+  ;;   npm install -g @mermaid-js/mermaid-cli   ; installs mmdc
+  ;;   brew install mermaid-cli                 ; macOS Homebrew
+  ;;
+  ;; Design notes:
+  ;;   :require t  — guarantees ob-mermaid (and its defcustom forms) are
+  ;;                 loaded before :config runs, so setopt is safe.
+  ;;   add-to-list — idempotent; append accumulates duplicates on re-eval.
+  ;;   setopt      — ob-mermaid-cli-path is defcustom (Coding Rule 6).
+
+  (defun orgx-export--mermaid-cli-path ()
+    "Return the absolute path to the mmdc CLI executable, or nil.
+Checks PATH first via `executable-find', then falls back to the
+npm global bin directory (~/.npm-global/bin/mmdc) for environments
+where npm global installs are not on PATH."
+    (or (executable-find "mmdc")
+        (let ((npm-bin (expand-file-name "~/.npm-global/bin/mmdc")))
+          (and (file-executable-p npm-bin) npm-bin))))
+
   (leaf ob-mermaid
     :straight t
     :after org
+    :require t
     :config
-    (when (executable-find "mmdc")
-      (setq ob-mermaid-cli-path (executable-find "mmdc")))
-    (org-babel-do-load-languages
-     'org-babel-load-languages
-     (append org-babel-load-languages '((mermaid . t)))))
+    (when-let ((cli (orgx-export--mermaid-cli-path)))
+      (setopt ob-mermaid-cli-path cli))
+    (add-to-list 'org-babel-load-languages '(mermaid . t))
+    (org-babel-do-load-languages 'org-babel-load-languages
+                                 org-babel-load-languages))
 
   ;; ob-dot is a file inside org-contrib, not an independent package.
   ;; straight.el has no reliable recipe for org-contrib that works across all
@@ -11558,3 +11587,36 @@ Short =C-c f/F= aliases retained for single-hand access.  The former
 | any submap command | 5–6 | 4 | −1–2 |
 | leader-level command | 4 | 3 | −1 |
 | org-todo (any buffer) | 5 | 4 | −1 |
+
+** 2026-05 (thirty-eighth evaluation pass)
+*** Fix BO: orgx/orgx-export.el — ob-mermaid Babel integration corrected
+
+🟠 Medium — Coding Rule 6 violation + structural correctness
+
+- *[Fix BO] orgx/orgx-export.el (leaf ob-mermaid)*: Four defects corrected.
+
+  1. *Rule 6 — =setq= on =defcustom=*: =ob-mermaid-cli-path= is declared
+     =defcustom= in =ob-mermaid.el=.  The old code used =setq=, bypassing
+     the custom type validator and any =:set= hook.  Replaced with =setopt=.
+
+  2. *Non-idempotent language registration*: =(append org-babel-load-languages
+     '((mermaid . t)))= appends a new cons cell on every evaluation, producing
+     duplicate entries after re-eval.  Replaced with =(add-to-list
+     'org-babel-load-languages '(mermaid . t))=, which is idempotent.
+
+  3. *Missing =:require t=*: =:after org= defers the =:config= body until
+     =org= loads, but does not guarantee =ob-mermaid= itself is loaded first.
+     Without =:require t=, the =ob-mermaid-cli-path= =defcustom= may not yet
+     exist when =setopt= runs, raising a void-variable error.  Added
+     =:require t= to guarantee load order.
+
+  4. *=executable-find= called twice*: The old guard =(when (executable-find
+     "mmdc") (setq … (executable-find "mmdc")))= invoked =executable-find=
+     twice, incurring two filesystem searches and risking a TOCTOU race.
+     Replaced by the named private function =orgx-export--mermaid-cli-path=,
+     which probes PATH once and falls back to =~/.npm-global/bin/mmdc= for
+     environments where =npm install -g= does not add the bin directory to
+     PATH.  The result is consumed once via =when-let=.
+
+  The Commentary section of =orgx-export.el= was also updated to document the
+  =mmdc= prerequisite and the fallback probe strategy.
