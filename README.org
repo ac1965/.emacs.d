@@ -27,26 +27,26 @@
 
 #+begin_src mermaid :file tangle-flow.svg :exports results
   flowchart LR
-  src["README.org\n(single source of truth)"]
+    src["README.org\n(single source of truth)"]
 
-      subgraph tangle ["org-babel-tangle"]
-          direction TB
-          T(["extract\nsrc blocks"])
-      end
+    subgraph tangle ["org-babel-tangle"]
+        direction TB
+        T(["extract\nsrc blocks"])
+    end
 
-      src --> tangle
+    src --> tangle
 
-      tangle --> ei["early-init.el"]
-      tangle --> ii["init.el"]
-      tangle --> mo["lisp/modules.el"]
-      tangle --> mods["lisp/&lt;layer&gt;/&lt;module&gt;.el\n(89+ files)"]
+    tangle --> ei["early-init.el"]
+    tangle --> ii["init.el"]
+    tangle --> mo["lisp/modules.el"]
+    tangle --> mods["lisp/&lt;layer&gt;/&lt;module&gt;.el\n(89+ files)"]
 
-      style src  fill:#EEEDFE,stroke:#534AB7,color:#3C3489
-      style T    fill:#E1F5EE,stroke:#0F6E56,color:#085041
-      style ei   fill:#FAEEDA,stroke:#BA7517,color:#633806
-      style ii   fill:#FAEEDA,stroke:#BA7517,color:#633806
-      style mo   fill:#FAEEDA,stroke:#BA7517,color:#633806
-      style mods fill:#FAECE7,stroke:#993C1D,color:#712B13
+    style src  fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    style T    fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    style ei   fill:#FAEEDA,stroke:#BA7517,color:#633806
+    style ii   fill:#FAEEDA,stroke:#BA7517,color:#633806
+    style mo   fill:#FAEEDA,stroke:#BA7517,color:#633806
+    style mods fill:#FAECE7,stroke:#993C1D,color:#712B13
 #+end_src
 
 =README.org= が唯一の真実のソースであり、=.el= ファイルはすべて生成物である。
@@ -5832,6 +5832,7 @@ LSP バックエンド非依存設計の補完側実装。=core-switches= で選
 
   (leaf org
     :straight nil
+    :require t
     :custom
     ((org-directory . my:d:org)
      (org-default-notes-file . "notes.org")
@@ -6199,7 +6200,6 @@ where npm global installs are not on PATH."
 
   (leaf ob-mermaid
     :straight t
-    :after org
     :require t
     :config
     (when-let ((cli (orgx-export--mermaid-cli-path)))
@@ -11620,3 +11620,33 @@ Short =C-c f/F= aliases retained for single-hand access.  The former
 
   The Commentary section of =orgx-export.el= was also updated to document the
   =mmdc= prerequisite and the fallback probe strategy.
+
+** 2026-05 (thirty-ninth evaluation pass)
+*** Fix BP: orgx-core + orgx-export — ob-mermaid not active at C-c C-c
+
+🔴 Critical — mermaid Babel blocks non-functional
+
+- *[Fix BP-1] orgx/orgx-core.el (leaf org)*: Added =:require t= to the
+  =(leaf org ...)= declaration.  Previously =leaf= without =:require t=
+  wraps =:custom= and =:config= bodies in =with-eval-after-load 'org=
+  but does not call =(require 'org)= at load time.  =org= therefore
+  remained unloaded until something else triggered it.  Because
+  =orgx-export= depends on =org= being present before =ob-mermaid= can
+  register its language, this lazy load caused =C-c C-c= on a
+  =#+begin_src mermaid= block to report "undefined" — the Babel
+  dispatch table had never been populated.  Adding =:require t= ensures
+  =org= is loaded synchronously when =orgx-core= loads, which is
+  guaranteed to precede =orgx-export= by the layer ordering in
+  =modules.el=.
+
+- *[Fix BP-2] orgx/orgx-export.el (leaf ob-mermaid)*: Removed =:after org=.
+  With =:after org= the =:config= body is deferred inside another
+  =with-eval-after-load 'org= wrapper.  After Fix BP-1 guarantees =org=
+  is already loaded when =orgx-export= is evaluated, the =:after org=
+  wrapper fires immediately — but the same guarantee makes the wrapper
+  redundant, and its presence masked the dependency on explicit load
+  order.  Replacing it with =:require t= alone makes the intent clear:
+  load =ob-mermaid= now and run =:config= now, with no hidden deferred
+  wrapper.  Together with Fix BP-1 this ensures the mermaid language is
+  registered in =org-babel-load-languages= before any =.org= file is
+  opened.
