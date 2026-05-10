@@ -8734,6 +8734,89 @@ Key files:
   (setopt my:use-ui  'nano
           my:use-lsp 'eglot)
 
+  ;; nano-modeline: time and buffer encoding in the right segment
+  ;;
+  ;; Actual API of rougier/nano-modeline (verified from source):
+  ;;
+  ;;   (defun nano-modeline-prog-mode (&optional default)
+  ;;     (funcall nano-modeline-position
+  ;;              '((nano-modeline-buffer-status) " " ...)   ; left
+  ;;              '((nano-modeline-cursor-position)           ; right
+  ;;                (nano-modeline-window-dedicated))
+  ;;              default))
+  ;;
+  ;; nano-modeline-position (= nano-modeline-header) passes the left/right
+  ;; lists to nano-modeline--make, which builds header-line-format as a
+  ;; (:eval ...) form.  Each element of the right list is evaluated every
+  ;; frame via (apply (car el) (cdr el)), so adding a function sexp to the
+  ;; right list gives automatic time updates.
+  ;;
+  ;; Extension strategy: use :override advice on nano-modeline-prog-mode and
+  ;; nano-modeline-text-mode to prepend (ac1965--nano-time-encoding) to the
+  ;; right list.
+  ;;
+  ;; Design constraints (cf. README coding rules):
+  ;;   - Guarded by with-eval-after-load 'nano-modeline; no-op under
+  ;;     my:use-ui 'doom or 'none.
+  ;;   - No top-level require of nano-modeline.
+  ;;   - All defun carry docstrings.
+  ;;   - No defcustom/defvar modified; setopt/setq not needed.
+
+  (defun ac1965--nano-time-encoding ()
+    "Return a propertized \"HH:MM  CODING\" string for the nano-modeline right segment.
+Called every frame inside nano-modeline--make's :eval block, so the
+time updates automatically.  Uses `nano-modeline-face' with the
+\\='secondary face role to match the standard right-segment style.
+Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped."
+    (let* ((time-str (format-time-string "%H:%M"))
+           (cs       (or (and (boundp 'buffer-file-coding-system)
+                              buffer-file-coding-system)
+                         'utf-8))
+           (cs-name  (replace-regexp-in-string
+                      "-\\(?:unix\\|dos\\|mac\\|with-signature\\)\\'"
+                      ""
+                      (symbol-name (coding-system-base cs)))))
+      (propertize (concat time-str "  " cs-name)
+                  'face (when (fboundp 'nano-modeline-face)
+                          (nano-modeline-face 'secondary)))))
+
+  (defun ac1965--nano-prog-mode (&optional default)
+    "Override for `nano-modeline-prog-mode' with time+encoding in right segment.
+Passes the same left segment as the original, with `ac1965--nano-time-encoding'
+prepended to the right segment.  DEFAULT has the same meaning as in the original."
+    (funcall nano-modeline-position
+             '((nano-modeline-buffer-status) " "
+               (nano-modeline-buffer-name) " "
+               (nano-modeline-git-info))
+             '((ac1965--nano-time-encoding) " "
+               (nano-modeline-cursor-position)
+               (nano-modeline-window-dedicated))
+             default))
+
+  (defun ac1965--nano-text-mode (&optional default)
+    "Override for `nano-modeline-text-mode' with time+encoding in right segment.
+DEFAULT has the same meaning as in the original."
+    (funcall nano-modeline-position
+             '((nano-modeline-buffer-status) " "
+               (nano-modeline-buffer-name) " "
+               (nano-modeline-git-info))
+             '((ac1965--nano-time-encoding) " "
+               (nano-modeline-cursor-position)
+               (nano-modeline-window-dedicated))
+             default))
+
+  (with-eval-after-load 'nano-modeline
+    ;; Override the per-mode functions.  Using :override rather than
+    ;; redefining the functions preserves the ability to remove with
+    ;; (advice-remove ...) and keeps the originals intact for inspection.
+    (advice-add 'nano-modeline-prog-mode :override #'ac1965--nano-prog-mode)
+    (advice-add 'nano-modeline-text-mode :override #'ac1965--nano-text-mode)
+    ;; Refresh already-open buffers.
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (cond ((derived-mode-p 'prog-mode) (ac1965--nano-prog-mode))
+              ((derived-mode-p 'text-mode) (ac1965--nano-text-mode))))))
+
   (provide 'ac1965)
   ;;; personal/ac1965.el ends here
 #+end_src
