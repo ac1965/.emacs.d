@@ -8557,8 +8557,7 @@ Key files:
 |------+---------|
 | =personal/user.el= | Shared personal settings across all your machines |
 | =personal/<login>.el= | Identity, font, UI, LSP switches |
-| =personal/device-darwin.el= | macOS IME, mouse and scroll settings |
-| =personal/apple-music.el= | AppleScript + hydra music control |
+| =personal/device-darwin.el= | macOS IME, mouse/scroll, Apple Music control |
 | =personal/personal-messages.el= | macOS Messages.app archiver |
 | =personal/personal-ai.el= | Org Babel + Claude API integration |
 
@@ -8759,40 +8758,42 @@ Key files:
            ("\\.vba\\'" . visual-basic-mode)
            ("\\.frm\\'" . visual-basic-mode)))
 
-  ;; nano-modeline: time and buffer encoding in the right segment
+  ;; nano-modeline: global header-line, suppressed mode-line
   ;;
-  ;; Actual API of rougier/nano-modeline (verified from source):
+  ;; Goal: show nano-modeline in every buffer regardless of major mode,
+  ;; and hide the stock mode-line entirely.
   ;;
-  ;;   (defun nano-modeline-prog-mode (&optional default)
-  ;;     (funcall nano-modeline-position
-  ;;              '((nano-modeline-buffer-status) " " ...)   ; left
-  ;;              '((nano-modeline-cursor-position)           ; right
-  ;;                (nano-modeline-window-dedicated))
-  ;;              default))
+  ;; API facts (verified from rougier/nano-modeline source):
+  ;;   nano-modeline-header (left right &optional default)
+  ;;     default=nil  → setq-local  header-line-format  (current buffer only)
+  ;;     default=t    → setq-default header-line-format  (all buffers, global)
   ;;
-  ;; nano-modeline-position (= nano-modeline-header) passes the left/right
-  ;; lists to nano-modeline--make, which builds header-line-format as a
-  ;; (:eval ...) form.  Each element of the right list is evaluated every
-  ;; frame via (apply (car el) (cdr el)), so adding a function sexp to the
-  ;; right list gives automatic time updates.
-  ;;
-  ;; Extension strategy: use :override advice on nano-modeline-prog-mode and
-  ;; nano-modeline-text-mode to prepend (ac1965--nano-time-encoding) to the
-  ;; right list.
+  ;; Strategy:
+  ;;   1. ac1965--nano-apply-global calls nano-modeline-header with default=t,
+  ;;      setting header-line-format globally for all present and future buffers.
+  ;;   2. (setq-default mode-line-format nil) hides the stock mode-line globally.
+  ;;   3. Both steps run inside with-eval-after-load 'nano-modeline, which fires
+  ;;      after ui-nano--setup calls (require 'nano-modeline).  The per-mode
+  ;;      hooks registered by ui-nano--setup (prog-mode-hook, text-mode-hook)
+  ;;      then call the overridden functions with default=nil, which is harmless:
+  ;;      setq-local on top of setq-default merely shadows for that buffer with
+  ;;      the same value.
   ;;
   ;; Design constraints (cf. README coding rules):
-  ;;   - Guarded by with-eval-after-load 'nano-modeline; no-op under
-  ;;     my:use-ui 'doom or 'none.
+  ;;   - Guarded by with-eval-after-load 'nano-modeline.
   ;;   - No top-level require of nano-modeline.
   ;;   - All defun carry docstrings.
-  ;;   - No defcustom/defvar modified; setopt/setq not needed.
+  ;;   - No defcustom/defvar modified.
 
   (defun ac1965--nano-time-encoding ()
-    "Return a propertized \"HH:MM  CODING\" string for the nano-modeline right segment.
-Called every frame inside nano-modeline--make's :eval block, so the
-time updates automatically.  Uses `nano-modeline-face' with the
-\\='secondary face role to match the standard right-segment style.
-Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped."
+    "Return a propertized \"HH:MM  CODING  IME\" string for the nano-modeline right segment.
+Evaluated every frame inside nano-modeline--make's :eval block, so
+the clock and IME state update automatically without any timer.
+Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped.
+IME state is read from `sis--current' when sis is loaded:
+  \\='english → \"A\"  (Roman / ASCII input)
+  \\='other   → \"あ\"  (Japanese Kotoeri)
+  nil/unknown → \"\"   (sis not active)"
     (let* ((time-str (format-time-string "%H:%M"))
            (cs       (or (and (boundp 'buffer-file-coding-system)
                               buffer-file-coding-system)
@@ -8800,15 +8801,20 @@ Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped
            (cs-name  (replace-regexp-in-string
                       "-\\(?:unix\\|dos\\|mac\\|with-signature\\)\\'"
                       ""
-                      (symbol-name (coding-system-base cs)))))
-      (propertize (concat time-str "  " cs-name)
+                      (symbol-name (coding-system-base cs))))
+           (ime-str  (when (boundp 'sis--current)
+                       (pcase sis--current
+                         ('english " A")
+                         ('other   " あ")
+                         (_        "")))))
+      (propertize (concat time-str "  " cs-name (or ime-str ""))
                   'face (when (fboundp 'nano-modeline-face)
                           (nano-modeline-face 'secondary)))))
 
   (defun ac1965--nano-prog-mode (&optional default)
     "Override for `nano-modeline-prog-mode' with time+encoding in right segment.
-Passes the same left segment as the original, with `ac1965--nano-time-encoding'
-prepended to the right segment.  DEFAULT has the same meaning as in the original."
+DEFAULT is passed through to `nano-modeline-header': t means global
+(setq-default), nil means buffer-local (setq-local)."
     (funcall nano-modeline-position
              '((nano-modeline-buffer-status) " "
                (nano-modeline-buffer-name) " "
@@ -8820,7 +8826,7 @@ prepended to the right segment.  DEFAULT has the same meaning as in the original
 
   (defun ac1965--nano-text-mode (&optional default)
     "Override for `nano-modeline-text-mode' with time+encoding in right segment.
-DEFAULT has the same meaning as in the original."
+DEFAULT has the same meaning as in `ac1965--nano-prog-mode'."
     (funcall nano-modeline-position
              '((nano-modeline-buffer-status) " "
                (nano-modeline-buffer-name) " "
@@ -8830,44 +8836,49 @@ DEFAULT has the same meaning as in the original."
                (nano-modeline-window-dedicated))
              default))
 
+  (defvar ac1965--nano-saved-mode-line-format nil
+    "Saved value of `mode-line-format' before nano-modeline suppressed it.
+Restored by `ac1965/nano-modeline-toggle' when toggling off.")
+
+  (defun ac1965--nano-apply-global ()
+    "Set nano-modeline as the global header-line and hide the mode-line.
+Saves the current default `mode-line-format' into
+`ac1965--nano-saved-mode-line-format' before clearing it, so that
+`ac1965/nano-modeline-toggle' can restore it later.
+Calls `ac1965--nano-prog-mode' with default=t so that
+`nano-modeline-header' uses setq-default, covering every buffer
+including those that never trigger a major-mode hook."
+    (unless ac1965--nano-saved-mode-line-format
+      (setq ac1965--nano-saved-mode-line-format
+            (default-value 'mode-line-format)))
+    (ac1965--nano-prog-mode t)
+    (setq-default mode-line-format nil))
+
   (with-eval-after-load 'nano-modeline
-    ;; Override the per-mode functions.  Using :override rather than
-    ;; redefining the functions preserves the ability to remove with
-    ;; (advice-remove ...) and keeps the originals intact for inspection.
     (advice-add 'nano-modeline-prog-mode :override #'ac1965--nano-prog-mode)
     (advice-add 'nano-modeline-text-mode :override #'ac1965--nano-text-mode)
-    ;; Refresh already-open buffers.
-    (dolist (buf (buffer-list))
-      (with-current-buffer buf
-        (cond ((derived-mode-p 'prog-mode) (ac1965--nano-prog-mode))
-              ((derived-mode-p 'text-mode) (ac1965--nano-text-mode))))))
+    (ac1965--nano-apply-global))
 
   ;; nano-modeline toggle: M-SPC t m
   ;;
-  ;; Toggles nano-modeline header-line visibility for the current buffer.
-  ;; When active, clears header-line-format (hides the modeline); when
-  ;; inactive, re-runs the appropriate nano-modeline mode function to
-  ;; restore it.  Bound into ui-leader-t-map ("t" submap = toggles) at
-  ;; key "m" (mnemonic: modeline).
-  ;;
-  ;; ui-leader-t-map is defined by ui-leader.el which loads via my:modules
-  ;; before personal/ac1965.el is evaluated, so the map is always present.
-  ;; ui-keymap--bind guards against a missing map, matching the pattern
-  ;; used throughout ui-keymap.el.
+  ;; Toggles nano-modeline header-line and mode-line visibility globally.
+  ;; Hide: sets header-line-format and restores mode-line-format to default.
+  ;; Show: calls ac1965--nano-apply-global to re-enable both.
 
   (defun ac1965/nano-modeline-toggle ()
-    "Toggle nano-modeline header-line display for the current buffer.
-When the header-line is visible, hides it by setting
-`header-line-format' to nil.  When hidden, restores it by calling the
-appropriate nano-modeline mode function for the current major mode."
+    "Toggle nano-modeline header-line display globally.
+When header-line-format is set (visible), clears it globally and
+restores `mode-line-format' from `ac1965--nano-saved-mode-line-format'.
+When cleared, calls `ac1965--nano-apply-global' to re-enable the
+header-line globally and suppress the mode-line again."
     (interactive)
-    (if header-line-format
-        (setq-local header-line-format nil)
-      (cond
-       ((derived-mode-p 'prog-mode) (ac1965--nano-prog-mode))
-       ((derived-mode-p 'text-mode) (ac1965--nano-text-mode))
-       (t (when (fboundp 'nano-modeline-prog-mode)
-            (nano-modeline-prog-mode))))))
+    (if (default-value 'header-line-format)
+        (progn
+          (setq-default header-line-format nil)
+          (setq-default mode-line-format
+                        (or ac1965--nano-saved-mode-line-format
+                            mode-line-format)))
+      (ac1965--nano-apply-global)))
 
   ;; Bind after after-init-hook so ui-keymap--startup-init has already run
   ;; ui-leader--define-maps, guaranteeing ui-leader-t-map exists as a keymap.
@@ -8932,39 +8943,17 @@ appropriate nano-modeline mode function for the current major mode."
              (mouse-wheel-follow-mouse          . t)
              (pixel-scroll-precision-use-momentum . nil)))
 
-  (provide 'device-darwin)
-  ;;; personal/device-darwin.el ends here
-#+end_src
-
-*** personal/apple-music.el
-:PROPERTIES:
-:CUSTOM_ID: personal-apple-music
-:header-args:emacs-lisp: :tangle personal/apple-music.el
-:END:
-#+begin_src emacs-lisp
-  ;;; personal/apple-music.el --- Apple Music control via AppleScript -*- lexical-binding: t; -*-
+  ;; Apple Music control via AppleScript
   ;;
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: personal
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; Apple Music control from Emacs via AppleScript.
-  ;;
-  ;; This file:
-  ;; - provides play, pause, next, prev, toggle, and current-track commands
-  ;; - all commands dispatch through `apple-music--applescript` via osascript
-  ;; - defines a `hydra-apple-music` keymap when hydra is available
-  ;; - all functions are no-ops on non-macOS systems
-  ;;; Code:
-
-  (eval-when-compile (require 'leaf))
+  ;; Merged from personal/apple-music.el (now :tangle no).
+  ;; All commands are no-ops on non-macOS systems via the darwin guard in
+  ;; apple-music--applescript.  The hydra is defined after-init so that
+  ;; hydra is guaranteed to be loaded (it is a straight.el package required
+  ;; by ui-hydra.el, which runs via my:modules before after-init-hook fires).
+  ;; Key: M-SPC a a (apps → Apple Music hydra).
 
   (defun apple-music--applescript (cmd)
+    "Send CMD to Music.app via osascript.  No-op on non-macOS systems."
     (when (eq system-type 'darwin)
       (shell-command-to-string
        (format "osascript -e 'tell application \"Music\" to %s'" cmd))))
@@ -8972,15 +8961,19 @@ appropriate nano-modeline mode function for the current major mode."
   (defun apple-music-play ()
     "Start playback in Apple Music."
     (interactive) (apple-music--applescript "play"))
+
   (defun apple-music-pause ()
     "Pause playback in Apple Music."
     (interactive) (apple-music--applescript "pause"))
+
   (defun apple-music-next ()
     "Skip to the next track in Apple Music."
     (interactive) (apple-music--applescript "next track"))
+
   (defun apple-music-prev ()
     "Return to the previous track in Apple Music."
     (interactive) (apple-music--applescript "previous track"))
+
   (defun apple-music-toggle ()
     "Toggle play/pause in Apple Music."
     (interactive) (apple-music--applescript "playpause"))
@@ -8994,22 +8987,28 @@ appropriate nano-modeline mode function for the current major mode."
                (string-trim (or name "Unknown"))
                (string-trim (or artist "Unknown")))))
 
-  (when (and (eq system-type 'darwin)
-             (featurep 'hydra))
-    (defhydra hydra-apple-music (:hint nil :color red)
-      "
-  ^Apple Music^
-  [_p_] play   [_s_] pause   [_n_] next   [_b_] prev   [_i_] info   [_q_] quit
-  "
-      ("p" apple-music-play)
-      ("s" apple-music-pause)
-      ("n" apple-music-next)
-      ("b" apple-music-prev)
-      ("i" apple-music-current)
-      ("q" nil :color blue)))
+  ;; Define the hydra and bind it after init so hydra is loaded.
+  ;; Depth 10 runs after ui-keymap--startup-init (depth 0), which means
+  ;; ui-leader-a-map is already a live keymap when ui-keymap--bind is called.
+  (add-hook 'after-init-hook
+            (lambda ()
+              (when (require 'hydra nil t)
+                (defhydra hydra-apple-music (:hint nil :color red)
+                  "
+^Apple Music^
+[_p_] play   [_s_] pause   [_n_] next   [_b_] prev   [_i_] info   [_q_] quit
+"
+                  ("p" apple-music-play)
+                  ("s" apple-music-pause)
+                  ("n" apple-music-next)
+                  ("b" apple-music-prev)
+                  ("i" apple-music-current)
+                  ("q" nil :color blue)))
+              (ui-keymap--bind 'ui-leader-a-map "a" #'hydra-apple-music/body))
+            10)
 
-  (provide 'apple-music)
-  ;;; personal/apple-music.el ends here
+  (provide 'device-darwin)
+  ;;; personal/device-darwin.el ends here
 #+end_src
 
 *** personal/personal-messages.el
