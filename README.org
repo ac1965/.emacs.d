@@ -8692,6 +8692,8 @@ Key files:
   ;; - overrides `my:d:org*` paths to /Users/ac1965/Documents/org/
   ;; - sets font: JetBrains Mono (mono), Noto Sans JP (variable), size 18
   ;; - activates `my:use-ui 'nano` and `my:use-lsp 'eglot`
+  ;; - registers .ps1 → powershell-mode and .bas → visual-basic-mode
+  ;;   (both derive from prog-mode; prog-mode-hook fires automatically)
   ;;; Code:
 
   ;; Identity
@@ -8733,6 +8735,29 @@ Key files:
   ;; use setopt.
   (setopt my:use-ui  'nano
           my:use-lsp 'eglot)
+
+  ;; File-extension → prog-mode registrations
+  ;;
+  ;; Neither powershell-mode nor visual-basic-mode is loaded by modules.el
+  ;; because they are machine-specific tools used only on this host.
+  ;; Placing the leaf blocks here keeps the shared personal/user.el clean.
+  ;;
+  ;; powershell-mode (MELPA/jschaf) derives from prog-mode; .ps1 and .psm1
+  ;; are the standard PowerShell script extensions.
+  ;;
+  ;; visual-basic-mode (MELPA/yoshiki-1) derives from prog-mode; .bas covers
+  ;; VBA module files exported from Excel/Access.
+
+  (leaf powershell
+    :straight t
+    :mode (("\\.ps1\\'"  . powershell-mode)
+           ("\\.psm1\\'" . powershell-mode)))
+
+  (leaf visual-basic-mode
+    :straight t
+    :mode (("\\.bas\\'" . visual-basic-mode)
+           ("\\.vba\\'" . visual-basic-mode)
+           ("\\.frm\\'" . visual-basic-mode)))
 
   ;; nano-modeline: time and buffer encoding in the right segment
   ;;
@@ -8816,6 +8841,41 @@ DEFAULT has the same meaning as in the original."
       (with-current-buffer buf
         (cond ((derived-mode-p 'prog-mode) (ac1965--nano-prog-mode))
               ((derived-mode-p 'text-mode) (ac1965--nano-text-mode))))))
+
+  ;; nano-modeline toggle: M-SPC t m
+  ;;
+  ;; Toggles nano-modeline header-line visibility for the current buffer.
+  ;; When active, clears header-line-format (hides the modeline); when
+  ;; inactive, re-runs the appropriate nano-modeline mode function to
+  ;; restore it.  Bound into ui-leader-t-map ("t" submap = toggles) at
+  ;; key "m" (mnemonic: modeline).
+  ;;
+  ;; ui-leader-t-map is defined by ui-leader.el which loads via my:modules
+  ;; before personal/ac1965.el is evaluated, so the map is always present.
+  ;; ui-keymap--bind guards against a missing map, matching the pattern
+  ;; used throughout ui-keymap.el.
+
+  (defun ac1965/nano-modeline-toggle ()
+    "Toggle nano-modeline header-line display for the current buffer.
+When the header-line is visible, hides it by setting
+`header-line-format' to nil.  When hidden, restores it by calling the
+appropriate nano-modeline mode function for the current major mode."
+    (interactive)
+    (if header-line-format
+        (setq-local header-line-format nil)
+      (cond
+       ((derived-mode-p 'prog-mode) (ac1965--nano-prog-mode))
+       ((derived-mode-p 'text-mode) (ac1965--nano-text-mode))
+       (t (when (fboundp 'nano-modeline-prog-mode)
+            (nano-modeline-prog-mode))))))
+
+  ;; Bind after after-init-hook so ui-keymap--startup-init has already run
+  ;; ui-leader--define-maps, guaranteeing ui-leader-t-map exists as a keymap.
+  ;; Depth 10 places this after ui-keymap--startup-init (depth 0 / default).
+  (add-hook 'after-init-hook
+            (lambda ()
+              (ui-keymap--bind 'ui-leader-t-map "m" #'ac1965/nano-modeline-toggle))
+            10)
 
   (provide 'ac1965)
   ;;; personal/ac1965.el ends here
