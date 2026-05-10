@@ -194,16 +194,66 @@ Auth modules must not depend on the ui layer.
 
 *** orgx
 
-Extended Org Mode functionality.
+Extended Org Mode functionality.  All orgx modules depend only on =core=,
+=ui=, =auth=, and =completion=; no dependency on =vcs= or =dev=.
 
-Responsibilities:
+The layer contains eleven modules.  Two of them (=orgx-roam-ui=,
+=orgx-brain=) are optional extras declared in =my:modules-extra= by
+=personal/user.el=; the remaining nine are in the canonical =my:modules= list.
 
-- Agenda and TODO configuration
-- Journaling (org-journal) and note capture
-- org-roam knowledge graph integration
-- Export backends (ox-hugo, LaTeX/LuaLaTeX)
-- Visual enhancements (org-modern)
-- Auto-tangle on save
+Responsibilities by module:
+
+- =orgx-core= — Org directory layout, =defvar= path variables, agenda
+  fallback phase 1 (=inbox.org=), TODO keywords, refile targets, capture
+  templates (todo, note, journal, meeting, blog post), archive location,
+  agenda phase 2 rebuild via =after-init-hook=
+- =orgx-extensions= — =org-journal= (journal directory), =org-roam= (DB
+  location, connector, autosync via 5-second idle timer, file-hash guard
+  advice), =org-download= (image directory), =toc-org=, =org-cliplink=
+- =orgx-visual= — =org-modern= visual variables (TODO faces, list/checkbox/
+  priority symbols, heading stars), agenda grid, custom faces; configured
+  once via =after-init-hook=; =org-modern-mode= enabled per buffer via
+  =org-mode-hook=
+- =orgx-fold= — interactive fold/unfold/toggle commands (=my/org-fold-subtree=,
+  =my/org-unfold-subtree=, =my/org-toggle-fold=) using built-in =org-fold=
+  with =outline-invisible-p= fallback for Emacs < 29; key bindings under
+  =M-SPC m= and =C-c= aliases
+- =orgx-export= — =ox-hugo= (TOML front-matter), =markdown-mode=,
+  =markdown-preview-mode=, =edit-indirect=, =ob-mermaid= (Babel mermaid
+  language; CLI path probed via =orgx-export--mermaid-cli-path=), =ob-dot=
+  (Graphviz; optional, activated only when =ob-dot= is on load-path)
+- =orgx-notes-markdown= — notebook-style Markdown notes under =my:d:org=;
+  =markdown-mode= / =gfm-mode= with =pandoc= backend, =visual-fill-column=,
+  =consult-notes= integration (=consult-notes-file-dir-sources= set via
+  =setopt= in =:config=), =org-download= integration for images;
+  commands =my/notes-new-note=, =my/notes-open-root=,
+  =my/notes-consult-ripgrep=
+- =orgx-auto-tangle= — automatic =org-babel-tangle= on =after-save-hook=
+  for =README.org= only; custom implementation using =ob-tangle= directly
+  (does NOT use the third-party =org-auto-tangle= package); guarded by a
+  buffer-local in-progress flag to prevent recursive loops
+- =orgx-auto-hugo= — automatic =ox-hugo= all-subtrees export triggered by
+  =org-capture-after-finalize-hook= (fires on =C-c C-c=, not on save);
+  aborted captures (=org-note-abort=) are skipped; target file detected via
+  =my:f:capture-blog-file= at finalize time
+- =orgx-typography= — =valign-mode= (pixel-precise table alignment) and
+  =org-appear-mode= (auto-show emphasis/link/sub-superscript markers);
+  optional extra appended to =my:modules-extra= by =personal/user.el=
+- =orgx-roam-ui= — =org-roam-ui= graph visualiser served via =web-server=
+  (MELPA package name: =simple-httpd=; feature symbol: =web-server=);
+  packages installed at top level (outside =with-eval-after-load=) to ensure
+  load-path availability; =provide 'simple-httpd= shim satisfies the upstream
+  =(require 'simple-httpd)= in =org-roam-ui.el=; UI opened via 8-second idle
+  timer after =org-roam= autosync (5-second timer) settles
+- =orgx-brain= — =org-brain= mind-map view sharing =my:d:org-roam= as its
+  note directory; command =my/brain-visualize=
+
+Org Babel language registration: =mermaid= and =dot= (Graphviz, optional)
+are explicitly registered in =orgx-export=.  =emacs-lisp=, =shell=, and
+=python= are Org built-in defaults and require no explicit registration.
+
+The =orgx= layer does not manage completion CAPF integration; that
+responsibility belongs to the =completion= layer (=capf-org-src= family).
 
 *** vcs
 
@@ -8623,11 +8673,25 @@ Key files:
                    orgx-brain
                    ui-macos))))
 
+  ;; [Fix BU] Locale and encoding initialisation.
+  ;;
+  ;; `set-language-environment' must precede `prefer-coding-system'.
+  ;; Calling it with "Japanese" adjusts the internal coding-system priority
+  ;; list for Japanese text detection (EUC-JP, Shift_JIS, UTF-8).
+  ;; `prefer-coding-system' then promotes utf-8 to the head of that list,
+  ;; ensuring UTF-8 wins for both read and write.
+  ;;
+  ;; `set-locale-environment "UTF-8"' (previous form) only set the process
+  ;; locale; it did NOT adjust Emacs's internal coding-system priority list,
+  ;; leaving Japanese file detection unreliable.
+  ;;
+  ;; Coding rule §6: these are not defcustom variables; plain setq / direct
+  ;; function calls are correct here.
   (leaf my:locale
     :straight nil
     :init
-    (set-locale-environment "UTF-8")
-    (prefer-coding-system 'utf-8)
+    (set-language-environment "Japanese")   ; adjusts coding-system priority list
+    (prefer-coding-system 'utf-8)           ; promotes utf-8 to head of priority list
     (set-default-coding-systems 'utf-8)
     (set-terminal-coding-system 'utf-8)
     (set-keyboard-coding-system 'utf-8)
@@ -8900,13 +8964,14 @@ header-line globally and suppress the mode-line again."
                             mode-line-format)))
       (ac1965--nano-apply-global)))
 
-  ;; Bind after after-init-hook so ui-keymap--startup-init has already run
-  ;; ui-leader--define-maps, guaranteeing ui-leader-t-map exists as a keymap.
-  ;; Depth 10 places this after ui-keymap--startup-init (depth 0 / default).
-  (add-hook 'after-init-hook
-            (lambda ()
-              (ui-keymap--bind 'ui-leader-t-map "m" #'ac1965/nano-modeline-toggle))
-            10)
+  (defun ac1965--bind-leader-keys ()
+    "Bind ac1965-specific keys into the leader keymap after startup.
+Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+(depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
+is guaranteed to be a live keymap."
+    (ui-keymap--bind 'ui-leader-t-map "m" #'ac1965/nano-modeline-toggle))
+
+  (add-hook 'after-init-hook #'ac1965--bind-leader-keys 10)
 
   (provide 'ac1965)
   ;;; personal/ac1965.el ends here
@@ -8929,13 +8994,16 @@ header-line globally and suppress the mode-line again."
   ;;
   ;;; Commentary:
   ;;
-  ;; macOS device-specific settings: IME switching and mouse scrolling.
+  ;; macOS device-specific settings: IME switching, mouse scrolling, Apple Music.
   ;;
   ;; This file:
-  ;; - configures sis with macism for automatic IME switching between
-  ;;   Roman and Japanese Kotoeri input sources
+  ;; - loads sis unconditionally; enables macism ISM and global modes when
+  ;;   macism is present (sis--current stays available for nano-modeline)
   ;; - tunes mouse/trackpad scroll for a Logitech MX Ergo S:
   ;;   1-line steps, no momentum, 3-line scroll margin
+  ;; - provides Apple Music control via AppleScript (play, pause, next, prev,
+  ;;   toggle, current-track, playlist selection via completing-read)
+  ;; - defines hydra-apple-music and binds it to M-SPC a a after init
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -9047,26 +9115,27 @@ Music.app is not available or the playlist list is empty."
             (apple-music-playlist-play choice)
             (message "♫ Playing playlist: %s" choice))))))
 
-  ;; Define the hydra and bind it after init so hydra is loaded.
-  ;; Depth 10 runs after ui-keymap--startup-init (depth 0), which means
-  ;; ui-leader-a-map is already a live keymap when ui-keymap--bind is called.
-  (add-hook 'after-init-hook
-            (lambda ()
-              (when (require 'hydra nil t)
-                (defhydra hydra-apple-music (:hint nil :color red)
-                  "
+  (defun device-darwin--apple-music-init ()
+    "Define `hydra-apple-music' and bind it to the leader key.
+Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+has defined `ui-leader-a-map'.  Requires hydra at runtime; no-op if
+hydra is not installed."
+    (when (require 'hydra nil t)
+      (defhydra hydra-apple-music (:hint nil :color red)
+        "
 ^Apple Music^
 [_p_] play   [_s_] pause   [_n_] next   [_b_] prev   [_i_] info   [_l_] playlist   [_q_] quit
 "
-                  ("p" apple-music-play)
-                  ("s" apple-music-pause)
-                  ("n" apple-music-next)
-                  ("b" apple-music-prev)
-                  ("i" apple-music-current)
-                  ("l" apple-music-playlist-select :color blue)
-                  ("q" nil :color blue)))
-              (ui-keymap--bind 'ui-leader-a-map "a" #'hydra-apple-music/body))
-            10)
+        ("p" apple-music-play)
+        ("s" apple-music-pause)
+        ("n" apple-music-next)
+        ("b" apple-music-prev)
+        ("i" apple-music-current)
+        ("l" apple-music-playlist-select :color blue)
+        ("q" nil :color blue)))
+    (ui-keymap--bind 'ui-leader-a-map "a" #'hydra-apple-music/body))
+
+  (add-hook 'after-init-hook #'device-darwin--apple-music-init 10)
 
   (provide 'device-darwin)
   ;;; personal/device-darwin.el ends here
@@ -9560,6 +9629,93 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
 :PROPERTIES:
 :CUSTOM_ID: changelog
 :END:
+
+** 2026-05 (Nth evaluation pass)
+
+*** Fix BU: personal/user.el — replace set-locale-environment with set-language-environment "Japanese"
+
+🔴 Critical — encoding initialisation
+
+- *[Fix BU] personal/user.el (leaf my:locale)*: Replaced
+  =(set-locale-environment "UTF-8")= with =(set-language-environment "Japanese")=
+  followed by =(prefer-coding-system 'utf-8)=.  =set-locale-environment= only
+  configures the OS process locale; it does not adjust Emacs's internal
+  coding-system priority list, leaving Japanese file detection unreliable and
+  causing mojibake when opening UTF-8 encoded Japanese text files.
+  =set-language-environment "Japanese"= adjusts the priority list to recognise
+  EUC-JP, Shift_JIS, and UTF-8 as Japanese candidates; the subsequent
+  =prefer-coding-system 'utf-8= call then promotes UTF-8 to the head of that
+  list, ensuring deterministic UTF-8 read and write.  The call order
+  (language-environment first, prefer-coding-system second) is mandatory;
+  reversing it would allow =set-language-environment= to overwrite the
+  UTF-8 preference.  The remaining calls (=set-default-coding-systems=,
+  =set-terminal-coding-system=, =set-keyboard-coding-system=,
+  =set-file-name-coding-system=, =set-selection-coding-system=, =setenv "LANG"=)
+  are unchanged.  Inline comments added per the coding rule that all
+  non-obvious side effects must be explained.
+
+*** Fix BW: README.org Layer Definitions — correct eight factual errors in orgx section
+
+🟠 Medium — documentation accuracy (implementation mismatch)
+
+- *[Fix BW-1] README.org (*** orgx > orgx-core)*: Removed the claim that
+  =org-roam= is configured in =orgx-core=.  Actual location: =orgx-extensions.el=.
+  =orgx-core= only sets =org-directory=, TODO keywords, capture templates,
+  and agenda rebuild; it does not touch org-roam.
+
+- *[Fix BW-2] README.org (*** orgx)*: Added =orgx-extensions= as a
+  documented module.  It was entirely absent from the Layer Definitions
+  despite implementing =org-journal=, the full =org-roam= configuration
+  (DB location, connector, autosync idle timer, file-hash guard advice),
+  =org-download=, =toc-org=, and =org-cliplink=.
+
+- *[Fix BW-3] README.org (*** orgx > orgx-notes-markdown)*: Removed
+  =ox-gfm= from the package list.  =ox-gfm= is not installed or required
+  in =orgx-notes-markdown.el=.  GFM output is provided by =markdown-mode='s
+  =gfm-mode=, not by =ox-gfm=.
+
+- *[Fix BW-4] README.org (*** orgx > orgx-fold)*: Removed =origami= from
+  the package list.  =orgx-fold.el= uses only the built-in =org-fold= API
+  and an =outline-invisible-p= fallback for Emacs < 29.  The =origami=
+  package is neither installed nor required.
+
+- *[Fix BW-5] README.org (*** orgx > orgx-typography)*: Removed
+  =mixed-pitch=, =olivetti=, and "headline spacing" from the description.
+  =orgx-typography.el= installs only =valign= (table alignment) and
+  =org-appear= (emphasis auto-reveal).  No other packages are present.
+
+- *[Fix BW-6] README.org (*** orgx > orgx-auto-tangle)*: Corrected
+  "via =org-auto-tangle=" to "custom implementation using =ob-tangle=".
+  =orgx-auto-tangle.el= does not depend on the third-party =org-auto-tangle=
+  package; it implements the trigger logic directly with =after-save-hook=
+  and =org-babel-tangle=.
+
+- *[Fix BW-7] README.org (*** orgx > orgx-auto-hugo)*: Corrected
+  "export on save" to "export triggered by =org-capture-after-finalize-hook=".
+  The actual trigger is =C-c C-c= capture finalization; aborted captures
+  (=org-note-abort= non-nil) are explicitly skipped.  Save events do not
+  trigger export.
+
+- *[Fix BW-8] README.org (*** orgx > Babel languages)*: Corrected the
+  Babel language list.  Only =mermaid= (=ob-mermaid=) and =dot= (=ob-dot=,
+  optional) are explicitly registered via =add-to-list 'org-babel-load-languages=
+  in =orgx-export=.  =emacs-lisp=, =shell=, and =python= are Org built-in
+  defaults and require no registration; claiming they are registered here
+  was inaccurate.
+
+*** Fix BV: README.org Layer Definitions — expand orgx responsibilities to match implementation
+
+🟡 Minor — documentation accuracy
+
+- *[Fix BV] README.org (** Layer Definitions > *** orgx)*: The previous
+  description listed only six high-level bullet points that did not reflect
+  the actual module inventory.  Expanded to enumerate each module
+  (=orgx-core=, =orgx-roam-ui=, =orgx-brain=, =orgx-export=,
+  =orgx-notes-markdown=, =orgx-visual=, =orgx-fold=, =orgx-typography=,
+  =orgx-auto-tangle=, =orgx-auto-hugo=) with its concrete responsibility.
+  Added explicit Babel language registration (=emacs-lisp=, =shell=, =python=,
+  =dot=, =mermaid=) and a boundary note clarifying that CAPF integration
+  belongs to the =completion= layer, not =orgx=.  No code changed.
 
 ** 2026-03 (review pass 3)
 
