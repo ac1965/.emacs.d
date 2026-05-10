@@ -8758,7 +8758,34 @@ Key files:
            ("\\.vba\\'" . visual-basic-mode)
            ("\\.frm\\'" . visual-basic-mode)))
 
-  ;; nano-modeline: global header-line, suppressed mode-line
+  ;; nano-modeline IME indicator — cache via sis-change-hook
+  ;;
+  ;; sis--current is only updated when sis--get is called (on IME switch
+  ;; events or idle timers).  Reading it directly in the :eval block works
+  ;; only if sis has already polled macism.  Calling sis--get every frame
+  ;; would spawn an osascript process per redisplay — unacceptable cost.
+  ;;
+  ;; Solution: maintain a buffer-local cache `ac1965--sis-indicator' that is
+  ;; updated via `sis-change-hook'.  The hook fires whenever sis--update-state
+  ;; detects a change, so the cache stays current without polling.
+  ;; The :eval block reads only the cache string — zero process overhead.
+
+  (defvar-local ac1965--sis-indicator ""
+    "Cached IME indicator string for the nano-modeline right segment.
+Updated by `ac1965--sis-update-indicator' via `sis-change-hook'.
+Values: \" A\" (english), \" あ\" (other), \"\" (unknown/unset).")
+
+  (defun ac1965--sis-update-indicator ()
+    "Update `ac1965--sis-indicator' from the current `sis--current' value.
+Attached to `sis-change-hook'; called whenever sis detects an IME switch."
+    (setq ac1965--sis-indicator
+          (pcase (and (boundp 'sis--current) sis--current)
+            ('english " A")
+            ('other   " あ")
+            (_        ""))))
+
+  (with-eval-after-load 'sis
+    (add-hook 'sis-change-hook #'ac1965--sis-update-indicator))
   ;;
   ;; Goal: show nano-modeline in every buffer regardless of major mode,
   ;; and hide the stock mode-line entirely.
@@ -8787,13 +8814,11 @@ Key files:
 
   (defun ac1965--nano-time-encoding ()
     "Return a propertized \"HH:MM  CODING  IME\" string for the nano-modeline right segment.
-Evaluated every frame inside nano-modeline--make's :eval block, so
-the clock and IME state update automatically without any timer.
-Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped.
-IME state is read from `sis--current' when sis is loaded:
-  \\='english → \"A\"  (Roman / ASCII input)
-  \\='other   → \"あ\"  (Japanese Kotoeri)
-  nil/unknown → \"\"   (sis not active)"
+Evaluated every frame inside nano-modeline--make's :eval block.
+Time and coding system are computed directly; IME state is read from
+the cache `ac1965--sis-indicator', which is updated via `sis-change-hook'
+to avoid spawning osascript processes on every redisplay.
+Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped."
     (let* ((time-str (format-time-string "%H:%M"))
            (cs       (or (and (boundp 'buffer-file-coding-system)
                               buffer-file-coding-system)
@@ -8801,13 +8826,8 @@ IME state is read from `sis--current' when sis is loaded:
            (cs-name  (replace-regexp-in-string
                       "-\\(?:unix\\|dos\\|mac\\|with-signature\\)\\'"
                       ""
-                      (symbol-name (coding-system-base cs))))
-           (ime-str  (when (boundp 'sis--current)
-                       (pcase sis--current
-                         ('english " A")
-                         ('other   " あ")
-                         (_        "")))))
-      (propertize (concat time-str "  " cs-name (or ime-str ""))
+                      (symbol-name (coding-system-base cs)))))
+      (propertize (concat time-str "  " cs-name ac1965--sis-indicator)
                   'face (when (fboundp 'nano-modeline-face)
                           (nano-modeline-face 'secondary)))))
 
@@ -8921,13 +8941,19 @@ header-line globally and suppress the mode-line again."
   (eval-when-compile (require 'leaf))
 
   ;; IME — sis (smart input source)
+  ;;
+  ;; sis is always loaded (no :when guard) so that sis--current is available
+  ;; for the nano-modeline IME indicator regardless of whether macism is
+  ;; installed.  The ISM backend (macism) and the global modes are enabled
+  ;; only when macism is present; without it sis loads but stays inert.
   (leaf sis
     :straight t
-    :when (and (eq system-type 'darwin) (executable-find "macism"))
+    :require t
     :config
-    (sis-ism-lazyman-config nil "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
-    (sis-global-context-mode t)
-    (sis-global-inline-mode t))
+    (when (and (eq system-type 'darwin) (executable-find "macism"))
+      (sis-ism-lazyman-config nil "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
+      (sis-global-context-mode t)
+      (sis-global-inline-mode t)))
 
   ;; Mouse / scroll — Logitech MX Ergo S
   ;; [Fix M] All scroll and mouse-wheel variables are defcustom; moved to :custom.
@@ -8987,6 +9013,40 @@ header-line globally and suppress the mode-line again."
                (string-trim (or name "Unknown"))
                (string-trim (or artist "Unknown")))))
 
+  (defun apple-music--playlist-names ()
+    "Return a list of playlist names from Music.app via AppleScript.
+Calls osascript with multiple -e flags to retrieve every playlist name.
+Returns nil on non-macOS systems or when Music.app is not running."
+    (when (eq system-type 'darwin)
+      (let* ((raw (shell-command-to-string
+                   (concat "osascript"
+                           " -e 'tell application \"Music\"'"
+                           " -e 'name of every playlist'"
+                           " -e 'end tell'")))
+             (trimmed (string-trim raw)))
+        (when (and trimmed (not (string-empty-p trimmed)))
+          ;; osascript returns a comma-separated list: "foo, bar, baz"
+          (mapcar #'string-trim (split-string trimmed ", *" t))))))
+
+  (defun apple-music-playlist-play (name)
+    "Play the Music.app playlist NAME immediately.
+NAME must match an existing playlist name exactly."
+    (apple-music--applescript
+     (format "play playlist \"%s\"" (string-replace "\"" "\\\"" name))))
+
+  (defun apple-music-playlist-select ()
+    "Choose a Music.app playlist via completing-read and start playback.
+Playlist names are fetched live from Music.app.  Exits silently if
+Music.app is not available or the playlist list is empty."
+    (interactive)
+    (let ((names (apple-music--playlist-names)))
+      (if (null names)
+          (message "[apple-music] No playlists found (is Music.app running?)")
+        (let ((choice (completing-read "Playlist: " names nil t)))
+          (when (and choice (not (string-empty-p choice)))
+            (apple-music-playlist-play choice)
+            (message "♫ Playing playlist: %s" choice))))))
+
   ;; Define the hydra and bind it after init so hydra is loaded.
   ;; Depth 10 runs after ui-keymap--startup-init (depth 0), which means
   ;; ui-leader-a-map is already a live keymap when ui-keymap--bind is called.
@@ -8996,13 +9056,14 @@ header-line globally and suppress the mode-line again."
                 (defhydra hydra-apple-music (:hint nil :color red)
                   "
 ^Apple Music^
-[_p_] play   [_s_] pause   [_n_] next   [_b_] prev   [_i_] info   [_q_] quit
+[_p_] play   [_s_] pause   [_n_] next   [_b_] prev   [_i_] info   [_l_] playlist   [_q_] quit
 "
                   ("p" apple-music-play)
                   ("s" apple-music-pause)
                   ("n" apple-music-next)
                   ("b" apple-music-prev)
                   ("i" apple-music-current)
+                  ("l" apple-music-playlist-select :color blue)
                   ("q" nil :color blue)))
               (ui-keymap--bind 'ui-leader-a-map "a" #'hydra-apple-music/body))
             10)
