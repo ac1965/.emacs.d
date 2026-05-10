@@ -9,7 +9,7 @@ SHELL := /bin/sh
 ROOT := $(CURDIR)
 
 EMACS  ?= emacs
-ORGK    ?= README.org
+ORG    ?= README.org
 EARLY  ?= early-init.el
 INIT   ?= init.el
 
