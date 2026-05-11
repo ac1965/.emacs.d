@@ -8824,20 +8824,20 @@ Key files:
 
   ;; nano-modeline IME indicator — cache via sis-change-hook
   ;;
-  ;; sis--current is only updated when sis--get is called (on IME switch
-  ;; events or idle timers).  Reading it directly in the :eval block works
-  ;; only if sis has already polled macism.  Calling sis--get every frame
-  ;; would spawn an osascript process per redisplay — unacceptable cost.
+  ;; sis--current is updated by sis-global-respect-mode's pre/post-command-hook
+  ;; handlers (sis--save-to-buffer = sis--get).  sis-change-hook fires inside
+  ;; sis--update-state when the value changes.  The cache variable is read by
+  ;; the nano-modeline :eval block every frame — zero process overhead.
   ;;
-  ;; Solution: maintain a buffer-local cache `ac1965--sis-indicator' that is
-  ;; updated via `sis-change-hook'.  The hook fires whenever sis--update-state
-  ;; detects a change, so the cache stays current without polling.
-  ;; The :eval block reads only the cache string — zero process overhead.
+  ;; defvar (not defvar-local): sis-change-hook fires in whichever buffer
+  ;; triggered the IME switch.  A buffer-local variable would update only
+  ;; that buffer; a global variable propagates to every buffer immediately.
 
-  (defvar-local ac1965--sis-indicator ""
+  (defvar ac1965--sis-indicator ""
     "Cached IME indicator string for the nano-modeline right segment.
 Updated by `ac1965--sis-update-indicator' via `sis-change-hook'.
-Values: \" A\" (english), \" あ\" (other), \"\" (unknown/unset).")
+Values: \" A\" (english), \" あ\" (other), \"\" (unknown/unset).
+Global so all buffers reflect the current IME state.")
 
   (defun ac1965--sis-update-indicator ()
     "Update `ac1965--sis-indicator' from the current `sis--current' value.
@@ -9014,12 +9014,21 @@ is guaranteed to be a live keymap."
   ;; for the nano-modeline IME indicator regardless of whether macism is
   ;; installed.  The ISM backend (macism) and the global modes are enabled
   ;; only when macism is present; without it sis loads but stays inert.
+  ;;
+  ;; sis-global-respect-mode is required for the nano-modeline IME indicator:
+  ;; it installs pre/post-command-hook handlers that call sis--save-to-buffer
+  ;; (= sis--get) on every command, keeping sis--current up to date and
+  ;; firing sis-change-hook when the source changes.  Without it,
+  ;; sis-global-context-mode only fires on evil-insert-state-entry-hook
+  ;; (irrelevant without evil), so sis--current stays nil permanently and
+  ;; the nano-modeline indicator never updates.
   (leaf sis
     :straight t
     :require t
     :config
     (when (and (eq system-type 'darwin) (executable-find "macism"))
       (sis-ism-lazyman-config nil "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
+      (sis-global-respect-mode t)
       (sis-global-context-mode t)
       (sis-global-inline-mode t)))
 
