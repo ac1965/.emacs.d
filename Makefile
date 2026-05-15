@@ -149,3 +149,45 @@ check-cookies:
 # (stale on-disk modules producing warnings that do not exist in source).
 reload: clean tangle check-cookies
 	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
+
+# ---- checkdoc : verify docstrings on all public defun ----------------------
+# Scans every .el file under LISPDIR for missing or malformed docstrings.
+# Exits 0 when all files pass, 1 if any produce warnings.
+checkdoc:
+	@echo "[checkdoc] scanning $(LISPDIR) ..."; \
+	 fail=0; \
+	 for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
+	   result=$$($(EMACS_Q) --eval \
+	     "(progn (find-file \"$$f\") (checkdoc-current-buffer t) (kill-buffer))" \
+	     2>&1); \
+	   if echo "$$result" | grep -q 'Warning\|Error'; then \
+	     echo "  FAIL: $$f"; echo "$$result" | grep 'Warning\|Error' | head -5; \
+	     fail=1; \
+	   fi; \
+	 done; \
+	 [ $$fail -eq 0 ] && echo "[checkdoc] all files OK" || exit 1
+
+# ---- checkdoc-strict : checkdoc with exit-on-failure -------------------------
+# Use in CI to fail the build when any public defun lacks a docstring.
+# Requires the Emacs session to have access to the module load path.
+
+# ---- lint : checkdoc + check-cookies combined --------------------------------
+# Single target to run all static quality checks before committing.
+.PHONY: checkdoc lint
+lint: check-cookies checkdoc
+	@echo "[lint] all checks passed"
+
+# ---- package-lint : optional — requires package-lint on load-path -----------
+# Validates MELPA-style package headers and dependency declarations.
+# Not required for the personal config workflow but useful when extracting
+# modules as standalone packages.
+# Install: M-x package-install RET package-lint RET
+.PHONY: package-lint
+package-lint:
+	@echo "[package-lint] scanning $(LISPDIR) ..."; \
+	 $(EMACS_Q) $(EVAL_LEAF) \
+	   --eval "(require 'package-lint nil t)" \
+	   --eval "(if (featurep 'package-lint) \
+	               (let ((files (directory-files-recursively \"$(LISPDIR)\" \"\\\\.el$$\"))) \
+	                 (dolist (f files) (package-lint-batch-and-exit))) \
+	               (message \"[package-lint] not installed; skipping\"))""
