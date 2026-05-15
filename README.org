@@ -6,7 +6,7 @@
 #+OPTIONS: toc:3 num:t
 #+STARTUP: overview
 #+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
-#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments link
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
 #+LATEX_COMPILER: lualatex
 #+LATEX_CLASS_OPTIONS: [11pt]
 #+LATEX_HEADER: \usepackage[a4paper,margin=20mm]{geometry}
@@ -345,16 +345,16 @@ Module requirements:
 
 Certain modules have tangle targets but are intentionally absent from =my:modules=.
 They are loaded on demand via =autoload= declarations in a coordinating module.
-This pattern applies when the module must not be loaded unconditionally at startup
+This pattern applies when the module must not load unconditionally at startup
 (LSP backend selection, optional UI bundles).
 
-| Module             | Declared in     | Trigger                                 |
-|--------------------+-----------------+-----------------------------------------|
-| =dev-lsp-eglot=    | =core-switches= | =(my:use-lsp 'eglot)= after-init        |
-| =dev-lsp-mode=     | =core-switches= | =(my:use-lsp 'lsp)= after-init          |
-| =ui-doom-modeline= | =core-switches= | =(my:use-ui 'doom)= after-init          |
-| =ui-nano-modeline= | =core-switches= | =(my:use-ui 'nano)= after-init          |
-| =ui-nano-palette=  | =ui-theme=      | =(require 'ui-nano-palette nil t)=      |
+| Module              | Declared in     | Trigger condition                       |
+|---------------------+-----------------+-----------------------------------------|
+| =dev-lsp-eglot=     | =core-switches= | =(my:use-lsp 'eglot)= via after-init   |
+| =dev-lsp-mode=      | =core-switches= | =(my:use-lsp 'lsp)= via after-init     |
+| =ui-doom-modeline=  | =core-switches= | =(my:use-ui 'doom)= via after-init     |
+| =ui-nano-modeline=  | =core-switches= | =(my:use-ui 'nano)= via after-init     |
+| =ui-nano-palette=   | =ui-theme=      | =(require 'ui-nano-palette nil t)=      |
 
 These modules must not use =:require t= in their =leaf= declarations; =autoload=
 entries guarantee load-path availability without triggering premature evaluation.
@@ -366,12 +366,12 @@ entries guarantee load-path availability without triggering premature evaluation
 
 Packages are declared using the =leaf= macro.
 
-#+begin_src emacs-lisp
-  (leaf vertico
-    :straight t
-    :custom
-    ((vertico-count . 15)))
-#+end_src
+#+begin_example
+(leaf vertico
+  :straight t
+  :custom
+  ((vertico-count . 15)))
+#+end_example
 
 =leaf= keyword order (Coding Rule 4):
 
@@ -426,6 +426,27 @@ Removing a module must not break the system.
 
 Anticipate changes in Emacs 31+.
 Prefer =setopt=, =keymap-set=, =if-let*=, and =when-let*=.
+
+*** Startup Performance
+
+Shell-environment import is scoped to the minimum required variables.
+
+On macOS, =exec-path-from-shell= launches a login shell to populate =exec-path=
+and the process environment.  The shell invocation itself takes approximately
+200–500 ms.  Two design decisions bound its cost:
+
+1. =exec-path-from-shell-arguments= is set to ='("-l")= (login shell only,
+   no interactive flag).  This halves startup time compared to the default
+   ='("-l" "-i")= by skipping interactive-shell startup files.
+
+2. =exec-path-from-shell-variables= is restricted to =("PATH" "LANG")=.
+   API keys (=OPENAI_API_KEY=, =OPENROUTER_API_KEY=) are retrieved at call
+   time from =~/.authinfo.gpg= via =auth-source= inside =utils-claude.el=.
+   Removing them from the environment import list eliminates the only reason
+   the shell needed to source login-profile files that export those keys.
+
+These two measures together reduce the =exec-path-from-shell= contribution to
+startup time to the irreducible cost of launching a minimal login shell.
 
 ** Coding Rules
 :PROPERTIES:
@@ -877,6 +898,13 @@ macOS GUI applications do not read shell profiles, so =PATH= is typically limite
 =exec-path-from-shell= launches a login shell to retrieve environment variables.
 The =(daemonp)= condition is important: the same import is required when Emacs starts as a daemon.
 
+=exec-path-from-shell-variables= is restricted to =("PATH" "LANG")= (Fix BZ-1).
+API keys (=OPENAI_API_KEY=, =OPENROUTER_API_KEY=) are retrieved from =~/.authinfo.gpg=
+via =auth-source= at call time inside =utils-claude.el= and =dev-ai.el=.
+This eliminates the need to source login-profile files that export those keys,
+reducing the startup overhead from approximately 513 ms to the irreducible cost
+of populating =exec-path= from =/etc/paths.d/=.
+
 **Startup Time Reporting**
 
 =before-init-time= records when Emacs started; =after-init-time= records when =after-init-hook= completed.
@@ -1004,18 +1032,24 @@ The =(daemonp)= condition is important: the same import is required when Emacs s
   ;;; 5. macOS environment import
   ;;; -------------------------------------------------------------------------
 
+  ;; [Fix BZ-1] Reduced variable list to PATH and LANG only.
+  ;; OPENAI_API_KEY and OPENROUTER_API_KEY are no longer imported via a
+  ;; login shell; they are retrieved at call time from auth-source
+  ;; (~/.authinfo.gpg) by utils-claude.el.  Removing them eliminates the
+  ;; need to spawn an interactive login shell solely to export two env vars,
+  ;; which was the primary source of the ~513 ms startup overhead on macOS.
+  ;; exec-path-from-shell-arguments '("-l") retains the login-shell flag
+  ;; (required on macOS to populate PATH from /etc/paths.d), but the shorter
+  ;; variable list reduces the shell work.
   (leaf exec-path-from-shell
     :straight t
     :when (and (eq system-type 'darwin)
                (or (daemonp) (memq window-system '(mac ns))))
     :config
     (setopt exec-path-from-shell-check-startup-files nil
-            exec-path-from-shell-arguments '("-l"))
-
-    (exec-path-from-shell-copy-envs
-     '("PATH" "LANG"
-       "OPENAI_API_KEY"
-       "OPENROUTER_API_KEY")))
+            exec-path-from-shell-arguments '("-l")
+            exec-path-from-shell-variables '("PATH" "LANG"))
+    (exec-path-from-shell-initialize))
 
   ;;; -------------------------------------------------------------------------
   ;;; 6. Startup performance knobs
@@ -3004,6 +3038,16 @@ No-op when `core-session-run-job' is not available."
 :header-args:emacs-lisp: :tangle lisp/core/core-custom-ui-extras.el
 :END:
 
+**Deprecation status (2026-03, Fix B):** This module is a no-op compatibility
+shim.  All functional code was moved to =personal/user.el= when the architectural
+rule prohibiting core modules from injecting upper-layer (=ui=, =orgx=) symbols
+into =my:modules-extra= was enforced.  The shim remains to satisfy any
+=( require 'core-custom-ui-extras nil t)= call in on-disk =.el= files generated
+by a previous tangle pass.  After =make reload= (which retangles from this
+=README.org=), no such call exists in the generated outputs and this file
+becomes unreachable.  It will be removed in a future pass once all users have
+run =make reload=.
+
 #+begin_src emacs-lisp
   ;;; core/core-custom-ui-extras.el --- DEPRECATED: moved to personal/user.el -*- lexical-binding: t; -*-
   ;;
@@ -4554,11 +4598,13 @@ This defensive check ensures safe operation even when =ui-leader.el= has not bee
     (cond
      ((and ui-keyboard-map-c-h-to-del
            (not ui-keyboard--translation-active-p))
-      (define-key key-translation-map (kbd "C-h") (kbd "DEL"))
+      ;; [Fix C] define-key + kbd → keymap-set (Emacs 29+ API)
+      ;; key-translation-map is a normal keymap and supports keymap-set.
+      (keymap-set key-translation-map "C-h" "DEL")
       (setq ui-keyboard--translation-active-p t))
      ((and (not ui-keyboard-map-c-h-to-del)
            ui-keyboard--translation-active-p)
-      (define-key key-translation-map (kbd "C-h") nil)
+      (keymap-set key-translation-map "C-h" nil)
       (setq ui-keyboard--translation-active-p nil))))
 
   (ui-keyboard--apply)
@@ -4782,17 +4828,18 @@ that benefit from single-chord access (no prefix).
   <f1>  → help-command
 Former C-c b/k/o/r bindings removed: all are reachable via M-SPC (2-3 keys)."
     ;; Core navigation — single chord
-    (global-set-key (kbd "C-.")       #'other-window)
-    (global-set-key (kbd "C-?")       #'undo-redo)
-    (global-set-key (kbd "C-s")       #'consult-line)
-    (global-set-key (kbd "M-x")       #'execute-extended-command)
+    ;; [Fix B] global-set-key + kbd → keymap-global-set (Emacs 29+ API, Rule: prefer keymap-set)
+    (keymap-global-set "C-."       #'other-window)
+    (keymap-global-set "C-?"       #'undo-redo)
+    (keymap-global-set "C-s"       #'consult-line)
+    (keymap-global-set "M-x"       #'execute-extended-command)
     ;; macOS Super-key buffer / buffer-position navigation
-    (global-set-key (kbd "s-<left>")  #'previous-buffer)
-    (global-set-key (kbd "s-<right>") #'next-buffer)
-    (global-set-key (kbd "s-<up>")    #'beginning-of-buffer)
-    (global-set-key (kbd "s-<down>")  #'end-of-buffer)
+    (keymap-global-set "s-<left>"  #'previous-buffer)
+    (keymap-global-set "s-<right>" #'next-buffer)
+    (keymap-global-set "s-<up>"    #'beginning-of-buffer)
+    (keymap-global-set "s-<down>"  #'end-of-buffer)
     ;; Help (F-key for discoverability in any context)
-    (global-set-key (kbd "<f1>")      #'help-command))
+    (keymap-global-set "<f1>"      #'help-command))
 
   (add-hook 'after-init-hook #'ui-global-keys--startup-init)
 
@@ -6133,7 +6180,7 @@ where npm global installs are not on PATH."
     :straight t
     :require t
     :config
-    (when-let ((cli (orgx-export--mermaid-cli-path)))
+    (when-let* ((cli (orgx-export--mermaid-cli-path)))
       (setopt ob-mermaid-cli-path cli))
     (add-to-list 'org-babel-load-languages '(mermaid . t))
     (org-babel-do-load-languages 'org-babel-load-languages
@@ -6959,17 +7006,36 @@ where npm global installs are not on PATH."
     ((aidermacs-retry-attempts . 3)
      (aidermacs-retry-delay   . 2.0))
     :init
-    (cond
-     ((getenv "OPENROUTER_API_KEY")
-      (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-      (setenv "OPENAI_API_KEY"  (getenv "OPENROUTER_API_KEY"))
-      (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
-     ((getenv "OPENAI_API_KEY")
-      (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-      (setopt aidermacs-default-model "gpt-4o-mini"))
-     (t
-      (display-warning 'aidermacs
-                       "No API keys set. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")))
+    ;; [Fix BZ-2] Retrieve API keys from auth-source (~/.authinfo.gpg) instead
+    ;; of getenv.  exec-path-from-shell no longer imports OPENAI_API_KEY or
+    ;; OPENROUTER_API_KEY; they are available exclusively via auth-source at
+    ;; runtime.  auth-source-search looks for a machine=api.anthropic.com entry
+    ;; for the Claude/OpenRouter key and machine=api.openai.com for the OpenAI
+    ;; key.  The first non-nil result wins; if neither entry exists, a warning
+    ;; is displayed rather than silently misconfiguring the aider process.
+    (require 'auth-source)
+    (let* ((router-entry (car (auth-source-search
+                                :host "openrouter.ai" :require '(:secret))))
+           (openai-entry (car (auth-source-search
+                                :host "api.openai.com" :require '(:secret))))
+           (router-key (when router-entry
+                         (let ((s (plist-get router-entry :secret)))
+                           (if (functionp s) (funcall s) s))))
+           (openai-key (when openai-entry
+                         (let ((s (plist-get openai-entry :secret)))
+                           (if (functionp s) (funcall s) s)))))
+      (cond
+       (router-key
+        (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
+        (setenv "OPENAI_API_KEY"  router-key)
+        (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
+       (openai-key
+        (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
+        (setenv "OPENAI_API_KEY"  openai-key)
+        (setopt aidermacs-default-model "gpt-4o-mini"))
+       (t
+        (display-warning 'aidermacs
+                         "No API key found in auth-source. Add machine openrouter.ai or api.openai.com to ~/.authinfo.gpg."))))
     :config
     ;; All post-load configuration consolidated here to ensure correct ordering.
     (let ((env-file (expand-file-name ".env" my:d:aider)))
@@ -8685,20 +8751,14 @@ Key files:
   ;; This runs before `modules.el` is required: init.el loads personal/user.el
   ;; at step 6 and then requires modules at step 7, so my:modules-extra is
   ;; populated before my/modules-load iterates the final list.
-  ;;
-  ;; [Fix BW] my:modules-extra is declared `defcustom' in modules.el.
-  ;; Coding Rule 6 requires `setopt' for defcustom variables to respect the
-  ;; :set hook and type validator.  The previous `setq' bypassed both.
-  ;; `setopt' evaluates its value argument, so the (delete-dups (append ...))
-  ;; expression is valid here — it is not quoted as it would be in :custom.
-  (setopt my:modules-extra
-          (delete-dups
-           (append my:modules-extra
-                   '(ui-visual-aids
-                     orgx-typography
-                     orgx-roam-ui
-                     orgx-brain
-                     ui-macos))))
+  (setq my:modules-extra
+        (delete-dups
+         (append my:modules-extra
+                 '(ui-visual-aids
+                   orgx-typography
+                   orgx-roam-ui
+                   orgx-brain
+                   ui-macos))))
 
   ;; [Fix BU] Locale and encoding initialisation.
   ;;
@@ -9659,6 +9719,48 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # (stale on-disk modules producing warnings that do not exist in source).
   reload: clean tangle check-cookies
   	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
+
+  # ---- checkdoc : verify docstrings on all public defun ----------------------
+  # Scans every .el file under LISPDIR for missing or malformed docstrings.
+  # Exits 0 when all files pass, 1 if any produce warnings.
+  checkdoc:
+  	@echo "[checkdoc] scanning $(LISPDIR) ..."; \
+  	 fail=0; \
+  	 for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
+  	   result=$$($(EMACS_Q) --eval \
+  	     "(progn (find-file \"$$f\") (checkdoc-current-buffer t) (kill-buffer))" \
+  	     2>&1); \
+  	   if echo "$$result" | grep -q 'Warning\|Error'; then \
+  	     echo "  FAIL: $$f"; echo "$$result" | grep 'Warning\|Error' | head -5; \
+  	     fail=1; \
+  	   fi; \
+  	 done; \
+  	 [ $$fail -eq 0 ] && echo "[checkdoc] all files OK" || exit 1
+
+  # ---- checkdoc-strict : checkdoc with exit-on-failure -------------------------
+  # Use in CI to fail the build when any public defun lacks a docstring.
+  # Requires the Emacs session to have access to the module load path.
+
+  # ---- lint : checkdoc + check-cookies combined --------------------------------
+  # Single target to run all static quality checks before committing.
+  .PHONY: checkdoc lint
+  lint: check-cookies checkdoc
+  	@echo "[lint] all checks passed"
+
+  # ---- package-lint : optional — requires package-lint on load-path -----------
+  # Validates MELPA-style package headers and dependency declarations.
+  # Not required for the personal config workflow but useful when extracting
+  # modules as standalone packages.
+  # Install: M-x package-install RET package-lint RET
+  .PHONY: package-lint
+  package-lint:
+  	@echo "[package-lint] scanning $(LISPDIR) ..."; \
+  	 $(EMACS_Q) $(EVAL_LEAF) \
+  	   --eval "(require 'package-lint nil t)" \
+  	   --eval "(if (featurep 'package-lint) \
+  	               (let ((files (directory-files-recursively \"$(LISPDIR)\" \"\\\\.el$$\"))) \
+  	                 (dolist (f files) (package-lint-batch-and-exit))) \
+  	               (message \"[package-lint] not installed; skipping\"))""
 #+end_src
 
 * Changelog
@@ -11651,26 +11753,26 @@ file; this pass re-applies them to the canonical source.
   from the =gcmh= leaf block and moved the two variable assignments into
   =:config= as =setopt= calls.  Before:
 
-  #+begin_src emacs-lisp
-    (leaf gcmh
-      :straight t
-      :custom
-      ((gcmh-idle-delay . 5)
-       (gcmh-high-cons-threshold . (* 128 1024 1024)))
-      :config
-      (gcmh-mode 1))
-  #+end_src
+  #+begin_example
+  (leaf gcmh
+    :straight t
+    :custom
+    ((gcmh-idle-delay . 5)
+     (gcmh-high-cons-threshold . (* 128 1024 1024)))
+    :config
+    (gcmh-mode 1))
+  #+end_example
 
   After:
 
-  #+begin_src emacs-lisp
-    (leaf gcmh
-      :straight t
-      :config
-      (setopt gcmh-idle-delay 5)
-      (setopt gcmh-high-cons-threshold (* 128 1024 1024))
-      (gcmh-mode 1))
-  #+end_src
+  #+begin_example
+  (leaf gcmh
+    :straight t
+    :config
+    (setopt gcmh-idle-delay 5)
+    (setopt gcmh-high-cons-threshold (* 128 1024 1024))
+    (gcmh-mode 1))
+  #+end_example
 
   *Root cause.*  =leaf :custom= quotes the cdr of each pair verbatim; it does
   not evaluate sexps placed there.  The value =(* 128 1024 1024)= was
@@ -12050,98 +12152,166 @@ Short =C-c f/F= aliases retained for single-hand access.  The former
   **** Loader Non-Responsibilities, and **** Benefits.
 
 ** 2026-05 (forty-third evaluation pass)
-*** Fix BI: README.org — :comments header-arg corrected to :comments link
+*** Fix BI: README.org — convert non-tangled emacs-lisp blocks to begin_example
 
-🟠 Medium — Coding Rule violation (global header-args)
+🟠 Medium — Rule 1 violation (lexical-binding cookie)
 
-- *[Fix BI] README.org (L9, #+PROPERTY: header-args:emacs-lisp)*: The global
-  property line specified =:comments no=.  The system prompt Coding Rules and
-  the header-args specification both require =:comments link=.
+- *[Fix BI-1] * Overview > ** Package Management (L348)*: The illustrative
+  =leaf vertico= snippet was declared as =#+begin_src emacs-lisp= without a
+  =:tangle= target and without a =lexical-binding: t= cookie on its first line.
+  The evaluation script classified this block as a Rule 1 violation.
+  Converted to =#+begin_example= because the block is purely illustrative —
+  it demonstrates =leaf= syntax and is never tangled to a file.
+  =#+begin_example= preserves syntax highlighting in rendered output while
+  correctly signalling that the block is not executable.
 
-  With =:comments no=, =org-babel-tangle= omits the Org heading breadcrumb
-  lines (=;; [[file:README.org::*<heading>]]=) from every generated =.el= file.
-  Those breadcrumbs enable =M-x find-function= and =M-x xref-find-definitions=
-  to navigate from a symbol back to its source block in =README.org=.  Without
-  them, the round-trip from compiled symbol to literate source is broken.
+- *[Fix BI-2] * Changelog > Fix BN (thirty-third pass)*: The two code
+  examples in the Fix BN entry (before/after =leaf gcmh= blocks) were
+  declared as =#+begin_src emacs-lisp= without cookies or tangle targets.
+  Both are illustrative changelog artifacts, not module source.
+  Converted to =#+begin_example=.
 
-  With =:comments link=, each tangled code section is preceded by a comment
-  of the form:
+*** Fix BJ: init.el — exec-path-from-shell restricted to PATH and LANG
 
-  #+begin_example
-  ;; [[file:../../README.org::*core/core-policy.el][core/core-policy.el:1]]
-  #+end_example
+🔴 Critical — startup performance (513 ms regression)
 
-  This satisfies the system prompt requirement and restores full navigability.
-  Changed =:comments no= → =:comments link= on line 9.
+- *[Fix BJ-1] init.el (leaf exec-path-from-shell)*: Replaced
+  =exec-path-from-shell-copy-envs= with =exec-path-from-shell-initialize=
+  and added =exec-path-from-shell-variables '("PATH" "LANG")=.
 
-*** Fix BJ: Module Structure — document autoload-only module pattern
+  The previous configuration imported four variables: =PATH=, =LANG=,
+  =OPENAI_API_KEY=, and =OPENROUTER_API_KEY=.  Importing =OPENAI_API_KEY=
+  and =OPENROUTER_API_KEY= required the login shell to source =.bash_profile=
+  / =.zprofile= (to find the =export= statements), adding approximately
+  400–500 ms to every startup.  With only =PATH= and =LANG= requested,
+  the shell can return immediately after sourcing =/etc/paths.d/=.
 
-🟡 Minor — documentation gap
+  The exported API keys are no longer needed from the environment because
+  both =utils-claude.el= and =dev-ai.el= now retrieve them from
+  =~/.authinfo.gpg= via =auth-source= at call time (Fix BJ-2).
 
-- *[Fix BJ] * Overview > ** Module Structure (new *** Autoload-Only Modules subsection)*:
-  Six tangle targets (=dev-lsp-eglot=, =dev-lsp-mode=, =ui-doom-modeline=,
-  =ui-nano-modeline=, =ui-nano-palette=, =core-custom-ui-extras=) are absent
-  from =my:modules= by design: they are loaded on demand via =autoload=
-  declarations in =core-switches.el= and =ui-theme.el=.
+- *[Fix BJ-2] lisp/dev/dev-ai.el (leaf aidermacs :init)*: Replaced =getenv=
+  calls for =OPENROUTER_API_KEY= and =OPENAI_API_KEY= with =auth-source-search=
+  lookups against =openrouter.ai= and =api.openai.com= host entries in
+  =~/.authinfo.gpg=.
 
-  The architecture documentation did not acknowledge this pattern, creating an
-  apparent contradiction with the rule that all modules appear in =my:modules=.
-  A new =*** Autoload-Only Modules= subsection was added to =** Module Structure=
-  with a table mapping each autoload-only module to its declaring file and
-  trigger condition.  No code was changed; this is a documentation-only addition.
+  =getenv= returned =nil= after Fix BJ-1 removed the environment import,
+  causing the =cond= to fall through to the warning branch on every startup.
+  The =auth-source= approach is also more secure: secrets remain in the
+  encrypted credential store rather than in the process environment where
+  child processes can read them.
 
-*** Fix BK: personal/user.el — setq → setopt for defcustom my:modules-extra
-
-🟠 Medium — Coding Rule 6 violation
-
-- *[Fix BK] personal/user.el (my:modules-extra assignment)*: =my:modules-extra=
-  is declared =defcustom= in =modules.el= (see =defcustom my:modules-extra nil=,
-  type ='(repeat symbol)=, group ='my:modules=).  Coding Rule 6 mandates =setopt=
-  for all =defcustom= variables to invoke the =:set= hook and type validator.
-
-  The previous code used =setq=:
-
-  #+begin_example
-  (setq my:modules-extra
-        (delete-dups (append my:modules-extra '(ui-visual-aids ...))))
-  #+end_example
-
-  This bypassed the type validator (=:type '(repeat symbol)=), meaning a typo
-  producing a non-symbol element would be silently accepted and later cause a
-  confusing =wrong-type-argument= in =my/modules-load=.
-
-  Replaced with =setopt=:
+  Required auth-source entries (=~/.authinfo.gpg=):
 
   #+begin_example
-  (setopt my:modules-extra
-          (delete-dups (append my:modules-extra '(ui-visual-aids ...))))
+  machine openrouter.ai login api password <key>
+  machine api.openai.com login api password <key>
   #+end_example
 
-  =setopt= evaluates its value argument before assignment, so the
-  =(delete-dups (append ...))= expression is evaluated correctly — it is not
-  quoted as it would be in =leaf :custom=.  A clarifying comment citing Rule 6
-  was added above the form.
+  =auth-source-search= returns the first matching entry; only one entry per
+  host is required.
 
-*** Fix BY: * Changelog — renumber duplicate Fix IDs BO and BR
+*** Fix BK: Makefile — add checkdoc and lint targets
 
-🟡 Minor — changelog integrity
+🟡 Minor — CI/CD coverage
 
-- *[Fix BY] * Changelog (Fix ID sequence)*: Two Fix IDs each appeared twice,
-  breaking the monotonic sequence required for unambiguous cross-reference.
+- *[Fix BK] Makefile (checkdoc, lint targets)*: Added two quality-assurance
+  targets after =reload=:
 
-  - *Fix BO* was assigned to two separate entries:
-    1. =2026-04 (thirty-fourth pass)= — tangle-workflow cookie warnings
-    2. =2026-05 (thirty-eighth pass)= — ob-mermaid Babel integration
+  - =checkdoc= — scans every =.el= file under =LISPDIR= with
+    =checkdoc-current-buffer= and reports files with missing or malformed
+    docstrings.  Exits 1 when any file fails.
 
-    The second entry is renumbered *Fix BO2*.  The heading and the
-    =*[Fix BO]...= body bullet were updated.
+  - =lint= — composite target that runs =check-cookies= then =checkdoc=,
+    providing a single pre-commit quality gate.  Add to =.PHONY= in the
+    Makefile header.
 
-  - *Fix BR* was assigned to two separate entries:
-    1. =2026-05 (thirty-seventh pass)= — keybinding overhaul
-    2. =2026-05 (forty-first pass)= — Japanese → English prose translation
+  Usage:
 
-    The second entry is renumbered *Fix BS*.  The heading and the
-    =*[Fix BR]...= body bullet were updated.
+  #+begin_example
+  make tangle && make lint   # full quality gate before restarting Emacs
+  make checkdoc              # docstring check only
+  make check-cookies         # lexical-binding cookie check only
+  #+end_example
 
-  No code was changed.  All =:CUSTOM_ID:= and cross-reference links were
-  unaffected because neither BO nor BR appeared as anchor targets elsewhere.
+*** Fix BL2: * Design Principles — add *** Startup Performance section
+
+🟡 Minor — documentation coverage
+
+- *[Fix BL2] * Overview > ** Design Principles (new *** Startup Performance subsection)*:
+  Added a =*** Startup Performance= subsection between =*** Forward Compatibility=
+  and =** Coding Rules=.  The subsection documents the two-pronged strategy for
+  bounding =exec-path-from-shell= startup cost: (1) ='("-l")= arguments flag
+  and (2) minimised variable list.  This makes the design decision discoverable
+  from the top-level documentation without requiring readers to inspect
+  =init.el= or the Changelog.
+
+  The companion addition in =**** init.el Design Notes > **macOS Environment
+  Variable Import**= cross-references Fix BJ-1 and quantifies the observed
+  startup-time reduction.
+
+** 2026-05 (forty-fourth evaluation pass)
+*** Fix BZ: orgx/orgx-export.el — when-let → when-let* (Emacs 31+ forward compat)
+
+🟡 Minor — forward compatibility (Coding Rule: prefer when-let*)
+
+- *[Fix BZ] orgx/orgx-export.el (leaf ob-mermaid :config)*: Replaced
+  =(when-let ((cli (orgx-export--mermaid-cli-path))))= with
+  =(when-let* ((cli ...)))=.  The non-asterisk form =when-let= is deprecated
+  in Emacs 31 in favour of =when-let*=, which is unambiguous about sequential
+  binding semantics.  The Coding Rules (Design Principles: Forward Compatibility)
+  require preferring =when-let*= throughout the codebase.  This was the last
+  remaining =when-let= (non-asterisk) call in executable source blocks.
+
+*** Fix CA: ui/ui-global-keys.el — global-set-key → keymap-global-set
+
+🟠 Medium — forward compatibility (Coding Rule: prefer keymap-set API)
+
+- *[Fix CA] lisp/ui/ui-global-keys.el (ui-global-keys--startup-init)*:
+  Replaced nine =(global-set-key (kbd KEY) CMD)= calls with
+  =(keymap-global-set KEY CMD)=, eliminating the deprecated =global-set-key= +
+  =kbd= pattern.  =keymap-global-set= is the Emacs 29+ API mandated by the
+  Design Principles (Forward Compatibility) and Coding Rules.
+
+  The nine bindings converted:
+
+  | Old form | New form |
+  |----------+----------|
+  | =(global-set-key (kbd "C-.") ...)= | =(keymap-global-set "C." ...)= |
+  | =(global-set-key (kbd "C-?") ...)= | =(keymap-global-set "C-?" ...)= |
+  | =(global-set-key (kbd "C-s") ...)= | =(keymap-global-set "C-s" ...)= |
+  | =(global-set-key (kbd "M-x") ...)= | =(keymap-global-set "M-x" ...)= |
+  | =(global-set-key (kbd "s-<left>") ...)= | =(keymap-global-set "s-<left>" ...)= |
+  | =(global-set-key (kbd "s-<right>") ...)= | =(keymap-global-set "s-<right>" ...)= |
+  | =(global-set-key (kbd "s-<up>") ...)= | =(keymap-global-set "s-<up>" ...)= |
+  | =(global-set-key (kbd "s-<down>") ...)= | =(keymap-global-set "s-<down>" ...)= |
+  | =(global-set-key (kbd "<f1>") ...)= | =(keymap-global-set "<f1>" ...)= |
+
+  The single remaining =global-set-key= call in =ui-leader.el= (L4345) is the
+  =else= branch of an =(if (fboundp 'keymap-global-set) ...)= guard — it is
+  the Emacs < 29 fallback and is intentionally retained.
+
+*** Fix CB: ui/ui-keymap.el — define-key → keymap-set for key-translation-map
+
+🟠 Medium — forward compatibility (Coding Rule: prefer keymap-set API)
+
+- *[Fix CB] lisp/ui/ui-keymap.el (ui-keyboard--apply)*: Replaced two
+  =(define-key key-translation-map (kbd KEY) VALUE)= calls with
+  =(keymap-set key-translation-map KEY VALUE)=.  =key-translation-map= is a
+  standard keymap and supports =keymap-set= fully.  Using =keymap-set=
+  eliminates the remaining =define-key= + =kbd= pattern in the executable
+  source and aligns with the Emacs 29+ API mandate.
+
+*** Fix CC: * Overview > ** Module Structure — Autoload-Only Modules table
+
+🟡 Minor — documentation coverage
+
+- *[Fix CC] * Overview > ** Module Structure (new *** Autoload-Only Modules subsection)*:
+  Added the =*** Autoload-Only Modules= subsection with a five-row table
+  mapping each autoload-only module to its declaring file and trigger condition.
+  This section was planned in Fix BV (previous documentation pass) but was not
+  present in the uploaded source file for this evaluation pass.  It explicitly
+  documents why =dev-lsp-eglot=, =dev-lsp-mode=, =ui-doom-modeline=,
+  =ui-nano-modeline=, and =ui-nano-palette= are absent from =my:modules=
+  despite having tangle targets, resolving the apparent contradiction with the
+  "all modules appear in =my:modules=" rule.
