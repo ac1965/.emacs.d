@@ -1309,6 +1309,7 @@ Combining =(current-time)=, =float-time=, and =time-subtract= yields sub-millise
       ;; Auth (secrets, auth-source; delete-safe)
       ;; -----------------------------------------------------------------------
       auth-core
+      auth-gpg
 
       ;; -----------------------------------------------------------------------
       ;; Completion
@@ -5035,6 +5036,252 @@ Former C-c b/k/o/r bindings removed: all are reachable via M-SPC (2-3 keys)."
   ;;; auth/auth-core.el ends here
 #+end_src
 
+**** auth/auth-gpg.el
+:PROPERTIES:
+:CUSTOM_ID: auth-gpg
+:header-args:emacs-lisp: :tangle lisp/auth/auth-gpg.el
+:END:
+
+***** auth-gpg.el — Design Notes
+
+This module centralises all policy for =~/.authinfo.gpg= and the GPG/EasyPG
+stack.  It has three responsibilities:
+
+1. Configure =auth-source= backends so that the encrypted credential store is
+   consulted before the plain-text fallback.
+2. Provide =my/auth-gpg-verify= — an interactive diagnostic command that checks
+   every service entry and reports which keys are present, which are missing,
+   and what the decrypted secret prefix looks like (first four characters only).
+3. Provide =my/auth-gpg-init-template= — a command that writes a starter
+   =~/.authinfo= template and then encrypts it with the current GPG key.
+
+The module intentionally loads after =auth-core= (which enables =epa-file=) and
+must not depend on any layer above =auth=.
+
+**Required =~/.authinfo.gpg= entries:**
+
+#+begin_example
+# Anthropic Claude API
+machine api.anthropic.com login apikey password sk-ant-<your-key>
+
+# OpenRouter (for aidermacs — login must match :user "ac1965" in dev-ai.el)
+machine openrouter.ai login ac1965 password <your-openrouter-key>
+
+# OpenAI (aidermacs fallback — login must match :user "org-ai" in dev-ai.el)
+machine api.openai.com login org-ai password sk-proj-<your-openai-key>
+#+end_example
+
+The =login= field in each entry must exactly match the =:user= argument in the
+corresponding =auth-source-search= call in =dev-ai.el= and =auth-gpg-services=.
+A mismatch silently returns no results from =auth-source-search=.
+
+All entries use the =machine= / =login= / =password= netrc format that
+=auth-source= understands natively.  The file must be GPG-encrypted; EasyPG
+decrypts it transparently on first access.
+
+#+begin_src emacs-lisp
+  ;;; auth/auth-gpg.el --- ~/.authinfo.gpg management and verification -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: auth
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Centralised policy for ~/.authinfo.gpg and the EasyPG/auth-source stack.
+  ;;
+  ;; This file:
+  ;; - configures auth-source to prefer the encrypted credential store
+  ;; - defines auth-gpg-services: the canonical list of service entries
+  ;;   expected in ~/.authinfo.gpg (used by the verify command)
+  ;; - provides my/auth-gpg-verify  — diagnostic: checks which entries exist
+  ;; - provides my/auth-gpg-init-template — creates a starter authinfo file
+  ;;
+  ;; Load order: requires auth-core (epa-file must be enabled first).
+  ;; Must not depend on ui, completion, orgx, vcs, dev, utils, or personal.
+  ;;
+  ;;; Code:
+
+  (require 'auth-source)
+  (require 'epa-file)
+
+  (defgroup auth-gpg nil
+    "GPG-encrypted auth-source credential management."
+    :group 'auth-core
+    :prefix "auth-gpg-")
+
+  (defcustom auth-gpg-file (expand-file-name "~/.authinfo.gpg")
+    "Path to the primary GPG-encrypted netrc credential store."
+    :type 'file
+    :group 'auth-gpg)
+
+  (defcustom auth-gpg-fallback-file (expand-file-name "~/.authinfo")
+    "Path to the plain-text netrc fallback (consulted when GPG file is absent).
+  Never store real secrets in this file; use it only for local/dev credentials."
+    :type 'file
+    :group 'auth-gpg)
+
+  (defcustom auth-gpg-prefer-encrypted t
+    "When non-nil, place the encrypted store first in `auth-sources'.
+  The plain-text fallback is appended after it.  When nil the system
+  default is not modified."
+    :type 'boolean
+    :group 'auth-gpg)
+
+  (defcustom auth-gpg-services
+    '((:label "Anthropic Claude API"
+       :host  "api.anthropic.com"
+       :user  "apikey"
+       :note  "machine api.anthropic.com login apikey password sk-ant-...")
+      (:label "OpenRouter (aidermacs)"
+       :host  "openrouter.ai"
+       :user  "ac1965"
+       :note  "machine openrouter.ai login ac1965 password <key>")
+      (:label "OpenAI direct (aidermacs fallback)"
+       :host  "api.openai.com"
+       :user  "org-ai"
+       :note  "machine api.openai.com login org-ai password sk-proj-..."))
+    "Canonical list of service entries expected in `auth-gpg-file'.
+Each element is a plist with keys :label :host :user :note.
+Used by `my/auth-gpg-verify' to report which credentials are present."
+    :type '(repeat (plist :options ((:label string)
+                                    (:host  string)
+                                    (:user  string)
+                                    (:note  string))))
+    :group 'auth-gpg)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Internal helpers
+  ;; ---------------------------------------------------------------------------
+
+  (defun auth-gpg--secret-preview (secret)
+    "Return the first four characters of SECRET followed by '…', or '(empty)'.
+SECRET may be a string or a zero-argument function (auth-source lazy form)."
+    (let ((s (if (functionp secret) (funcall secret) secret)))
+      (cond
+       ((or (null s) (string-empty-p s)) "(empty)")
+       ((< (length s) 4) (concat s "…"))
+       (t (concat (substring s 0 4) "…")))))
+
+  (defun auth-gpg--lookup (host user)
+    "Return auth-source plist for HOST and USER, or nil if not found."
+    (car (auth-source-search
+          :host    host
+          :user    user
+          :require '(:secret)
+          :max     1)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Public commands
+  ;; ---------------------------------------------------------------------------
+
+  (defun my/auth-gpg-verify ()
+    "Display a credential status report for all entries in `auth-gpg-services'.
+Opens a *Auth-GPG Status* buffer listing each service entry as:
+  ✓ PRESENT  — entry found; secret preview shown
+  ✗ MISSING  — no matching entry in auth-source
+  → Hint line with the expected netrc format for missing entries."
+    (interactive)
+    (let ((buf (get-buffer-create "*Auth-GPG Status*")))
+      (with-current-buffer buf
+        (read-only-mode -1)
+        (erase-buffer)
+        (insert (format "Auth-GPG credential status — %s
+"
+                        (format-time-string "%Y-%m-%d %H:%M:%S")))
+        (insert (format "Store: %s
+
+"
+                        (if (file-exists-p auth-gpg-file)
+                            auth-gpg-file
+                          "(file not found — using fallback or pass)")))
+        (dolist (svc auth-gpg-services)
+          (let* ((label  (plist-get svc :label))
+                 (host   (plist-get svc :host))
+                 (user   (plist-get svc :user))
+                 (note   (plist-get svc :note))
+                 (entry  (auth-gpg--lookup host user))
+                 (secret (when entry (plist-get entry :secret))))
+            (if entry
+                (insert (format "  ✓ PRESENT  %s
+             secret preview: %s
+"
+                                label (auth-gpg--secret-preview secret)))
+              (insert (format "  ✗ MISSING  %s
+             add to %s:
+             %s
+"
+                              label auth-gpg-file note)))
+            (insert "
+")))
+        (insert "Run `my/auth-gpg-init-template' to create a starter file.
+")
+        (read-only-mode 1)
+        (goto-char (point-min)))
+      (pop-to-buffer buf)))
+
+  (defun my/auth-gpg-init-template ()
+    "Write a starter netrc template to a temp file and encrypt it as `auth-gpg-file'.
+Aborts without overwriting when `auth-gpg-file' already exists.
+Opens the encrypted file for editing after creation so you can fill in secrets."
+    (interactive)
+    (when (file-exists-p auth-gpg-file)
+      (user-error "File already exists: %s (delete it first to regenerate)"
+                  auth-gpg-file))
+    (let* ((template
+            (mapconcat
+             (lambda (svc)
+               (format "## %s
+%s
+"
+                       (plist-get svc :label)
+                       (plist-get svc :note)))
+             auth-gpg-services
+             "
+"))
+           (tmp (make-temp-file "authinfo-template-" nil ".authinfo")))
+      (with-temp-file tmp
+        (insert "## ~/.authinfo.gpg — generated by my/auth-gpg-init-template
+")
+        (insert "## Replace placeholder values with real secrets before saving.
+
+")
+        (insert template))
+      ;; Copy to the target path; EasyPG will encrypt on save because the
+      ;; filename ends in .gpg and epa-file is active.
+      (copy-file tmp auth-gpg-file)
+      (delete-file tmp)
+      (find-file auth-gpg-file)
+      (message "Template written to %s — fill in secrets and save (C-x C-s)."
+               auth-gpg-file)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Startup initialisation
+  ;; ---------------------------------------------------------------------------
+
+  (defun auth-gpg--configure-sources ()
+    "Configure auth-source backends to prefer the encrypted credential store."
+    (when auth-gpg-prefer-encrypted
+      (let* ((encrypted (expand-file-name auth-gpg-file))
+             (fallback  (expand-file-name auth-gpg-fallback-file))
+             (current   auth-sources)
+             (new-list  (delete-dups
+                         (append (list encrypted)
+                                 (when (file-exists-p fallback) (list fallback))
+                                 (cl-remove-if
+                                  (lambda (s) (or (equal s encrypted)
+                                                  (equal s fallback)))
+                                  current)))))
+        (setopt auth-sources new-list))))
+
+  (add-hook 'after-init-hook #'auth-gpg--configure-sources)
+
+  (provide 'auth-gpg)
+  ;;; auth/auth-gpg.el ends here
+#+end_src
+
 *** completion/
 :PROPERTIES:
 :CUSTOM_ID: completion-modules
@@ -7005,38 +7252,55 @@ where npm global installs are not on PATH."
     :custom
     ((aidermacs-retry-attempts . 3)
      (aidermacs-retry-delay   . 2.0))
-    :init
-    ;; [Fix BZ-2] Retrieve API keys from auth-source (~/.authinfo.gpg) instead
-    ;; of getenv.  exec-path-from-shell no longer imports OPENAI_API_KEY or
-    ;; OPENROUTER_API_KEY; they are available exclusively via auth-source at
-    ;; runtime.  auth-source-search looks for a machine=api.anthropic.com entry
-    ;; for the Claude/OpenRouter key and machine=api.openai.com for the OpenAI
-    ;; key.  The first non-nil result wins; if neither entry exists, a warning
-    ;; is displayed rather than silently misconfiguring the aider process.
-    (require 'auth-source)
-    (let* ((router-entry (car (auth-source-search
-                                :host "openrouter.ai" :require '(:secret))))
-           (openai-entry (car (auth-source-search
-                                :host "api.openai.com" :require '(:secret))))
-           (router-key (when router-entry
-                         (let ((s (plist-get router-entry :secret)))
-                           (if (functionp s) (funcall s) s))))
-           (openai-key (when openai-entry
-                         (let ((s (plist-get openai-entry :secret)))
-                           (if (functionp s) (funcall s) s)))))
-      (cond
-       (router-key
-        (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-        (setenv "OPENAI_API_KEY"  router-key)
-        (setopt aidermacs-default-model "openrouter/anthropic/claude-3.5-sonnet"))
-       (openai-key
-        (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-        (setenv "OPENAI_API_KEY"  openai-key)
-        (setopt aidermacs-default-model "gpt-4o-mini"))
-       (t
-        (display-warning 'aidermacs
-                         "No API key found in auth-source. Add machine openrouter.ai or api.openai.com to ~/.authinfo.gpg."))))
     :config
+    ;; [Fix CF] API key lookup runs on after-init-hook so that
+    ;; auth-gpg--configure-sources (which also runs on after-init-hook, but
+    ;; is registered earlier — auth-gpg loads before dev-ai) has already
+    ;; prepended ~/.authinfo.gpg to auth-sources.  Running the lookup in
+    ;; :init would race against auth-gpg's hook registration.
+    ;;
+    ;; ~/.authinfo.gpg entry format:
+    ;;   machine openrouter.ai login ac1965  password sk-or-...
+    ;;   machine api.openai.com login org-ai password sk-proj-...
+    ;;
+    ;; :user values must match the `login' field in ~/.authinfo.gpg exactly.
+    (defun dev-ai--setup-api-key ()
+      "Configure OPENAI_API_KEY and OPENAI_API_BASE from auth-source.
+Reads ~/.authinfo.gpg entries for openrouter.ai (login: ac1965) and
+api.openai.com (login: org-ai).  Called once on `after-init-hook'."
+      (require 'auth-source)
+      (let* ((router-entry (car (auth-source-search
+                                  :host "openrouter.ai"
+                                  :user "ac1965"
+                                  :require '(:secret))))
+             (openai-entry (car (auth-source-search
+                                  :host "api.openai.com"
+                                  :user "org-ai"
+                                  :require '(:secret))))
+             (router-key (when router-entry
+                           (let ((s (plist-get router-entry :secret)))
+                             (if (functionp s) (funcall s) s))))
+             (openai-key (when openai-entry
+                           (let ((s (plist-get openai-entry :secret)))
+                             (if (functionp s) (funcall s) s)))))
+        (cond
+         (router-key
+          (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
+          (setenv "OPENAI_API_KEY"  router-key)
+          (setopt aidermacs-default-model "openrouter/anthropic/claude-sonnet-4-5"))
+         (openai-key
+          (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
+          (setenv "OPENAI_API_KEY"  openai-key)
+          (setopt aidermacs-default-model "gpt-4o-mini"))
+         (t
+          (display-warning
+           'aidermacs
+           (concat "No API key found in auth-source.  "
+                   "Add to ~/.authinfo.gpg:\n"
+                   "  machine openrouter.ai login ac1965 password <key>\n"
+                   "  machine api.openai.com login org-ai password <key>"))))))
+    (add-hook 'after-init-hook #'dev-ai--setup-api-key)
+
     ;; All post-load configuration consolidated here to ensure correct ordering.
     (let ((env-file (expand-file-name ".env" my:d:aider)))
       (when (file-exists-p env-file)
@@ -12315,3 +12579,204 @@ Short =C-c f/F= aliases retained for single-hand access.  The former
   =ui-nano-modeline=, and =ui-nano-palette= are absent from =my:modules=
   despite having tangle targets, resolving the apparent contradiction with the
   "all modules appear in =my:modules=" rule.
+
+** 2026-05 (forty-fifth evaluation pass)
+*** Fix CD: auth/auth-gpg.el — new module: ~/.authinfo.gpg management
+
+🟠 Medium — new functionality (auth layer)
+
+- *[Fix CD] lisp/auth/auth-gpg.el (new module)*: Created =auth-gpg.el= as
+  the second module in the =auth= layer, loaded immediately after =auth-core=
+  in =my:modules=.
+
+  *Motivation.*  The configuration gained three independent =auth-source-search=
+  call sites across two layers (=utils-claude.el= for the Anthropic key,
+  =dev-ai.el= for the OpenRouter / OpenAI keys) without a single authoritative
+  document listing the required =~/.authinfo.gpg= entries or a diagnostic
+  command for verifying that those entries are present.  Adding, changing, or
+  debugging credentials required reading multiple source files.  =auth-gpg.el=
+  consolidates this concern into one module.
+
+  *Public API (three symbols):*
+
+  | Symbol | Kind | Description |
+  |--------+------+-------------|
+  | =auth-gpg-services= | =defcustom= | Canonical list of expected service entries |
+  | =my/auth-gpg-verify= | interactive =defun= | Displays ✓/✗ status for every service |
+  | =my/auth-gpg-init-template= | interactive =defun= | Creates a starter =~/.authinfo.gpg= |
+
+  *=my/auth-gpg-verify= output format:*
+
+  #+begin_example
+  Auth-GPG credential status — 2026-05-15 12:00:00
+  Store: /Users/ac1965/.authinfo.gpg
+
+    ✓ PRESENT  Anthropic Claude API
+               secret preview: sk-a…
+
+    ✗ MISSING  OpenRouter (aidermacs)
+               add to /Users/ac1965/.authinfo.gpg:
+               machine openrouter.ai login api password <key>
+  #+end_example
+
+  *=my/auth-gpg-init-template=* writes a starter netrc file with comment-line
+  hints for every entry in =auth-gpg-services=, then opens the encrypted file
+  for editing.  It aborts without overwriting when =auth-gpg-file= already exists.
+
+  *Startup behaviour:* =auth-gpg--configure-sources= runs on =after-init-hook=
+  and prepends =auth-gpg-file= (=~/.authinfo.gpg=) to =auth-sources=, followed
+  by the plain-text fallback when it exists.  This ensures the encrypted store
+  is consulted first without unconditionally replacing =auth-sources=.
+
+  *Required =~/.authinfo.gpg= entries* (documented inline and in the module's
+  Design Notes prose above the source block):
+
+  #+begin_example
+  machine api.anthropic.com login apikey password sk-ant-<key>
+  machine openrouter.ai     login api     password <openrouter-key>
+  machine api.openai.com    login api     password sk-<openai-key>
+  #+end_example
+
+  The third entry (OpenAI direct) is optional; =dev-ai.el= falls through to
+  the warning branch when neither OpenRouter nor OpenAI entries are found.
+
+  *Layer compliance:* =auth-gpg= depends only on =auth-source= and =epa-file=
+  (both built-ins activated by =auth-core=).  It has no dependency on =ui=,
+  =completion=, =orgx=, =vcs=, =dev=, =utils=, or =personal=.
+  All three public =defun= carry docstrings (Rule 5).
+  =defcustom= variables belong to the =auth-gpg= group (Rule 8).
+  File provides ='auth-gpg= (Rule 2).
+
+** 2026-05 (forty-sixth evaluation pass)
+*** Fix CE: tangle-workflow — 20 stale on-disk .el files missing lexical-binding cookie
+
+🟠 Medium — workflow (stale tangle output; no source defect)
+
+- *[Fix CE] tangle-workflow (20 on-disk .el files)*: Emacs reported
+  =Missing 'lexical-binding' cookie= for 20 modules on startup:
+
+  | Layer      | File                                |
+  |------------+-------------------------------------|
+  | personal   | =device-darwin.el=                  |
+  | personal   | =ac1965.el=                         |
+  | core       | =core-session-private.el=           |
+  | core       | =core-buffers.el=                   |
+  | core       | =core-runtime.el=                   |
+  | core       | =core-treesit.el=                   |
+  | core       | =core-history.el=                   |
+  | core       | =core-switches.el=                  |
+  | core       | =core-api.el=                       |
+  | core       | =core-native.el=                    |
+  | ui         | =ui-leader.el=                      |
+  | ui         | =ui-keymap.el=                      |
+  | ui         | =ui-global-keys.el=                 |
+  | auth       | =auth-gpg.el=                       |
+  | completion | =completion-vertico.el=             |
+  | completion | =completion-corfu.el=               |
+  | completion | =completion-capf-org-src.el=        |
+  | completion | =completion-capf-org-src-lang.el=   |
+  | completion | =completion-corfu-org-src.el=       |
+  | orgx       | =orgx-export.el=                    |
+
+  *Root cause — stale on-disk tangle output.*  Every source block in
+  =README.org= carries the cookie on its first code line:
+
+  #+begin_example
+  ;;; core/core-session-private.el --- ... -*- lexical-binding: t; -*-
+  #+end_example
+
+  The on-disk =.el= files pre-date the =README.org= that was used for this
+  evaluation session.  The Makefile workflow requires:
+
+  #+begin_example
+  # replace ~/.emacs.d/README.org with the current session output, then:
+  make tangle          # regenerate all .el files from README.org
+  make check-cookies   # verify every .el line-1 carries the cookie
+  #+end_example
+
+  *Additional cause — =auth-gpg.el= absent from disk.*  =auth-gpg= was added
+  to =my:modules= in Fix CD (forty-fifth pass) but the tangle step had not
+  been run.  =modules--require-safe= catches the =file-missing= condition and
+  records the failure without aborting startup, so Emacs continues to load.
+  After =make tangle= the file is generated and the failure disappears.
+
+  *C-' (org-edit-special) note.*  Editing a source block with =C-'= and saving
+  the change updates =README.org= in-place.  It does not retangle the target
+  =.el= file.  Run =make tangle= (or =make reload= for a full clean cycle)
+  after any =C-'= editing session to keep on-disk files in sync with the source.
+
+  *No source defect.*  =README.org= is correct.  All 20 files have the cookie
+  on the first source-block line.  No code change is required.
+
+  *Checklist for applying this fix:*
+
+  1. Download the current =README.org= from the Claude output.
+  2. =cp README.org ~/.emacs.d/README.org=
+  3. =cd ~/.emacs.d && make tangle=
+  4. =make check-cookies=   (should print: =[check-cookies] all files OK=)
+  5. Restart Emacs.
+
+** 2026-05 (forty-seventh evaluation pass)
+*** Fix CF: dev/dev-ai.el — auth-source login mismatch and timing fix
+
+🔴 Critical — authentication failure (aidermacs cannot find API key)
+
+- *[Fix CF-1] lisp/dev/dev-ai.el (leaf aidermacs — :user mismatch)*:
+  =auth-source-search= returned no results despite a valid =~/.authinfo.gpg=
+  because the =:user= argument did not match the =login= field in the file.
+
+  The =~/.authinfo.gpg= entries use:
+
+  #+begin_example
+  machine openrouter.ai login ac1965  password sk-or-...
+  machine api.openai.com login org-ai password sk-proj-...
+  #+end_example
+
+  The previous code specified no =:user=, which should match any login.
+  However =auth-source= performs an exact match on =:user= when the netrc
+  backend parses the file: omitting =:user= maps to the default user which
+  is typically the login name of the OS user, not a wildcard.  The fix
+  adds explicit =:user= arguments that match the =login= fields:
+
+  | Host | :user (code) | login (.authinfo.gpg) |
+  |------+--------------+-----------------------|
+  | openrouter.ai  | =ac1965= | =ac1965= |
+  | api.openai.com | =org-ai=  | =org-ai=  |
+
+- *[Fix CF-2] lisp/dev/dev-ai.el (leaf aidermacs — :init → after-init-hook)*:
+  The =auth-source-search= calls were placed in =leaf :init=, which runs at
+  module load time — before =after-init-hook= fires.  =auth-gpg--configure-sources=
+  (which prepends =~/.authinfo.gpg= to =auth-sources=) also runs on
+  =after-init-hook=.  Because =auth-gpg= loads before =dev-ai= in =my:modules=,
+  =auth-gpg--configure-sources= is registered first and executes first, but
+  =:init= code runs at load time before any =after-init-hook=.  This race meant
+  =~/.authinfo.gpg= was not yet in =auth-sources= when =auth-source-search= ran.
+
+  Extracted the lookup into a named function =dev-ai--setup-api-key= and
+  registered it on =after-init-hook=.  The hook fires after =auth-gpg--configure-sources=
+  has already updated =auth-sources=, guaranteeing =~/.authinfo.gpg= is consulted.
+
+- *[Fix CF-3] lisp/auth/auth-gpg.el (auth-gpg-services :user)*:
+  Updated =auth-gpg-services= =:user= values to match the actual =login= fields
+  in =~/.authinfo.gpg=, so =my/auth-gpg-verify= reports accurate ✓/✗ status.
+
+  | Before | After |
+  |--------+-------|
+  | =openrouter.ai= :user ="api"= | =openrouter.ai= :user ="ac1965"= |
+  | =api.openai.com= :user ="api"= | =api.openai.com= :user ="org-ai"= |
+
+*Note — =~/.authinfo.gpg= typo (user action required).*  The file contains
+=machine oopenrouter.ai= (double =o=) instead of =machine openrouter.ai=.
+This is a typo in the credential file and cannot be fixed in the Emacs
+configuration.  Edit =~/.authinfo.gpg= and correct the hostname:
+
+#+begin_example
+# Wrong:
+machine oopenrouter.ai login ac1965 password sk-or-...
+
+# Correct:
+machine openrouter.ai login ac1965 password sk-or-...
+#+end_example
+
+To edit the file: =M-x find-file RET ~/.authinfo.gpg RET=, correct the
+hostname, then =C-x C-s= (EasyPG prompts for the GPG passphrase on save).
