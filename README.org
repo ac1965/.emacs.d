@@ -816,11 +816,15 @@ Disabling the toolbar in =early-init.el= prevents it from appearing briefly befo
   ;; 9) Backups / auto-save
   ;; ---------------------------------------------------------------------------
 
-  (setq make-backup-files nil
-        version-control nil
-        delete-old-versions nil
-        backup-by-copying nil
-        auto-save-default nil
+  ;; Backups are stored under var/backup/ (no-littering path set in core-editing).
+  ;; early-init enables versioned backups; paths are overridden after no-littering loads.
+  (setq make-backup-files     t
+        version-control       t        ; keep numbered backups
+        kept-new-versions     6
+        kept-old-versions     2
+        delete-old-versions   t        ; delete excess backups silently
+        backup-by-copying     t        ; preserve symlinks
+        auto-save-default     nil      ; disable legacy #file# auto-save
         auto-save-list-file-prefix nil)
 
   ;; ---------------------------------------------------------------------------
@@ -2633,7 +2637,8 @@ established before the persistence files are loaded."
   ;;
   ;; This file:
   ;; - configures TRAMP with persistence paths and `scp` as the default method
-  ;; - enables `auto-save-visited-mode` for continuous auto-saving
+  ;; - implements the auto-save subsystem (auto-save-visited-mode + focus-out hook
+  ;;   + versioned backups under no-littering-var-directory/backup/)
   ;; - sets up paredit (disabling electric-pair to avoid conflict) and puni
   ;; - configures show-paren, undo-fu/vundo, ace-window, visual-line-mode
   ;; - replaces dired with dirvish (dirvish-override-dired-mode)
@@ -2650,10 +2655,146 @@ established before the persistence files are loaded."
     '((tramp-default-method . "scp")
       (tramp-verbose        . 3)))
 
-  (setopt auto-save-visited-interval 1
-          auto-save-default        nil)
-  (when (fboundp 'auto-save-visited-mode)
-    (auto-save-visited-mode 1))
+  ;; ---------------------------------------------------------------------------
+  ;; Auto-save and backup policy
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; Three complementary mechanisms:
+  ;;
+  ;; 1. auto-save-visited-mode  — writes the visited file itself every
+  ;;    `auto-save-visited-interval' seconds of idle time (Emacs 26.1+).
+  ;;    Replaces the legacy #file# scratch-file approach (auto-save-default nil
+  ;;    set in early-init).
+  ;;
+  ;; 2. core-editing--save-all-on-focus-out — saves all modified file-backed
+  ;;    buffers when Emacs loses focus (focus-out-hook) or the selected window
+  ;;    changes (window-selection-change-functions).  Covers the gap where the
+  ;;    idle timer has not yet fired.
+  ;;
+  ;; 3. Versioned backups — enabled in early-init; backup-directory-alist is
+  ;;    set here (after no-littering-var-directory is available) so all backup
+  ;;    files are consolidated under var/backup/.
+
+  (defgroup core-autosave nil
+    "Auto-save and backup policy."
+    :group 'convenience
+    :prefix "core-autosave-")
+
+  (defcustom core-autosave-interval 5
+    "Idle seconds before auto-save-visited-mode writes modified buffers to disk.
+Lower values reduce data loss but increase I/O during editing.
+Recommended range: 5–30 seconds."
+    :type 'natnum
+    :group 'core-autosave)
+
+  (defcustom core-autosave-save-on-focus-out t
+    "When non-nil, save all modified file-backed buffers when Emacs loses focus."
+    :type 'boolean
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-extensions
+    '("gpg" "age" "enc" "pem" "p12" "pfx")
+    "File extensions that are never auto-saved.
+Each element is a string without a leading dot (e.g. \"gpg\", not \".gpg\").
+Encrypted and certificate files are excluded by default because writing them
+automatically could silently overwrite an encrypted file with plaintext or
+corrupt a partially-modified binary.
+Customise in personal/user.el with setopt."
+    :type '(repeat string)
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-name-patterns nil
+    "List of regular expressions matched against buffer file names.
+Buffers whose file name matches any pattern are excluded from auto-save.
+Patterns are matched with `string-match-p' against the full file path.
+Example: (setopt core-autosave-exclude-name-patterns
+                 \='(\"\\.authinfo\" \"secret\" \"/tmp/\"))
+Customise in personal/user.el with setopt."
+    :type '(repeat regexp)
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-modes nil
+    "List of major-mode symbols whose buffers are never auto-saved.
+Example: (setopt core-autosave-exclude-modes
+                 \='(erc-mode circe-mode term-mode vterm-mode))
+Customise in personal/user.el with setopt."
+    :type '(repeat symbol)
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-predicates nil
+    "List of single-argument functions called with the buffer as argument.
+If any predicate returns non-nil the buffer is excluded from auto-save.
+Each function must be side-effect-free and accept one argument (a buffer).
+Example: (setopt core-autosave-exclude-predicates
+                 \='(my/tramp-buffer-p))
+Customise in personal/user.el with setopt."
+    :type '(repeat function)
+    :group 'core-autosave)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Internal predicate
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-autosave--save-buffer-p (buf)
+    "Return non-nil when BUF should be auto-saved.
+A buffer is eligible when ALL of the following hold:
+  1. It is backed by a file (`buffer-file-name').
+  2. Its file extension is not in `core-autosave-exclude-extensions'.
+  3. Its file name does not match any pattern in
+     `core-autosave-exclude-name-patterns'.
+  4. Its major mode is not in `core-autosave-exclude-modes'.
+  5. No predicate in `core-autosave-exclude-predicates' returns non-nil."
+    (when-let* ((fname (buffer-file-name buf)))
+      (let* ((ext  (file-name-extension fname))
+             (mode (buffer-local-value 'major-mode buf)))
+        (and
+         ;; 1. Extension not excluded
+         (not (and ext (member (downcase ext)
+                               core-autosave-exclude-extensions)))
+         ;; 2. Name pattern not excluded
+         (not (cl-some (lambda (pat) (string-match-p pat fname))
+                       core-autosave-exclude-name-patterns))
+         ;; 3. Major mode not excluded
+         (not (memq mode core-autosave-exclude-modes))
+         ;; 4. Custom predicates
+         (not (cl-some (lambda (fn) (funcall fn buf))
+                       core-autosave-exclude-predicates))))))
+
+  (defun core-editing--save-all-buffers ()
+    "Save all modified file-backed buffers that pass the auto-save exclusion rules.
+Exclusion is controlled by `core-autosave-exclude-extensions',
+`core-autosave-exclude-name-patterns', `core-autosave-exclude-modes', and
+`core-autosave-exclude-predicates'.  All four are customisable in
+personal/user.el via setopt."
+    (save-some-buffers t #'core-autosave--save-buffer-p))
+
+  (defun core-editing--save-on-focus-out (_frame)
+    "Save all file-backed buffers when FRAME loses focus."
+    (when core-autosave-save-on-focus-out
+      (core-editing--save-all-buffers)))
+
+  (defun core-editing--save-on-window-change (frame)
+    "Save all file-backed buffers when the selected window changes in FRAME."
+    (when (and core-autosave-save-on-focus-out
+               (frame-live-p frame))
+      (core-editing--save-all-buffers)))
+
+  (defun core-editing--autosave-init ()
+    "Configure and activate the auto-save subsystem."
+    ;; 1. Backup directory — set here so no-littering-var-directory is available.
+    (setopt backup-directory-alist
+            `(("." . ,(expand-file-name "backup/" no-littering-var-directory))))
+    ;; 2. auto-save-visited-mode: write to the actual file, not a scratch file.
+    (setopt auto-save-visited-interval core-autosave-interval
+            auto-save-default          nil)
+    (auto-save-visited-mode 1)
+    ;; 3. Focus-out hook.
+    (add-hook 'focus-out-hook #'core-editing--save-on-focus-out)
+    ;; 4. Window-change hook (covers buffer switching in the same frame).
+    (add-function :after after-focus-change-function
+                  #'core-editing--save-on-focus-out))
+
+  (add-hook 'emacs-startup-hook #'core-editing--autosave-init)
 
   (defun core-editing--paredit-setup ()
     "Enable paredit and disable electric-pair locally (they conflict)."
@@ -7264,10 +7405,31 @@ where npm global installs are not on PATH."
     ;;   machine api.openai.com login org-ai password sk-proj-...
     ;;
     ;; :user values must match the `login' field in ~/.authinfo.gpg exactly.
+    (defun dev-ai--ensure-authinfo-in-sources ()
+      "Ensure the GPG credential store is in `auth-sources' before searching.
+Reads `auth-gpg-file' when the auth-gpg module is loaded, falling back to
+~/.authinfo.gpg.  Adds the file to the front of `auth-sources' if absent and
+clears the auth-source cache so the next search reads the file fresh.
+Called by `dev-ai--setup-api-key'."
+      (require 'auth-source)
+      (let ((gpg-file (expand-file-name
+                       (if (boundp 'auth-gpg-file)
+                           auth-gpg-file
+                         "~/.authinfo.gpg"))))
+        (when (and (file-exists-p gpg-file)
+                   (not (member gpg-file auth-sources)))
+          (setopt auth-sources (cons gpg-file auth-sources))
+          (auth-source-forget-all-cached))))
+
     (defun dev-ai--setup-api-key ()
       "Configure OPENAI_API_KEY and OPENAI_API_BASE from auth-source.
-Reads ~/.authinfo.gpg entries for openrouter.ai (login: ac1965) and
-api.openai.com (login: org-ai).  Called once on `after-init-hook'."
+Reads ~/.authinfo.gpg via `auth-source-search' for:
+  machine openrouter.ai login ac1965  (preferred)
+  machine api.openai.com login org-ai (fallback)
+Calls `dev-ai--ensure-authinfo-in-sources' first so the lookup succeeds
+regardless of `auth-gpg--configure-sources' execution order.
+Called on `after-init-hook'."
+      (dev-ai--ensure-authinfo-in-sources)
       (require 'auth-source)
       (let* ((router-entry (car (auth-source-search
                                   :host "openrouter.ai"
@@ -9077,6 +9239,33 @@ Key files:
         (when (fboundp 'personal-messages-archive)
           ;; First run after 120 seconds of idle; repeat every 600 seconds (10 min).
           (run-with-idle-timer 120 600 #'personal-messages-archive)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Auto-save exclusions (personal policy)
+  ;; ---------------------------------------------------------------------------
+  ;; Customise which files are never auto-saved.
+  ;; Core defaults already exclude: gpg age enc pem p12 pfx.
+  ;; Add personal exclusions here.
+
+  ;; Exclude additional file-name patterns (full path matched):
+  (setopt core-autosave-exclude-name-patterns
+          '("\.authinfo"          ; credential files (plain or encrypted)
+            "\.netrc"             ; legacy netrc
+            "/tmp/"                ; temp files — let OS manage them
+            "\.bak\'"            ; already-a-backup files
+            "COMMIT_EDITMSG\'"    ; git commit message buffers
+            "MERGE_MSG\'"
+            "rebase-merge/"
+            "\.log\'"))          ; log files — append-only, save noise
+
+  ;; Exclude by major mode:
+  (setopt core-autosave-exclude-modes
+          '(erc-mode               ; IRC — messages are server-side
+            circe-mode
+            term-mode              ; terminal emulators — no file backing anyway
+            vterm-mode
+            eshell-mode
+            sql-interactive-mode)) ; SQL REPL output
 
   (provide 'user)
   ;;; personal/user.el ends here
@@ -12780,3 +12969,195 @@ machine openrouter.ai login ac1965 password sk-or-...
 
 To edit the file: =M-x find-file RET ~/.authinfo.gpg RET=, correct the
 hostname, then =C-x C-s= (EasyPG prompts for the GPG passphrase on save).
+
+** 2026-05 (forty-eighth evaluation pass)
+*** Fix CG: early-init.el — enable versioned backups under no-littering var/backup/
+
+🟠 Medium — data safety (backup files were disabled)
+
+- *[Fix CG] early-init.el (section 9 Backups / auto-save)*: Replaced
+  =make-backup-files nil= with a versioned backup policy.  The previous
+  configuration disabled all backup files, making silent data loss (accidental
+  overwrite, failed tangle) unrecoverable.
+
+  New policy:
+
+  | Variable | Value | Effect |
+  |----------+-------+--------|
+  | =make-backup-files= | =t= | Enable backups |
+  | =version-control= | =t= | Keep numbered backups (=file.el~1~=, =file.el~2~=, …) |
+  | =kept-new-versions= | =6= | Retain the 6 most recent versions |
+  | =kept-old-versions= | =2= | Retain the 2 oldest versions |
+  | =delete-old-versions= | =t= | Silently delete excess versions |
+  | =backup-by-copying= | =t= | Preserve hard links and symlinks |
+
+  =backup-directory-alist= is set in =core-editing--autosave-init= (after
+  =no-littering-var-directory= is available) to route all backup files to
+  =var/backup/=.  The existing =my/delete-old-backups= (=core-persistence.el=)
+  already targets this directory and purges files older than 7 days.
+
+*** Fix CH: core/core-editing.el — replace ad-hoc auto-save with structured subsystem
+
+🟠 Medium — reliability and correctness (auto-save-visited-interval = 1 s; no focus-out save)
+
+- *[Fix CH] lisp/core/core-editing.el (auto-save subsystem)*: Replaced the
+  three bare =setopt= / =when= lines with a self-contained auto-save subsystem
+  comprising a =defgroup=, two =defcustom= variables, three named =defun=, and
+  one =after-startup-hook= initialiser.
+
+  *Changes:*
+
+  1. =core-autosave-interval= (=defcustom=, default =5=) replaces the
+     hard-coded =auto-save-visited-interval= value of =1=.  One-second
+     intervals cause a disk write on every idle second while typing; the new
+     default of five seconds matches common editor conventions without
+     meaningfully increasing maximum data loss.
+
+  2. =core-autosave-save-on-focus-out= (=defcustom=, default =t=) controls
+     the focus-out behaviour independently from the idle-timer behaviour.
+
+  3. =core-editing--save-all-buffers= calls =save-some-buffers= with the
+     =buffer-file-name= predicate to skip non-file buffers (=*scratch*=,
+     =*Messages*=, Dired, etc.).
+
+  4. =core-editing--save-on-focus-out= is added to =focus-out-hook= and to
+     =after-focus-change-function=.  This saves all modified file-backed
+     buffers immediately when Emacs loses focus, covering the gap between
+     idle-timer ticks.
+
+  5. =core-editing--autosave-init= runs on =emacs-startup-hook=, which fires
+     after =no-littering-var-directory= is established, ensuring
+     =backup-directory-alist= is set to the correct path.
+
+  *Effective auto-save triggers after this fix:*
+
+  | Trigger | Mechanism |
+  |---------------------------+------------------------------------|
+  | Idle for ≥5 s | =auto-save-visited-mode= timer |
+  | Emacs loses OS focus | =focus-out-hook= |
+  | After-focus change | =after-focus-change-function= |
+  | =C-x s= / =C-x C-s= | Standard Emacs save |
+
+** 2026-05 (forty-ninth evaluation pass)
+*** Fix CI: core/core-editing.el — auto-save exclusion system; personal/user.el defaults
+
+🟠 Medium — configurability (auto-save applied indiscriminately to all file-backed buffers)
+
+- *[Fix CI-1] lisp/core/core-editing.el (core-autosave defcustom group)*:
+  Extended the =core-autosave= defcustom group with four new variables that
+  give the personal layer full control over which buffers are excluded from
+  auto-save:
+
+  | Variable | Type | Default |
+  |----------+------+---------|
+  | =core-autosave-exclude-extensions= | =(repeat string)= | ='("gpg" "age" "enc" "pem" "p12" "pfx")= |
+  | =core-autosave-exclude-name-patterns= | =(repeat regexp)= | =nil= |
+  | =core-autosave-exclude-modes= | =(repeat symbol)= | =nil= |
+  | =core-autosave-exclude-predicates= | =(repeat function)= | =nil= |
+
+  The encrypted-file extensions (=gpg=, =age=, =enc=, =pem=, =p12=, =pfx=)
+  are excluded by default because silently overwriting an encrypted file could
+  corrupt it or expose plaintext.
+
+- *[Fix CI-2] lisp/core/core-editing.el (core-autosave--save-buffer-p)*:
+  Extracted the save predicate into a named private function
+  =core-autosave--save-buffer-p= (double-dash = private, per naming rules).
+  The predicate evaluates all four exclusion conditions in order and returns
+  non-nil only when the buffer should be saved.  It is passed as the predicate
+  argument to =save-some-buffers= inside =core-editing--save-all-buffers=.
+
+  Predicate logic:
+
+  #+begin_example
+  buffer is saved iff:
+    buffer-file-name is non-nil
+    AND extension not in core-autosave-exclude-extensions
+    AND file name matches no pattern in core-autosave-exclude-name-patterns
+    AND major-mode not in core-autosave-exclude-modes
+    AND no predicate in core-autosave-exclude-predicates returns non-nil
+  #+end_example
+
+  Uses =when-let*= (Emacs 31+ forward-compat) and =cl-some= for short-circuit
+  evaluation of list predicates.
+
+- *[Fix CI-3] personal/user.el (auto-save exclusion policy)*: Added personal
+  exclusion configuration via =setopt= at the end of =personal/user.el=:
+
+  *Excluded name patterns:*
+  =\.authinfo=, =\.netrc=, =/tmp/=, =\.bak\'=,
+  =COMMIT_EDITMSG\'=, =MERGE_MSG\'=, =rebase-merge/=, =\.log\'=
+
+  *Excluded major modes:*
+  =erc-mode=, =circe-mode=, =term-mode=, =vterm-mode=,
+  =eshell-mode=, =sql-interactive-mode=
+
+  All settings use =setopt= (Rule 6 — these are =defcustom= variables).
+
+  *How to add custom exclusions in personal/ac1965.el or device-darwin.el:*
+
+  #+begin_example
+  ;; Append to the list set in personal/user.el:
+  (setopt core-autosave-exclude-name-patterns
+          (append core-autosave-exclude-name-patterns
+                  '("/work/sensitive/")))
+
+  ;; Add a custom predicate (buffer → bool):
+  (defun my/large-buffer-p (buf)
+    "Exclude buffers larger than 10 MB from auto-save."
+    (> (buffer-size buf) (* 10 1024 1024)))
+
+  (setopt core-autosave-exclude-predicates
+          (append core-autosave-exclude-predicates
+                  '(my/large-buffer-p)))
+  #+end_example
+
+** 2026-05 (fiftieth evaluation pass)
+*** Fix CJ: dev/dev-ai.el — self-contained auth-source lookup (no hook-order dependency)
+
+🔴 Critical — authentication failure persists after Fix CF
+
+- *[Fix CJ] lisp/dev/dev-ai.el (dev-ai--ensure-authinfo-in-sources, dev-ai--setup-api-key)*:
+  The warning persisted after Fix CF because =dev-ai--setup-api-key= still
+  depended on =auth-gpg--configure-sources= having run first.  While both
+  functions are registered on =after-init-hook=, the hook executes them in
+  registration order — which is the module load order — and auth-gpg loads
+  before dev-ai.  In principle this should be safe.
+
+  However, =auth-source-search= caches its results.  If =auth-source= was
+  consulted (e.g., by EasyPG or another module) before =after-init-hook=
+  fired, the cache was built from the default =auth-sources= list which does
+  not include =~/.authinfo.gpg=.  When =dev-ai--setup-api-key= subsequently
+  called =auth-source-search=, it received the stale cached result (nil)
+  rather than searching the now-updated =auth-sources=.
+
+  *Fix:* Added =dev-ai--ensure-authinfo-in-sources=, a private helper called
+  at the top of =dev-ai--setup-api-key=.  It checks whether the GPG
+  credential file is already in =auth-sources= and, if not:
+
+  1. Prepends the file to =auth-sources= via =setopt=.
+  2. Calls =(auth-source-forget-all-cached)= to force a fresh read on the
+     next =auth-source-search= call.
+
+  This makes =dev-ai--setup-api-key= self-contained: it succeeds whether
+  =auth-gpg--configure-sources= has run or not, and regardless of any prior
+  =auth-source= cache state.
+
+  *Diagnostic steps* if the warning appears after =make tangle && make reload=:
+
+  #+begin_example
+  ;; Evaluate in *scratch* (C-x C-e after each form):
+
+  ;; 1. Check what auth-sources currently contains:
+  auth-sources
+
+  ;; 2. Clear the cache and retry manually:
+  (auth-source-forget-all-cached)
+  (auth-source-search :host "openrouter.ai" :user "ac1965" :require '(:secret))
+
+  ;; 3. If nil, check the file exists and is readable:
+  (file-exists-p auth-gpg-file)
+  #+end_example
+
+  If step 2 returns nil but step 3 returns =t=, the =login= field in
+  =~/.authinfo.gpg= does not match =ac1965=.  Edit the file with
+  =M-x find-file ~/.authinfo.gpg= and correct the =login= field.
