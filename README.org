@@ -2772,19 +2772,17 @@ Exclusion is controlled by `core-autosave-exclude-extensions',
 personal/user.el via setopt."
     (save-some-buffers t #'core-autosave--save-buffer-p))
 
-  (defun core-editing--save-on-focus-out (_frame)
-    "Save all file-backed buffers when FRAME loses focus."
+  (defun core-editing--save-on-focus-out ()
+    "Save all file-backed buffers when Emacs loses focus.
+Called from `focus-out-hook' and `after-focus-change-function',
+both of which use zero-argument calling convention."
     (when core-autosave-save-on-focus-out
       (core-editing--save-all-buffers)))
 
-  (defun core-editing--save-on-window-change (frame)
-    "Save all file-backed buffers when the selected window changes in FRAME."
-    (when (and core-autosave-save-on-focus-out
-               (frame-live-p frame))
-      (core-editing--save-all-buffers)))
-
   (defun core-editing--autosave-init ()
-    "Configure and activate the auto-save subsystem."
+    "Configure and activate the auto-save subsystem.
+Idempotent: repeated calls do not register duplicate hooks because
+`add-hook' and `add-function' check for existing entries."
     ;; 1. Backup directory — set here so no-littering-var-directory is available.
     (setopt backup-directory-alist
             `(("." . ,(expand-file-name "backup/" no-littering-var-directory))))
@@ -2792,9 +2790,14 @@ personal/user.el via setopt."
     (setopt auto-save-visited-interval core-autosave-interval
             auto-save-default          nil)
     (auto-save-visited-mode 1)
-    ;; 3. Focus-out hook.
+    ;; 3. focus-out-hook — zero-argument; fired when the OS takes focus away.
     (add-hook 'focus-out-hook #'core-editing--save-on-focus-out)
-    ;; 4. Window-change hook (covers buffer switching in the same frame).
+    ;; 4. after-focus-change-function — also zero-argument (Emacs calls it
+    ;;    with no arguments; the frame is NOT passed as an argument).
+    ;;    Remove any stale registration before adding to prevent duplicates
+    ;;    across config reloads (e.g. make reload without restarting Emacs).
+    (remove-function after-focus-change-function
+                     #'core-editing--save-on-focus-out)
     (add-function :after after-focus-change-function
                   #'core-editing--save-on-focus-out))
 
@@ -13446,6 +13449,86 @@ hostname, then =C-x C-s= (EasyPG prompts for the GPG passphrase on save).
   (setopt core-autosave-exclude-predicates
           (append core-autosave-exclude-predicates
                   '(my/large-buffer-p)))
+  #+end_example
+
+** 2026-05 (fifty-second evaluation pass)
+*** Fix CL: core/core-editing.el — separate focus-out hook functions by arity
+
+🔴 Critical — runtime error on every focus-out event
+
+- *[Fix CL] lisp/core/core-editing.el (core-editing--save-on-focus-out,
+  core-editing--save-on-focus-change)*: The single function
+  =core-editing--save-on-focus-out (_frame)= was registered on both
+  =focus-out-hook= and =after-focus-change-function=.  These two hooks use
+  incompatible calling conventions:
+
+  | Hook | Arity | Convention |
+  |------+-------+------------|
+  | =focus-out-hook= | 0 | Standard hook; functions receive no arguments |
+  | =after-focus-change-function= | 1 | Passes the affected frame as first argument |
+
+  Calling a 1-argument function from =focus-out-hook= raised:
+  =Wrong number of arguments: #[(_frame) ...], 0=
+  on every focus-out event (window switch, app switch, screensaver).
+
+  *Fix:* Split into two named functions with correct arities:
+
+  | Function | Arity | Registered on |
+  |----------+-------+---------------|
+  | =core-editing--save-on-focus-out= | 0 | =focus-out-hook= |
+  | =core-editing--save-on-focus-change= | 1 (=_frame=) | =after-focus-change-function= |
+
+  Both functions delegate to =core-editing--save-all-buffers= after checking
+  =core-autosave-save-on-focus-out=.  The defunct =core-editing--save-on-window-change=
+  (same body, never registered) is also removed.
+
+** 2026-05 (fifty-third evaluation pass)
+*** Fix CM: core/core-editing.el — after-focus-change-function is zero-argument; remove duplicate registration
+
+🔴 Critical — Fix CL introduced a second wrong-arity registration
+
+- *[Fix CM] lisp/core/core-editing.el (core-editing--save-on-focus-out,
+  core-editing--autosave-init)*: Fix CL incorrectly assumed that
+  =after-focus-change-function= receives a frame argument.  The Emacs
+  documentation (=C-h v after-focus-change-function=) states it is called
+  with *no arguments*; it is the caller’s responsibility to inspect
+  =(frame-focus-state)= if frame information is needed.  Fix CL therefore
+  introduced a new 1-argument function =core-editing--save-on-focus-change=
+  registered on a 0-argument hook, reproducing the original crash.
+
+  Additionally, =core-editing--autosave-init= runs on =emacs-startup-hook= and
+  may be re-executed across =make reload= sessions without a full Emacs restart.
+  =add-function= does *not* deduplicate: each call appends another copy of the
+  function to =after-focus-change-function=, causing repeated saves per event.
+
+  *Changes:*
+
+  1. =core-editing--save-on-focus-change= removed entirely.  Its body was
+     identical to =core-editing--save-on-focus-out=; the only difference was
+     the erroneous =(_frame)= parameter.
+
+  2. =core-editing--save-on-focus-out= reverts to a zero-argument function and
+     is now registered on *both* hooks:
+
+     | Hook | Arity | Registration |
+     |------+-------+--------------|
+     | =focus-out-hook= | 0 | =add-hook= (idempotent by default) |
+     | =after-focus-change-function= | 0 | =remove-function= then =add-function= |
+
+  3. =core-editing--autosave-init= calls =remove-function= before =add-function=
+     so that repeated invocations (reload without restart) never accumulate
+     duplicate entries.
+
+  *Immediate workaround* (without restarting Emacs):
+
+  #+begin_example
+  ;; Evaluate in *scratch* (C-x C-e):
+  (remove-function after-focus-change-function
+                   #'core-editing--save-on-focus-out)
+  (remove-function after-focus-change-function
+                   #'core-editing--save-on-focus-change)
+  (add-function :after after-focus-change-function
+                #'core-editing--save-on-focus-out)
   #+end_example
 
 ** 2026-05 (fifty-first evaluation pass)
