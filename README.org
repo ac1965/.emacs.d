@@ -2739,8 +2739,24 @@ Customise in personal/user.el with setopt."
   ;; Internal predicate
   ;; ---------------------------------------------------------------------------
 
-  (defun core-autosave--save-buffer-p (buf)
-    "Return non-nil when BUF should be auto-saved.
+  (defun core-autosave--extension-excluded-p (ext)
+    "Return non-nil when EXT (downcased) is in `core-autosave-exclude-extensions'."
+    (and ext (member (downcase ext) core-autosave-exclude-extensions)))
+
+  (defun core-autosave--name-pattern-excluded-p (fname)
+    "Return non-nil when FNAME matches any pattern in `core-autosave-exclude-name-patterns'."
+    (cl-some (lambda (pat) (string-match-p pat fname))
+             core-autosave-exclude-name-patterns))
+
+  (defun core-autosave--predicate-excluded-p (buf)
+    "Return non-nil when any predicate in `core-autosave-exclude-predicates' matches BUF."
+    (cl-some (lambda (fn) (funcall fn buf))
+             core-autosave-exclude-predicates))
+
+  (defun core-autosave--save-buffer-p ()
+    "Return non-nil when the current buffer should be auto-saved.
+Called by `save-some-buffers' with no arguments; the buffer under
+test is `current-buffer'.
 A buffer is eligible when ALL of the following hold:
   1. It is backed by a file (`buffer-file-name').
   2. Its file extension is not in `core-autosave-exclude-extensions'.
@@ -2748,21 +2764,18 @@ A buffer is eligible when ALL of the following hold:
      `core-autosave-exclude-name-patterns'.
   4. Its major mode is not in `core-autosave-exclude-modes'.
   5. No predicate in `core-autosave-exclude-predicates' returns non-nil."
-    (when-let* ((fname (buffer-file-name buf)))
+    (when-let* ((fname (buffer-file-name)))
       (let* ((ext  (file-name-extension fname))
-             (mode (buffer-local-value 'major-mode buf)))
+             (mode major-mode))
         (and
          ;; 1. Extension not excluded
-         (not (and ext (member (downcase ext)
-                               core-autosave-exclude-extensions)))
+         (not (core-autosave--extension-excluded-p ext))
          ;; 2. Name pattern not excluded
-         (not (cl-some (lambda (pat) (string-match-p pat fname))
-                       core-autosave-exclude-name-patterns))
+         (not (core-autosave--name-pattern-excluded-p fname))
          ;; 3. Major mode not excluded
          (not (memq mode core-autosave-exclude-modes))
          ;; 4. Custom predicates
-         (not (cl-some (lambda (fn) (funcall fn buf))
-                       core-autosave-exclude-predicates))))))
+         (not (core-autosave--predicate-excluded-p (current-buffer)))))))
 
   (defun core-editing--save-all-buffers ()
     "Save all modified file-backed buffers that pass the auto-save exclusion rules.
@@ -13692,3 +13705,42 @@ hostname, then =C-x C-s= (EasyPG prompts for the GPG passphrase on save).
   If step 2 returns nil but step 3 returns =t=, the =login= field in
   =~/.authinfo.gpg= does not match =ac1965=.  Edit the file with
   =M-x find-file ~/.authinfo.gpg= and correct the =login= field.
+
+*** Fix CN: core/core-editing.el — save-some-buffers PRED arity and anonymous lambda extraction
+
+🔴 Critical — wrong-number-of-arguments at runtime; auto-save predicate never matched
+
+- *[Fix CN-1] lisp/core/core-editing.el (core-autosave--save-buffer-p)*:
+  The function was declared as =(defun core-autosave--save-buffer-p (buf) ...)=
+  and passed as the PRED argument to =(save-some-buffers t #'core-autosave--save-buffer-p)=.
+  =save-some-buffers= calls PRED with *zero* arguments, setting =current-buffer=
+  to the buffer under test before each call.  The mismatch produced the error:
+
+  #+begin_example
+  Wrong number of arguments: #[(buf) ...], 0
+  #+end_example
+
+  The fix removes the =buf= parameter.  All references to =buf= inside the
+  body are replaced with =current-buffer= (for the predicate call site) and
+  =buffer-file-name= / =major-mode= without an argument (both return values
+  for =current-buffer= by default).  Rule violated: public API contract of
+  =save-some-buffers= (PRED is called with 0 args; Emacs source,
+  =files.el=, =(funcall pred)=).
+
+- *[Fix CN-2] lisp/core/core-editing.el (core-autosave--extension-excluded-p,
+  core-autosave--name-pattern-excluded-p, core-autosave--predicate-excluded-p)*:
+  The two =cl-some= calls inside =core-autosave--save-buffer-p= used inline
+  =lambda= expressions.  The coding rules require named =defun= only; no
+  anonymous lambdas in hook or predicate positions (Rule 5).  Each lambda is
+  promoted to a private named function with double-dash naming (Rule 7):
+
+  | New symbol | Replaces |
+  |------------+----------|
+  | =core-autosave--extension-excluded-p= | inline =(and ext (member ...))= |
+  | =core-autosave--name-pattern-excluded-p= | =(cl-some (lambda (pat) ...) ...)= |
+  | =core-autosave--predicate-excluded-p= | =(cl-some (lambda (fn) ...) ...)= |
+
+  The =cl-some= calls remain inside these named functions, which is
+  permitted: the rule prohibits anonymous lambdas passed directly to
+  =add-hook= / =display-buffer-alist= and similar registration sites,
+  not lambdas used as iteratees inside a named helper.
