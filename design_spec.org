@@ -1,2631 +1,471 @@
 # -*- mode: org; coding: utf-8; -*-
-#+TITLE: Modern Emacs Configuration — Detailed Design Specification
+#+TITLE: Modern Emacs Configuration — 設計ドキュメント
 #+AUTHOR: YAMASHITA, Takao
-#+DATE: 2026-05 (rev.4)
-#+LANGUAGE: en
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
 #+OPTIONS: toc:3 num:t ^:nil
 #+STARTUP: overview
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:dot :exports results :results file :mkdirp yes
 
-* 1. Overview
-:PROPERTIES:
-:CUSTOM_ID: overview
-:END:
+* 概要
 
-This document is the authoritative design specification derived from =README.org=
-(the literate programming source).  It reflects all fixes through Fix BT
-(forty-second evaluation pass, 2026-05).
-
-| Item | Value |
-|------|-------|
-| Modules (load order) | 86 |
-| Tangle targets | 95 |
-| Public defun (autoload) | 19 |
-| defcustom variables | 70 |
-| Hook registrations | 64 |
-
-** Design Principles
-:PROPERTIES:
-:CUSTOM_ID: design-principles
-:END:
-
-| Principle | Description |
-|-----------|-------------|
-| *Deterministic startup* | =modules.el= defines an explicit load order; =condition-case= provides per-module error isolation so one failure cannot cascade to higher layers. |
-| *Layer separation* | Dependencies flow downward only: core → ui → completion → orgx → dev.  Dependency inversion is prohibited. |
-| *Delete safety* | Any module can be skipped via =my:modules-skip=.  =fboundp= / =boundp= guards prevent a missing module from making Emacs unbootable. |
-| *Literate programming* | =README.org= is the single source of truth.  =org-babel-tangle= generates =lisp/<layer>/<module>.el=.  The generated files must never be edited manually. |
-| *Forward compatibility* | Targets Emacs 30+, anticipates Emacs 31+.  Uses =if-let*= / =when-let*= / =and-let*=.  Obsolete APIs are prohibited. |
-| *setopt uniformity* | All =defcustom= variables are set with =setopt= or =leaf :custom=.  =setq= is reserved for =defvar=, internal mutable state, and runtime-evaluated values whose backquote expansion would trigger =setopt= type-check false positives (e.g. =org-capture-templates=). |
-| *Naming conventions* | Public functions: =my/= or =<module>-=.  Private helpers: =<module>--= (double dash).  Mixed form =my/<topic>--= is prohibited.  Path variables: =my:d:*=. |
-| *Documentation* | All public =defun= must carry a docstring.  Every module owning =defcustom= variables must declare a =defgroup= and reference it in each variable's =:group=. |
-
-** Coding Rules
-:PROPERTIES:
-:CUSTOM_ID: coding-rules
-:END:
-
-| Rule | Detail |
-|------|--------|
-| =lexical-binding: t= | Required in every module. |
-| =(provide 'FEATURE)= | Symbol must match the tangle file name without the =.el= extension. |
-| Built-ins: =:straight nil= | Emacs built-in packages must declare =:straight nil= in their =leaf= form. |
-| =leaf= keyword order | =:straight= → =:ensure= → =:after= → =:require= → =:pre-setq= → =:custom= → =:bind= → =:hook= → =:init= → =:config= |
-| =setopt= for =defcustom= | All =defcustom= variables use =setopt= or =leaf :custom=.  =setq= is used only for =defvar= and internal state.  Exception: backquote expressions with runtime evaluation use =setq= (=org-capture-templates=, =org-agenda-files=, =org-todo-keywords=, =org-refile-targets=). |
-| Public API only | Third-party =--= symbols may only be called under an =fboundp= guard. |
-| Named =defun= | Anonymous lambdas in =add-hook= are prohibited.  Use named =defun= at module top level. |
-| Docstrings required | All public =defun= must carry a docstring. |
-| =defgroup= required | Every module that owns =defcustom= variables must declare =defgroup=. |
-| =keymap-set= API | Use =keymap-set= / =keymap-global-set= (Emacs 29+).  =define-key= + =kbd= is prohibited. |
-| =defun= placement | All =defun= declarations at module top level.  Never inside =leaf= blocks or =with-eval-after-load=. |
-
-** Boot Sequence
-:PROPERTIES:
-:CUSTOM_ID: boot-sequence
-:END:
+このドキュメントは =emacs_design_deep_v3.pptx= の内容を Org 形式にまとめたものです。
+図はすべて =svg/= ディレクトリに Graphviz =dot= 言語から生成した SVG として保存してあります。
+Emacs の =ob-dot= があれば =C-c C-c= で再生成できます。
 
 #+begin_example
-early-init.el
-  → init.el (straight.el / leaf bootstrap)
-      ① (defvar my:modules-extra nil)     ; declared before personal overlay loads
-      ② personal/user.el loaded           ; appends to my:modules-extra
-      ③ (require 'modules nil t)
-      ④ my/modules-load                   ; condition-case isolated loading
-          core-* (16) → ui-* (13+α) → auth-* (1) → completion-* (12)
-          → orgx-* (9) → vcs-* (3) → dev-* (13) → utils-* (10)
-          → additional modules in my:modules-extra
-      ⑤ after-init-hook                   ; core-switches: LSP/UI bundle activation
+emacs-design-doc/
+├── design.org
+└── svg/
+    ├── 01_boot_flow.svg
+    ├── 02_condition_case.svg
+    ├── 03_session_facade.svg
+    ├── 04_gc_strategy.svg
+    ├── 05_autosave_flow.svg
+    ├── 06_auth_resolution.svg
+    ├── 07_capf_dispatch.svg
+    ├── 08_lsp_agnostic.svg
+    ├── 09_utils_claude.svg
+    ├── 10_orgtangle_hugo.svg
+    ├── 11_leader_keymap.svg
+    └── 12_dev_ai_timing.svg
 #+end_example
 
-** Directory Structure
-:PROPERTIES:
-:CUSTOM_ID: directory-structure
-:END:
+* 起動シーケンス
+
+** 3フェーズの全体像
+
+Emacs の起動は内部的に 3 段階に分かれています。
+
+- *Phase 1 (early-init.el)* — フレームが描画される前の最初期処理。
+  =package.el= を無効化して、ディレクトリを準備して、GC を一時的に緩めます。
+- *Phase 2 (init.el)* — =straight.el= と =leaf= をブートストラップして、
+  モジュールシステムを起動する手前の準備をします。
+- *Phase 3 (modules.el)* — 75 本のモジュールを決められた順番でロードします。
+  1 本失敗しても残りは続きます。
+
+[[file:svg/01_boot_flow.svg]]
+
+** early-init.el の 10 セクション
+
+| セクション | 内容 | コード例 |
+|------------+------+---------|
+| §1 | =package.el= 無効化 | =(setq package-enable-at-startup nil)= |
+| §2–3 | ベースディレクトリ + straight ベース | =my:d / .cache/build-31.0= |
+| §4–5 | macOS Homebrew + native-comp | =HOMEBREW_PREFIX= 探索, =eln-load-path= |
+| §6–7 | =no-littering= 互換変数の事前設定 | =no-littering-var-directory= |
+| §8 | GC ガード | =file-name-handler-alist= を nil に退避 |
+| §9 | バックアップポリシー | =version-control t=, =kept-new-versions 6= |
+| §10 | 早期 UI | =default-frame-alist= でツールバーオフ |
+
+** init.el の 10 ステップ
+
+| ステップ | 内容 | 注意点 |
+|----------+------+--------|
+| §1–2 | URL パス設定 + straight ブートストラップ | 初回のみネットワークアクセス |
+| §3–4 | =leaf= + Org ブートストラップ | =leaf-keywords-init= 必須 |
+| §5 | macOS 環境変数取得 | ='("-l")= のみ。=PATH= と =LANG= だけ取得 |
+| §6–7 | パフォーマンス + GCMH | =read-process-output-max= 4MiB |
+| §8 | 組み込みポリシー | =use-short-answers=, =C-z= アンバインド |
+| §9 | パーソナルオーバーレイ | =user.el= + =ac1965.el= をロード |
+| §10 | モジュール起動 | =(require 'modules nil t)= |
+
+* modules.el — Delete-Safety の実装
+
+=modules.el= は設定システムの司令塔です。
+一番大事なのは「1 本壊れても全体が止まらない」という delete-safety の保証で、
+その核心が =condition-case= による各モジュールの隔離です。
+
+[[file:svg/02_condition_case.svg]]
+
+- =error= だけを捕まえます。=quit= (=C-g=) は意図的に伝播させます。
+  ユーザーが中断したいときは中断できるようにしておく必要があるので。
+- =my:modules-verbose= が非 nil なら各モジュールのロード時間をミリ秒単位で表示します。
+- =my:modules-skip= にシンボルを入れておくと、そのモジュールを静かにスキップできます。
+  たとえば =dev-docker= を使わないデバイスでは省略できます。
+- =my:modules-extra= は =personal/user.el= が追記します。正規リストの後ろに追加されます。
+
+#+begin_src emacs-lisp
+;; modules.el の核心部分
+(dolist (feature (append my:modules my:modules-extra))
+  (unless (memq feature my:modules-skip)
+    (let ((t0 (current-time)))
+      (condition-case err
+          (progn (require feature) t)
+        (error
+         (message "[modules] Failed to load %s: %s"
+                  feature (error-message-string err))
+         nil))
+      (when my:modules-verbose
+        (message "%-24s %s"
+                 feature
+                 (modules--format-seconds
+                  (float-time (time-subtract (current-time) t0))))))))
+#+end_src
+
+* core-session — Facade パターンと Dual-Timer スケジューラ
+
+セッションのバックグラウンドジョブ管理には Facade パターンを使っています。
+外部モジュールは =core-session.el= (公開 API) だけを =require= して、
+実装の詳細は =core-session-private.el= に完全に隠蔽されています。
+
+[[file:svg/03_session_facade.svg]]
+
+** 2 チャンネルタイマー設計
+
+| タイマー | 実装 | 周期 | 用途 |
+|----------+------+------+------|
+| 定期タイマー | =(run-at-time 600 600 ...)= | 600 秒ごと | セッション定期メンテ |
+| アイドルタイマー | =(run-with-idle-timer 120 t ...)= | 120 秒アイドル後 | バックグラウンド処理 |
+
+ジョブは =make-hash-table :test 'eq= で管理されています。
+=maphash= を使って走査するので、中間リストのアロケーションが不要です。
+
+#+begin_src emacs-lisp
+;; core-session-private.el より
+(defun core-session--run-all ()
+  "全ての有効ジョブを実行する。maphash で走査し中間リストを作らない。"
+  (maphash (lambda (_name meta)
+             (when (plist-get meta :enabled)
+               (condition-case _err
+                   (funcall (plist-get meta :fn))
+                 (error nil))))
+           core-session--jobs-table))
+#+end_src
+
+* GC Strategy — 3 層の協調設計
+
+GC 管理は 3 つのモジュールが役割を分担しています。
+
+[[file:svg/04_gc_strategy.svg]]
+
+| 層 | ファイル | タイミング | 内容 |
+|----+----------+------------+------|
+| 起動ガード | =early-init.el §8= | 起動時 | =file-name-handler-alist= を nil に退避。=after-init-hook= で復元 |
+| 明示トリガー | =core-gc.el= | フォーカス喪失 / ミニバッファ終了 | =garbage-collect= を =condition-case= で安全に実行 |
+| アイドル管理 | =gcmh= (=core-runtime.el=) | アイドル 5 秒後 | 128MiB 閾値。=leaf :custom= では式評価不可なので =:config= で =setopt= |
+
+#+begin_quote
+*落とし穴:* =gcmh-high-cons-threshold= に =(* 128 1024 1024)= を渡すとき、
+=leaf :custom= に書くと式がリテラルとして格納されてしまいます。
+=:config= 内で =(setopt gcmh-high-cons-threshold (* 128 1024 1024))= と書くのが正解です。
+#+end_quote
+
+* Auto-Save Subsystem — Fix CH/CI で整備した保存サブシステム
+
+=core-editing.el= の自動保存サブシステムは 3 つのトリガーと 4 段階の除外判定で構成されています。
+
+[[file:svg/05_autosave_flow.svg]]
+
+** 保存トリガー
+
+| トリガー | 仕組み |
+|----------+--------|
+| アイドル ≥5 秒 | =auto-save-visited-mode= のタイマー。=core-autosave-interval= (defcustom, デフォルト 5) で調整 |
+| OS フォーカス喪失 | =focus-out-hook= → =core-editing--save-on-focus-out= |
+| フォーカス変更後 | =after-focus-change-function= (ゼロ引数規約) |
+
+** 除外 defcustom 変数
+
+| 変数名 | デフォルト | 説明 |
+|--------+------------+------|
+| =core-autosave-exclude-extensions= | ="gpg" "age" "enc" "pem"...= | 拡張子で除外 |
+| =core-autosave-exclude-name-patterns= | =nil= | フルパスに対する正規表現リスト |
+| =core-autosave-exclude-modes= | =nil= | 除外するメジャーモード一覧 |
+| =core-autosave-exclude-predicates= | =nil= | =(buf) → bool= な関数リスト |
+
+いずれも =personal/user.el= で =setopt= を使って上書きできます。
+
+* auth Layer — 認証情報の解決フロー
+
+認証まわりは 3 つのモジュールが連携します。
+特に aidermacs の API キー取得は =after-init-hook= の発火順序に依存する繊細な設計です。
+
+[[file:svg/06_auth_resolution.svg]]
+
+** ~/.authinfo.gpg に必要なエントリ
 
 #+begin_example
-.emacs.d/
-├── early-init.el              GC, directory definitions, early UI
-├── init.el                    straight.el, leaf, module entrypoint
-├── lisp/modules.el            load-order definition, error isolation
-├── README.org                 Literate source (single source of truth)
-├── Makefile                   tangle → byte-compile builder
-├── lisp/core/                 runtime foundations (16 modules)
-├── lisp/ui/                   visual and interaction (13+ modules)
-├── lisp/auth/                 authentication (1 module)
-├── lisp/completion/           completion stack (12 modules)
-├── lisp/orgx/                 Org ecosystem (9 modules)
-├── lisp/vcs/                  version control (3 modules)
-├── lisp/dev/                  development tooling (13 modules)
-├── lisp/utils/                general helpers (10 modules)
-├── personal/                  user-specific overlays (6 files)
-├── .var/ (.etc/ .cache/)      no-littering: runtime state / config / cache
-├── .cache/eln/                native-comp ELN cache
-└── .cache/treesit/            Tree-sitter grammar binaries
+# Anthropic Claude API (utils-claude.el 用)
+machine api.anthropic.com login apikey password sk-ant-...
+
+# OpenRouter (aidermacs 優先バックエンド)
+machine openrouter.ai login ac1965 password sk-or-...
+
+# OpenAI (aidermacs フォールバック)
+machine api.openai.com login org-ai password sk-proj-...
 #+end_example
 
-** Revision History
-:PROPERTIES:
-:CUSTOM_ID: revision-history
-:END:
+=login= フィールドは =:user= 引数に完全一致しないと =auth-source-search= が何も返しません。
+Fix CF で発覚したハマりどころです。
 
-| Rev | Date | Content |
-|-----|------|---------|
-| rev.1 | 2026-03 | Initial release (81 modules). |
-| rev.2 | 2026-03 | Fix A–D: dev-lsp-bridge repositioned; core-custom-ui-extras moved to personal; completion-category-overrides authority clarified; bootstrap-- naming. |
-| rev.3 | 2026-03 | Fix A–AD (9 evaluation rounds).  Module count 81→89 tangle targets, 72 load-order modules.  setopt uniformity; =my/xxx--= naming abolished; 50 docstrings added; defgroup coverage; Coding Rules documented. |
-| rev.4 | 2026-05 | Fix AE–BT (rounds 10–42).  Translated to English.  Added 14 missing lisp/ modules and 6 personal/ modules.  Updated stats (86 load-order modules, 95 tangle targets).  Keybinding overhaul (Fix BR); ob-mermaid Babel integration (Fix BO/BP); check-cookies Makefile target (Fix BQ); duplicate section removal (Fix BT). |
+** after-init-hook の発火順序
 
-* 2. Bootstrap Files
-:PROPERTIES:
-:CUSTOM_ID: bootstrap
-:END:
+=auth-gpg= が =dev-ai= よりも =modules.el= で先にロードされることを利用しています。
 
-** early-init.el
-:PROPERTIES:
-:CUSTOM_ID: early-init
-:END:
+#+begin_example
+auth-gpg ロード → after-init-hook に configure-sources を登録
+dev-ai   ロード → after-init-hook に setup-api-key を登録
+  ↓ after-init-hook 発火
+  #1: auth-gpg--configure-sources → ~/.authinfo.gpg を auth-sources 先頭に追加
+  #2: dev-ai--setup-api-key → auth-source-search が成功 ✓
+#+end_example
 
-| Item | Value |
-|------|-------|
-| Tangle target | =early-init.el= |
-| provide | — (not a loadable feature) |
+=dev-ai= の =:init= で検索していた旧実装ではこの順序が保証できず、
+常に "no key found" になっていました (Fix CF-2)。
 
-*** Responsibilities
+* completion Layer — CAPF スタックと Org SRC ブロック補完
 
-Runs before =package.el= initialisation and before the frame is rendered.
-Establishes infrastructure only; loads no features.
+[[file:svg/07_capf_dispatch.svg]]
 
-- Disable =package.el= auto-initialisation
-- Set =straight-base-dir= and =straight-build-dir= (versioned: =build-31.0=)
-- Define directory constants =my:d:var=, =my:d:cache=, =my:d:etc=
-- Temporarily relax GC threshold and clear =file-name-handler-alist=
-- Prepare =native-comp-eln-load-path= and tree-sitter grammar path
-- Apply early UI defaults (disable toolbar, scroll bar) to prevent flicker
+** ベース CAPF スタック
 
-*** Public API
+| フック | 関数 | CAPF スタック |
+|--------+------+--------------|
+| =emacs-lisp-mode-hook= | =completion--elisp-capfs= | =cape-elisp-symbol cape-file cape-dabbrev= |
+| =prog-mode-hook= | =completion--prog-capfs= | 既存スタック + =cape-file cape-dabbrev= |
+| =text-mode-hook= | =completion--text-capfs= | =cape-dabbrev cape-file= |
+| =org-mode-hook= | =completion--org-capfs= | =cape-dabbrev cape-file cape-tex= |
+| =sh-mode / eshell= | =completion--shell-capfs= | =cape-file cape-dabbrev= |
 
-- =my/ensure-directory-exists= — creates a directory path if absent (available from startup)
+** capf-org-src ファミリー (4 モジュール協調)
 
-*** Notes
+Org の =#+begin_src= ブロック内で言語固有の補完が効くのは、このファミリーのおかげです。
 
-=straight-build-dir= must be set here, before straight.el bootstraps.
-=file-name-handler-alist= is saved to =core--orig-file-name-handler-alist= and restored
-in =after-init-hook=; failure to restore breaks TRAMP.
+| モジュール | 役割 |
+|------------+------|
+| =completion-capf-org-src= | =org-src-mode-hook= でモードを見てディスパッチ |
+| =completion-capf-org-src-lang= | 言語別 CAPF 設定リスト |
+| =completion-corfu-org-src= | =edit-indirect= バッファで =corfu-mode= 有効化 |
+| =completion-orderless-org-src= | Org src ブロックのみ =orderless= スタイル適用 |
 
-** init.el
-:PROPERTIES:
-:CUSTOM_ID: init-el
-:END:
+* dev Layer — LSP バックエンド非依存設計
 
-| Item | Value |
-|------|-------|
-| Tangle target | =init.el= |
-| provide | — |
+[[file:svg/08_lsp_agnostic.svg]]
 
-*** Responsibilities
+=dev-lsp-bridge.el= を =dev/= セクションの先頭に置くことで、
+=ui-keymap.el= がバックエンドを知らなくても =dev-lsp-code-actions= などにキーをバインドできます。
 
-Activates feature logic after infrastructure is established.
+** autoload-only モジュール
 
-- Configure URL state paths before =url.el= loads
-- Bootstrap straight.el
-- Import macOS login-shell environment (=exec-path-from-shell=, GUI and daemon)
-- Initialise =leaf=
-- Apply runtime performance settings (=gcmh=, IO buffers)
-- Declare =my:modules-extra= before personal overlay loads
-- Load =personal/<login-name>.el=
-- Require =modules.el=
-- Report startup time and GC count on =after-init-hook=
+これらは =my:modules= に含まれません。=core-switches.el= 経由で遅延ロードされます。
 
-*** Public API
+| モジュール | 宣言先 | トリガー |
+|------------+--------+---------|
+| =dev-lsp-eglot= | =core-switches= | =(my:use-lsp 'eglot)= |
+| =dev-lsp-mode= | =core-switches= | =(my:use-lsp 'lsp)= |
+| =dev-lsp-bridge= (3rd party) | =core-switches= | =(my:use-lsp 'bridge)= |
+| =ui-doom-modeline= | =core-switches= | =(my:use-ui 'doom)= |
+| =ui-nano-modeline= | =core-switches= | =(my:use-ui 'nano)= |
+| =ui-nano-palette= | =ui-theme= | =(require 'ui-nano-palette nil t)= |
 
-None.  =bootstrap--safe-load-file= is an internal helper.
+* utils-claude.el — Claude API HTTP クライアント
 
-*** Notes
+[[file:svg/09_utils_claude.svg]]
 
-=(bound-and-true-p straight-base-dir)= respects the value set in =early-init.el=.
-=my:modules-extra= must be declared before personal overlay loads so the personal
-overlay can append to it.
+** 公開 API
 
-** modules.el
-:PROPERTIES:
-:CUSTOM_ID: modules-el
-:END:
+#+begin_src emacs-lisp
+;; 同期リクエスト
+(utils-claude-request-sync MESSAGES &optional MODEL MAX-TOKENS SYSTEM)
+;; → 応答テキスト文字列を返す。失敗時は utils-claude-error をシグナル。
 
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/modules.el= |
-| provide | =modules= |
+;; 非同期リクエスト
+(utils-claude-request MESSAGES CALLBACK &optional MODEL MAX-TOKENS SYSTEM)
+;; → CALLBACK は (text) または (nil err) で呼ばれる。
+#+end_src
 
-*** Responsibilities
+** defcustom 変数
 
-Central orchestration layer.  Contains orchestration only; feature logic
-resides inside the individual module files.
+| 変数 | デフォルト値 |
+|------+-------------|
+| =utils-claude-default-model= | ="claude-sonnet-4-5"= |
+| =utils-claude-max-tokens= | =4096= |
+| =utils-claude-api-version= | ="2023-06-01"= |
+| =utils-claude-endpoint= | =https://api.anthropic.com/v1/messages= |
 
-- Define the canonical module load order (=my:modules= list)
-- Provide =my:modules-skip= and =my:modules-extra= as =defcustom= (customisable via =personal/=)
-- Load each module with =condition-case= error isolation
-- Report per-module load time when =my:modules-verbose= is non-nil
-- Prevent dependency inversion between layers
+エラーは =(define-error 'utils-claude-error ...)= で定義した独自条件です。
+呼び出し側は =(condition-case err ... (utils-claude-error ...))= でラップしてください。
 
-*** Public API
+* orgx Layer — Auto-Tangle & Auto-Hugo
 
-- =my/modules-load= — execute the isolated load sequence
+[[file:svg/10_orgtangle_hugo.svg]]
 
-*** defcustom Variables
+** orgx-auto-tangle
 
-- =my:modules-skip= — list of module symbols to skip
-- =my:modules-extra= — additional modules appended after the canonical list
-- =my:modules-verbose= — non-nil to enable per-module timing output
+=after-save-hook= をバッファローカルに登録しているので =README.org= 以外には影響しません。
+再帰ループ防止のため =orgx-auto-tangle--in-progress= をバッファローカルフラグとして使っています。
 
-*** Notes
+#+begin_src emacs-lisp
+(defvar-local orgx-auto-tangle--in-progress nil)
+
+(defun orgx-auto-tangle--maybe ()
+  (when (and (orgx-auto-tangle--eligible-p)
+             (not orgx-auto-tangle--in-progress))
+    (let ((orgx-auto-tangle--in-progress t)
+          (org-confirm-babel-evaluate nil)
+          (inhibit-modification-hooks t))
+      (condition-case err
+          (org-babel-tangle)
+        (error (message "[auto-tangle] %s" err))))))
+#+end_src
+
+** orgx-auto-hugo
 
-=condition-case= catches =error= only; =quit= (=C-g=) propagates so that user
-interruption is respected.
+=after-save-hook= ではなく =org-capture-after-finalize-hook= を使っています。
+キャプチャ編集中の自動保存で ox-hugo がトリガーされると未完成エントリがエクスポートされてしまうためです。
+=org-note-abort= が非 nil なら (=C-c C-k= でキャンセルされた場合) エクスポートをスキップします。
 
-* 3. core/ — Runtime Foundations
-:PROPERTIES:
-:CUSTOM_ID: core-layer
-:END:
+* ui-leader.el — M-SPC リーダーキー階層
 
-Core modules must not depend on the ui layer or any higher layer.
+[[file:svg/11_leader_keymap.svg]]
 
-** core/core-fixes.el
-:PROPERTIES:
-:CUSTOM_ID: core-fixes
-:END:
+=M-SPC= を起点に 13 個のサブマップが並んでいます。
+元が =C-c SPC= (3 キー) だったのを =M-SPC= (2 キー) に変更して、
+全リーダーコマンドのキーストロークを 1 つ短縮しています。
 
-| Item | Value |
-|------|-------|
-| Load order | #1 |
-| Tangle target | =lisp/core/core-fixes.el= |
-| provide | =core-fixes= |
+キーマップの定義はロード時に即座に実行されます。=after-init-hook= には遅延させません。
+=ui-keymap.el= がロードされる前にマップが確定している必要があるためです。
 
-*** Responsibilities
+* dev-ai.el — aidermacs の認証タイミング修正 (Fix CF)
 
-Compatibility shim layer.  Currently a no-op placeholder; provides a stable
-location for future version-specific corrections.
+[[file:svg/12_dev_ai_timing.svg]]
 
-*** Internal Functions
+** 修正前後のサマリー
 
-- =core-fixes--emacs>=  — version predicate (intentional duplication of =core-tools= symbol;
-  =core-tools= is not yet loaded at this point in the sequence)
+| | Before Fix CF-2 | After Fix CF-2 |
+|---+-----------------+----------------|
+| いつ検索するか | =:init= (モジュールロード時) | =after-init-hook= |
+| =~/.authinfo.gpg= の状態 | まだ =auth-sources= に未追加 | =auth-gpg= が先に追加済み |
+| 結果 | 常に "no key found" | 鍵取得成功 |
 
-** core/core-policy.el
-:PROPERTIES:
-:CUSTOM_ID: core-policy
-:END:
+** dev-ai--setup-api-key の cond ロジック
 
-| Item | Value |
-|------|-------|
-| Load order | #2 |
-| Tangle target | =lisp/core/core-policy.el= |
-| provide | =core-policy= |
+#+begin_src emacs-lisp
+(cond
+ ;; 優先: OpenRouter
+ (router-key
+  (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
+  (setenv "OPENAI_API_KEY"  router-key)
+  (setopt aidermacs-default-model "openrouter/anthropic/claude-sonnet-4-5"))
+ ;; フォールバック: OpenAI 直接
+ (openai-key
+  (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
+  (setenv "OPENAI_API_KEY"  openai-key)
+  (setopt aidermacs-default-model "gpt-4o-mini"))
+ ;; どちらも見つからない場合
+ (t
+  (display-warning 'aidermacs "No API key found in auth-source.")))
+#+end_src
 
-*** Responsibilities
+* 命名規則と変数代入ポリシー
 
-Global behavioural policy.  Must not activate UI or package features.
+** 命名規則
 
-- Whitespace and trailing-whitespace rules
-- Indentation standards and tab policy (=indent-tabs-mode=, =tab-width=)
-- Editor safety constraints (=require-final-newline=, =delete-trailing-whitespace=)
+| プレフィックス | スコープ | 例 |
+|----------------+----------+----|
+| =my/= | 公開インタラクティブコマンド | =my/eww-search=, =my/auth-gpg-verify= |
+| =<module>-= | モジュール公開 API | =core-treesit-install-all=, =ui-font-apply= |
+| =<module>--= | モジュール内部実装 | =core-native--collect=, =modules--require-safe= |
+| =my:d:*= | パス / ディレクトリ変数 | =my:d=, =my:d:var=, =my:d:org= |
+| =my:modules= | 正規リスト定数 | =defconst= で定義。変更禁止 |
 
-*** Public API
+禁止パターン: =my/<topic>--= の複合形。公開名前空間 (=my/=) とプライベートスコープ (=--=) を混ぜてはいけません。
 
-- =core-policy-apply= — apply all policy settings imperatively
+** setopt vs setq
 
-*** Hook Registrations
+| 使うべき形 | 対象 | 補足 |
+|------------+------+------|
+| =setopt= | =defcustom= 変数 | セッターと型チェックを通す |
+| =setq= | =defvar=, 内部状態変数 | セッターが不要な場合 |
+| =setopt= (=:config= 内) | 実行時評価が必要な =defcustom= パス | =:custom= では式評価不可 |
+| =setq-local= | バッファローカルな =defcustom= 上書き | Makefile の =indent-tabs-mode= など |
+| =customize-save-variable= | セッションをまたいで永続化が必要な =defcustom= | =personal-messages-last-archived= など |
 
-- =before-save-hook= → =delete-trailing-whitespace=
+=setq= が正解な =defcustom= 例外:
+=org-agenda-files=, =org-capture-templates=, =org-todo-keywords=, =org-refile-targets=, =org-roam-db-connector=。
+バッククォートや実行時評価が =setopt= の型チェッカーと相性が悪いためです。
 
-** core/core-session.el
-:PROPERTIES:
-:CUSTOM_ID: core-session
-:END:
+* Coding Rules R1–R8
 
-| Item | Value |
-|------|-------|
-| Load order | #3 |
-| Tangle target | =lisp/core/core-session.el= |
-| provide | =core-session= |
+** R1 — lexical-binding
 
-*** Responsibilities
+全ファイルの 1 行目に =;; -*- lexical-binding: t; -*-= を必ず書きます。
+ないとラムダが動的スコープで動いてクロージャのバグが出ます。
 
-Public API façade for session management.  Delegates implementation to
-=core-session-private=.  External modules must require =core-session=, never
-=core-session-private= directly.
+** R2 — =provide= シンボルとファイル名の一致
 
-*** Public API
+#+begin_src emacs-lisp
+;;; core-treesit.el
+(provide 'core-treesit)  ; ファイル名と一致させる
+#+end_src
 
-- =core-api-session-register-job= — register a periodic session job
-- =core-api-session-unregister-job= — unregister a session job
-- =core-api-session-run-job= — execute a session job immediately
-- =core-session-enable-autosave= — activate auto-save facilities
-- =core-session-report= — display current session job status
+** R3 — 組み込みパッケージに =:straight nil=
 
-*** defcustom Variables
+#+begin_src emacs-lisp
+(leaf saveplace :straight nil
+  :pre-setq
+  `((save-place-file . ,(concat no-littering-var-directory "saveplace"))))
+#+end_src
 
-- =core-session-interval= — period in seconds for the run-at-time timer (default 600)
-- =core-session-idle-delay= — idle seconds before run-with-idle-timer fires (default 120)
-- =core-session-enable-p= — master enable flag
+** R4 — =leaf= キーワード順序
 
-** core/core-session-private.el
-:PROPERTIES:
-:CUSTOM_ID: core-session-private
-:END:
+#+begin_example
+:straight → :ensure → :after → :require →
+:pre-setq → :custom → :bind → :hook → :init → :config
+#+end_example
 
-| Item | Value |
-|------|-------|
-| Load order | #4 |
-| Tangle target | =lisp/core/core-session-private.el= |
-| provide | =core-session-private= |
+** R5 — 公開 =defun= のドキュメント文字列
 
-*** Responsibilities
+Fix W で 19 モジュール、50 関数に追記しました。インタラクティブコマンドは必ずドキュメントを書きます。
 
-Implementation details for =core-session=.  Not to be required directly
-by any module other than =core-session=.
+** R6 — =setopt= / =setq=
 
-- Manage the job registry (association list)
-- Run periodic timer (=run-at-time=) and idle timer (=run-with-idle-timer=)
+上の「命名規則と変数代入ポリシー」セクション参照。
 
-*** Internal Functions
+** R7 — 命名規則
 
-- =core-session--registry= — job registry store
-- =core-session--tick= — periodic timer callback
-- =core-session--idle-tick= — idle timer callback
+上の「命名規則と変数代入ポリシー」セクション参照。
 
-** core/core-gc.el
-:PROPERTIES:
-:CUSTOM_ID: core-gc
-:END:
+** R8 — =keymap-set= API (Emacs 29+)
 
-| Item | Value |
-|------|-------|
-| Load order | #5 |
-| Tangle target | =lisp/core/core-gc.el= |
-| provide | =core-gc= |
+#+begin_src emacs-lisp
+;; ✓ 正しい書き方
+(keymap-global-set "C-s" #'consult-line)
+(keymap-set dired-mode-map "TAB" #'dirvish-subtree-toggle)
 
-*** Responsibilities
+;; ✗ 古い書き方 (Fix CA/CB で移行済み)
+(global-set-key (kbd "C-s") 'consult-line)
+#+end_src
 
-Explicit GC trigger points complementing the gcmh idle-timer approach in
-=core-runtime=.  Runs GC when the user is naturally pausing.
+* Changelog Fix A→CJ — カテゴリ別サマリー
 
-*** Hook Registrations
+| カテゴリ | 重大度 | 件数 | 代表 Fix | 根本原因 |
+|----------+--------+------+----------+---------|
+| =setq= → =setopt= | 🟡 Minor | 32 | G H K M P Q R S T U V | =defcustom= のセッター・型検証バイパス |
+| 匿名 λ → named =defun= | 🟠 Medium | 17 | 3 4 5 6 7 8 10b B E | フック削除不可、byte-compiler 不可視 |
+| 公開 API 違反 | 🔴 Critical | 3 | Fix 1 2 | =eglot--servers= 内部変数アクセス、存在しないフック名 |
+| 命名規則違反 | 🟠 Medium | 17 | Fix X/Y | =my/xxx--= 禁止形 17 件一括リネーム |
+| =leaf :custom= → =:config + setopt= | 🟡 Minor | 9 | AI AJ AK | =:custom= で式評価不可 → リテラル格納バグ |
+| 認証・タイミング | 🔴 Critical | 4 | BJ CF CJ | env 経由 API キー廃止、=:init= → =after-init-hook= |
+| 前方互換性 | 🟠 Medium | 14 | CA CB BZ | =global-set-key+kbd= 廃止、=when-let*= 統一 |
+| ドキュメント文字列 | 🟡 Minor | 50 | Fix W | 公開 =defun= 50 件にドキュメント追記 |
+| バックアップ / 自動保存 | 🟠 Medium | 3 | CG CH CI | バックアップ無効化、1秒間隔、除外ルールなし |
+| 新規モジュール追加 | 🟠 Medium | 2 | CD BK | =auth-gpg.el=、Makefile =checkdoc= / =lint= |
 
-- =focus-out-hook= → =garbage-collect=
-- =minibuffer-exit-hook= → =garbage-collect=
+* まとめ
 
-*** defcustom Variables
+| キーワード | 要点 |
+|------------+------|
+| Boot | 3 フェーズ完全決定論的。=my:modules= リストが唯一の起動順序定義 |
+| Isolation | =condition-case= 隔離で delete-safe。1 本壊れても 74 本が続く |
+| GC | 3 層協調: 起動ガード → 明示トリガー → gcmh アイドル管理 |
+| Auth | =auth-gpg.el= が 3 箇所の =auth-source-search= を一元管理 |
+| CAPF | 6 モードスタック + =capf-org-src= ファミリー 4 モジュール協調 |
+| LSP | =dev-lsp-bridge= ファサード。=core-switches= で実行時切り替え |
+| Credentials | =utils-claude= + =dev-ai= は =after-init-hook= のタイミングに依存 |
+| Rules | R1–R8 + setopt/setq 判定 + 命名規則 → 80 件の修正で強化済み |
 
-- =core-gc-enable-p= — enable explicit GC triggers (default =t=)
-
-*** Internal Functions
-
-- =core-gc--maybe-collect= — conditional GC respecting =core-gc-enable-p=
-
-** core/core-persistence.el
-:PROPERTIES:
-:CUSTOM_ID: core-persistence
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #6 |
-| Tangle target | =lisp/core/core-persistence.el= |
-| provide | =core-persistence= |
-
-*** Responsibilities
-
-- Configure =desktop.el= for session restoration
-- Enable =auto-save-visited-mode= for file-visiting buffers
-- Purge backup files older than 7 days
-
-*** Public API
-
-- =my/delete-old-backups= — delete backup files older than the configured threshold
-
-*** Hook Registrations
-
-- =emacs-startup-hook= → =desktop-read=
-
-** core/core-buffers.el
-:PROPERTIES:
-:CUSTOM_ID: core-buffers
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #7 |
-| Tangle target | =lisp/core/core-buffers.el= |
-| provide | =core-buffers= |
-
-*** Responsibilities
-
-- Configure =ibuffer= grouping and column layout
-- Ensure =*scratch*= buffer is always present
-
-*** Public API
-
-- =my/ibuffer-open= — open ibuffer with preset groups
-- =my/scratch-switch= — switch to or create =*scratch*=
-
-*** Hook Registrations
-
-- =ibuffer-mode-hook= → =core-buffers--setup-groups=
-
-*** Internal Functions
-
-- =core-buffers--setup-groups= — apply ibuffer filter groups
-
-** core/core-runtime.el
-:PROPERTIES:
-:CUSTOM_ID: core-runtime
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #8 |
-| Tangle target | =lisp/core/core-runtime.el= |
-| provide | =core-runtime= |
-
-*** Responsibilities
-
-- Configure gcmh for idle-time GC management
-- Set IO performance parameters (=read-process-output-max=, etc.)
-
-*** Hook Registrations
-
-- =emacs-startup-hook= → gcmh activation
-
-*** defcustom Variables
-
-- =core-runtime-gcmh-threshold= — high-cons threshold during activity (default 16 MiB)
-
-*** Internal Functions
-
-- =core-runtime--configure-io= — apply IO buffer settings
-
-** core/core-tools.el
-:PROPERTIES:
-:CUSTOM_ID: core-tools
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #9 |
-| Tangle target | =lisp/core/core-tools.el= |
-| provide | =core-tools= |
-
-*** Responsibilities
-
-- Version predicate utilities available to all subsequent modules
-- Basic path and string helpers used across layers
-
-*** Public API
-
-- =core-tools-emacs>=  — Emacs version predicate
-- =core-tools-executable-find= — memoised =executable-find=
-- =core-tools-expand-path= — expand and cache directory paths
-- =core-tools-string-join= — portable string join
-- =core-tools-require-soft= — =require= with =nil noerror=
-- =core-tools-after-load= — =with-eval-after-load= wrapper
-- =core-tools-when-os= — OS-conditional execution
-
-** core/core-treesit.el
-:PROPERTIES:
-:CUSTOM_ID: core-treesit
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #10 |
-| Tangle target | =lisp/core/core-treesit.el= |
-| provide | =core-treesit= |
-
-*** Responsibilities
-
-- Configure =treesit-extra-load-path= to =.cache/treesit/=
-- Provide grammar installation and status reporting utilities
-
-*** Public API
-
-- =core-treesit-install-all= — install all registered grammars
-- =core-treesit-install= — install a single grammar
-- =core-treesit-report= — display grammar availability status
-- =core-treesit-available-p= — predicate for a given language
-- =core-treesit-ensure-mode= — activate ts-mode when grammar is available
-
-*** Hook Registrations
-
-- =after-init-hook= → =core-treesit--verify-grammars=
-
-*** defcustom Variables
-
-- =core-treesit-grammars= — list of grammar specifications to manage
-- =core-treesit-enable-p= — master enable flag
-- =core-treesit-auto-install= — install missing grammars automatically
-
-*** Internal Functions
-
-- =core-treesit--verify-grammars= — check grammar availability on startup
-
-** core/core-history.el
-:PROPERTIES:
-:CUSTOM_ID: core-history
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #11 |
-| Tangle target | =lisp/core/core-history.el= |
-| provide | =core-history= |
-
-*** Responsibilities
-
-- Configure =savehist=, =recentf=, and =save-place= with no-littering paths
-
-*** Hook Registrations
-
-- =emacs-startup-hook= → activate all three persistence modes
-
-*** Internal Functions
-
-- =core-history--configure-paths= — set persistence file paths
-
-** core/core-editing.el
-:PROPERTIES:
-:CUSTOM_ID: core-editing
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #12 |
-| Tangle target | =lisp/core/core-editing.el= |
-| provide | =core-editing= |
-
-*** Responsibilities
-
-- Configure =dirvish= as the primary directory browser (replacing =dired=)
-- Set up =transient= state directory
-- Configure =which-func-mode= and =display-line-numbers=
-
-*** Internal Functions
-
-- =core-editing--configure-dirvish= — apply dirvish settings
-
-** core/core-switches.el
-:PROPERTIES:
-:CUSTOM_ID: core-switches
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #13 |
-| Tangle target | =lisp/core/core-switches.el= |
-| provide | =core-switches= |
-
-*** Responsibilities
-
-Backend-agnostic activation of LSP and UI bundles.  Reads =my:use-lsp= and
-=my:use-ui= set by the personal overlay and loads the appropriate modules via
-autoloaded entry points.
-
-*** Hook Registrations
-
-- =after-init-hook= → =core-switches--activate-backends=
-
-*** defcustom Variables
-
-- =my:use-lsp= — LSP backend selector (='eglot=, ='lsp-mode=, ='lsp-bridge=, or =nil=)
-- =my:use-ui= — UI bundle selector (='doom=, ='nano=, or =nil=)
-
-*** Internal Functions
-
-- =core-switches--activate-backends= — dispatch to LSP and UI entry points
-- =core-switches--load-lsp= — load the selected LSP module
-- =core-switches--load-ui= — load the selected UI bundle module
-
-** core/core-custom.el
-:PROPERTIES:
-:CUSTOM_ID: core-custom
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #14 |
-| Tangle target | =lisp/core/core-custom.el= |
-| provide | =core-custom= |
-
-*** Responsibilities
-
-- Configure =custom-file= to an explicit path under =.var/=
-- Load =custom-file= silently on startup
-
-*** Public API
-
-- =my/custom-open= — open =custom-file= for editing
-- =core-custom--ensure-file= — create =custom-file= if absent
-
-*** Internal Functions
-
-- =core-custom--ensure-file=
-
-** core/core-api.el
-:PROPERTIES:
-:CUSTOM_ID: core-api
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #15 |
-| Tangle target | =lisp/core/core-api.el= |
-| provide | =core-api= |
-
-*** Responsibilities
-
-Cross-layer public API façade.  Exposes session management operations as stable
-symbols that higher layers may call without depending on =core-session= directly.
-
-*** Public API
-
-- =core-api-session-register-job= — façade → =core-session=
-- =core-api-session-unregister-job= — façade → =core-session=
-- =core-api-session-run-job= — façade → =core-session=
-
-** core/core-native.el
-:PROPERTIES:
-:CUSTOM_ID: core-native
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #16 |
-| Tangle target | =lisp/core/core-native.el= |
-| provide | =core-native= |
-
-*** Responsibilities
-
-- Collect, manage, and display native compilation warnings
-- Provide mode control: =silent= (suppress), =collect= (buffer), =verbose= (echo)
-
-*** Public API
-
-- =core-native-clear-warnings=
-- =core-native-warnings-count=
-- =core-native-show-warnings=
-- =core-native-save-warnings=
-- =core-native-set-mode=
-
-** core/core-custom-ui-extras.el
-:PROPERTIES:
-:CUSTOM_ID: core-custom-ui-extras
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/core/core-custom-ui-extras.el= |
-| provide | =core-custom-ui-extras= |
-
-*** Responsibilities
-
-*DEPRECATED — no-op placeholder.*  The =my:modules-extra= population for
-=ui-visual-aids=, =orgx-typography=, and =ui-macos= was moved to
-=personal/user.el= (Fix B).  This file exists only to prevent
-=void-feature= errors from residual =(require 'core-custom-ui-extras)= calls
-in stale tangle output.
-
-* 4. ui/ — Visual and Interaction
-:PROPERTIES:
-:CUSTOM_ID: ui-layer
-:END:
-
-** ui/ui-nano-palette.el
-:PROPERTIES:
-:CUSTOM_ID: ui-nano-palette
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/ui/ui-nano-palette.el= |
-| provide | =ui-nano-palette= |
-
-*** Responsibilities
-
-Evolved Nano colour palette used across the UI layer.
-
-- Define semantic palette variables as =defcustom= (background, foreground, surface, etc.)
-- Provide safe face application via =ui-nano-palette--apply-face=
-- Provide daemon/frame-safe reapplication on =after-make-frame-functions=
-- Theme reload resilience via =enable-theme= advice
-
-*** defcustom Variables
-
-- =nano-color-background=, =nano-color-foreground=, =nano-color-surface=
-- =nano-color-highlight=, =nano-color-critical=, =nano-color-popout=
-- =nano-color-faded=, =nano-color-salient=
-
-*** Internal Functions
-
-- =ui-nano-palette--apply-face= — apply a face spec safely
-- =ui-nano-palette--reapply= — idempotent full reapplication
-
-** ui/ui-font.el
-:PROPERTIES:
-:CUSTOM_ID: ui-font
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #17 |
-| Tangle target | =lisp/ui/ui-font.el= |
-| provide | =ui-font= |
-
-*** Responsibilities
-
-- Set primary, variable-pitch, and fixed-pitch fonts via =defcustom=
-- Provide interactive font size adjustment
-- Reload fonts on =after-make-frame-functions= for daemon safety
-
-*** Public API
-
-- =ui-font-apply= — apply the configured font spec
-- =ui-font-increase= — increase font size by one step
-- =ui-font-decrease= — decrease font size by one step
-
-*** Hook Registrations
-
-- =after-init-hook= → =ui-font-apply=
-- =after-make-frame-functions= → =ui-font-apply=
-
-*** defcustom Variables
-
-- =ui-font-family= — primary monospace font family
-- =ui-font-size= — base font size in points
-- =ui-font-variable-family= — variable-pitch font family
-- =ui-font-fixed-family= — fixed-pitch font family
-
-*** Internal Functions
-
-- =ui-font--set-faces= — apply font specs to relevant faces
-
-** ui/ui-doom-modeline.el
-:PROPERTIES:
-:CUSTOM_ID: ui-doom-modeline
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/ui/ui-doom-modeline.el= |
-| provide | =ui-doom-modeline= |
-
-*** Responsibilities
-
-Doom modeline UI bundle (loaded on demand via =core-switches=).
-
-- Install and configure =nerd-icons= and =doom-modeline=
-- Set modeline height, buffer name style, word-count display
-
-*** Public API
-
-- =my/ui-enable-doom= — activate the Doom modeline bundle
-
-** ui/ui-nano-modeline.el
-:PROPERTIES:
-:CUSTOM_ID: ui-nano-modeline
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/ui/ui-nano-modeline.el= |
-| provide | =ui-nano-modeline= |
-
-*** Responsibilities
-
-Nano modeline UI bundle (loaded on demand via =core-switches=).
-
-- Configure =nano-modeline= padding and per-mode hooks
-- Guard initialisation with a flag to prevent repeated setup on frame creation
-- Does NOT require =ui-nano-palette=; =ui-theme.el= is the authoritative loader
-
-*** Public API
-
-- =my/ui-enable-nano= — activate the Nano modeline bundle
-
-*** Internal Functions
-
-- =ui-nano--available-p= — check whether =nano-modeline= is loadable
-- =ui-nano--setup= — idempotent initialisation
-
-** ui/ui-theme.el
-:PROPERTIES:
-:CUSTOM_ID: ui-theme
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #18 |
-| Tangle target | =lisp/ui/ui-theme.el= |
-| provide | =ui-theme= |
-
-*** Responsibilities
-
-- Load and apply the selected theme
-- Optionally require =ui-nano-palette= (soft require; absence is non-fatal)
-- Apply palette via =with-eval-after-load 'ui-nano-palette=
-
-*** Hook Registrations
-
-- =after-init-hook= → =ui-theme--load=
-- =after-make-frame-functions= → =ui-theme--reapply=
-- =enable-theme-functions= → =ui-theme--on-enable=
-
-*** defcustom Variables
-
-- =ui-theme-name= — theme symbol to load
-- =ui-theme-nano-palette-p= — whether to load the Nano palette
-
-*** Internal Functions
-
-- =ui-theme--load=
-- =ui-theme--reapply=
-- =ui-theme--on-enable=
-
-** ui/ui-window.el
-:PROPERTIES:
-:CUSTOM_ID: ui-window
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #19 |
-| Tangle target | =lisp/ui/ui-window.el= |
-| provide | =ui-window= |
-
-*** Responsibilities
-
-- Configure =display-buffer-alist= for predictable buffer placement
-- Enable =winner-mode= for window configuration history
-
-*** Public API
-
-- =my/window-split-and-follow= — split window and move point to new window
-- =my/window-delete-and-balance= — delete window and rebalance
-
-** ui/ui-utils.el
-:PROPERTIES:
-:CUSTOM_ID: ui-utils
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #20 |
-| Tangle target | =lisp/ui/ui-utils.el= |
-| provide | =ui-utils= |
-
-*** Responsibilities
-
-Small UI convenience utilities that do not belong to any other module.
-
-- Configure =which-func-mode=
-- Configure =display-line-numbers-mode= for prog-mode buffers
-
-** ui/ui-health-modeline.el
-:PROPERTIES:
-:CUSTOM_ID: ui-health-modeline
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #21 |
-| Tangle target | =lisp/ui/ui-health-modeline.el= |
-| provide | =ui-health-modeline= |
-
-*** Responsibilities
-
-- Display session health indicators in the mode line (GC count, LSP status, time)
-
-*** Hook Registrations
-
-- =after-init-hook= → install mode-line segment
-- =focus-out-hook= → update indicators
-- =post-command-hook= → lightweight refresh
-- =buffer-list-update-hook= → LSP status refresh
-
-*** defcustom Variables
-
-- =ui-health-modeline-enable-p= — master enable flag
-- =ui-health-modeline-gc-warn-threshold= — GC count that triggers warning colour
-- =ui-health-modeline-format= — mode-line format string
-
-*** Internal Functions
-
-- =ui-health-modeline--segment= — produce the mode-line segment string
-
-** ui/ui-imenu.el
-:PROPERTIES:
-:CUSTOM_ID: ui-imenu
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #22 |
-| Tangle target | =lisp/ui/ui-imenu.el= |
-| provide | =ui-imenu= |
-
-*** Responsibilities
-
-- Configure =imenu= depth and auto-rescan
-- Configure =imenu-list= side panel
-
-** ui/ui-leader.el
-:PROPERTIES:
-:CUSTOM_ID: ui-leader
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #23 |
-| Tangle target | =lisp/ui/ui-leader.el= |
-| provide | =ui-leader= |
-
-*** Responsibilities
-
-- Define the leader key map (=M-SPC=) and all sub-maps
-
-*** Public API
-
-- =my/leader-open-map= — display leader key hints
-
-*** defcustom Variables
-
-- =ui-leader-key= — the leader key binding (default: =M-SPC=)
-- =ui-leader-enable-p= — master enable flag
-- =ui-leader-show-hints-p= — whether to show which-key hints
-
-*** Internal Functions
-
-- =ui-leader--build-maps= — construct the keymap hierarchy
-
-** ui/ui-hydra.el
-:PROPERTIES:
-:CUSTOM_ID: ui-hydra
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #24 |
-| Tangle target | =lisp/ui/ui-hydra.el= |
-| provide | =ui-hydra= |
-
-*** Responsibilities
-
-- Define hydra menus for window management, zoom, and text scaling
-
-*** Public API
-
-- =my/hydra-window= — window management hydra
-- =my/hydra-zoom= — zoom / text scale hydra
-
-*** defcustom Variables
-
-- =ui-hydra-enable-p= — master enable flag
-
-** ui/ui-which-key.el
-:PROPERTIES:
-:CUSTOM_ID: ui-which-key
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #25 |
-| Tangle target | =lisp/ui/ui-which-key.el= |
-| provide | =ui-which-key= |
-
-*** Responsibilities
-
-- Configure =which-key-mode= with idle delay and popup style
-
-*** Hook Registrations
-
-- =after-init-hook= → =which-key-mode=
-
-*** defcustom Variables
-
-- =ui-which-key-delay= — idle seconds before which-key popup appears
-- =ui-which-key-max-description= — maximum length of key description
-
-*** Internal Functions
-
-- =ui-which-key--configure= — apply settings and activate
-
-** ui/ui-keymap.el
-:PROPERTIES:
-:CUSTOM_ID: ui-keymap
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #26 |
-| Tangle target | =lisp/ui/ui-keymap.el= |
-| provide | =ui-keymap= |
-
-*** Responsibilities
-
-- Populate the leader key map with all command bindings (Fix BR: minimised keystroke count)
-- Bind high-frequency commands at the top level of the leader map
-
-*** Hook Registrations
-
-- =after-init-hook= → =ui-keymap--install=
-
-*** defcustom Variables
-
-- =ui-keymap-leader-bindings= — alist of leader-key → command mappings
-
-*** Internal Functions
-
-- =ui-keymap--bind= — safely bind a key in a keymap with =keymapp= guard
-- =ui-keymap--install= — install all bindings
-
-** ui/ui-global-keys.el
-:PROPERTIES:
-:CUSTOM_ID: ui-global-keys
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #27 |
-| Tangle target | =lisp/ui/ui-global-keys.el= |
-| provide | =ui-global-keys= |
-
-*** Responsibilities
-
-- Bind global keys outside the leader map (macOS super-key shortcuts, etc.)
-
-*** Hook Registrations
-
-- =after-init-hook= → =ui-global-keys--install=
-
-*** Internal Functions
-
-- =ui-global-keys--install= — apply global bindings
-
-** ui/ui-visual-aids.el
-:PROPERTIES:
-:CUSTOM_ID: ui-visual-aids
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/ui/ui-visual-aids.el= |
-| provide | =ui-visual-aids= |
-
-*** Responsibilities
-
-Optional visual enhancement module.  Not in =my:modules=; appended to
-=my:modules-extra= by =personal/user.el=.
-
-- Configure =pulsar= for transient cursor feedback
-- Enable =hl-todo= with colour-coded keyword faces
-- Enable =rainbow-delimiters= in =prog-mode=
-- Enable =indent-bars= in =prog-mode=
-
-** ui/ui-macos.el
-:PROPERTIES:
-:CUSTOM_ID: ui-macos
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/ui/ui-macos.el= |
-| provide | =ui-macos= |
-
-*** Responsibilities
-
-Optional macOS-specific UI module.  Not in =my:modules=; appended to
-=my:modules-extra= by =personal/user.el=.  Guards all settings under
-=(eq system-type 'darwin)=.
-
-- Enable transparent titlebars (=ns-transparent-titlebar=)
-- Set =use-title-bar= for native macOS title bar rendering
-
-* 5. auth/ — Authentication
-:PROPERTIES:
-:CUSTOM_ID: auth-layer
-:END:
-
-Auth modules must not depend on the ui layer.
-
-** auth/auth-core.el
-:PROPERTIES:
-:CUSTOM_ID: auth-core
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #28 |
-| Tangle target | =lisp/auth/auth-core.el= |
-| provide | =auth-core= |
-
-*** Responsibilities
-
-- Configure =auth-source= to use =~/.authinfo.gpg=
-- Configure EasyPG for transparent GPG encryption
-- Configure =pass= integration for credential lookup
-- Verify required environment variables on startup
-
-*** Public API
-
-- =auth-core-lookup= — retrieve a credential from auth-source
-
-*** Hook Registrations
-
-- =after-init-hook= → =auth-core--verify-env=
-
-*** defcustom Variables
-
-- =auth-core-authinfo-path= — path to the authinfo file
-
-*** Internal Functions
-
-- =auth-core--verify-env= — check for required env variables
-
-* 6. completion/ — Completion Stack
-:PROPERTIES:
-:CUSTOM_ID: completion-layer
-:END:
-
-** completion/completion-core.el
-:PROPERTIES:
-:CUSTOM_ID: completion-core
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #29 |
-| Tangle target | =lisp/completion/completion-core.el= |
-| provide | =completion-core= |
-
-*** Responsibilities
-
-- Set =completion-styles= to ='(orderless basic)=
-- Configure =completion-category-overrides= (the authoritative definition)
-- Set =completion-cycle-threshold=
-
-** completion/completion-vertico.el
-:PROPERTIES:
-:CUSTOM_ID: completion-vertico
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #30 |
-| Tangle target | =lisp/completion/completion-vertico.el= |
-| provide | =completion-vertico= |
-
-*** Responsibilities
-
-- Enable =vertico-mode= and =marginalia-mode=
-- Configure vertico count, cycle behaviour
-
-*** Hook Registrations
-
-- =after-init-hook= → activate vertico and marginalia
-
-*** Internal Functions
-
-- =completion-vertico--setup= — apply vertico settings
-
-** completion/completion-consult.el
-:PROPERTIES:
-:CUSTOM_ID: completion-consult
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #31 |
-| Tangle target | =lisp/completion/completion-consult.el= |
-| provide | =completion-consult= |
-
-*** Responsibilities
-
-- Install and configure =consult= (=consult-buffer=, =consult-grep=, =consult-ripgrep=, etc.)
-- Bind consult commands through the leader map
-
-** completion/completion-embark.el
-:PROPERTIES:
-:CUSTOM_ID: completion-embark
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #32 |
-| Tangle target | =lisp/completion/completion-embark.el= |
-| provide | =completion-embark= |
-
-*** Responsibilities
-
-- Install and configure =embark= and =embark-consult=
-- Bind =embark-act= and =embark-dwim=
-
-** completion/completion-corfu.el
-:PROPERTIES:
-:CUSTOM_ID: completion-corfu
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #33 |
-| Tangle target | =lisp/completion/completion-corfu.el= |
-| provide | =completion-corfu= |
-
-*** Responsibilities
-
-- Enable =corfu-mode= globally and =corfu-terminal-mode= in terminals
-- Configure auto-completion delay, minimum prefix, and cycle behaviour
-
-*** Hook Registrations
-
-- =after-init-hook= → =global-corfu-mode=
-
-*** Internal Functions
-
-- =completion-corfu--configure= — apply corfu settings
-
-** completion/completion-icons.el
-:PROPERTIES:
-:CUSTOM_ID: completion-icons
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #34 |
-| Tangle target | =lisp/completion/completion-icons.el= |
-| provide | =completion-icons= |
-
-*** Responsibilities
-
-- Install =nerd-icons-completion= and =kind-icon=
-- Configure =marginalia-align= for icon integration
-
-** completion/completion-capf.el
-:PROPERTIES:
-:CUSTOM_ID: completion-capf
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #35 |
-| Tangle target | =lisp/completion/completion-capf.el= |
-| provide | =completion-capf= |
-
-*** Responsibilities
-
-- Configure =cape= for CAPF aggregation
-- Register cape functions in =completion-at-point-functions= for relevant modes
-
-*** Hook Registrations
-
-Nine =add-hook= registrations across =prog-mode=, =text-mode=, =org-mode=,
-=emacs-lisp-mode=, and =eglot-managed-mode=.
-
-*** Internal Functions
-
-- =completion-capf--setup-prog= — install cape CAPFs for prog-mode
-- =completion-capf--setup-text= — install for text-mode
-
-** completion/completion-capf-org-src.el
-:PROPERTIES:
-:CUSTOM_ID: completion-capf-org-src
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #36 |
-| Tangle target | =lisp/completion/completion-capf-org-src.el= |
-| provide | =completion-capf-org-src= |
-
-*** Responsibilities
-
-Block detection and dispatch for Org SRC block completion.
-Detects the block language via =org-in-src-block-p= and
-=org-element-property=, then dispatches to the appropriate language CAPF.
-
-*** Hook Registrations
-
-- =org-mode-hook= → install dispatcher CAPF
-
-*** Internal Functions
-
-- =completion-capf-org-src--dispatcher= — dispatch to per-language CAPF
-
-** completion/completion-capf-org-src-lang.el
-:PROPERTIES:
-:CUSTOM_ID: completion-capf-org-src-lang
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #37 |
-| Tangle target | =lisp/completion/completion-capf-org-src-lang.el= |
-| provide | =completion-capf-org-src-lang= |
-
-*** Responsibilities
-
-Per-language CAPF selection for Org SRC blocks.
-
-*** Hook Registrations
-
-- =org-mode-hook= → install lang-aware CAPF
-
-*** Internal Functions
-
-- =completion-capf-org-src-lang--get-capf= — return the CAPF for a given language symbol
-
-** completion/completion-corfu-org-src.el
-:PROPERTIES:
-:CUSTOM_ID: completion-corfu-org-src
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #38 |
-| Tangle target | =lisp/completion/completion-corfu-org-src.el= |
-| provide | =completion-corfu-org-src= |
-
-*** Responsibilities
-
-Corfu integration for Org SRC block completion.
-
-*** Hook Registrations
-
-- =org-mode-hook= → configure corfu for src blocks
-
-*** Internal Functions
-
-- =completion-corfu-org-src--setup= — enable corfu-mode locally in src blocks
-
-** completion/completion-orderless-org-src.el
-:PROPERTIES:
-:CUSTOM_ID: completion-orderless-org-src
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #39 |
-| Tangle target | =lisp/completion/completion-orderless-org-src.el= |
-| provide | =completion-orderless-org-src= |
-
-*** Responsibilities
-
-Apply orderless filtering inside Org SRC blocks.
-
-*** Hook Registrations
-
-- =org-mode-hook= → install orderless for src-block context
-
-*** Internal Functions
-
-- =completion-orderless-org-src--configure= — set styles buffer-locally
-
-** completion/completion-lsp.el
-:PROPERTIES:
-:CUSTOM_ID: completion-lsp
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #40 |
-| Tangle target | =lisp/completion/completion-lsp.el= |
-| provide | =completion-lsp= |
-
-*** Responsibilities
-
-Backend-agnostic CAPF integration.  Adds the appropriate CAPF function to
-=completion-at-point-functions= based on the backend selected by =core-switches=.
-
-*** Public API
-
-- =completion-lsp-setup= — install the correct CAPF for the active backend
-
-*** Hook Registrations
-
-- =eglot-managed-mode-hook= → eglot CAPF installation
-- =lsp-mode-hook= → lsp-mode CAPF installation
-
-*** defcustom Variables
-
-- =completion-lsp-backend= — active backend symbol (mirrors =my:use-lsp=)
-
-*** Internal Functions
-
-- =completion-lsp--eglot-capf= — install eglot CAPF
-- =completion-lsp--lspmode-capf= — install lsp-mode CAPF
-
-* 7. orgx/ — Org Ecosystem
-:PROPERTIES:
-:CUSTOM_ID: orgx-layer
-:END:
-
-** orgx/orgx-core.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-core
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #41 |
-| Tangle target | =lisp/orgx/orgx-core.el= |
-| provide | =orgx-core= |
-
-*** Responsibilities
-
-- Configure Org directory, agenda files, todo keywords, refile targets
-- Configure Org capture templates (including blog post template: key =b=)
-- Enable =org-modern= for visual enhancement
-
-*** Public API
-
-- =my/org-agenda-open= — open Org agenda with preset views
-
-*** Hook Registrations
-
-- =org-mode-hook= → =orgx-core--setup=
-
-*** Internal Functions
-
-- =orgx-core--setup= — apply per-buffer Org settings
-
-** orgx/orgx-visual.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-visual
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #42 |
-| Tangle target | =lisp/orgx/orgx-visual.el= |
-| provide | =orgx-visual= |
-
-*** Responsibilities
-
-- Configure =org-modern= faces
-- Configure =org-superstar= or =org-bullets= heading indicators
-
-*** Hook Registrations
-
-- =org-mode-hook= → activate visual packages
-- =after-init-hook= → apply global org-modern settings
-
-*** Internal Functions
-
-- =orgx-visual--configure= — apply visual settings
-
-** orgx/orgx-extensions.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-extensions
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #43 |
-| Tangle target | =lisp/orgx/orgx-extensions.el= |
-| provide | =orgx-extensions= |
-
-*** Responsibilities
-
-- Configure =org-roam= with =org-roam-db-connector= pinned for Emacs 31 (Fix BH)
-- Configure =org-journal=
-- Configure =consult-notes= source directories
-
-*** Internal Functions
-
-- =orgx-extensions--configure-roam= — apply org-roam settings
-
-** orgx/orgx-fold.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-fold
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #44 |
-| Tangle target | =lisp/orgx/orgx-fold.el= |
-| provide | =orgx-fold= |
-
-*** Responsibilities
-
-- Provide subtree fold/unfold commands with sensible defaults
-
-*** Public API
-
-- =my/org-fold-subtree= — fold subtree at point
-- =my/org-unfold-subtree= — unfold subtree at point
-- =my/org-toggle-fold= — toggle fold state
-
-** orgx/orgx-export.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-export
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #45 |
-| Tangle target | =lisp/orgx/orgx-export.el= |
-| provide | =orgx-export= |
-
-*** Responsibilities
-
-- Install =ox-hugo= (TOML front-matter for Hugo blog export)
-- Install =markdown-mode= and =edit-indirect=
-- Register =mermaid= as an Org Babel language via =ob-mermaid= (Fix BO/BP)
-- Configure =ob-dot= for Graphviz rendering (optional)
-
-*** Notes
-
-=ob-mermaid= requires the =mmdc= CLI from =@mermaid-js/mermaid-cli= (install
-via =npm install -g @mermaid-js/mermaid-cli= or =brew install mermaid-cli=).
-=ob-mermaid-cli-path= is a =defcustom=; assignment uses =setopt=.
-Babel language registration uses =add-to-list= (idempotent) after =:require t=
-ensures the package is loaded.
-
-*** Internal Functions
-
-- =orgx-export--mermaid-cli-path= — locate =mmdc= on PATH or in =~/.npm-global/bin=
-
-** orgx/orgx-notes-markdown.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-notes-markdown
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #46 |
-| Tangle target | =lisp/orgx/orgx-notes-markdown.el= |
-| provide | =orgx-notes-markdown= |
-
-*** Responsibilities
-
-- Configure =consult-notes= with Org roam and file-directory sources
-- Configure =markdown-mode= and =markdown-preview-mode=
-
-*** Public API
-
-- =my/notes-search= — search notes with consult-notes
-- =my/notes-find-file= — find a note file
-- =my/notes-org-roam-node-find= — find an org-roam node
-- =my/notes-open-today= — open today's org-journal entry
-- =my/notes-capture= — trigger org-capture
-- =my/notes-roam-random= — open a random org-roam node
-
-*** Hook Registrations
-
-- =markdown-mode-hook= → enable preview
-
-*** defcustom Variables
-
-- =orgx-notes-markdown-preview-p= — enable markdown preview on open
-- =orgx-notes-markdown-source-dirs= — list of note directory paths
-
-*** Internal Functions
-
-- =orgx-notes-markdown--configure-sources= — build consult-notes source list
-
-** orgx/orgx-auto-tangle.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-auto-tangle
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #47 |
-| Tangle target | =lisp/orgx/orgx-auto-tangle.el= |
-| provide | =orgx-auto-tangle= |
-
-*** Responsibilities
-
-- Auto-run =org-babel-tangle= on save when the file matches =my/orgx-auto-tangle-target-file=
-- Buffer-local in-progress flag prevents recursive save loops
-
-*** Hook Registrations
-
-- =org-mode-hook= → =orgx-auto-tangle--install-hook=
-- =after-save-hook= (buffer-local) → =orgx-auto-tangle--maybe=
-
-*** Internal Functions
-
-- =orgx-auto-tangle--eligible-p= — check whether the buffer is the target
-- =orgx-auto-tangle--maybe= — conditional tangle with recursion guard
-
-** orgx/orgx-auto-hugo.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-auto-hugo
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/orgx/orgx-auto-hugo.el= |
-| provide | =orgx-auto-hugo= |
-
-*** Responsibilities
-
-Automatic ox-hugo all-subtrees export triggered by =org-capture= finalisation
-(Fix AO/AP).  Exports only when a blog-post capture entry (key =b=) is
-committed via =C-c C-c=.  Does not export on abort or during save events.
-
-- Detects target file via =my:f:capture-blog-file= at finalise time
-- Re-entrant guard flag prevents recursive export calls
-
-*** Hook Registrations
-
-- =org-capture-after-finalize-hook= → =orgx-auto-hugo--on-finalize=
-
-*** Internal Functions
-
-- =orgx-auto-hugo--blog-capture-p= — return non-nil when the finalised capture targeted the blog file
-- =orgx-auto-hugo--on-finalize= — conditional export with abort check
-
-** orgx/orgx-typography.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-typography
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/orgx/orgx-typography.el= |
-| provide | =orgx-typography= |
-
-*** Responsibilities
-
-Optional Org typography module.  Not in =my:modules=; appended to
-=my:modules-extra= by =personal/user.el=.
-
-- Enable =valign-mode= per Org buffer for pixel-precise table alignment
-- Enable =org-appear-mode= to auto-show emphasis markers on cursor entry
-
-** orgx/orgx-roam-ui.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-roam-ui
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/orgx/orgx-roam-ui.el= |
-| provide | =orgx-roam-ui= |
-
-*** Responsibilities
-
-Interactive graph visualiser for org-roam nodes (Fix AQ).  Not in =my:modules=;
-appended to =my:modules-extra= by =personal/user.el=.
-
-- Install =simple-httpd= (recipe), =websocket=, and =org-roam-ui= at top level
-- Require =web-server= (not =simple-httpd= — Fix BL); add =simple-httpd= compatibility shim (Fix BM)
-- Open the UI via an 8-second idle timer after org-roam autosync has settled
-- =defvar= guard prevents duplicate timer registration on force-reload
-
-** orgx/orgx-brain.el
-:PROPERTIES:
-:CUSTOM_ID: orgx-brain
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/orgx/orgx-brain.el= |
-| provide | =orgx-brain= |
-
-*** Responsibilities
-
-org-brain mind-map / wiki integration (Fix AR).  Not in =my:modules=;
-appended to =my:modules-extra= by =personal/user.el=.
-
-- Set =org-brain-path= to =my:d:org-roam= so both tools share the same directory
-- Bind =my/brain-visualize= in the personal key prefix
-
-*** Public API
-
-- =my/brain-visualize= — open org-brain visualisation for the entry at point
-
-* 8. vcs/ — Version Control
-:PROPERTIES:
-:CUSTOM_ID: vcs-layer
-:END:
-
-VCS modules must not depend on the dev layer.
-
-** vcs/vcs-magit.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-magit
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #48 |
-| Tangle target | =lisp/vcs/vcs-magit.el= |
-| provide | =vcs-magit= |
-
-*** Responsibilities
-
-- Install and configure =magit=
-- Set =magit-display-buffer-function= for full-frame display
-
-** vcs/vcs-gutter.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-gutter
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #49 |
-| Tangle target | =lisp/vcs/vcs-gutter.el= |
-| provide | =vcs-gutter= |
-
-*** Responsibilities
-
-- Enable =diff-hl-mode= globally for gutter diff indicators
-- Configure =diff-hl-flydiff-mode= for unsaved buffer diffs
-
-** vcs/vcs-forge.el
-:PROPERTIES:
-:CUSTOM_ID: vcs-forge
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #50 |
-| Tangle target | =lisp/vcs/vcs-forge.el= |
-| provide | =vcs-forge= |
-
-*** Responsibilities
-
-- Install and configure =forge= for GitHub/GitLab integration within Magit
-
-* 9. dev/ — Development Tooling
-:PROPERTIES:
-:CUSTOM_ID: dev-layer
-:END:
-
-** dev/dev-lsp-bridge.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-bridge
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #51 |
-| Tangle target | =lisp/dev/dev-lsp-bridge.el= |
-| provide | =dev-lsp-bridge= |
-
-*** Responsibilities
-
-- Install and configure =lsp-bridge= (Python-based LSP client)
-- Provide the entry point called by =core-switches=
-
-*** Public API
-
-- =dev-lsp-code-actions= — backend-agnostic code action
-- =dev-lsp-rename= — backend-agnostic symbol rename
-- =dev-lsp-format-buffer= — backend-agnostic buffer format
-
-** dev/dev-lsp-eglot.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-eglot
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/dev/dev-lsp-eglot.el= |
-| provide | =dev-lsp-eglot= |
-
-*** Responsibilities
-
-Eglot LSP backend (loaded on demand via =core-switches=).
-
-- Define =my/eglot-guessable-p= to detect whether Eglot can find a server
-- Hook =dev-lsp-eglot--maybe-ensure= into =prog-mode-hook=
-- Provide =my/lsp-enable-eglot= as the =core-switches= entry point
-
-*** Public API
-
-- =my/lsp-enable-eglot= — activate the Eglot LSP backend
-
-*** Internal Functions
-
-- =dev-lsp-eglot--maybe-ensure= — call =eglot-ensure= when server is guessable
-- =my/eglot-guessable-p= — version-guarded server detection predicate
-
-** dev/dev-lsp-mode.el
-:PROPERTIES:
-:CUSTOM_ID: dev-lsp-mode
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/dev/dev-lsp-mode.el= |
-| provide | =dev-lsp-mode= |
-
-*** Responsibilities
-
-lsp-mode backend (loaded on demand via =core-switches=).
-
-- Configure lsp-mode with file watchers, response timeout, and =:none= completion provider
-- Enable =lsp-ui= doc and sideline overlays
-- Provide =my/lsp-enable-lspmode= as the =core-switches= entry point
-
-*** Public API
-
-- =my/lsp-enable-lspmode= — activate the lsp-mode LSP backend
-
-** dev/dev-ai.el
-:PROPERTIES:
-:CUSTOM_ID: dev-ai
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #52 |
-| Tangle target | =lisp/dev/dev-ai.el= |
-| provide | =dev-ai= |
-
-*** Responsibilities
-
-- Install and configure =aidermacs= for AI-assisted editing
-- Install and configure =gptel= for conversational AI
-
-*** Internal Functions
-
-- =dev-ai--configure-aidermacs= — apply aidermacs settings
-
-** dev/dev-term.el
-:PROPERTIES:
-:CUSTOM_ID: dev-term
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #53 |
-| Tangle target | =lisp/dev/dev-term.el= |
-| provide | =dev-term= |
-
-*** Responsibilities
-
-- Install and configure =vterm= (libvterm-based terminal)
-- Apply Nano palette colours in vterm via =with-eval-after-load 'ui-nano-palette=
-
-*** Public API
-
-- =my/vterm-open= — open or switch to a vterm buffer
-
-*** Hook Registrations
-
-- =vterm-mode-hook= → =dev-term--setup=
-- =after-make-frame-functions= → =dev-term--reapply-colors=
-
-*** defcustom Variables
-
-- =dev-term-shell= — shell to use in vterm (default: =$SHELL=)
-- =dev-term-enable-p= — master enable flag
-
-*** Internal Functions
-
-- =dev-term--setup= — apply per-buffer vterm configuration
-- =dev-term--reapply-colors= — refresh palette colours in vterm buffers
-
-** dev/dev-web-core.el
-:PROPERTIES:
-:CUSTOM_ID: dev-web-core
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #54 |
-| Tangle target | =lisp/dev/dev-web-core.el= |
-| provide | =dev-web-core= |
-
-*** Responsibilities
-
-- Configure =web-mode= for HTML/JSX/TSX files
-- Set indentation offsets for web-mode
-
-** dev/dev-build.el
-:PROPERTIES:
-:CUSTOM_ID: dev-build
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #55 |
-| Tangle target | =lisp/dev/dev-build.el= |
-| provide | =dev-build= |
-
-*** Responsibilities
-
-- Install and configure =project.el= extensions
-- Install =compile= enhancements (=ansi-color= output)
-
-*** Public API
-
-- =my/project-compile= — compile in project root
-
-*** Internal Functions
-
-- =dev-build--configure-compile= — apply compile settings
-
-** dev/dev-format.el
-:PROPERTIES:
-:CUSTOM_ID: dev-format
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #56 |
-| Tangle target | =lisp/dev/dev-format.el= |
-| provide | =dev-format= |
-
-*** Responsibilities
-
-- Install and configure =apheleia= for format-on-save
-- Register formatters per major mode
-
-** dev/dev-infra-modes.el
-:PROPERTIES:
-:CUSTOM_ID: dev-infra-modes
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #57 |
-| Tangle target | =lisp/dev/dev-infra-modes.el= |
-| provide | =dev-infra-modes= |
-
-*** Responsibilities
-
-- Configure =yaml-mode=, =toml-mode=, =dockerfile-mode=, =nginx-mode=
-
-** dev/dev-docker.el
-:PROPERTIES:
-:CUSTOM_ID: dev-docker
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #58 |
-| Tangle target | =lisp/dev/dev-docker.el= |
-| provide | =dev-docker= |
-
-*** Responsibilities
-
-- Install and configure =docker.el= and =docker-compose-mode=
-
-** dev/dev-music.el
-:PROPERTIES:
-:CUSTOM_ID: dev-music
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #59 |
-| Tangle target | =lisp/dev/dev-music.el= |
-| provide | =dev-music= |
-
-*** Responsibilities
-
-- Install and configure =emms= with =emms-directory= set before =emms-all= (Fix O)
-- Define a hydra menu for playback control
-
-*** Hook Registrations
-
-- =emms-player-started-hook= → update mode-line
-
-*** defcustom Variables
-
-- =dev-music-emms-dir= — EMMS state directory (=:pre-setq= to precede =emms-all=)
-
-*** Internal Functions
-
-- =dev-music--configure-players= — register EMMS players
-
-** dev/dev-sql.el
-:PROPERTIES:
-:CUSTOM_ID: dev-sql
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #60 |
-| Tangle target | =lisp/dev/dev-sql.el= |
-| provide | =dev-sql= |
-
-*** Responsibilities
-
-- Configure =sql-mode= connection profiles and output formatting
-
-** dev/dev-rest.el
-:PROPERTIES:
-:CUSTOM_ID: dev-rest
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #61 |
-| Tangle target | =lisp/dev/dev-rest.el= |
-| provide | =dev-rest= |
-
-*** Responsibilities
-
-- Install =restclient= and =restclient-helm= for REST API testing
-
-** dev/dev-navigation.el
-:PROPERTIES:
-:CUSTOM_ID: dev-navigation
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #62 |
-| Tangle target | =lisp/dev/dev-navigation.el= |
-| provide | =dev-navigation= |
-
-*** Responsibilities
-
-- Install =dumb-jump= for go-to-definition without LSP
-- Configure =xref= backend order
-
-*** Public API
-
-- =my/jump-to-definition= — xref/dumb-jump dispatch
-- =my/jump-back= — pop xref marker stack
-- =my/jump-references= — find all references
-- =my/jump-apropos= — apropos-style symbol search
-
-*** Hook Registrations
-
-- =prog-mode-hook= → configure xref backends
-- =xref-backend-functions= → register dumb-jump
-
-*** Internal Functions
-
-- =dev-navigation--configure-xref= — set xref backend priority
-
-** dev/dev-tools.el
-:PROPERTIES:
-:CUSTOM_ID: dev-tools
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #63 |
-| Tangle target | =lisp/dev/dev-tools.el= |
-| provide | =dev-tools= |
-
-*** Responsibilities
-
-- Install =eldoc-box= for popup documentation
-- Install =highlight-indent-guides= for prog-mode
-- Install =yasnippet= and =yasnippet-snippets=
-
-*** Public API
-
-- =my/toggle-eldoc-box= — toggle eldoc-box display
-- =my/toggle-indent-guides= — toggle indent guide display
-- =my/yas-expand-or-complete= — expand snippet or trigger completion
-
-* 10. utils/ — General Helpers
-:PROPERTIES:
-:CUSTOM_ID: utils-layer
-:END:
-
-** utils/utils-path.el
-:PROPERTIES:
-:CUSTOM_ID: utils-path
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #64 |
-| Tangle target | =lisp/utils/utils-path.el= |
-| provide | =utils-path= |
-
-*** Responsibilities
-
-- Path normalisation, existence checks, and directory creation helpers
-
-*** Public API
-
-- =utils-path-expand= — expand and normalise a path
-- =utils-path-ensure-dir= — create directory if absent
-- =utils-path-join= — join path components
-
-** utils/utils-async.el
-:PROPERTIES:
-:CUSTOM_ID: utils-async
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #65 |
-| Tangle target | =lisp/utils/utils-async.el= |
-| provide | =utils-async= |
-
-*** Responsibilities
-
-- Wrappers for =async-shell-command= and =make-process=
-
-*** Public API
-
-- =utils-async-run= — run a shell command asynchronously
-- =utils-async-sentinel= — build a standard process sentinel
-
-** utils/utils-buffers.el
-:PROPERTIES:
-:CUSTOM_ID: utils-buffers
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #66 |
-| Tangle target | =lisp/utils/utils-buffers.el= |
-| provide | =utils-buffers= |
-
-*** Responsibilities
-
-- Buffer listing and management utilities
-
-*** Public API
-
-- =utils-buffers-kill-matching= — kill buffers matching a regexp
-
-** utils/utils-edit.el
-:PROPERTIES:
-:CUSTOM_ID: utils-edit
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #67 |
-| Tangle target | =lisp/utils/utils-edit.el= |
-| provide | =utils-edit= |
-
-*** Responsibilities
-
-- Editing convenience commands (duplicate line, move line, toggle comment)
-
-*** Public API
-
-- =my/duplicate-line= — duplicate current line
-- =my/move-line-up= — move line up
-- =my/move-line-down= — move line down
-
-** utils/utils-dired.el
-:PROPERTIES:
-:CUSTOM_ID: utils-dired
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #68 |
-| Tangle target | =lisp/utils/utils-dired.el= |
-| provide | =utils-dired= |
-
-*** Responsibilities
-
-- Configure =dirvish= as the primary file browser
-- Configure =dired= fallback settings
-
-*** Public API
-
-- =my/dired-open= — open dired in project root or default directory
-
-** utils/utils-functions.el
-:PROPERTIES:
-:CUSTOM_ID: utils-functions
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #69 |
-| Tangle target | =lisp/utils/utils-functions.el= |
-| provide | =utils-functions= |
-
-*** Responsibilities
-
-- Miscellaneous interactive utility commands
-
-*** Public API
-
-- =my/print-load-path= — display =load-path= in a buffer
-- =my/print-feature-list= — display loaded features
-- =my/check-missing-executables= — check for required external tools
-- =my/toggle-debug-on-error= — toggle =debug-on-error=
-- =my/print-build-info= — display Emacs build info as a Markdown table
-
-** utils/utils-org-agenda.el
-:PROPERTIES:
-:CUSTOM_ID: utils-org-agenda
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #70 |
-| Tangle target | =lisp/utils/utils-org-agenda.el= |
-| provide | =utils-org-agenda= |
-
-*** Responsibilities
-
-- Scan =org-directory= for =.org= files and cache the result
-- Provide =org-agenda-files= to =orgx-core= via the public API
-
-*** Public API
-
-- =utils-org-agenda-build= — scan and cache the agenda file list
-- =utils-org-agenda-invalidate-cache= — force cache invalidation
-
-*** defcustom Variables
-
-- =utils-org-agenda-scan-dirs= — directories to include in the scan
-- =utils-org-agenda-exclude-patterns= — regexp patterns to exclude
-- =utils-org-agenda-cache-ttl= — cache time-to-live in seconds
-
-*** Internal Functions
-
-- =utils-org-agenda--scan= — perform the filesystem scan
-- =utils-org-agenda--cache-valid-p= — check whether the cache is fresh
-
-** utils/utils-lint.el
-:PROPERTIES:
-:CUSTOM_ID: utils-lint
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #71 |
-| Tangle target | =lisp/utils/utils-lint.el= |
-| provide | =utils-lint= |
-
-*** Responsibilities
-
-- Configure =flymake= as the diagnostic backend
-- Configure =package-lint= for Emacs Lisp package validation
-
-** utils/utils-diagnostics.el
-:PROPERTIES:
-:CUSTOM_ID: utils-diagnostics
-:END:
-
-| Item | Value |
-|------|-------|
-| Load order | #72 |
-| Tangle target | =lisp/utils/utils-diagnostics.el= |
-| provide | =utils-diagnostics= |
-
-*** Responsibilities
-
-- Aggregate diagnostic information for debugging startup issues
-
-*** Public API
-
-- =my/print-load-path= — display =load-path=
-- =my/print-feature-list= — display loaded features
-- =my/check-missing-executables= — audit required executables
-
-** utils/utils-scratch.el
-:PROPERTIES:
-:CUSTOM_ID: utils-scratch
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/utils/utils-scratch.el= |
-| provide | =utils-scratch= |
-
-*** Responsibilities
-
-Scratch buffer lifecycle management (Fix AX).
-
-- Auto-recreate =*scratch*= via =buffer-list-update-hook= when killed
-- Provide =my/scratch-new= to create additional =*scratch-N*= buffers
-
-*** Public API
-
-- =my/scratch-new= — create and switch to a fresh scratch buffer
-
-*** Hook Registrations
-
-- =buffer-list-update-hook= → =scratch--ensure-exists=
-
-*** Internal Functions
-
-- =scratch--ensure-exists= — recreate =*scratch*= if absent
-
-** utils/utils-claude.el
-:PROPERTIES:
-:CUSTOM_ID: utils-claude
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =lisp/utils/utils-claude.el= |
-| provide | =utils-claude= |
-
-*** Responsibilities
-
-Low-level HTTP client for the Anthropic Claude Messages API (Fix AL).
-No dependency on UI, Org, or any layer above utils.
-
-- Retrieve API key from =auth-source= (=~/.authinfo.gpg=)
-- Synchronous POST: =utils-claude-request-sync=
-- Asynchronous POST with callback: =utils-claude-request=
-- Signal =utils-claude-error= on HTTP failure or JSON parse error
-
-*** Public API
-
-- =utils-claude-get-api-key= — retrieve key from auth-source
-- =utils-claude-request-sync= — synchronous POST, returns response text
-- =utils-claude-request= — asynchronous POST with callback
-
-*** defcustom Variables
-
-- =utils-claude-default-model= — default model identifier
-- =utils-claude-max-tokens= — default max-tokens value
-
-* 11. personal/ — User Overlays
-:PROPERTIES:
-:CUSTOM_ID: personal-layer
-:END:
-
-Personal modules are optional, loaded last, and must not modify lower layers.
-They are excluded from version control (or from shared commits).
-
-** personal/user.el
-:PROPERTIES:
-:CUSTOM_ID: personal-user
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =personal/user.el= |
-| provide | =personal-user= |
-
-*** Responsibilities
-
-Shared personal settings applied across all machines.
-
-- Set =my:use-lsp= and =my:use-ui= backend selectors
-- Append optional modules to =my:modules-extra=:
-  =ui-visual-aids=, =orgx-typography=, =ui-macos=, =orgx-roam-ui=, =orgx-brain=
-- Set Org directory paths (=my:d:org=, =my:d:org-roam=)
-- Configure capture blog file path (=my:f:capture-blog-file=)
-
-** personal/ac1965.el
-:PROPERTIES:
-:CUSTOM_ID: personal-ac1965
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =personal/ac1965.el= |
-| provide | =personal-ac1965= |
-
-*** Responsibilities
-
-Identity and device-specific settings for the =ac1965= login.
-
-- Set author name, email, and font preferences
-- Configure LSP backend and UI bundle
-- Append =orgx-roam-ui= and =orgx-brain= to =my:modules-extra= (Fix AS)
-
-** personal/device-darwin.el
-:PROPERTIES:
-:CUSTOM_ID: personal-device-darwin
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =personal/device-darwin.el= |
-| provide | =personal-device-darwin= |
-
-*** Responsibilities
-
-macOS-specific settings.
-
-- Configure IME integration (=mac-input-method=)
-- Configure mouse and scroll wheel settings
-- Set macOS-specific =exec-path= additions
-
-** personal/apple-music.el
-:PROPERTIES:
-:CUSTOM_ID: personal-apple-music
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =personal/apple-music.el= |
-| provide | =personal-apple-music= |
-
-*** Responsibilities
-
-AppleScript-based Apple Music control from Emacs.
-
-- Provide play/pause/next/previous/volume commands via AppleScript
-- Define a hydra menu for music control
-
-** personal/personal-messages.el
-:PROPERTIES:
-:CUSTOM_ID: personal-messages
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =personal/personal-messages.el= |
-| provide | =personal-messages= |
-
-*** Responsibilities
-
-macOS Messages.app archiver via AppleScript (Fix AM-related).
-
-- Fetch and archive iMessage conversations
-- Export to Org format under =my:d:org=
-
-** personal/personal-ai.el
-:PROPERTIES:
-:CUSTOM_ID: personal-ai
-:END:
-
-| Item | Value |
-|------|-------|
-| Tangle target | =personal/personal-ai.el= |
-| provide | =personal-ai= |
-
-*** Responsibilities
-
-Org Babel + Claude API integration (Fix AM).  Depends on
-=utils/utils-claude.el= for HTTP transport.
-
-- Register a =claude= Babel language with =:system=, =:model=, =:token= header args
-- Execute =#+begin_src claude= blocks synchronously via =utils-claude-request-sync=
-- Support asynchronous execution for long-running requests
-
-* Appendix A: Module Index
-:PROPERTIES:
-:CUSTOM_ID: appendix-a
-:END:
-
-Load order, layer, public defun count, defcustom count, and hook count.
-Modules without a load-order number are optional (=my:modules-extra=) or deprecated.
-
-| # | Module | Layer | pub | cust | hook |
-|---|--------|-------|-----|------|------|
-| 1 | =core-fixes= | core | 0 | 0 | 0 |
-| 2 | =core-policy= | core | 1 | 0 | 1 |
-| 3 | =core-session= | core | 5 | 3 | 0 |
-| 4 | =core-session-private= | core | 0 | 0 | 0 |
-| 5 | =core-gc= | core | 0 | 1 | 2 |
-| 6 | =core-persistence= | core | 1 | 0 | 1 |
-| 7 | =core-buffers= | core | 2 | 0 | 1 |
-| 8 | =core-runtime= | core | 0 | 1 | 1 |
-| 9 | =core-tools= | core | 7 | 0 | 0 |
-| 10 | =core-treesit= | core | 5 | 3 | 1 |
-| 11 | =core-history= | core | 0 | 0 | 1 |
-| 12 | =core-editing= | core | 0 | 0 | 0 |
-| 13 | =core-switches= | core | 0 | 2 | 1 |
-| 14 | =core-custom= | core | 2 | 0 | 0 |
-| 15 | =core-api= | core | 3 | 0 | 0 |
-| 16 | =core-native= | core | 5 | 0 | 0 |
-| — | =core-custom-ui-extras= | core | 0 | 0 | 0 |
-| 17 | =ui-font= | ui | 3 | 4 | 2 |
-| — | =ui-nano-palette= | ui | 0 | 8 | 0 |
-| — | =ui-doom-modeline= | ui | 1 | 0 | 0 |
-| — | =ui-nano-modeline= | ui | 1 | 0 | 0 |
-| 18 | =ui-theme= | ui | 0 | 2 | 3 |
-| 19 | =ui-window= | ui | 2 | 0 | 0 |
-| 20 | =ui-utils= | ui | 0 | 0 | 0 |
-| 21 | =ui-health-modeline= | ui | 0 | 3 | 4 |
-| 22 | =ui-imenu= | ui | 0 | 0 | 0 |
-| 23 | =ui-leader= | ui | 1 | 3 | 0 |
-| 24 | =ui-hydra= | ui | 2 | 1 | 0 |
-| 25 | =ui-which-key= | ui | 0 | 2 | 1 |
-| 26 | =ui-keymap= | ui | 0 | 1 | 1 |
-| 27 | =ui-global-keys= | ui | 0 | 0 | 1 |
-| α | =ui-visual-aids= | ui | 0 | 0 | 0 |
-| α | =ui-macos= | ui | 0 | 0 | 0 |
-| 28 | =auth-core= | auth | 1 | 1 | 1 |
-| 29 | =completion-core= | completion | 0 | 0 | 0 |
-| 30 | =completion-vertico= | completion | 0 | 0 | 1 |
-| 31 | =completion-consult= | completion | 0 | 0 | 0 |
-| 32 | =completion-embark= | completion | 0 | 0 | 0 |
-| 33 | =completion-corfu= | completion | 0 | 0 | 1 |
-| 34 | =completion-icons= | completion | 0 | 0 | 0 |
-| 35 | =completion-capf= | completion | 0 | 0 | 9 |
-| 36 | =completion-capf-org-src= | completion | 0 | 0 | 1 |
-| 37 | =completion-capf-org-src-lang= | completion | 0 | 0 | 1 |
-| 38 | =completion-corfu-org-src= | completion | 0 | 0 | 1 |
-| 39 | =completion-orderless-org-src= | completion | 0 | 0 | 1 |
-| 40 | =completion-lsp= | completion | 1 | 1 | 2 |
-| 41 | =orgx-core= | orgx | 1 | 0 | 1 |
-| 42 | =orgx-visual= | orgx | 0 | 0 | 2 |
-| 43 | =orgx-extensions= | orgx | 0 | 0 | 0 |
-| 44 | =orgx-fold= | orgx | 3 | 0 | 0 |
-| 45 | =orgx-export= | orgx | 0 | 0 | 0 |
-| 46 | =orgx-notes-markdown= | orgx | 6 | 2 | 1 |
-| 47 | =orgx-auto-tangle= | orgx | 0 | 0 | 2 |
-| α | =orgx-auto-hugo= | orgx | 0 | 0 | 1 |
-| α | =orgx-typography= | orgx | 0 | 0 | 2 |
-| α | =orgx-roam-ui= | orgx | 0 | 0 | 0 |
-| α | =orgx-brain= | orgx | 1 | 0 | 0 |
-| 48 | =vcs-magit= | vcs | 0 | 0 | 0 |
-| 49 | =vcs-gutter= | vcs | 0 | 0 | 0 |
-| 50 | =vcs-forge= | vcs | 0 | 0 | 0 |
-| 51 | =dev-lsp-bridge= | dev | 3 | 0 | 0 |
-| — | =dev-lsp-eglot= | dev | 1 | 0 | 1 |
-| — | =dev-lsp-mode= | dev | 1 | 0 | 0 |
-| 52 | =dev-ai= | dev | 0 | 0 | 0 |
-| 53 | =dev-term= | dev | 1 | 1 | 2 |
-| 54 | =dev-web-core= | dev | 0 | 0 | 0 |
-| 55 | =dev-build= | dev | 1 | 0 | 0 |
-| 56 | =dev-format= | dev | 0 | 0 | 0 |
-| 57 | =dev-infra-modes= | dev | 0 | 0 | 0 |
-| 58 | =dev-docker= | dev | 0 | 0 | 0 |
-| 59 | =dev-music= | dev | 0 | 1 | 1 |
-| 60 | =dev-sql= | dev | 0 | 0 | 0 |
-| 61 | =dev-rest= | dev | 0 | 0 | 0 |
-| 62 | =dev-navigation= | dev | 4 | 0 | 3 |
-| 63 | =dev-tools= | dev | 3 | 0 | 0 |
-| 64 | =utils-path= | utils | 3 | 0 | 0 |
-| 65 | =utils-async= | utils | 2 | 0 | 0 |
-| 66 | =utils-buffers= | utils | 1 | 0 | 0 |
-| 67 | =utils-edit= | utils | 3 | 0 | 0 |
-| 68 | =utils-dired= | utils | 1 | 0 | 0 |
-| 69 | =utils-functions= | utils | 4 | 0 | 0 |
-| 70 | =utils-org-agenda= | utils | 2 | 3 | 0 |
-| 71 | =utils-lint= | utils | 0 | 0 | 0 |
-| 72 | =utils-diagnostics= | utils | 3 | 0 | 0 |
-| α | =utils-scratch= | utils | 1 | 0 | 1 |
-| α | =utils-claude= | utils | 3 | 2 | 0 |
-| — | =personal-user= | personal | 0 | 0 | 0 |
-| — | =personal-ac1965= | personal | 0 | 0 | 0 |
-| — | =personal-device-darwin= | personal | 0 | 0 | 0 |
-| — | =personal-apple-music= | personal | 0 | 0 | 0 |
-| — | =personal-messages= | personal | 0 | 0 | 0 |
-| — | =personal-ai= | personal | 0 | 0 | 0 |
-
-Legend: =—= = loaded on demand or deprecated; =α= = loaded via =my:modules-extra=.
-
-* Appendix B: Naming Convention Reference
-:PROPERTIES:
-:CUSTOM_ID: appendix-b
-:END:
-
-| Pattern | Example | Use |
-|---------|---------|-----|
-| =my/<n>= | =my/safe-load-file= | Public interactive commands and cross-module public functions |
-| =<module>-<n>= | =core-tools-emacs>=, =ui-font-apply= | Module public API (prefixed with module name) |
-| =<module>--<n>= | =core-custom--ensure-file=, =modules--require-safe= | Private module helpers (double dash = private).  Form =my/<topic>--= is prohibited. |
-| =my:d:*= | =my:d:var=, =my:d:org=, =my:d:treesit= | Directory / path variables |
-| =<group>-<n>= | =core-session-enable-p=, =ui-font-size= | defcustom variables (group name matches defgroup) |
-| =bootstrap--*= | =bootstrap--safe-load-file= | init.el internal helpers (before modules.el loads) |
-| =<module>-enable-p= | =core-gc-enable-p=, =dev-term-enable-p= | Feature enable/disable flag defcustom |
-| =<module>-*-p= | =core-treesit-enable-p=, =ui-hydra-enable-p= | Boolean predicate defcustom |
-
-* Appendix C: Public API Quick Reference
-:PROPERTIES:
-:CUSTOM_ID: appendix-c
-:END:
-
-** Core API (always available)
-
-| Function | Module | Purpose |
-|----------|--------|---------|
-| =my/ensure-directory-exists= | early-init.el | Create directory path (available from startup) |
-| =core-api-session-register-job= | core-api | Register a session job |
-| =core-api-session-unregister-job= | core-api | Unregister a session job |
-| =core-api-session-run-job= | core-api | Execute a session job immediately |
-| =core-treesit-install-all= | core-treesit | Install all registered Tree-sitter grammars |
-| =core-treesit-report= | core-treesit | Display Tree-sitter grammar status |
-| =my/custom-open= | core-custom | Open =custom-file= for editing |
-
-** LSP Unified API
-
-| Function | Module | Purpose |
-|----------|--------|---------|
-| =dev-lsp-code-actions= | dev-lsp-bridge | Backend-agnostic code action |
-| =dev-lsp-rename= | dev-lsp-bridge | Backend-agnostic symbol rename |
-| =dev-lsp-format-buffer= | dev-lsp-bridge | Backend-agnostic buffer format |
-| =my/lsp-enable-eglot= | dev-lsp-eglot | Activate Eglot backend |
-| =my/lsp-enable-lspmode= | dev-lsp-mode | Activate lsp-mode backend |
-
-** Native Compilation Diagnostics API
-
-| Function | Module | Purpose |
-|----------|--------|---------|
-| =core-native-clear-warnings= | core-native | Clear collected warnings |
-| =core-native-warnings-count= | core-native | Return warning count |
-| =core-native-show-warnings= | core-native | Display warnings in a buffer |
-| =core-native-save-warnings= | core-native | Save warnings to file |
-| =core-native-set-mode= | core-native | Switch reporting mode (silent/collect/verbose) |
-
-** Org Ecosystem API
-
-| Function | Module | Purpose |
-|----------|--------|---------|
-| =utils-org-agenda-build= | utils-org-agenda | Scan and cache agenda file list |
-| =utils-org-agenda-invalidate-cache= | utils-org-agenda | Force cache invalidation |
-| =my/org-fold-subtree= | orgx-fold | Fold subtree at point |
-| =my/org-unfold-subtree= | orgx-fold | Unfold subtree at point |
-| =my/org-toggle-fold= | orgx-fold | Toggle subtree fold state |
-| =my/notes-search= | orgx-notes-markdown | Search notes with consult-notes |
-| =my/brain-visualize= | orgx-brain | Open org-brain visualisation |
-
-** Claude API
-
-| Function | Module | Purpose |
-|----------|--------|---------|
-| =utils-claude-get-api-key= | utils-claude | Retrieve key from auth-source |
-| =utils-claude-request-sync= | utils-claude | Synchronous POST to Claude Messages API |
-| =utils-claude-request= | utils-claude | Asynchronous POST with callback |
-
-** Diagnostics and Debug API
-
-| Function | Module | Purpose |
-|----------|--------|---------|
-| =my/print-load-path= | utils-functions | Display =load-path= in a buffer |
-| =my/print-feature-list= | utils-functions | Display loaded features |
-| =my/check-missing-executables= | utils-functions | Audit required external tools |
-| =my/toggle-debug-on-error= | utils-functions | Toggle =debug-on-error= |
-| =my/print-build-info= | utils-functions | Display Emacs build info as Markdown table |
+=README.org= が唯一の真実の源です。
+すべての =.el= ファイルはタングルされた成果物なので、直接編集しても =make tangle= で上書きされます。
