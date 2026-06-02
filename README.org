@@ -3335,13 +3335,18 @@ run =make reload=.
     (interactive)
     (unless (display-graphic-p)
       (user-error "Fonts are only meaningful in graphical frames"))
-    (let* ((default-family (face-attribute 'default :family))
-           (default-height (face-attribute 'default :height))
+    (let* ((default-family  (face-attribute 'default :family))
+           (default-height  (face-attribute 'default :height))
            (variable-family (face-attribute 'variable-pitch :family))
-           (emoji-font (font-get (font-spec :script 'emoji) :family)))
+           ;; Read the emoji family from the defcustom/fallback value that
+           ;; ui-font-apply passed to set-fontset-font.  The previous probe
+           ;; (font-get (font-spec :script 'emoji) :family) queries font
+           ;; availability rather than the registered fontset entry, so it
+           ;; returns nil on macOS and reports "unknown".
+           (emoji-family    (or ui-font-emoji (ui-font--system-emoji))))
       (message "Fonts applied:\n  Default        : %s (%.1f pt)\n  Variable-pitch : %s\n  Emoji          : %s"
-               default-family (/ default-height 10.0) variable-family
-               (or emoji-font "unknown"))))
+               default-family (/ default-height 10.0)
+               variable-family emoji-family)))
 
   ;; [R10 FIX] Extracted anonymous lambda → named defun.
   ;; Rationale: the daemon branch registered an anonymous function on
@@ -9626,8 +9631,7 @@ Key files:
   ;; - sets `user-full-name` and `user-mail-address` for this machine
   ;; - exports `GPG_KEY_ID` for auth and encryption modules
   ;; - overrides `my:d:org*` paths to /Users/ac1965/Documents/org/
-  ;; - sets font: JetBrains Mono (mono), Noto Sans JP (variable),
-  ;;   Apple Color Emoji (emoji), size 18
+  ;; - sets font: JetBrains Mono (mono), Noto Sans JP (variable), size 18
   ;; - activates `my:use-ui 'nano` and `my:use-lsp 'eglot`
   ;; - registers .ps1 → powershell-mode and .bas → visual-basic-mode
   ;;   (both derive from prog-mode; prog-mode-hook fires automatically)
@@ -9663,11 +9667,8 @@ Key files:
   ;; Font preferences
   ;; [Fix U] ui-font-default, ui-font-variable-pitch, ui-font-size are
   ;; defcustom (ui-font.el); use setopt.
-  ;; ui-font-emoji: explicit declaration overrides the auto-detect fallback
-  ;; in ui-font--system-emoji so that the emoji fontset is always set to
-  ;; "Apple Color Emoji" on this machine, regardless of system-type detection.
-  ;; ui-font-apply calls (set-fontset-font t 'emoji (font-spec :family ...)),
-  ;; which registers the family for the 'emoji Unicode script range.
+  ;; [Fix AM] ui-font-emoji: explicit value overrides the ui-font--system-emoji
+  ;; fallback and is read directly by ui-font-describe for the startup log.
   (setopt ui-font-default        "JetBrains Mono"
           ui-font-variable-pitch "Noto Sans JP"
           ui-font-emoji          "Apple Color Emoji"
@@ -13751,3 +13752,33 @@ hostname, then =C-x C-s= (EasyPG prompts for the GPG passphrase on save).
   permitted: the rule prohibits anonymous lambdas passed directly to
   =add-hook= / =display-buffer-alist= and similar registration sites,
   not lambdas used as iteratees inside a named helper.
+
+** 2026-03 (sixteenth evaluation pass)
+
+*** Fix AM: ui-font.el — ui-font-describe reports "unknown" for emoji font
+
+*🟠 Medium — ui-font-describe emoji detection returns nil on macOS*
+
+- *[Fix AM] lisp/ui/ui-font.el (ui-font-describe)*: Replaced the unreliable
+  emoji font probe =(font-get (font-spec :script 'emoji) :family)= with a
+  direct reference to =(or ui-font-emoji (ui-font--system-emoji))=.
+
+  The previous probe constructs a =font-spec= requesting the =emoji= script
+  and then reads back its =:family= slot.  On macOS, =font-spec= with
+  =:script 'emoji= does not perform a fontset lookup; it returns nil for
+  =:family= because no family was specified in the spec itself.  The
+  =font-get= call therefore always returned nil, and the =(or nil
+  "unknown")= fallback produced the "unknown" message regardless of what
+  =set-fontset-font= had actually registered.
+
+  The authoritative source of the emoji family is the value that
+  =ui-font-apply= passed to =set-fontset-font=, which is =(or ui-font-emoji
+  (ui-font--system-emoji))=.  Reading that expression directly in
+  =ui-font-describe= makes the displayed value consistent with what was
+  registered.
+
+- *[Fix AM] personal/ac1965.el*: Added =(setopt ui-font-emoji "Apple Color
+  Emoji")= to the font preferences block, making the emoji font explicit
+  rather than relying on the =ui-font--system-emoji= macOS fallback.  This
+  ensures the value is visible in the startup log and in
+  =M-x ui-font-describe= output.
