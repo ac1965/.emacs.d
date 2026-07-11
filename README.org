@@ -291,8 +291,6 @@ General-purpose utilities used across layers.
 
 Responsibilities:
 
-- Path and directory helpers
-- Async shell command utilities
 - Buffer management and ibuffer configuration
 - dired and dirvish integration
 - Claude API HTTP client (utils-claude)
@@ -1294,13 +1292,11 @@ Combining =(current-time)=, =float-time=, and =time-subtract= yields sub-millise
       core-persistence
       core-buffers
       core-runtime
-      core-tools
       core-treesit
       core-history
       core-editing
       core-switches
       core-custom
-      core-api
       core-native
 
       ;; -----------------------------------------------------------------------
@@ -1386,8 +1382,6 @@ Combining =(current-time)=, =float-time=, and =time-subtract= yields sub-millise
       ;; -----------------------------------------------------------------------
       ;; Utils
       ;; -----------------------------------------------------------------------
-      utils-path
-      utils-async
       utils-buffers
       utils-edit
       utils-dired
@@ -1478,9 +1472,6 @@ Combining =(current-time)=, =float-time=, and =time-subtract= yields sub-millise
 
 Compatibility fix layer.  No active fix code exists at this time; the module serves as a placeholder for future version-specific corrections.
 
-=core-fixes--emacs>== is also defined under the same name in =core-tools.el= (intentional duplication).
-=core-fixes= is the first module loaded, so =core-tools= symbols do not yet exist.
-Using =defalias= would raise a void-function error; the duplicate definition is therefore the correct choice to respect load-order constraints.
 
 #+begin_src emacs-lisp
   ;;; core/core-fixes.el --- Compatibility & hotfix layer -*- lexical-binding: t; -*-
@@ -1494,24 +1485,10 @@ Using =defalias= would raise a void-function error; the duplicate definition is 
   ;;; Commentary:
   ;; Minimal and version-scoped compatibility fixes for Emacs.
   ;;
-  ;; Load-order note:
-  ;; core-fixes is the FIRST module loaded (see modules.el).  core-tools loads
-  ;; at position 9.  Therefore this file must NOT defalias to core-tools-emacs>=
-  ;; — that symbol is not yet defined at load time and would raise void-function.
-  ;;
-  ;; core-fixes--emacs>= is defined independently here.  core-tools.el defines
-  ;; its own core-tools-emacs>= separately.  Both are identical one-liners, and
-  ;; the duplication is deliberate: the two functions serve different namespaces
-  ;; (internal vs public) and avoiding the duplication via defalias requires
-  ;; a load-order inversion that would break the deterministic module sequence.
+  ;; This module intentionally contains no active fix code.  It is the first
+  ;; module loaded (see modules.el) and exists as a version-guarded hotfix slot.
   ;;
   ;;; Code:
-
-  (defun core-fixes--emacs>= (major minor)
-    "Return non-nil if running Emacs version is at least MAJOR.MINOR."
-    (or (> emacs-major-version major)
-        (and (= emacs-major-version major)
-             (>= emacs-minor-version minor))))
 
   ;;;; Forward-compatibility notes --------------------------------------------
   ;;
@@ -1596,7 +1573,7 @@ Using =defalias= would raise a void-function error; the duplicate definition is 
   ;; - optionally auto-saves collected warnings to a file on exit
   ;;
   ;; Load-order note:
-  ;; Loaded last in the core/ section (after core-api) so that all core
+  ;; Loaded last in the core/ section so that all core
   ;; infrastructure is available.  Native compilation is asynchronous and
   ;; initialisation is deferred to after-init-hook, so late load order is safe.
   ;;; Code:
@@ -2314,91 +2291,6 @@ Runs via `after-init-hook'."
 
   (provide 'core-runtime)
   ;;; core-runtime.el ends here
-#+end_src
-
-**** core/core-tools.el
-:PROPERTIES:
-:CUSTOM_ID: core-tools
-:header-args:emacs-lisp: :tangle lisp/core/core-tools.el
-:END:
-#+begin_src emacs-lisp
-  ;;; core/core-tools.el --- Internal core helper utilities -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; Low-level helper utilities shared across all configuration layers.
-  ;;
-  ;; This file:
-  ;; - `core-tools-emacs>=`: version predicate for guarded feature code
-  ;; - `core-tools-ensure-directory`: stable alias for `my/ensure-directory-exists`
-  ;;   (defined in early-init.el)
-  ;; - `core-tools-feature-present-p` / `core-tools-function-present-p`:
-  ;;   presence predicates that avoid hard `require` calls
-  ;; - `core-tools-require-if-present` / `core-tools-call-if-present`:
-  ;;   safe wrappers that no-op when a feature or function is absent
-  ;; - `core-tools-check-provide`: warns when a file omits `(provide ...)`
-  ;; - `core-tools-user-file-p`: true for files under `user-emacs-directory`
-  ;;
-  ;; Deduplication note:
-  ;; `core-fixes--emacs>=` (internal to core-fixes.el) is aliased here as the
-  ;; public `core-tools-emacs>=`.  This eliminates two identical implementations
-  ;; without breaking any existing call sites.
-  ;;; Code:
-
-  ;; [R9 FIX] Added docstring (public API must document its contract).
-  ;; [R9 FIX] De-duplicated: core-fixes--emacs>= and core-tools-emacs>= were
-  ;; identical implementations.  Define once here; core-fixes can defalias.
-  (defun core-tools-emacs>= (major minor)
-    "Return non-nil if running Emacs version is at least MAJOR.MINOR."
-    (or (> emacs-major-version major)
-        (and (= emacs-major-version major)
-             (>= emacs-minor-version minor))))
-
-  ;; Canonical: my/ensure-directory-exists is defined in early-init.el.
-  ;; Provide core-tools-ensure-directory as a stable alias so existing
-  ;; call sites in other modules continue to work without modification.
-  (defalias 'core-tools-ensure-directory #'my/ensure-directory-exists)
-
-  (defun core-tools-feature-present-p (feature)
-    "Return non-nil if FEATURE is loaded or locatable on `load-path'."
-    (or (featurep feature) (locate-library (symbol-name feature))))
-
-  (defun core-tools-function-present-p (fn)
-    "Return non-nil if FN is a bound function symbol."
-    (and (symbolp fn) (fboundp fn)))
-
-  (defun core-tools-require-if-present (feature)
-    "Require FEATURE only if it is present; return the feature or nil."
-    (when (core-tools-feature-present-p feature)
-      (require feature nil t)))
-
-  (defun core-tools-call-if-present (fn &rest args)
-    "Call FN with ARGS if it is bound; return nil otherwise."
-    (when (core-tools-function-present-p fn)
-      (apply fn args)))
-
-  (defun core-tools-check-provide (feature file)
-    "Warn if FEATURE was not provided after loading FILE."
-    (when (and feature file)
-      (unless (featurep feature)
-        (warn "[core-tools] %s loaded from %s but did not provide `%s`"
-              feature file feature))))
-
-  (defun core-tools-user-file-p (file)
-    "Return non-nil if FILE is under `user-emacs-directory'."
-    (and (stringp file)
-         (string-prefix-p
-          (expand-file-name user-emacs-directory)
-          (expand-file-name file))))
-
-  (provide 'core-tools)
-  ;;; core/core-tools.el ends here
 #+end_src
 
 **** core/core-treesit.el
@@ -3196,56 +3088,6 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;;; core/core-custom.el ends here
 #+end_src
 
-**** core/core-api.el
-:PROPERTIES:
-:CUSTOM_ID: core-api
-:header-args:emacs-lisp: :tangle lisp/core/core-api.el
-:END:
-#+begin_src emacs-lisp
-  ;;; core/core-api.el --- Stable public API surface -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; Stable public API surface for cross-layer access to core services.
-  ;;
-  ;; This file:
-  ;; - re-exports session job operations as `core-api-session-*` wrappers
-  ;; - guards every call with `fboundp` so this module loads safely even
-  ;;   when `core-session` is absent or disabled
-  ;;
-  ;; NOTE: Other layers should call `core-api-*` rather than depending on
-  ;; `core-session` directly.
-  ;;; Code:
-
-  (defun core-api-session-register-job (name fn &rest plist)
-    "Register background job NAME with function FN via the session facade.
-PLIST may include :enabled and other metadata.
-No-op when `core-session-register-job' is not available."
-    (when (fboundp 'core-session-register-job)
-      (apply #'core-session-register-job name fn plist)))
-
-  (defun core-api-session-unregister-job (name)
-    "Unregister background job NAME via the session facade.
-No-op when `core-session-unregister-job' is not available."
-    (when (fboundp 'core-session-unregister-job)
-      (core-session-unregister-job name)))
-
-  (defun core-api-session-run-job (name)
-    "Run background job NAME immediately via the session facade.
-No-op when `core-session-run-job' is not available."
-    (when (fboundp 'core-session-run-job)
-      (core-session-run-job name)))
-
-  (provide 'core-api)
-  ;;; core/core-api.el ends here
-#+end_src
-
 **** core/core-custom-ui-extras.el
 :PROPERTIES:
 :CUSTOM_ID: core-custom-ui-extras
@@ -3479,18 +3321,8 @@ run =make reload=.
     :type 'color
     :group 'my:nano)
 
-  (defcustom nano-color-surface "#ffffff"
-    "UI surface color."
-    :type 'color
-    :group 'my:nano)
-
   (defcustom nano-color-subtle "#e5e7eb"
     "Subtle UI surface."
-    :type 'color
-    :group 'my:nano)
-
-  (defcustom nano-color-border "#d1d5db"
-    "UI border color."
     :type 'color
     :group 'my:nano)
 
@@ -3549,11 +3381,6 @@ run =make reload=.
   ;;;; ---------------------------------------------------------------------------
   ;;;; Interaction colors
   ;;;; ---------------------------------------------------------------------------
-
-  (defcustom nano-color-highlight "#e0e7ff"
-    "Highlight background."
-    :type 'color
-    :group 'my:nano)
 
   (defcustom nano-color-selection "#e5e7eb"
     "Selection background."
@@ -3722,46 +3549,6 @@ run =make reload=.
     (ui-nano--safe-face
      'dirvish-subtree-state-face
      :foreground nano-color-salient))
-
-  ;;;; ---------------------------------------------------------------------------
-  ;;;; Palette override API
-  ;;;; ---------------------------------------------------------------------------
-
-  (defun my/nano-set-palette-and-apply (&rest plist)
-    "Override palette and apply.
-
-  Example:
-
-   (my/nano-set-palette-and-apply
-    :background \"#ffffff\"
-    :foreground \"#000000\")"
-
-    (let ((map
-           '((:background . nano-color-background)
-             (:foreground . nano-color-foreground)
-             (:surface . nano-color-surface)
-             (:subtle . nano-color-subtle)
-             (:border . nano-color-border)
-             (:strong . nano-color-strong)
-             (:muted . nano-color-muted)
-             (:salient . nano-color-salient)
-             (:popout . nano-color-popout)
-             (:success . nano-color-success)
-             (:warning . nano-color-warning)
-             (:critical . nano-color-critical)
-             (:info . nano-color-info)
-             (:highlight . nano-color-highlight)
-             (:selection . nano-color-selection)
-             (:cursor . nano-color-cursor))))
-
-      (while plist
-        (let* ((key (pop plist))
-               (value (pop plist))
-               (sym (cdr (assq key map))))
-          (when sym
-            (setf (symbol-value sym) value)))))
-
-    (my/nano-apply-faces))
 
   ;;;; ---------------------------------------------------------------------------
   ;;;; Theme reload resilience
@@ -4550,11 +4337,6 @@ to reduce keystroke overhead for all leader-prefixed commands."
     (keymap-set ui-leader-map "a" ui-leader-a-map)
     (keymap-set ui-leader-map "q" ui-leader-q-map)
     (keymap-set ui-leader-map "h" ui-leader-h-map))
-
-  (defun ui-leader-local-key ()
-    "Return the full key sequence string for the local leader prefix."
-    (format "%s %s" ui-leader-key ui-leader-local-suffix))
-
   (defun ui-leader--bind-root ()
     "Bind the root leader key globally."
     (when ui-leader-enable-p
@@ -8633,9 +8415,10 @@ Called on `after-init-hook'."
 
   (leaf multiple-cursors :straight t)
 
-  ;; eww state variables - must be top-level for byte-compiler visibility
-  (defvar my:d:eww
-    (expand-file-name "eww/" (or (bound-and-true-p my:d:var) user-emacs-directory)))
+  ;; eww state variables - must be top-level for byte-compiler visibility.
+  ;; `my:d:eww' is defined in early-init.el (defconst); declare it here for the
+  ;; byte-compiler only -- do not re-initialise it.
+  (defvar my:d:eww)
   (defvar eww-hl-search-word nil
     "Search term to highlight after eww renders a page.")
 
@@ -8943,101 +8726,6 @@ experience rather than assumption.
 :PROPERTIES:
 :CUSTOM_ID: utils-modules
 :END:
-
-**** utils/utils-path.el
-:PROPERTIES:
-:CUSTOM_ID: utils-path
-:header-args:emacs-lisp: :tangle lisp/utils/utils-path.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils/utils-path.el --- Path manipulation helpers -*- lexical-binding: t; -*-
-  ;;
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; Path manipulation helpers for configuration modules.
-  ;;
-  ;; This file:
-  ;; - `utils-path-normalize`: canonicalises a path with a trailing slash
-  ;; - `utils-path-relative`: returns a child path relative to a base dir,
-  ;;   or nil when the child is not under the base
-  ;; - `utils-path-safe-name`: replaces non-alphanumeric chars with hyphens
-  ;;
-  ;; NOTE: `my/ensure-directory-exists` is defined in early-init.el and is
-  ;; always available by the time this module loads.
-  ;;; Code:
-
-  (eval-when-compile (require 'subr-x))
-
-  (defun utils-path-normalize (path)
-    "Return PATH as an absolute directory path with trailing slash."
-    (expand-file-name (file-name-as-directory path)))
-
-  (defun utils-path-relative (base child)
-    "Return CHILD path relative to BASE directory, or nil if not under BASE."
-    (let ((base-n (utils-path-normalize base))
-          (child-n (expand-file-name child)))
-      (when (string-prefix-p base-n child-n)
-        (substring child-n (length base-n)))))
-
-  (defun utils-path-safe-name (str)
-    "Return STR with all non-alphanumeric characters replaced by hyphens."
-    (replace-regexp-in-string "[^[:alnum:]_.-]" "-" str))
-
-  ;; my/ensure-directory-exists is defined in early-init.el (defalias of
-  ;; core--ensure-directory).  early-init.el always loads before any module,
-  ;; so the function is guaranteed to be present here.  No fallback needed.
-
-  (provide 'utils-path)
-  ;;; utils/utils-path.el ends here
-#+end_src
-
-**** utils/utils-async.el
-:PROPERTIES:
-:CUSTOM_ID: utils-async
-:header-args:emacs-lisp: :tangle lisp/utils/utils-async.el
-:END:
-#+begin_src emacs-lisp
-  ;;; utils/utils-async.el --- Async shell command utilities -*- lexical-binding: t; -*-
-  ;;
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: utils
-  ;;
-    ;;; Commentary:
-  ;;
-  ;; Async shell command utilities for non-blocking subprocess execution.
-  ;;
-  ;; This file:
-  ;; - `utils-async-shell-command`: runs a command in a named output buffer
-  ;; - `utils-async-run-script`: runs an executable script with optional args,
-  ;;   guarded by `file-executable-p`
-    ;;; Code:
-
-  (defun utils-async-shell-command (cmd &optional buf)
-    "Run shell command CMD asynchronously, output to BUF (default *Async Shell Command*)."
-    (let ((buf-name (or buf "*Async Shell Command*")))
-      (async-shell-command cmd buf-name)))
-
-  (defun utils-async-run-script (script &optional args)
-    "Run executable SCRIPT with optional ARGS string asynchronously.
-  No-op when SCRIPT is not executable."
-    (when (file-executable-p script)
-      (utils-async-shell-command
-       (concat script (if args (concat " " args) "")))))
-
-  (provide 'utils-async)
-    ;;; utils/utils-async.el ends here
-#+end_src
 
 **** utils/utils-buffers.el
 :PROPERTIES:
@@ -10878,6 +10566,58 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
 #+end_src
 
 * Changelog
+
+** 2026-07 (dead-code elimination pass)
+
+*** Fix DC: removal of unreferenced code (static reachability analysis)
+
+Reachability analysis over all tangled =emacs-lisp= blocks (roots: =interactive=
+commands, =org-babel-execute:*= dispatch targets, hook/keymap references,
+=define-error= / =defface= / minor-mode definitions, and every symbol referenced
+outside a definition body) identified 30 definitions with no reachable call site.
+All of them were removed.
+
+*Modules deleted (every symbol in the file was unreachable):*
+
+| Module | Unreachable symbols | Note |
+|--------+---------------------+------|
+| =lisp/core/core-tools.el= | 8/8 | =core-tools-emacs>== was never called; =core-tools-ensure-directory= was an alias with no call site (all callers use =my/ensure-directory-exists= directly); =core-tools-feature-present-p= / =-function-present-p= were only used by =core-tools-require-if-present= / =-call-if-present=, which were themselves unreferenced (transitively dead); =core-tools-check-provide= and =core-tools-user-file-p= had no callers. |
+| =lisp/core/core-api.el= | 3/3 | The three =core-api-session-*= wrappers had no call site.  The facade wrapped the =core-session= job API, which no module uses. |
+| =lisp/utils/utils-path.el= | 3/3 | =utils-path-relative= / =-safe-name= had no callers; =utils-path-normalize= was used only by =utils-path-relative= (transitively dead). |
+| =lisp/utils/utils-async.el= | 2/2 | =utils-async-run-script= had no callers; =utils-async-shell-command= was used only by it (transitively dead). |
+
+Both entries were removed from =my:modules= in =modules.el=, and the =utils=
+layer responsibilities in Layer Definitions were updated accordingly.
+
+*Definitions deleted (module retained):*
+
+- =core-fixes.el= — =core-fixes--emacs>== (private, zero call sites).  The module
+  is retained as the documented version-guarded hotfix slot; the stale load-order
+  Commentary describing the =core-tools-emacs>== duplication was removed with it.
+- =ui-leader.el= — =ui-leader-local-key= (zero call sites).
+- =ui-nano-palette.el= — =my/nano-set-palette-and-apply= and the three palette
+  variables it was the sole consumer of (=nano-color-surface=, =nano-color-border=,
+  =nano-color-highlight=); none of the three is referenced by any face definition.
+
+*Duplicate definition removed:*
+
+- =dev-navigation.el= — =my:d:eww= was re-defined with a value even though
+  =early-init.el= already binds it with =defconst=.  Since =defvar= does not
+  overwrite a bound symbol, the initialiser was dead.  Replaced with a bare
+  =(defvar my:d:eww)= forward declaration, which is the correct pattern for
+  byte-compiler visibility across compilation units (as used in
+  =core-session-private.el=).
+
+*Deliberately retained:*
+
+- =(defvar my:modules-extra nil)= in =init.el= is *not* redundant with the
+  =defcustom= in =modules.el=: the personal overlay (section 8) appends to it
+  before =modules.el= is loaded (section 9), so the =defvar= must establish the
+  binding first.
+- Interactive commands that are reachable only via =M-x= (no key binding) were
+  left in place; they are user-facing entry points, not dead code.
+
+Net: -313 lines, 4 modules, 30 definitions.
 
 ** 2026-07 (Emacs 31 built-in adoption pass)
 
