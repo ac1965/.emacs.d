@@ -35,7 +35,7 @@ Primary design goals:
 - Deterministic startup (identical inputs always produce identical results)
 - Explicit dependency management (no implicit auto-discovery)
 - Delete-safe module architecture (removing any module leaves the rest functional)
-- Forward compatibility with Emacs 31+
+- Maximal use of Emacs 31 built-ins (a built-in always beats a hand-written equivalent)
 - Maintainability for long-term evolution
 - LSP backend agnosticism (eglot / lsp-mode / lsp-bridge are interchangeable)
 
@@ -264,6 +264,8 @@ Version control integration.
 
 Responsibilities:
 
+- Built-in =vc= policy (=vcs-core=): async check-in, published-history guard,
+  =vc-auto-revert-mode=, VC Directory hygiene, smerge auto-enable
 - Magit configuration
 - Gutter diff indicators (diff-hl)
 - GitHub/GitLab Forge integration
@@ -481,7 +483,11 @@ See the LICENSE file for details.
 :END:
 
 *Required*
-- Emacs 30+ (with native compilation)
+- Emacs 31 (=emacs-31= branch / =master=), built with native compilation.
+  As of 2026-07 the newest Emacs 31 tag is =emacs-31.0.90= (pretest); the
+  released stable series is 30.x.  Modules degrade gracefully on Emacs 30:
+  every Emacs 31-only block is guarded by =(>= emacs-major-version 31)= or a
+  =boundp= / =fboundp= check.
 - Git
 - GNU Make
 - GCC 10+ (=libgccjit=)
@@ -497,7 +503,7 @@ See the LICENSE file for details.
 :CUSTOM_ID: structure
 :END:
 
-This Emacs configuration uses a *modular design* targeting **Emacs 30+**.
+This Emacs configuration uses a *modular design* targeting **Emacs 31** (degrading safely to Emacs 30).
 Each layer has a clearly defined responsibility domain, ensuring behavioural predictability, UI replaceability, and isolation of personal customisation.
 
 - =early-init.el= → earliest bootstrap (performance, paths, UI defaults)
@@ -1350,6 +1356,7 @@ Combining =(current-time)=, =float-time=, and =time-subtract= yields sub-millise
       ;; -----------------------------------------------------------------------
       ;; VCS
       ;; -----------------------------------------------------------------------
+      vcs-core
       vcs-magit
       vcs-gutter
       vcs-forge
@@ -1811,6 +1818,16 @@ Runs via `after-init-hook' once all modules are loaded."
     (add-hook 'kill-emacs-hook #'core-native--maybe-auto-save))
 
   (add-hook 'after-init-hook #'core-native--startup-init)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: battery-aware asynchronous native compilation
+  ;; ---------------------------------------------------------------------------
+  ;; On an Apple Silicon laptop, async native-comp is the single largest source
+  ;; of background CPU (and therefore battery drain) after a package upgrade.
+  ;; Emacs 31 lets us suspend it while running on battery; queued jobs resume
+  ;; once the machine is back on AC power.
+  (when (boundp 'native-comp-async-on-battery-power)
+    (setopt native-comp-async-on-battery-power nil))
 
   (provide 'core-native)
   ;;; core/core-native.el ends here
@@ -2400,149 +2417,102 @@ Runs via `after-init-hook'."
   ;;
   ;;; Commentary:
   ;;
-  ;; Tree-sitter infrastructure: availability, grammar management, mode remapping.
+  ;; Tree-sitter infrastructure, delegated to Emacs 31 built-ins.
   ;;
-  ;; This file:
-  ;; - guards all Tree-sitter usage behind `core-treesit-enable-p`
-  ;; - remaps legacy major modes to `-ts-mode` variants when grammars are
-  ;;   available, via `core-treesit-apply-remap`
-  ;; - registers grammar source URLs with `core-treesit-register-sources`
-  ;; - provides `core-treesit-install-grammar` and `core-treesit-install-all`
-  ;;   for on-demand or bulk grammar installation
-  ;; - auto-installs missing grammars on startup when
-  ;;   `core-treesit-auto-install-p` is non-nil
+  ;; Emacs 31 provides two user options that replace the hand-written grammar
+  ;; management of the previous implementation:
+  ;;
+  ;; - `treesit-enabled-modes'        derives `major-mode-remap-alist' from the
+  ;;                                  `treesit-major-mode-remap-alist' tables that
+  ;;                                  the ts-mode packages themselves publish.
+  ;; - `treesit-auto-install-grammar' installs a missing grammar on demand, when a
+  ;;                                  ts-mode is actually turned on.
+  ;;
+  ;; Consequently this module no longer carries a mode-remap table, a bulk
+  ;; installer, or an `emacs-startup-hook' entry.  It declares only:
+  ;;
+  ;; - where grammars live (`treesit-extra-load-path')
+  ;; - where they come from (`treesit-language-source-alist', Emacs 31 keyword
+  ;;   form: :revision :source-dir :cc :c++ :commit)
+  ;; - remaps for third-party legacy modes that ship no ts-mode remap table
+  ;; - `core-treesit-report' for diagnostics
+  ;;
+  ;; On Emacs < 31 the module degrades to a no-op except for the source alist.
   ;;; Code:
 
-  (eval-when-compile (require 'leaf) (require 'subr-x))
+  (eval-when-compile (require 'leaf))
 
   (defgroup core-treesit nil
     "Tree-sitter infrastructure layer."
     :group 'convenience)
 
-  (defcustom core-treesit-enable-p t
-    "Enable Tree-sitter based major modes when available."
-    :type 'boolean :group 'core-treesit)
+  (defconst core-treesit--sources
+    '((bash       "https://github.com/tree-sitter/tree-sitter-bash")
+      (css        "https://github.com/tree-sitter/tree-sitter-css")
+      (dockerfile "https://github.com/camdencheek/tree-sitter-dockerfile")
+      (elisp      "https://github.com/Wilfred/tree-sitter-elisp")
+      (javascript "https://github.com/tree-sitter/tree-sitter-javascript")
+      (json       "https://github.com/tree-sitter/tree-sitter-json")
+      (python     "https://github.com/tree-sitter/tree-sitter-python")
+      (toml       "https://github.com/tree-sitter/tree-sitter-toml")
+      (tsx        "https://github.com/tree-sitter/tree-sitter-typescript"
+                  :source-dir "tsx/src")
+      (typescript "https://github.com/tree-sitter/tree-sitter-typescript"
+                  :source-dir "typescript/src")
+      (yaml       "https://github.com/ikatyang/tree-sitter-yaml"))
+    "Grammar sources in the Emacs 31 keyword form.
+Recognised keywords: :revision :source-dir :cc :c++ :commit.")
 
-  (defcustom core-treesit-auto-install-p nil
-    "Automatically install missing Tree-sitter grammars on startup."
-    :type 'boolean :group 'core-treesit)
+  (defconst core-treesit--legacy-remap
+    '((toml-mode . toml-ts-mode)
+      (json-mode . json-ts-mode)
+      (yaml-mode . yaml-ts-mode)
+      (dockerfile-mode . dockerfile-ts-mode))
+    "Remaps for third-party modes not covered by `treesit-major-mode-remap-alist'.
+Applied only when the corresponding grammar is actually installed.")
 
-  (defcustom core-treesit-install-languages
-    '(python javascript typescript tsx json css yaml bash toml)
-    "Languages considered by `core-treesit-install-all` and auto-install."
-    :type '(repeat symbol) :group 'core-treesit)
+  (defun core-treesit--ready-p (mode)
+    "Return non-nil when the grammar backing ts-mode MODE is installed."
+    (let ((lang (intern (string-remove-suffix "-ts-mode" (symbol-name mode)))))
+      (and (fboundp 'treesit-language-available-p)
+           (treesit-language-available-p lang))))
 
-  (defun core-treesit--available-p ()
-    (and core-treesit-enable-p
-         (fboundp 'treesit-available-p)
-         (ignore-errors (treesit-available-p))))
-
-  (defun core-treesit--language-available-p (lang)
-    (and (fboundp 'treesit-language-available-p)
-         (ignore-errors (treesit-language-available-p lang))))
-
-  (defvar core-treesit--mode-remap-alist
-    '((python-mode      . python-ts-mode)
-      (js-mode          . js-ts-mode)
-      (js-json-mode     . json-ts-mode)
-      (json-mode        . json-ts-mode)
-      (css-mode         . css-ts-mode)
-      (typescript-mode  . typescript-ts-mode)
-      (tsx-mode         . tsx-ts-mode)
-      (yaml-mode        . yaml-ts-mode)
-      (sh-mode          . bash-ts-mode)
-      (toml-mode        . toml-ts-mode)))
-
-  (defun core-treesit-apply-remap ()
-    "Remap legacy major modes to their Tree-sitter `-ts-mode` variants.
-Merges `core-treesit--mode-remap-alist' into `major-mode-remap-alist'
-using `cl-union' with `:test #'equal', avoiding the O(n) duplicate-check
-performed by each individual `add-to-list' call in a dolist loop."
-    (interactive)
-    (when (core-treesit--available-p)
-      (setq major-mode-remap-alist
-            (cl-union core-treesit--mode-remap-alist
-                      major-mode-remap-alist
-                      :test #'equal))))
-
-  (defvar core-treesit--language-sources
-    '((python     . ("https://github.com/tree-sitter/tree-sitter-python"))
-      (javascript . ("https://github.com/tree-sitter/tree-sitter-javascript" "master" "src"))
-      (typescript . ("https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src"))
-      (tsx        . ("https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src"))
-      (json       . ("https://github.com/tree-sitter/tree-sitter-json"))
-      (css        . ("https://github.com/tree-sitter/tree-sitter-css"))
-      (yaml       . ("https://github.com/ikatyang/tree-sitter-yaml"))
-      (bash       . ("https://github.com/tree-sitter/tree-sitter-bash"))
-      (toml       . ("https://github.com/tree-sitter/tree-sitter-toml"))))
-
-  (defun core-treesit-register-sources ()
-    "Register known Tree-sitter grammar source URLs in `treesit-language-source-alist'.
-Uses `cl-union' to merge `core-treesit--language-sources' in one pass,
-avoiding the O(n) duplicate check that `add-to-list' performs per entry."
-    (interactive)
-    (when (boundp 'treesit-language-source-alist)
-      (setq treesit-language-source-alist
-            (cl-union (mapcar (lambda (it) (cons (car it) (cdr it)))
-                              core-treesit--language-sources)
-                      treesit-language-source-alist
-                      :test #'equal))))
-
-  (defun core-treesit-install-grammar (lang)
-    "Install the Tree-sitter grammar for LANG."
-    (interactive
-     (list (intern (completing-read "Install grammar: "
-                                    (mapcar (lambda (x) (symbol-name (car x)))
-                                            core-treesit--language-sources)
-                                    nil t))))
-    (unless (core-treesit--available-p)
-      (user-error "Tree-sitter is not available or disabled"))
-    (unless (fboundp 'treesit-install-language-grammar)
-      (user-error "treesit-install-language-grammar is not available"))
-    (core-treesit-register-sources)
-    (if (core-treesit--language-available-p lang)
-        (message "[treesit] already available: %s" lang)
-      (message "[treesit] installing: %s" lang)
-      (treesit-install-language-grammar lang)
-      (if (core-treesit--language-available-p lang)
-          (message "[treesit] installed: %s" lang)
-        (message "[treesit] install finished but not detected: %s" lang))))
-
-  (defun core-treesit-install-all (&optional force)
-    "Install all grammars listed in `core-treesit-install-languages'.
-With prefix arg FORCE, reinstall grammars that are already present."
-    (interactive "P")
-    (unless (core-treesit--available-p)
-      (user-error "Tree-sitter is not available or disabled"))
-    (core-treesit-register-sources)
-    (dolist (lang core-treesit-install-languages)
-      (when (or force (not (core-treesit--language-available-p lang)))
-        (ignore-errors (core-treesit-install-grammar lang)))))
+  (leaf treesit
+    :straight nil
+    :if (and (fboundp 'treesit-available-p) (treesit-available-p))
+    :custom
+    ;; Emacs 31: enable every tree-sitter mode whose grammar is present.
+    ((treesit-enabled-modes        . t)
+     ;; Emacs 31: install a missing grammar on demand.  Use `always' for
+     ;; unattended installation, `ask-dir' to choose the target directory.
+     (treesit-auto-install-grammar . 'ask)
+     (treesit-font-lock-level      . 4))
+    :config
+    ;; Emacs 31: `treesit-extra-load-path' is a user option, and its first
+    ;; element is the default install directory for `treesit-auto-install-grammar'.
+    (setopt treesit-extra-load-path
+            (list (expand-file-name "tree-sitter/" no-littering-var-directory)))
+    (my/ensure-directory-exists (car treesit-extra-load-path))
+    (dolist (src core-treesit--sources)
+      (unless (assq (car src) treesit-language-source-alist)
+        (push src treesit-language-source-alist)))
+    (dolist (pair core-treesit--legacy-remap)
+      (when (and (core-treesit--ready-p (cdr pair))
+                 (not (assq (car pair) major-mode-remap-alist)))
+        (push pair major-mode-remap-alist))))
 
   (defun core-treesit-report ()
-    "Report Tree-sitter availability and grammar status to the echo area."
+    "Report Tree-sitter grammar availability to the echo area."
     (interactive)
-    (message "[treesit] available=%s, extra-load-path=%S"
-             (if (core-treesit--available-p) "yes" "no")
-             (when (boundp 'treesit-extra-load-path) treesit-extra-load-path))
-    (when (core-treesit--available-p)
-      (dolist (lang core-treesit-install-languages)
-        (message "[treesit] %s: %s" lang
-                 (if (core-treesit--language-available-p lang) "ok" "missing")))))
-
-  (defun core-treesit--startup-init ()
-    "Initialize tree-sitter support after Emacs startup.
-Applies major-mode remappings via `core-treesit-apply-remap' and, when
-`core-treesit-auto-install-p' is non-nil, silently installs all configured
-grammars via `core-treesit-install-all'.  Errors during grammar installation
-are suppressed so a missing grammar does not abort startup.
-Runs via `emacs-startup-hook'."
-    (when (core-treesit--available-p)
-      (core-treesit-apply-remap)
-      (when core-treesit-auto-install-p
-        (ignore-errors (core-treesit-install-all)))))
-
-  (add-hook 'emacs-startup-hook #'core-treesit--startup-init)
+    (unless (and (fboundp 'treesit-available-p) (treesit-available-p))
+      (user-error "Tree-sitter is not available in this build"))
+    (message "[treesit] path=%S %s"
+             treesit-extra-load-path
+             (mapconcat
+              (lambda (src)
+                (format "%s:%s" (car src)
+                        (if (treesit-language-available-p (car src)) "ok" "-")))
+              core-treesit--sources " ")))
 
   (provide 'core-treesit)
   ;;; core/core-treesit.el ends here
@@ -2592,18 +2562,36 @@ Using =after-init-hook= instead risks loading files before paths are fully estab
   ;; consistent with how savehist-file is handled in the same module.
   (leaf saveplace :straight nil
     :pre-setq
-    `((save-place-file . ,(concat no-littering-var-directory "saveplace"))))
+    `((save-place-file . ,(concat no-littering-var-directory "saveplace")))
+    :custom
+    ;; Emacs 31: periodic autosave of places.  This option installs a timer, so
+    ;; it must be set with setopt (:custom), never with setq/:pre-setq.
+    ((save-place-autosave-interval . 300)))
 
   (leaf recentf :straight nil
     :pre-setq
     `((recentf-save-file      . ,(concat no-littering-var-directory "recentf"))
-      (recentf-max-saved-items . 100)))
+      (recentf-max-saved-items . 100))
+    :custom
+    ;; Emacs 31: periodic autosave (timer-installing option -> setopt), plus
+    ;; quieter operation of `recentf-save-list' and `recentf-open-files'.
+    ((recentf-autosave-interval       . 300)
+     (recentf-show-messages           . nil)
+     (recentf-suppress-open-file-help . t))
+    :config
+    ;; Emacs 31: skip files whose extension is in `completion-ignored-extensions'.
+    (when (fboundp 'recentf-exclude-file-by-extension-p)
+      (add-to-list 'recentf-exclude #'recentf-exclude-file-by-extension-p)))
 
+  ;; Emacs 31: savehist merges external modifications of the history file
+  ;; (multi-process safety: GUI + daemon + CLI Emacs sharing one history file).
+  ;; That merge is active ONLY while `savehist-additional-variables' is nil, so
+  ;; `my:desktop-ask-on-restore' is deliberately NOT persisted here; it belongs
+  ;; to `custom-file' / core-session-private.el instead.
   (leaf savehist
     :straight nil
     :pre-setq
-    `((savehist-file . ,(concat no-littering-var-directory "history"))
-      (savehist-additional-variables . '(my:desktop-ask-on-restore)))
+    `((savehist-file . ,(concat no-littering-var-directory "history")))
     :init
     (my/ensure-directory-exists (file-name-directory (concat no-littering-var-directory "history"))))
 
@@ -2895,6 +2883,70 @@ Idempotent: repeated calls do not register duplicate hooks because
             transient-levels-file  (concat no-littering-var-directory "transient/levels.el")
             transient-values-file  (concat no-littering-var-directory "transient/values.el"))
     (my/ensure-directory-exists (concat no-littering-var-directory "transient/")))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: editing built-ins
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; hideshow reached parity with third-party folding packages in Emacs 31:
+  ;; `hs-cycle' (parent -> nested -> all), `hs-toggle-all', margin/fringe
+  ;; indicators, and a hidden-line count next to the ellipsis.  Tree-sitter
+  ;; based modes gained proper `hs-minor-mode' support in the same release, so
+  ;; folding now works in *-ts-mode buffers without extra configuration.
+  ;;
+  ;; NOTE: `hs-special-modes-alist' is obsolete in Emacs 31, and hiding commands
+  ;; now act on the innermost block containing point (set `hs-hide-block-behavior'
+  ;; to `after-cursor' for the pre-31 behaviour).
+  (leaf hideshow
+    :straight nil
+    :hook ((prog-mode-hook . hs-minor-mode))
+    :custom
+    ((hs-show-indicators               . t)
+     (hs-display-lines-hidden          . t)
+     (hs-indicator-maximum-buffer-size . 500000))
+    :config
+    (keymap-set hs-minor-mode-map "<backtab>" #'hs-cycle)
+    (keymap-set hs-minor-mode-map "C-c @ a"   #'hs-toggle-all))
+
+  ;; ElDoc: Emacs 31 can surface the `help-echo' text property at point, and can
+  ;; show the first sentence of a called function's docstring while typing its
+  ;; arguments -- documentation without leaving the buffer.
+  (leaf eldoc
+    :straight nil
+    :custom
+    ((eldoc-help-at-pt                          . t)
+     (eldoc-echo-area-use-multiline-p           . nil)
+     (elisp-eldoc-funcall-with-docstring-length . 'short))
+    :config
+    (add-hook 'emacs-lisp-mode-hook #'core-editing--elisp-eldoc-setup))
+
+  (defun core-editing--elisp-eldoc-setup ()
+    "Use the Emacs 31 docstring-aware ElDoc function in Emacs Lisp buffers."
+    (when (fboundp 'elisp-eldoc-funcall-with-docstring)
+      (add-hook 'eldoc-documentation-functions
+                #'elisp-eldoc-funcall-with-docstring nil t)))
+
+  ;; Scalar editing options introduced in Emacs 31.  Guarded so the module stays
+  ;; loadable on Emacs 30 (delete-safety applies to versions as well as modules).
+  (when (>= emacs-major-version 31)
+    ;; C-w with no active region kills the previous word instead of signalling.
+    (setopt kill-region-dwim 'emacs-word)
+    ;; `delete-pair' leaves a mark at the deletion site.
+    (setopt delete-pair-push-mark t)
+    ;; Do not re-highlight the region on C-x C-x (mark is a position, not a UI).
+    (setopt exchange-point-and-mark-highlight-region nil)
+    ;; show-paren must not match parens inside comments/strings.
+    (setopt show-paren-not-in-comments-or-strings t)
+    ;; hl-line follows the window, not the buffer.
+    (setopt global-hl-line-sticky-flag 'window)
+    ;; Windows: quitting help/compilation buffers kills them; killing a buffer
+    ;; lets `quit-restore-window' restore the previous layout.
+    (setopt quit-window-kill-buffer '(help-mode compilation-mode messages-buffer-mode))
+    (setopt kill-buffer-quit-windows t)
+    ;; `C-h l' refreshes while displayed.
+    (setopt view-lossage-auto-refresh t)
+    ;; Emacs 31 replaces `find-function-setup-keys' with a real minor mode.
+    (find-function-mode 1))
 
   (provide 'core-editing)
   ;;; core/core-editing.el ends here
@@ -5132,6 +5184,55 @@ binding would add keymap surface without practical benefit."
     (add-to-list 'default-frame-alist '(ns-transparent-titlebar . t))
     (add-to-list 'default-frame-alist '(use-title-bar . t)))
 
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: system integration (macOS 10.9+)
+  ;; ---------------------------------------------------------------------------
+  ;; `system-taskbar-mode' drives the Dock icon: badge counts, a progress bar
+  ;; overlay, and the "needs attention" bounce.  `system-sleep' blocks idle
+  ;; sleep while a long job runs and provides pre-sleep / post-wake hooks.
+  ;;
+  ;; Both are useful for the compile-heavy workloads this configuration is used
+  ;; for (native compilation, Emacs builds from source): the machine no longer
+  ;; falls asleep mid-build, and remote (TRAMP) connections are torn down before
+  ;; sleep rather than hanging on wake.
+  (when (and (eq system-type 'darwin) (fboundp 'system-taskbar-mode))
+    (system-taskbar-mode 1))
+
+  (defvar ui-macos--sleep-block-token nil
+    "Token returned by `system-sleep-block-sleep', or nil when not blocking.")
+
+  (defun ui-macos--block-sleep-during-compile (_proc)
+    "Inhibit system idle sleep while a compilation is running.
+Called from `compilation-start-hook'.  The display is allowed to sleep."
+    (when (and (fboundp 'system-sleep-block-sleep)
+               (null ui-macos--sleep-block-token))
+      (setq ui-macos--sleep-block-token
+            (system-sleep-block-sleep "Emacs: compiling" t))))
+
+  (defun ui-macos--unblock-sleep-after-compile (_buffer _status)
+    "Release the sleep block once compilation finishes.
+Called from `compilation-finish-functions'."
+    (when (and ui-macos--sleep-block-token
+               (fboundp 'system-sleep-unblock-sleep))
+      (system-sleep-unblock-sleep ui-macos--sleep-block-token)
+      (setq ui-macos--sleep-block-token nil)))
+
+  (defun ui-macos--handle-sleep-event (event)
+    "Close remote connections on EVENT when the system is about to sleep.
+Pre-sleep handlers get only a few seconds and must not signal, hence the
+`condition-case'.  Connections are re-established lazily on next access."
+    (condition-case nil
+        (when (and (fboundp 'sleep-event-state)
+                   (eq (sleep-event-state event) 'pre-sleep)
+                   (fboundp 'tramp-cleanup-all-connections))
+          (tramp-cleanup-all-connections))
+      (error nil)))
+
+  (when (and (eq system-type 'darwin) (require 'system-sleep nil t))
+    (add-hook 'compilation-start-hook     #'ui-macos--block-sleep-during-compile)
+    (add-hook 'compilation-finish-functions #'ui-macos--unblock-sleep-after-compile)
+    (add-hook 'system-sleep-event-functions #'ui-macos--handle-sleep-event))
+
   (provide 'ui-macos)
   ;;; ui/ui-macos.el ends here
 #+end_src
@@ -5813,6 +5914,27 @@ Runs on `after-init-hook'.  Skips registration when:
     :custom
     ((completion-styles . '(orderless basic))))
 
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31 completion engine
+  ;; ---------------------------------------------------------------------------
+  ;; - `completion-eager-display' / `completion-eager-update' would pop up and
+  ;;   live-update the "*Completions*" buffer.  Vertico already owns that role;
+  ;;   both are pinned to nil so a future change of the Emacs default cannot
+  ;;   produce two competing candidate lists.
+  ;; - `completion-pcm-leading-wildcard' makes the partial-completion style
+  ;;   behave like substring (match anywhere), which is what `basic' fallback
+  ;;   completion should do next to orderless.
+  ;; - The `flex' style was reimplemented in Emacs 31 (faster, better ranking);
+  ;;   it is now worth using directly for the file category rather than relying
+  ;;   on an orderless dispatcher.
+  (leaf emacs
+    :straight nil
+    :if (>= emacs-major-version 31)
+    :custom
+    ((completion-eager-display        . nil)
+     (completion-eager-update         . nil)
+     (completion-pcm-leading-wildcard . t)))
+
   (provide 'completion-core)
   ;;; completion/completion-core.el ends here
 #+end_src
@@ -6031,6 +6153,37 @@ Removes itself from `window-setup-hook' after the first run."
   (leaf kind-icon :straight t :after corfu :require t
     :custom ((kind-icon-default-face . 'corfu-default)))
   (leaf cape :straight t :after corfu)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: Completion Preview (built-in inline "ghost text")
+  ;; ---------------------------------------------------------------------------
+  ;; Completion Preview shows the top candidate inline, ahead of point, without
+  ;; opening a popup.  Emacs 31 promoted `completion-preview-sort-function' to a
+  ;; user option precisely so it can be aligned with a popup UI such as Corfu --
+  ;; sharing the sort function means the previewed candidate is always the same
+  ;; one Corfu would insert first, so the two interfaces never disagree.
+  ;; `completion-preview-inhibit-functions' (new in 31) keeps it out of terminal
+  ;; and REPL buffers, where the preview overlay fights with the process output.
+  (defun completion-corfu--preview-inhibit-p ()
+    "Return non-nil in buffers where inline completion preview is unwanted."
+    (derived-mode-p 'vterm-mode 'eshell-mode 'comint-mode 'term-mode))
+
+  (leaf completion-preview
+    :straight nil
+    :if (>= emacs-major-version 31)
+    :custom
+    ((completion-preview-minimum-symbol-length . 3))
+    :hook ((prog-mode-hook . completion-preview-mode)
+           (org-mode-hook  . completion-preview-mode))
+    :config
+    ;; Align the preview's ranking with Corfu's.  When Corfu has no explicit
+    ;; sort function, keep the Emacs default rather than inventing one.
+    (when (bound-and-true-p corfu-sort-function)
+      (setopt completion-preview-sort-function corfu-sort-function))
+    (setopt completion-preview-inhibit-functions
+            (list #'completion-corfu--preview-inhibit-p))
+    (keymap-set completion-preview-active-mode-map "M-n" #'completion-preview-next-candidate)
+    (keymap-set completion-preview-active-mode-map "M-p" #'completion-preview-prev-candidate))
 
   (provide 'completion-corfu)
   ;;; completion/completion-corfu.el ends here
@@ -7170,6 +7323,17 @@ where npm global installs are not on PATH."
 
   (add-hook 'org-mode-hook #'orgx-auto-tangle--install-hook)
 
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: throttle with timeout.el
+  ;; ---------------------------------------------------------------------------
+  ;; README.org is ~14k lines and tangles ~90 files; a burst of saves (auto-save
+  ;; -visited-mode plus an explicit C-x C-s) used to run the whole tangle twice.
+  ;; `timeout-throttle' installs an advice that collapses repeated calls inside
+  ;; the interval into one.  The in-progress flag above is retained: throttling
+  ;; limits frequency, it does not guarantee non-reentrancy.
+  (when (and (require 'timeout nil t) (fboundp 'timeout-throttle))
+    (timeout-throttle #'orgx-auto-tangle--maybe 2.0))
+
   (provide 'orgx-auto-tangle)
   ;;; orgx/orgx-auto-tangle.el ends here
 #+end_src
@@ -8005,10 +8169,37 @@ Called on `after-init-hook'."
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
-  (leaf project :straight nil)
-  (leaf files :straight nil
-    :custom ((require-final-newline . t) (delete-trailing-lines . t))
-    :hook ((before-save-hook . delete-trailing-whitespace)))
+
+  ;; Emacs 31 project.el:
+  ;; - `project-prune-zombie-projects' removes vanished projects from the list
+  ;; - `project-list-exclude' keeps scratch/temporary trees out of the list
+  ;; - `project-mode-line-mode' shows the project name in the mode line
+  ;; - new commands: project-root-find-file, project-find-matching-buffer,
+  ;;   project-save-some-buffers (C-x p C-x s), project-customize-dirlocals
+  (leaf project
+    :straight nil
+    :custom
+    ((project-prune-zombie-projects . t)
+     (project-list-exclude . '("\\`/tmp/" "\\`/private/var/folders/"))
+     ;; Show the project name in the mode line, but not for remote (TRAMP)
+     ;; files, where computing it costs a round trip.
+     (project-mode-line . 'non-remote)))
+
+  ;; Emacs 31: `delete-trailing-whitespace-mode' is a buffer-local minor mode.
+  ;; The previous global `before-save-hook' entry rewrote every buffer that was
+  ;; ever saved -- including files in third-party repositories, producing
+  ;; whitespace-only diffs.  Scope it to the modes we actually own instead.
+  (leaf files
+    :straight nil
+    :custom ((require-final-newline . t)
+             (delete-trailing-lines . t))
+    :hook ((prog-mode-hook . delete-trailing-whitespace-mode)
+           (org-mode-hook  . delete-trailing-whitespace-mode)
+           (conf-mode-hook . delete-trailing-whitespace-mode)
+           (text-mode-hook . delete-trailing-whitespace-mode)))
+
+  ;; NOTE (Emacs 31): `editorconfig-apply' is obsolete; `editorconfig-mode'
+  ;; remains the supported entry point.
   (leaf editorconfig :straight t :global-minor-mode t)
 
   (provide 'dev-web-core)
@@ -8561,6 +8752,91 @@ Called on `after-init-hook'."
 :CUSTOM_ID: vcs-modules
 :END:
 
+**** vcs/vcs-core.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-core
+:header-args:emacs-lisp: :tangle lisp/vcs/vcs-core.el
+:END:
+
+Emacs 31 rewrote large parts of =vc= (over forty NEWS entries).  Several of the
+operations that historically justified reaching for Magit are now available from
+the built-in interface: multiple working trees, cherry-pick and revert,
+incoming/outgoing diffs, asynchronous check-in, and stash deletion from VC
+Directory.
+
+This module does *not* remove Magit.  It enables the built-in layer so both are
+available, and so the decision to drop Magit (or not) can be made from measured
+experience rather than assumption.
+
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-core.el --- Built-in VC policy (Emacs 31) -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Built-in `vc' configuration, exploiting the Emacs 31 VC rewrite.
+  ;;
+  ;; Key bindings worth knowing (all built-in, no third-party packages):
+  ;;
+  ;;   C-x v v     vc-next-action            C-x v @   vc-revert
+  ;;   C-x v b l   vc-print-fileset-branch-log
+  ;;   C-x v b L   vc-print-root-branch-log
+  ;;   C-x v R     vc-rename-file            C-x v !   (own input history)
+  ;;   In VC Directory:  V  vc-dir-root-next-action
+  ;;                     z d / D  delete Git stashes
+  ;;
+  ;; This module must not depend on the dev layer (layer invariant).
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf vc
+    :straight nil
+    :if (>= emacs-major-version 31)
+    :custom
+    (;; Refuse to rewrite history that has already been published.  This is the
+     ;; single most valuable new safety option in the Emacs 31 VC rewrite.
+     (vc-allow-rewriting-published-history . nil)
+     ;; Check in asynchronously; surface failures rather than swallowing them.
+     (vc-async-checkin                 . t)
+     (vc-display-failed-async-commands . t)
+     ;; Distinguish incoming/outgoing commands with their own prefixes.
+     (vc-use-incoming-outgoing-prefixes . t)
+     ;; VC Directory hygiene.
+     (vc-dir-auto-hide-up-to-date        . t)
+     (vc-dir-save-some-buffers-on-revert . t)
+     ;; Offer conflict resolution (smerge) when a merge leaves conflicts.
+     (vc-resolve-conflicts . t)
+     ;; Show the commit diff in the log-edit buffer before committing.
+     (log-edit-hook . '(log-edit-show-files log-edit-show-diff)))
+    :config
+    ;; Emacs 31: revert buffers automatically when the working tree changes
+    ;; underneath us (branch switch, rebase, pull performed outside Emacs).
+    (when (fboundp 'vc-auto-revert-mode)
+      (vc-auto-revert-mode 1)))
+
+  ;; SMerge gained a `repeat-map' in Emacs 31: after the first conflict command,
+  ;; the following keys repeat without the prefix.
+  (leaf smerge-mode
+    :straight nil
+    :hook ((find-file-hook . vcs-core--maybe-enable-smerge)))
+
+  (defun vcs-core--maybe-enable-smerge ()
+    "Enable `smerge-mode' when the visited file contains conflict markers."
+    (save-excursion
+      (goto-char (point-min))
+      (when (re-search-forward "^<<<<<<< " nil t)
+        (smerge-mode 1))))
+
+  (provide 'vcs-core)
+  ;;; vcs/vcs-core.el ends here
+#+end_src
+
 **** vcs/vcs-magit.el
 :PROPERTIES:
 :CUSTOM_ID: vcs-magit
@@ -9071,18 +9347,31 @@ Called on `after-init-hook'."
 
   (eval-when-compile (require 'leaf))
 
-  (leaf flycheck :straight t)
-
-  (leaf flymake :straight nil
-    :hook (prog-mode . flymake-mode))
-
-  ;; [Fix M] sideline-backends-right is a defcustom; moved to :custom.
-  (leaf sideline :straight t
-    :after flymake
-    :custom ((sideline-backends-right . '(sideline-flycheck sideline-flymake)))
+  ;; Emacs 31 renders diagnostics at end-of-line natively
+  ;; (`flymake-show-diagnostics-at-end-of-line', values: short / t / fancy) and
+  ;; chooses fringe vs. margin indicators automatically
+  ;; (`flymake-indicator-type' = auto, which also works on TTY frames).
+  ;; The sideline stack (sideline + sideline-flymake + sideline-flycheck) is
+  ;; therefore removed: three packages replaced by two built-in user options.
+  (leaf flymake
+    :straight nil
+    :custom
+    ((flymake-indicator-type                  . 'auto)
+     (flymake-show-diagnostics-at-end-of-line . 'short)
+     (flymake-no-changes-timeout              . 0.5)
+     (flymake-fringe-indicator-position       . 'left-fringe))
+    :hook ((prog-mode-hook . flymake-mode))
     :config
-    (leaf sideline-flymake :straight t)
-    (leaf sideline-flycheck :straight t))
+    ;; Emacs 29+ keymap API (Coding Rule: keymap-set, not define-key).
+    (keymap-set flymake-mode-map "M-n" #'flymake-goto-next-error)
+    (keymap-set flymake-mode-map "M-p" #'flymake-goto-prev-error)
+    (keymap-set flymake-mode-map "C-c ! l" #'flymake-show-buffer-diagnostics)
+    (keymap-set flymake-mode-map "C-c ! p" #'flymake-show-project-diagnostics))
+
+  ;; flycheck is retained ONLY as the diagnostics backend that lsp-mode expects
+  ;; when `my:use-lsp' selects the lsp-mode backend.  It is never enabled
+  ;; globally; with the eglot backend (the default) flymake is the sole checker.
+  (leaf flycheck :straight t)
 
   (provide 'utils-lint)
   ;;; utils/utils-lint.el ends here
@@ -9673,7 +9962,7 @@ Key files:
   (setq my:d:org          "/Users/ac1965/Documents/org/"
         my:d:org-journal   "/Users/ac1965/Documents/org/journal/"
         my:d:org-roam      "/Users/ac1965/Documents/org/org-roam/"
-        my:f:capture-blog-file "/Users/ac1965/Projects/mysite/all-posts.org")
+        my:f:capture-blog-file "/Users/ac1965/Documents/Projects/mysite/all-posts.org")
 
   ;; Font preferences
   ;; [Fix U] ui-font-default, ui-font-variable-pitch, ui-font-size are
@@ -10589,6 +10878,90 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
 #+end_src
 
 * Changelog
+
+** 2026-07 (Emacs 31 built-in adoption pass)
+
+Target version raised from "Emacs 30+" to *Emacs 31* (=emacs-31.0.90= / =master=).
+Every change below replaces hand-written configuration with a facility that Emacs
+itself now guarantees; all Emacs 31-only code is guarded so the configuration
+still loads on Emacs 30.
+
+*Removed (superseded by built-ins)*
+
+- *lisp/core/core-treesit.el*: deleted =core-treesit--mode-remap-alist=,
+  =core-treesit-apply-remap=, =core-treesit-register-sources=,
+  =core-treesit-install-grammar=, =core-treesit-install-all=,
+  =core-treesit--startup-init= and its =emacs-startup-hook= entry
+  (~155 lines → ~105 lines, and no startup hook).  Replaced by
+  =treesit-enabled-modes= (t) and =treesit-auto-install-grammar= (ask).
+  =treesit-language-source-alist= now uses the Emacs 31 keyword form
+  (=:source-dir=); =treesit-extra-load-path= (a user option since 31) points at
+  =var/tree-sitter/= and doubles as the grammar install directory.
+  A small =core-treesit--legacy-remap= remains for third-party modes
+  (=toml-mode=, =json-mode=, =yaml-mode=, =dockerfile-mode=) that publish no
+  =treesit-major-mode-remap-alist=.
+- *lisp/utils/utils-lint.el*: removed =sideline=, =sideline-flymake= and
+  =sideline-flycheck= (three packages) in favour of Emacs 31's
+  =flymake-show-diagnostics-at-end-of-line= (=short=) and
+  =flymake-indicator-type= (=auto=, TTY-aware).  =flycheck= is retained but not
+  enabled: it exists only as lsp-mode's diagnostics backend.
+- *lisp/dev/dev-web-core.el*: the global =(before-save-hook . delete-trailing-whitespace)=
+  is gone.  It rewrote *every* saved buffer, including files in third-party
+  repositories.  Replaced by the Emacs 31 buffer-local
+  =delete-trailing-whitespace-mode=, hooked into prog/org/conf/text modes only.
+- *lisp/core/core-history.el*: =savehist-additional-variables= cleared.  Emacs 31
+  merges external modifications of the history file only while that variable is
+  nil; multi-process safety (GUI + daemon + CLI) outweighs persisting
+  =my:desktop-ask-on-restore= there.
+
+*Added (Emacs 31 built-ins)*
+
+- *lisp/vcs/vcs-core.el* (new module, registered before =vcs-magit=): built-in
+  =vc= policy — =vc-allow-rewriting-published-history= nil,
+  =vc-async-checkin=, =vc-use-incoming-outgoing-prefixes=,
+  =vc-dir-auto-hide-up-to-date=, =vc-resolve-conflicts=, =vc-auto-revert-mode=,
+  and automatic =smerge-mode= on conflict markers.
+- *lisp/core/core-editing.el*: =hideshow= with Emacs 31 indicators
+  (=hs-show-indicators=, =hs-display-lines-hidden=, =hs-cycle=, =hs-toggle-all=;
+  tree-sitter modes gained =hs-minor-mode= support in 31); =eldoc-help-at-pt=;
+  =elisp-eldoc-funcall-with-docstring=; =kill-region-dwim=,
+  =delete-pair-push-mark=, =show-paren-not-in-comments-or-strings=,
+  =global-hl-line-sticky-flag= (window), =quit-window-kill-buffer=,
+  =kill-buffer-quit-windows=, =find-function-mode=.
+- *lisp/completion/completion-core.el*: =completion-eager-display= and
+  =completion-eager-update= pinned to nil (Vertico owns candidate display);
+  =completion-pcm-leading-wildcard= t.
+- *lisp/completion/completion-corfu.el*: built-in =completion-preview-mode=,
+  with =completion-preview-sort-function= aligned to =corfu-sort-function= so the
+  inline preview and the Corfu popup never disagree, and
+  =completion-preview-inhibit-functions= keeping it out of vterm/eshell/comint.
+- *lisp/core/core-history.el*: =recentf-autosave-interval= and
+  =save-place-autosave-interval= (300 s) — built-in timers replace ad-hoc saving;
+  =recentf-exclude-file-by-extension-p= added to =recentf-exclude=.
+- *lisp/core/core-native.el*: =native-comp-async-on-battery-power= nil — async
+  native compilation is suspended on battery power (Apple Silicon laptops).
+- *lisp/dev/dev-web-core.el*: =project-prune-zombie-projects=,
+  =project-list-exclude=, =project-mode-line-mode=.
+- *lisp/ui/ui-macos.el*: =system-taskbar-mode= (Dock badge/progress) and
+  =system-sleep= (idle-sleep inhibition during compilation; TRAMP teardown before
+  sleep) — both new in Emacs 31 and supported on macOS 10.9+.
+- *lisp/orgx/orgx-auto-tangle.el*: =timeout-throttle= (new library =timeout.el=)
+  collapses save bursts into a single tangle; the in-progress flag is retained
+  because throttling limits frequency, not reentrancy.
+
+*Compatibility notes (Emacs 31 incompatible changes)*
+
+- =if-let= / =when-let= are obsolete; the configuration already uses the starred
+  forms exclusively.
+- =FOO-ts-mode-indent-offset= was renamed to =FOO-ts-indent-offset=.
+- =hs-special-modes-alist= is obsolete; hiding commands now act on the innermost
+  block containing point (=hs-hide-block-behavior= restores the old behaviour).
+- =editorconfig-apply= is obsolete; =editorconfig-mode= is unaffected.
+- =xterm-mouse-mode= is on by default in capable terminals; disable it explicitly
+  if terminal-side copy/paste is preferred in CLI sessions.
+- =site-start.el= is now loaded *before* =early-init.el=.
+- Emacs 31 bundles Org 9.8.
+
 :PROPERTIES:
 :CUSTOM_ID: changelog
 :END:
