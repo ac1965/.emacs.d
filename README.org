@@ -1391,7 +1391,6 @@ native-comp が走ります。
 :CUSTOM_ID: modular-loader-and-core-suite
 :END:
 
-
 *** Overview
 
 このセットアップの中心にあるのは、「厳格に層化され、順序が明示されたモジュールロード」という
@@ -1719,7 +1718,7 @@ native-comp が走ります。
   ;;; modules.el ends here
 #+end_src
 
-*** [#B] core/
+*** core/
 :PROPERTIES:
 :CUSTOM_ID: core-modules
 :END:
@@ -1810,6 +1809,39 @@ native-comp が走ります。
           (insert ";;; -*- lexical-binding: t; -*-\n\n")))))
 
   (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
+
+  ;;;; 信頼するコンテンツ（Emacs 30.1 以降）----------------------------------
+
+  ;; Emacs 30.1 は `trusted-content' を導入した。バッファの内容を「実行してよい」と
+  ;; みなすかどうかを判定する仕組みである。`flymake-mode' が有効な Emacs Lisp バッファでは
+  ;; `elisp-flymake-byte-compile' がバイトコンパイルを走らせるが、バイトコンパイルは
+  ;; マクロ展開と `eval-when-compile' を評価する。つまり *コードを実行する*。
+  ;; 信頼できない内容に対してこれを行うのは危険なため、Emacs は `trusted-content-p' が
+  ;; nil のバッファでバックエンドを無効化し、警告を出す。
+  ;;
+  ;; 自分で管理している設定ファイルは信頼してよい。これを宣言しないと、lisp/ や personal/
+  ;; 配下の .el を編集するたびに flymake のバイトコンパイル・バックエンドが無効化される。
+  ;;
+  ;; 仕様上の注意:
+  ;; - ディレクトリを指定する要素は末尾が "/" でなければならない。
+  ;; - 値は abbreviate-file-name 形式で与える。
+  ;; - init.el（`user-init-file'）は Emacs が無条件に信頼するため、列挙する必要はない。
+  ;; - `trusted-content-p' は buffer-file-truename が nil のバッファを決して信頼しない。
+  ;;   したがって *scratch* はここに何を書いても信頼されない（`:all' のみが例外だが、
+  ;;   docstring が「gaping security hole」と明記しており採用しない）。
+  ;;   *scratch* で flymake を有効化しない方針については utils-lint.el を参照。
+
+  (defun core-policy--trusted-dir (dir)
+    "Return DIR as an abbreviated directory name suitable for `trusted-content'."
+    (abbreviate-file-name (file-name-as-directory (expand-file-name dir))))
+
+  (when (boundp 'trusted-content)
+    (setopt trusted-content
+            (list (core-policy--trusted-dir my:d:lisp)
+                  (core-policy--trusted-dir
+                   (expand-file-name "personal" user-emacs-directory))
+                  (abbreviate-file-name
+                   (expand-file-name "early-init.el" user-emacs-directory)))))
 
   (provide 'core-policy)
   ;;; core/core-policy.el ends here
@@ -9564,7 +9596,8 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;;
   ;; 本ファイルの責務:
   ;; - オンデマンド検査のため flycheck を導入する
-  ;; - すべての `prog-mode' バッファで flymake を有効化する
+  ;; - ファイルを訪問している `prog-mode' バッファで flymake を有効化する
+  ;;   （*scratch* 等の非ファイルバッファは除外する。理由は下記）
   ;; - 診断メッセージを行末に表示するよう設定する
   ;;; Code:
 
@@ -9576,6 +9609,33 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;; （`flymake-indicator-type' = auto。TTY フレームでも機能する）。
   ;; したがって sideline のスタック（sideline + sideline-flymake + sideline-flycheck）は
   ;; 削除した。3 つのパッケージが、2 つの組み込みユーザーオプションに置き換わった。
+  ;; flymake はファイルを訪問しているバッファでのみ有効化する。
+  ;;
+  ;; 理由: `lisp-interaction-mode'（*scratch*）は `prog-mode' 派生なので、
+  ;; prog-mode-hook に flymake-mode を直接繋ぐと *scratch* でも有効になる。しかし
+  ;; `elisp-flymake-byte-compile' は Emacs 30.1 以降 `trusted-content-p' を確認し、
+  ;; buffer-file-truename が nil のバッファ（= ファイルを訪問していないバッファ）を
+  ;; 決して信頼しない。結果として起動のたびに次の警告が出る:
+  ;;
+  ;;   Disabling backend elisp-flymake-byte-compile because
+  ;;   (user-error "Disabling elisp-flymake-byte-compile in *scratch* (untrusted content)")
+  ;;
+  ;; これは Emacs の設計どおりの動作である。バイトコンパイルはマクロを展開し
+  ;; `eval-when-compile' を評価する（= コードを実行する）ため、貼り付けたばかりの
+  ;; スニペットに対して自動実行するのは危険だからである。
+  ;;
+  ;; 対処として `trusted-content' に `:all' を設定する方法があるが、docstring が
+  ;; 「gaping security hole」と明記しており採用しない。*scratch* で flymake を
+  ;; 有効化しなければ済む話である。診断は C-x C-e / C-j での評価時に得られる。
+  ;;
+  ;; 信頼するディレクトリ（lisp/ と personal/）の宣言は core-policy.el にある。
+  (defun utils-lint--enable-flymake-maybe ()
+    "Enable `flymake-mode' in `prog-mode' buffers that visit a file.
+  Buffers without a file (notably *scratch*) can never satisfy `trusted-content-p',
+  so `elisp-flymake-byte-compile' would only disable itself with a warning."
+    (when buffer-file-name
+      (flymake-mode 1)))
+
   (leaf flymake
     :straight nil
     :custom
@@ -9583,7 +9643,7 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
      (flymake-show-diagnostics-at-end-of-line . 'short)
      (flymake-no-changes-timeout              . 0.5)
      (flymake-fringe-indicator-position       . 'left-fringe))
-    :hook ((prog-mode-hook . flymake-mode))
+    :hook ((prog-mode-hook . utils-lint--enable-flymake-maybe))
     :config
     ;; Emacs 29 以降のキーマップ API（コーディング規則: define-key ではなく keymap-set）。
     (keymap-set flymake-mode-map "M-n" #'flymake-goto-next-error)
@@ -9959,7 +10019,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;;; utils/utils-claude.el ends here
 #+end_src
 
-*** Personal Configuration
+** Personal Configuration
 :PROPERTIES:
 :CUSTOM_ID: personal-config
 :END:
@@ -9996,7 +10056,6 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Apple Music 操作 |
 | =personal/personal-messages.el= | macOS Messages.app のアーカイバ |
 | =personal/personal-ai.el= | Org Babel と Claude API の統合 |
-
 *** personal/user.el
 :PROPERTIES:
 :CUSTOM_ID: personal-user
@@ -10176,7 +10235,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; 識別情報
   ;; user-full-name と user-mail-address は defcustom（simple.el）である。
   (setopt user-full-name    "YAMASHITA, Takao"
-          user-mail-address "tjy1965@gmail.com")
+        user-mail-address "tjy1965@gmail.com")
 
   ;; GPG キー
   (setenv "GPG_KEY_ID" "B4A5D8")
@@ -10216,6 +10275,22 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   (setopt my:use-ui  'nano
           my:use-lsp 'eglot)
 
+  ;;
+  (with-eval-after-load 'org-roam-ui
+    ;; HTTP/WebSocket
+    (setq org-roam-ui-port 35901)
+
+    ;; ブラウザで開く
+    (setq browse-url-browser-function #'browse-url-default-browser)
+
+    ;; 自動起動
+    (setq org-roam-ui-open-on-start t)
+
+    ;; DB変更をリアルタイム反映
+    (setq org-roam-ui-sync-theme t
+          org-roam-ui-follow t
+          org-roam-ui-update-on-save t))
+
   ;; 拡張子 → prog-mode の登録
   ;;
   ;; powershell-mode も visual-basic-mode も modules.el ではロードしない。
@@ -10252,13 +10327,13 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   (defvar ac1965--sis-indicator ""
     "Cached IME indicator string for the nano-modeline right segment.
-Updated by `ac1965--sis-update-indicator' via `sis-change-hook'.
-Values: \" A\" (english), \" あ\" (other), \"\" (unknown/unset).
-Global so all buffers reflect the current IME state.")
+  Updated by `ac1965--sis-update-indicator' via `sis-change-hook'.
+  Values: \" A\" (english), \" あ\" (other), \"\" (unknown/unset).
+  Global so all buffers reflect the current IME state.")
 
   (defun ac1965--sis-update-indicator ()
     "Update `ac1965--sis-indicator' from the current `sis--current' value.
-Attached to `sis-change-hook'; called whenever sis detects an IME switch."
+  Attached to `sis-change-hook'; called whenever sis detects an IME switch."
     (setq ac1965--sis-indicator
           (pcase (and (boundp 'sis--current) sis--current)
             ('english " A")
@@ -10295,11 +10370,11 @@ Attached to `sis-change-hook'; called whenever sis detects an IME switch."
 
   (defun ac1965--nano-time-encoding ()
     "Return a propertized \"HH:MM  CODING  IME\" string for the nano-modeline right segment.
-Evaluated every frame inside nano-modeline--make's :eval block.
-Time and coding system are computed directly; IME state is read from
-the cache `ac1965--sis-indicator', which is updated via `sis-change-hook'
-to avoid spawning osascript processes on every redisplay.
-Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped."
+  Evaluated every frame inside nano-modeline--make's :eval block.
+  Time and coding system are computed directly; IME state is read from
+  the cache `ac1965--sis-indicator', which is updated via `sis-change-hook'
+  to avoid spawning osascript processes on every redisplay.
+  Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped."
     (let* ((time-str (format-time-string "%H:%M"))
            (cs       (or (and (boundp 'buffer-file-coding-system)
                               buffer-file-coding-system)
@@ -10314,8 +10389,8 @@ Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped
 
   (defun ac1965--nano-prog-mode (&optional default)
     "Override for `nano-modeline-prog-mode' with time+encoding in right segment.
-DEFAULT is passed through to `nano-modeline-header': t means global
-(setq-default), nil means buffer-local (setq-local)."
+  DEFAULT is passed through to `nano-modeline-header': t means global
+  (setq-default), nil means buffer-local (setq-local)."
     (funcall nano-modeline-position
              '((nano-modeline-buffer-status) " "
                (nano-modeline-buffer-name) " "
@@ -10327,7 +10402,7 @@ DEFAULT is passed through to `nano-modeline-header': t means global
 
   (defun ac1965--nano-text-mode (&optional default)
     "Override for `nano-modeline-text-mode' with time+encoding in right segment.
-DEFAULT has the same meaning as in `ac1965--nano-prog-mode'."
+  DEFAULT has the same meaning as in `ac1965--nano-prog-mode'."
     (funcall nano-modeline-position
              '((nano-modeline-buffer-status) " "
                (nano-modeline-buffer-name) " "
@@ -10339,16 +10414,16 @@ DEFAULT has the same meaning as in `ac1965--nano-prog-mode'."
 
   (defvar ac1965--nano-saved-mode-line-format nil
     "Saved value of `mode-line-format' before nano-modeline suppressed it.
-Restored by `ac1965/nano-modeline-toggle' when toggling off.")
+  Restored by `ac1965/nano-modeline-toggle' when toggling off.")
 
   (defun ac1965--nano-apply-global ()
     "Set nano-modeline as the global header-line and hide the mode-line.
-Saves the current default `mode-line-format' into
-`ac1965--nano-saved-mode-line-format' before clearing it, so that
-`ac1965/nano-modeline-toggle' can restore it later.
-Calls `ac1965--nano-prog-mode' with default=t so that
-`nano-modeline-header' uses setq-default, covering every buffer
-including those that never trigger a major-mode hook."
+  Saves the current default `mode-line-format' into
+  `ac1965--nano-saved-mode-line-format' before clearing it, so that
+  `ac1965/nano-modeline-toggle' can restore it later.
+  Calls `ac1965--nano-prog-mode' with default=t so that
+  `nano-modeline-header' uses setq-default, covering every buffer
+  including those that never trigger a major-mode hook."
     (unless ac1965--nano-saved-mode-line-format
       (setq ac1965--nano-saved-mode-line-format
             (default-value 'mode-line-format)))
@@ -10368,24 +10443,24 @@ including those that never trigger a major-mode hook."
 
   (defun ac1965/nano-modeline-toggle ()
     "Toggle nano-modeline header-line display globally.
-When header-line-format is set (visible), clears it globally and
-restores `mode-line-format' from `ac1965--nano-saved-mode-line-format'.
-When cleared, calls `ac1965--nano-apply-global' to re-enable the
-header-line globally and suppress the mode-line again."
+  When header-line-format is set (visible), clears it globally and
+  restores `mode-line-format' from `ac1965--nano-saved-mode-line-format'.
+  When cleared, calls `ac1965--nano-apply-global' to re-enable the
+  header-line globally and suppress the mode-line again."
     (interactive)
     (if (default-value 'header-line-format)
-        (progn
-          (setq-default header-line-format nil)
-          (setq-default mode-line-format
-                        (or ac1965--nano-saved-mode-line-format
-                            mode-line-format)))
-      (ac1965--nano-apply-global)))
+       (progn
+         (setq-default header-line-format nil)
+         (setq-default mode-line-format
+                   (or ac1965--nano-saved-mode-line-format
+                      mode-line-format)))
+     (ac1965--nano-apply-global)))
 
   (defun ac1965--bind-leader-keys ()
     "Bind ac1965-specific keys into the leader keymap after startup.
-Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
-(depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
-is guaranteed to be a live keymap."
+  Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+  (depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
+  is guaranteed to be a live keymap."
     (ui-keymap--bind 'ui-leader-t-map "m" #'ac1965/nano-modeline-toggle))
 
   (add-hook 'after-init-hook #'ac1965--bind-leader-keys 10)
@@ -11350,6 +11425,42 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/org
 パッケージ側が同梱版より新しいバージョンを必要とする場合があり、straight が新しい版を
 導入するのは *意図した動作* である。したがって疑似パッケージに加えるのは、同梱版で十分だと
 確認できたもの（ここでは org）に限る。
+
+*** *scratch* での flymake 警告（Emacs 30.1 の trusted-content）
+
+起動のたびに次の警告が出ていた。
+
+#+begin_example
+Disabling backend elisp-flymake-byte-compile because
+(user-error "Disabling elisp-flymake-byte-compile in *scratch* (untrusted content)")
+#+end_example
+
+*原因*
+
+Emacs 30.1 が導入した =trusted-content= による、設計どおりの動作である。
+=elisp-flymake-byte-compile= はバイトコンパイルを走らせるが、バイトコンパイルはマクロを
+展開し =eval-when-compile= を評価する。すなわち *コードを実行する*。信頼できない内容に
+対してこれを自動実行するのは危険なため、Emacs は =trusted-content-p= が nil のバッファで
+このバックエンドを無効化する。
+
+=utils-lint= は =:hook ((prog-mode-hook . flymake-mode))= としていた。
+=lisp-interaction-mode=（=*scratch*=）は =prog-mode= 派生なので flymake が有効になるが、
+=trusted-content-p= は =buffer-file-truename= が nil のバッファを *決して* 信頼しない。
+=*scratch*= はファイルを訪問していないため、=trusted-content= に何を列挙しても信頼されない。
+
+*対処*
+
+=trusted-content= に =:all= を設定すれば警告は消えるが、docstring が「gaping security hole」と
+明記しており採用しない。=*scratch*= で flymake を有効化しなければ済む。
+
+- =utils-lint.el= — =prog-mode-hook= に繋ぐ関数を =utils-lint--enable-flymake-maybe= に変更し、
+  =buffer-file-name= が非 nil のバッファでのみ =flymake-mode= を有効化する。診断は
+  =C-x C-e= / =C-j= での評価時に得られるため、=*scratch*= で失うものは無い。
+- =core-policy.el= — =trusted-content= に =lisp/=、=personal/=、=early-init.el= を登録した。
+  これを宣言しないと、自分の設定ファイルを編集するたびに flymake のバイトコンパイル・
+  バックエンドが無効化される。=init.el=（=user-init-file=）は Emacs が無条件に信頼するため
+  列挙不要である。ディレクトリ要素は末尾が =/= でなければならず、値は
+  =abbreviate-file-name= 形式で与える必要がある。
 
 *** ドキュメントとコードの整合
 
