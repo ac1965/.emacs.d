@@ -916,6 +916,30 @@ gcmh が担当します。
           (format "build-%d.%d" emacs-major-version emacs-minor-version)
           straight-profiles '((nil . "default.el")))
 
+  ;; Org は Emacs 同梱である（Emacs 32.0.50: Org 9.8.7）。しかし straight はそれを知らない。
+  ;; org-modern / org-roam / ox-hugo / org-journal などは Package-Requires に
+  ;; (org "9.x") を宣言しているため、straight はその依存を解決しようとして org の
+  ;; レシピを探し、git から clone しはじめる:
+  ;;
+  ;;   Building org-modern...
+  ;;   Building org-modern → Cloning org...
+  ;;
+  ;; straight-built-in-pseudo-packages に載っているパッケージは、依存として現れても
+  ;; レシピ探索の対象外となり、単にスキップされる。既定値は
+  ;; '(emacs nadvice python image-mode) で org を含まないため、ここで追加する。
+  ;;
+  ;; 設定場所が early-init.el でなければならない理由:
+  ;;   本変数は「org に依存するパッケージが straight に登録されるより前」に設定する
+  ;;   必要がある（straight.el の docstring が明記している）。straight のブートストラップ
+  ;;   自体が init.el のセクション 2 で走るため、その前に値を確定できるのは early-init.el
+  ;;   だけである。straight.el がロードされた時点で defcustom が評価されるが、defcustom は
+  ;;   束縛済みの値を上書きしないため、ここでの設定が生き残る。
+  ;;
+  ;; 既定値のリストは維持したうえで org を足す（既定値を落とすと emacs / nadvice などが
+  ;; 再び clone 対象になる）。
+  (setopt straight-built-in-pseudo-packages
+          '(emacs nadvice python image-mode org))
+
   ;; ---------------------------------------------------------------------------
   ;; 5) macOS Homebrew ツールチェーン
   ;; ---------------------------------------------------------------------------
@@ -1036,7 +1060,7 @@ gcmh が担当します。
 :header-args:emacs-lisp: :tangle init.el
 :END:
 
-*** init.el Design Notes
+**** init.el Design Notes
 
 =early-init.el= が土台を固めた後、機能ロジックを有効化するのが =init.el= の役目です。
 責務ははっきり分かれていて、このファイルはブートストラップだけを行い、実際の設定は
@@ -11284,6 +11308,48 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
 =org-roam-ui-open= には =;;;###autoload= が付いており、呼び出し時に自動でロードされる。
 これにより本モジュールが =org-roam-ui= → =org-roam= → =org= の連鎖を起動時に引き込むことが
 なくなり、Org の遅延ロードが保たれる。
+
+*** straight が組み込み Org を clone する問題
+
+=straight-use-package 'org= を削除した後も、straight は org を git から clone していた。
+
+#+begin_example
+Building org-modern...
+Building org-modern → Cloning org...
+#+end_example
+
+*原因*
+
+=org-modern=、=org-roam=、=ox-hugo=、=org-journal= などは =Package-Requires= に
+=(org "9.x")= を宣言している。straight は依存関係を解決する際、org が Emacs 同梱である
+ことを知らないため、レシピを探して clone しようとする。=straight-use-package 'org= を
+書かなくても、*依存として要求された時点で* clone が走る。
+
+*対処*
+
+=straight-built-in-pseudo-packages= に =org= を追加した。この変数に載っているパッケージは、
+依存として現れてもレシピ探索の対象外となり、単にスキップされる。既定値は
+='(emacs nadvice python image-mode)= であり、org を含まない。
+
+設定場所は =early-init.el= でなければならない。straight.el の docstring が
+「org に依存するパッケージが登録されるより前に設定すること」と明記しており、straight の
+ブートストラップは =init.el= のセクション 2 で走るためである。straight.el がロードされた
+時点で =defcustom= が評価されるが、=defcustom= は束縛済みの値を上書きしないため、
+=early-init.el= での設定が生き残る。
+
+既に clone された org は削除して再ビルドすること。
+
+#+begin_example
+rm -rf ~/.emacs.d/.cache/straight/repos/org
+rm -rf ~/.emacs.d/.cache/straight/build-*/org
+#+end_example
+
+*transient / seq などを追加しない理由*
+
+=magit= は =(transient "0.7")= や =(seq "2.24")= を要求する。これらも Emacs 同梱だが、
+パッケージ側が同梱版より新しいバージョンを必要とする場合があり、straight が新しい版を
+導入するのは *意図した動作* である。したがって疑似パッケージに加えるのは、同梱版で十分だと
+確認できたもの（ここでは org）に限る。
 
 *** ドキュメントとコードの整合
 
