@@ -1,11 +1,11 @@
-# Makefile — One-pass builder for a modular Emacs config
-# - Default / `make all` : onepass-init (tangle -> incremental byte-compile)
-# - `make onepass-q`     : -Q (minimal env) tangle -> full byte-compile
-# - Paths are absolutized from repo root to avoid "lisp/personal" confusion.
+# Makefile — モジュール式 Emacs 設定のためのワンパス・ビルダー
+# - 既定 / `make all` : onepass-init（tangle -> 差分バイトコンパイル）
+# - `make onepass-q`  : -Q（最小環境）で tangle -> 全バイトコンパイル
+# - パスはリポジトリルートから絶対化する（"lisp/personal" の混同を防ぐため）
 
 SHELL := /bin/sh
 
-# ---- Repo-root & absolutized dirs --------------------------------------------
+# ---- リポジトリルートと絶対化したディレクトリ -----------------------------------
 ROOT := $(CURDIR)
 
 EMACS  ?= emacs
@@ -13,7 +13,7 @@ ORG    ?= README.org
 EARLY  ?= early-init.el
 INIT   ?= init.el
 
-# Always treat these as top-level under repo root
+# これらは常にリポジトリルート直下として扱う
 LISPDIR_REL     ?= lisp
 PERSONALDIR_REL ?= personal
 
@@ -26,14 +26,14 @@ INIT  := $(abspath $(ROOT)/$(INIT))
 STRICT_BYTE_WARN ?= 0   # Treat byte-compile warnings as errors
 NATIVE_COMPILE   ?= 1   # Prefer native-compile if available
 
-# ---- Emacs runners & common eval snippets ------------------------------------
+# ---- Emacs の実行方法と共通の eval スニペット -----------------------------------
 EMACS_BATCH := "$(EMACS)" --batch
 EMACS_Q     := $(EMACS_BATCH) -Q
 
 EVAL_STRICT := $(if $(filter 1,$(STRICT_BYTE_WARN)),--eval "(setq byte-compile-error-on-warn t)",)
 EVAL_NATIVE := $(if $(filter 1,$(NATIVE_COMPILE)),--eval "(setq comp-deferred-compilation t)",)
 
-# Optional leaf injection for -Q
+# -Q 実行時の leaf の任意注入
 STRAIGHT_BASE_DIR ?= $(shell \
   if [ -f "$(EARLY)" ]; then \
     $(EMACS_Q) -l "$(EARLY)" \
@@ -54,11 +54,11 @@ EVAL_LEAF := \
             (ignore-errors (require 'leaf-keywords)) \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
-# ---- Default target (no args) ------------------------------------------------
+# ---- 既定ターゲット（引数なし）--------------------------------------------------
 .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies
 all: onepass-init
 
-# ---- One-pass (early+init env) : tangle -> incremental compile ---------------
+# ---- ワンパス（early+init 環境）: tangle -> 差分コンパイル -----------------------
 onepass-init: $(ORG)
 	@echo "[onepass-init] tangle -> incremental byte-compile (init loaded)"
 	@$(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" \
@@ -73,7 +73,7 @@ onepass-init: $(ORG)
 	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
 	  --eval "(message \"[onepass-init] done\")"
 
-# ---- One-pass (-Q minimal env) : tangle -> full compile ----------------------
+# ---- ワンパス（-Q 最小環境）: tangle -> 全コンパイル -----------------------------
 onepass-q: $(ORG)
 	@echo "[onepass-q] -Q tangle -> full byte-compile (init not loaded)"
 	@$(EMACS_Q) \
@@ -88,7 +88,7 @@ onepass-q: $(ORG)
 	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
 	  --eval "(message \"[onepass-q] done\")"
 
-# ---- Utilities ---------------------------------------------------------------
+# ---- ユーティリティ -------------------------------------------------------------
 show-files:
 	@echo "[list] $(LISPDIR)";    { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } || true
 	@echo "[list] $(PERSONALDIR)"; { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } || true
@@ -121,9 +121,9 @@ tangle:
 	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
 	  --eval "(org-babel-tangle-file \"$(ORG)\")"
 
-# ---- check-cookies : verify lexical-binding cookie on line 1 of every .el ---
-# Run after `make tangle` to confirm all output files have the cookie.
-# Exits 0 if all pass, 1 and lists offenders if any are missing.
+# ---- check-cookies : 全 .el の 1 行目にある lexical-binding クッキーを検証 -------
+# `make tangle' の後に実行し、生成物すべてにクッキーがあることを確認する。
+# すべて合格なら 0 を返す。欠落があれば該当ファイルを列挙して 1 を返す。
 check-cookies:
 	@echo "[check-cookies] scanning $(LISPDIR) ..."
 	@fail=0; \
@@ -142,17 +142,17 @@ check-cookies:
 	   exit 1; \
 	 fi
 
-# ---- reload : purge .elc then re-tangle --------------------------------------
-# Use this after replacing README.org with a new Claude output to guarantee
-# that stale byte-compiled modules cannot shadow the freshly tangled .el files.
-# This target is the operational fix for the Fix BM / Fix BO class of incident
-# (stale on-disk modules producing warnings that do not exist in source).
+# ---- reload : .elc を削除してから再 tangle ---------------------------------------
+# README.org を新しい Claude の出力に差し替えた後に使う。古いバイトコンパイル済み
+# モジュールが、新しく tangle した .el を覆い隠さないことを保証するためである。
+# このターゲットは、ソースには存在しない警告をディスク上の古いモジュールが出すという
+# 古いモジュールが出す）に対する運用上の対処である。
 reload: clean tangle check-cookies
 	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
 
-# ---- checkdoc : verify docstrings on all public defun ----------------------
-# Scans every .el file under LISPDIR for missing or malformed docstrings.
-# Exits 0 when all files pass, 1 if any produce warnings.
+# ---- checkdoc : すべての公開 defun の docstring を検証 ---------------------------
+# LISPDIR 配下の全 .el を走査し、docstring の欠落や不正を検出する。
+# 全ファイルが合格すれば 0、警告が出れば 1 を返す。
 checkdoc:
 	@echo "[checkdoc] scanning $(LISPDIR) ..."; \
 	 fail=0; \
@@ -167,21 +167,21 @@ checkdoc:
 	 done; \
 	 [ $$fail -eq 0 ] && echo "[checkdoc] all files OK" || exit 1
 
-# ---- checkdoc-strict : checkdoc with exit-on-failure -------------------------
-# Use in CI to fail the build when any public defun lacks a docstring.
-# Requires the Emacs session to have access to the module load path.
+# ---- checkdoc-strict : 失敗時に終了する checkdoc ---------------------------------
+# 公開 defun に docstring が無いときビルドを失敗させたい CI で使う。
+# Emacs セッションがモジュールの load-path を参照できる必要がある。
 
-# ---- lint : checkdoc + check-cookies combined --------------------------------
-# Single target to run all static quality checks before committing.
+# ---- lint : checkdoc + check-cookies をまとめて実行 -------------------------------
+# コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
 .PHONY: checkdoc lint
 lint: check-cookies checkdoc
 	@echo "[lint] all checks passed"
 
-# ---- package-lint : optional — requires package-lint on load-path -----------
-# Validates MELPA-style package headers and dependency declarations.
-# Not required for the personal config workflow but useful when extracting
-# modules as standalone packages.
-# Install: M-x package-install RET package-lint RET
+# ---- package-lint : 任意 — load-path 上に package-lint が必要 --------------------
+# MELPA 形式のパッケージヘッダと依存宣言を検証する。
+# 個人設定のワークフローでは不要だが、モジュールを独立パッケージとして切り出す際に
+# 有用である。
+# インストール: M-x package-install RET package-lint RET
 .PHONY: package-lint
 package-lint:
 	@echo "[package-lint] scanning $(LISPDIR) ..."; \
