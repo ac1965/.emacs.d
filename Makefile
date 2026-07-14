@@ -55,7 +55,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- 既定ターゲット（引数なし）--------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle
 all: onepass-init
 
 # ---- ワンパス（early+init 環境）: tangle -> 差分コンパイル -----------------------
@@ -171,10 +171,36 @@ checkdoc:
 # 公開 defun に docstring が無いときビルドを失敗させたい CI で使う。
 # Emacs セッションがモジュールの load-path を参照できる必要がある。
 
-# ---- lint : checkdoc + check-cookies をまとめて実行 -------------------------------
+# ---- check-tangle : tangle 先を継承できない emacs-lisp ブロックを検出 -------------
+# Org の :header-args: はサブツリーにのみ継承される。見出しレベルを 1 段間違えて
+# "**** foo Design Notes" を "*** foo Design Notes" と書くと、親（*** foo）の
+# 兄弟になってしまい、その配下の src ブロックが :tangle を受け取れない。
+# tangle は静かに成功し、当該 .el だけが生成されない — 実機で 2 回踏んだ事故である。
+#
+# 本ターゲットは README.org を Org のパーサで走査し、実効 :tangle が nil または
+# "no" の emacs-lisp ブロックを行番号付きで列挙して失敗する。
+.PHONY: check-tangle
+check-tangle:
+	@echo "[check-tangle] verifying :tangle inheritance in $(ORG) ..."
+	@$(EMACS) -Q --batch \
+	  --eval "(require 'org)" \
+	  --eval "(with-current-buffer (find-file-noselect \"$(ORG)\") \
+	            (let ((bad 0)) \
+	              (org-babel-map-src-blocks nil \
+	                (when (string= lang \"emacs-lisp\") \
+	                  (let ((tgt (cdr (assq :tangle (nth 2 (org-babel-get-src-block-info t)))))) \
+	                    (when (or (null tgt) (equal tgt \"no\")) \
+	                      (setq bad (1+ bad)) \
+	                      (message \"  ORPHAN src block at line %d\" (line-number-at-pos)))))) \
+	              (if (> bad 0) \
+	                  (progn (message \"[check-tangle] FAILED: %d block(s) without a tangle target\" bad) \
+	                         (kill-emacs 1)) \
+	                (message \"[check-tangle] ok\")))))"
+
+# ---- lint : check-tangle + check-cookies + checkdoc をまとめて実行 ----------------
 # コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
 .PHONY: checkdoc lint
-lint: check-cookies checkdoc
+lint: check-tangle check-cookies checkdoc
 	@echo "[lint] all checks passed"
 
 # ---- package-lint : 任意 — load-path 上に package-lint が必要 --------------------
