@@ -11264,11 +11264,11 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # リテラルの "=" 文字としてそのまま表示される（シンタックスハイライトも失われる）。
   # tangle には影響しないため、見た目の欠陥として気づかれにくい。
   #
-  # 検査本体は scripts/check-emphasis.el（Appendix を参照）。シェル引用符の入れ子を
-  # 避けるため、check-tangle のような --eval 一行ではなく --load で読み込む。
+  # 検査本体は scripts/check_emphasis.py（Appendix を参照）。標準ライブラリのみに
+  # 依存する Python スクリプトであり、Emacs のバッチモードは介さない。
   .PHONY: check-emphasis
   check-emphasis:
-  	@$(EMACS) -Q --batch --load scripts/check-emphasis.el -- "$(ORG)"
+  	@python3 scripts/check_emphasis.py "$(ORG)"
 
   # ---- lint : check-tangle + check-emphasis + check-cookies + checkdoc をまとめて実行 --
   # コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
@@ -11292,177 +11292,212 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   	               (message \"[package-lint] not installed; skipping\"))""
 #+end_src
 
-* Appendix: check-emphasis.el — 効かない Org 強調記法の検出スクリプト
+* Appendix: check_emphasis.py — 効かない Org 強調記法の検出スクリプト
 :PROPERTIES:
-:CUSTOM_ID: appendix-check-emphasis-el
-:header-args:emacs-lisp: :tangle scripts/check-emphasis.el :mkdirp yes :comments link
+:CUSTOM_ID: appendix-check-emphasis-py
+:header-args:python: :tangle scripts/check_emphasis.py :mkdirp yes :comments link
 :END:
 
-=make check-emphasis=（=make lint= にも含まれる）が呼び出す検査本体です。実装を
-=README.org= 本文の Makefile ブロックへ =--eval= で直書きすると、シェルの引用符と
-Elisp の文字リテラル・正規表現のエスケープが何重にも重なり、書いた本人ですら
-検証できなくなります。通常の Elisp ファイルとして独立させ、=--load= で読み込む
-構成にしました。
+=make check-emphasis= （ =make lint= にも含まれる）が呼び出す検査本体です。
+
+*なぜ Elisp ではなく Python なのか*
+
+最初の実装は Elisp（ =scripts/check-emphasis.el= 、 =--load= で読み込む方式）でした。
+しかし本リポジトリの開発環境には Emacs 本体が無く、実機で 2 件の不具合が見つかるまで
+気づけませんでした。 =:comments link= が =lexical-binding= クッキーを 1 行目から
+追い出す問題と、 =--load FILE -- ARGS= における =command-line-args-left= の ="--"=
+処理の問題です。いずれも Elisp のバッチモード特有の癖であり、実行できない環境で
+書いたコードでは検証しきれませんでした。
+
+Python は本リポジトリの開発環境で実際に実行・検証できます。ロジックは Elisp 版と
+同一で、 =scripts/reload.py= と同じく標準ライブラリのみに依存します。
 
 *検出方法*
 
 =org-emphasis-regexp-components= が定める「直前・直後に許される文字」の集合を
-そのまま Elisp の文字リストとして持ち、 =/= verbatim と ~code~ を先に確定させて
+そのまま Python の =set= として持ち、 =/= verbatim と ~code~ を先に確定させて
 保護領域とし、 *bold* はそれと重ならない候補だけを検査します。 =*scratch*= の
 ように verbatim の内側にある =*= を誤って bold 候補と見なさないよう、直前・直後が
 =/~ の場合は除外します（README.org 側の自動修正スクリプトと同じ判定規則です）。
 
-コードブロック本文・見出し行・drawer/keyword/table 行（先頭が =:= =#= =\vert=）は
+コードブロック本文・見出し行・drawer/keyword/table 行（先頭が =:= =#= =|= ）は
 検査対象から除外します。
 
 *実行例*
 
 #+begin_example
-$ make check-emphasis
+$ python3 scripts/check_emphasis.py README.org design_spec.org
 [check-emphasis] scanning README.org for ineffective emphasis markers ...
-  L249: =my:modules= に含まれる
+  README.org:249: =my:modules= に含まれる
 [check-emphasis] FAILED: 1 ineffective marker(s)
 #+end_example
 
-#+begin_src emacs-lisp
-  ;;; scripts/check-emphasis.el --- 効かない Org 強調記法の検出 -*- lexical-binding: t; -*-
+複数ファイルを一度に検査できます。 =make check-emphasis= は =$(ORG)= （ =README.org= ）
+のみを渡しますが、 =design_spec.org= も含めて検査したい場合は直接呼び出してください。
 
-  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
-  ;; Category: tooling
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; org-emphasis-regexp-components の既定値では、開始マーカーの直前・終了マーカーの
-  ;; 直後が特定の文字集合（半角空白・タブ・- – — ( " ' { が直前側、
-  ;; . , : ! ? ; ' " ) } [ が直後側、および行頭・行末）でなければ強調は成立しない。
-  ;; 全角文字（、。（）「」等）はこの集合に含まれないため、和文に接した =verbatim=、
-  ;; ~code~、*bold* は静かに機能しなくなる（マーカーがリテラル文字としてそのまま
-  ;; 表示され、シンタックスハイライトも失われる）。tangle には影響しないため、
-  ;; 見た目の欠陥として気づかれにくい。
-  ;;
-  ;; 使い方:
-  ;;   emacs -Q --batch --load scripts/check-emphasis.el -- README.org
-  ;;
-  ;; 終了コード: 検出 0 件で 0、1 件以上で 1。
-  ;;
-  ;;; Code:
+#+begin_src python
+  #!/usr/bin/env python3
+  """Detect Org emphasis markers that org-emphasis-regexp-components silently rejects.
 
-  (require 'cl-lib)
+  By default, Org requires the character immediately before an opening marker and
+  immediately after a closing marker to belong to a specific set (ASCII whitespace,
+  "-", en/em dash, and a few punctuation marks -- see PRE_OK / POST_OK below).
+  Fullwidth characters (、。（）「」 etc.) are not in that set, so =verbatim=, ~code~,
+  and *bold* spans adjacent to Japanese prose are silently rendered as literal text
+  instead of being fontified -- a defect that does not affect tangling and is easy
+  to miss by eye.
 
-  (defconst check-emphasis--pre-ok
-    '(?\s ?\t ?- ?\u2013 ?\u2014 ?\( ?\" ?\' ?\{)
-    "Characters allowed immediately before an emphasis marker's opening char.")
+  This mirrors the detection rule used to auto-fix README.org during development:
+  =verbatim= and ~code~ spans are resolved first and treated as protected regions
+  (a bare = or ~ is always literal, never a bold delimiter). *bold* candidates are
+  then checked only outside those protected regions, and are skipped when
+  immediately adjacent to = or ~ (so the asterisks inside =*scratch*= are not
+  mistaken for a bold marker).
 
-  (defconst check-emphasis--post-ok
-    '(?\s ?\t ?- ?\u2013 ?\u2014 ?. ?, ?: ?! ?\? ?\; ?\' ?\" ?\) ?\} ?\[)
-    "Characters allowed immediately after an emphasis marker's closing char.")
+  Usage:
+      python3 scripts/check_emphasis.py README.org [design_spec.org ...]
 
-  (defun check-emphasis--marker-regexp (mk)
-    "Build a regexp matching MK CONTENT MK for the single-character marker MK.
-  CONTENT must not start or end with whitespace or MK itself, and must not
-  contain MK internally.  Mirrors the border/body rules implied by
-  `org-emphasis-regexp-components'."
-    (let* ((lit (char-to-string mk))
-           (esc (regexp-quote lit)))
-      (concat esc
-              "\\(" "[^[:space:]" lit "]"
-              "[^" lit "\n]*?"
-              "[^[:space:]" lit "]"
-              "\\|" "[^[:space:]" lit "]"
-              "\\)"
-              esc)))
+  Exit status: 0 if no violations were found in any file, 1 otherwise.
+  """
 
-  (defun check-emphasis--collect-spans (line mk)
-    "Return all (BEG . END) spans in LINE matching the marker MK, unfiltered."
-    (let ((re (check-emphasis--marker-regexp mk))
-          (pos 0)
-          (spans nil))
-      (while (string-match re line pos)
-        (push (cons (match-beginning 0) (match-end 0)) spans)
-        (setq pos (match-end 0)))
-      (nreverse spans)))
+  from __future__ import annotations
 
-  (defun check-emphasis--overlaps-p (a b spans)
-    "Return non-nil if the span [A, B) overlaps any span in SPANS."
-    (cl-some (lambda (s) (and (< a (cdr s)) (< (car s) b))) spans))
+  import re
+  import sys
+  from pathlib import Path
 
-  (defun check-emphasis--check-span (line lineno a b)
-    "Report LINE's span [A, B) at LINENO if its border chars are disallowed.
-  Returns 1 if a violation was reported, 0 otherwise."
-    (let* ((pre  (and (> a 0) (aref line (1- a))))
-           (post (and (< b (length line)) (aref line b))))
-      (if (or (and pre  (not (memq pre  check-emphasis--pre-ok)))
-              (and post (not (memq post check-emphasis--post-ok))))
-          (progn
-            (message "  L%d: %s" lineno
-                     (substring line a (min (length line) (+ a 40))))
-            1)
-        0)))
+  # Characters allowed immediately before an emphasis marker's opening char.
+  PRE_OK = set(" \t-\u2013\u2014(\"'{")
 
-  (defun check-emphasis--scan-line (line lineno)
-    "Scan LINE (at LINENO) for ineffective emphasis markers.
-  Returns the count of violations found.
+  # Characters allowed immediately after an emphasis marker's closing char.
+  POST_OK = set(" \t-\u2013\u2014.,:!?;'\")}[")
 
-  =verbatim= and ~code~ spans are resolved first and treated as protected
-  regions, since a bare =/~ character is always literal, never a bold/italic
-  delimiter.  *bold* candidates are then checked only outside those protected
-  regions, and are also skipped when immediately adjacent to = or ~ (e.g. the
-  `*' characters inside =*scratch*= are part of the verbatim span, not a
-  bold marker, even though the naive regexp would also match them)."
-    (let ((bad 0) (protected nil))
-      (dolist (mk '(?= ?~))
-        (dolist (span (check-emphasis--collect-spans line mk))
-          (let ((a (car span)) (b (cdr span)))
-            (unless (check-emphasis--overlaps-p a b protected)
-              (push span protected)
-              (setq bad (+ bad (check-emphasis--check-span line lineno a b)))))))
-      (dolist (span (check-emphasis--collect-spans line ?*))
-        (let ((a (car span)) (b (cdr span)))
-          (unless (or (check-emphasis--overlaps-p a b protected)
-                      (and (> a 0) (memq (aref line (1- a)) '(?= ?~)))
-                      (and (< b (length line)) (memq (aref line b) '(?= ?~))))
-            (setq bad (+ bad (check-emphasis--check-span line lineno a b))))))
-      bad))
+  # Only these three markers are checked. "/" (italic) is deliberately excluded:
+  # path-like strings such as "lisp/core/core-gc.el" are extremely common in this
+  # document and are not meant as italics, so including "/" would produce a flood
+  # of false positives.
+  _MARKERS = "=~*"
 
-  (defun check-emphasis--run (file)
-    "Scan FILE and return the total count of ineffective emphasis markers.
-  Skips source/example block bodies, heading lines, and lines beginning
-  with a drawer, keyword, or table marker (: # |)."
-    (let ((bad 0) (in-block nil) (lineno 0))
-      (with-temp-buffer
-        (insert-file-contents file)
-        (goto-char (point-min))
-        (while (not (eobp))
-          (setq lineno (1+ lineno))
-          (let ((line (buffer-substring-no-properties
-                       (line-beginning-position) (line-end-position))))
-            (cond
-             ((string-match-p "\\`[ \t]*#\\+begin_\\(src\\|example\\)" line)
-              (setq in-block t))
-             ((string-match-p "\\`[ \t]*#\\+end_\\(src\\|example\\)" line)
-              (setq in-block nil))
-             ((or in-block
-                  (string-match-p "\\`[ \t]*\\*+ " line)
-                  (string-match-p "\\`[ \t]*[:#|]" line)))
-             (t
-              (setq bad (+ bad (check-emphasis--scan-line line lineno))))))
-          (forward-line 1)))
-      bad))
+  _BLOCK_START_RE = re.compile(r"^[ \t]*#\+begin_(src|example)", re.IGNORECASE)
+  _BLOCK_END_RE = re.compile(r"^[ \t]*#\+end_(src|example)", re.IGNORECASE)
+  _HEADING_RE = re.compile(r"^[ \t]*\*+ ")
+  _DRAWER_KEYWORD_TABLE_RE = re.compile(r"^[ \t]*[:#|]")
 
-  (let ((file (car command-line-args-left)))
-    (unless (and file (file-exists-p file))
-      (message "[check-emphasis] usage: emacs -Q --batch --load check-emphasis.el -- FILE.org")
-      (kill-emacs 2))
-    (message "[check-emphasis] scanning %s for ineffective emphasis markers ..." file)
-    (let ((bad (check-emphasis--run file)))
-      (if (> bad 0)
-          (progn
-            (message "[check-emphasis] FAILED: %d ineffective marker(s)" bad)
-            (kill-emacs 1))
-        (message "[check-emphasis] ok"))))
 
-  (provide 'check-emphasis)
-  ;;; scripts/check-emphasis.el ends here
+  def _marker_span_re(marker: str) -> re.Pattern[str]:
+      """Build a regexp matching MARKER CONTENT MARKER.
+
+      CONTENT must not start or end with whitespace or MARKER itself, and must
+      not contain MARKER internally. This mirrors the border/body rules implied
+      by org-emphasis-regexp-components.
+      """
+      m = re.escape(marker)
+      return re.compile(rf"{m}([^\s{m}][^{m}\n]*?[^\s{m}]|[^\s{m}]){m}")
+
+
+  _SPAN_RE = {mk: _marker_span_re(mk) for mk in _MARKERS}
+
+
+  def _collect_spans(line: str, marker: str) -> list[tuple[int, int]]:
+      """Return all (start, end) spans in LINE matching MARKER, unfiltered."""
+      spans = []
+      pos = 0
+      rx = _SPAN_RE[marker]
+      while True:
+          m = rx.search(line, pos)
+          if not m:
+              break
+          spans.append((m.start(), m.end()))
+          pos = m.end()
+      return spans
+
+
+  def _overlaps(a: int, b: int, spans: list[tuple[int, int]]) -> bool:
+      return any(a < e and s < b for s, e in spans)
+
+
+  def _check_span(line: str, a: int, b: int) -> bool:
+      """Return True if the span [a, b) has a disallowed border character."""
+      pre = line[a - 1] if a > 0 else None
+      post = line[b] if b < len(line) else None
+      bad_pre = pre is not None and pre not in PRE_OK
+      bad_post = post is not None and post not in POST_OK
+      return bad_pre or bad_post
+
+
+  def scan_line(line: str) -> list[tuple[int, int]]:
+      """Return the list of (start, end) spans in LINE with an ineffective marker."""
+      violations: list[tuple[int, int]] = []
+      protected: list[tuple[int, int]] = []
+
+      for marker in ("=", "~"):
+          for a, b in _collect_spans(line, marker):
+              if _overlaps(a, b, protected):
+                  continue
+              protected.append((a, b))
+              if _check_span(line, a, b):
+                  violations.append((a, b))
+
+      for a, b in _collect_spans(line, "*"):
+          if _overlaps(a, b, protected):
+              continue
+          if a > 0 and line[a - 1] in "=~":
+              continue
+          if b < len(line) and line[b] in "=~":
+              continue
+          if _check_span(line, a, b):
+              violations.append((a, b))
+
+      return violations
+
+
+  def scan_file(path: Path) -> int:
+      """Scan PATH and print any ineffective emphasis markers found.
+
+      Skips source/example block bodies, heading lines, and lines beginning with
+      a drawer, keyword, or table marker (: # |). Returns the violation count.
+      """
+      bad = 0
+      in_block = False
+      text = path.read_text(encoding="utf-8")
+      for lineno, line in enumerate(text.split("\n"), start=1):
+          if _BLOCK_START_RE.match(line):
+              in_block = True
+              continue
+          if _BLOCK_END_RE.match(line):
+              in_block = False
+              continue
+          if in_block or _HEADING_RE.match(line) or _DRAWER_KEYWORD_TABLE_RE.match(line):
+              continue
+          for a, b in scan_line(line):
+              bad += 1
+              print(f"  {path}:{lineno}: {line[a:min(len(line), a + 40)]}")
+      return bad
+
+
+  def main(argv: list[str]) -> int:
+      if not argv:
+          print("usage: check_emphasis.py FILE.org [FILE.org ...]", file=sys.stderr)
+          return 2
+
+      total = 0
+      for arg in argv:
+          path = Path(arg)
+          if not path.is_file():
+              print(f"[check-emphasis] no such file: {path}", file=sys.stderr)
+              return 2
+          print(f"[check-emphasis] scanning {path} for ineffective emphasis markers ...")
+          total += scan_file(path)
+
+      if total > 0:
+          print(f"[check-emphasis] FAILED: {total} ineffective marker(s)", file=sys.stderr)
+          return 1
+      print("[check-emphasis] ok")
+      return 0
+
+
+  if __name__ == "__main__":
+      raise SystemExit(main(sys.argv[1:]))
 #+end_src
 
 * Appendix: reload.py — make reload 相当の Python 実装
@@ -12297,7 +12332,7 @@ Emacs master から抽出した型情報を用い、他の =setopt= に同種の
 （ =my:d:treesit= 、関数引数の =mode= 、 =let= 束縛の =new-list= 等）を意図的に渡すもので、
 問題ない。
 
-** 効かない Org 強調記法の検出（Makefile: check-emphasis）と回帰の修正
+** 効かない Org 強調記法の検出（Makefile: check-emphasis）
 
 「見出しレベル 1 段違いで tangle が壊れる」class の事故に続き、今度は「全角文字に接した
 =verbatim= / *bold* が Org 上で効かない」という、tangle には影響しないが *ドキュメントとして
@@ -12311,26 +12346,41 @@ Emacs master から抽出した型情報を用い、他の =setopt= に同種の
 したがって和文に接した =code= や *太字* はマーカーとして解釈されず、リテラルの記号として
 そのまま表示される。
 
-*回帰の発見*
+*経緯: Elisp 実装 → 実機で 2 件の不具合 → Python へ置き換え*
 
-以前の一括修正（217 箇所）の *後* に行った複数回の編集（org-roam 関連の変更、
-=on-mismatch= の修正など）で、ガード無しの新しい散文が追加され、同じ欠陥が 37 箇所
-再混入していた。検査ロジックを実装する過程でこれを検出し、同じ自動修正ルーチンを
-再適用して解消した（冪等な操作であるため、既に正しい箇所には影響しない）。
+最初の実装は =scripts/check-emphasis.el= （ =--load= で読み込む Elisp スクリプト）だった。
+本リポジトリの開発環境には Emacs 本体が無く、ロジックは Python への一時的な移植で
+検証したものの、Elisp のバッチモード特有の挙動までは検証できなかった。実機
+（ =make lint= ）で 2 件の不具合が報告された。
 
-*対処: make check-emphasis*
+1. =:header-args:emacs-lisp:= に付けていた =:comments link= が、tangle 時にコード本体の
+   前へ =;; [[file:README.org::...][...]]= という逆参照リンク行を挿入し、
+   =-*- lexical-binding: t; -*-= を 1 行目から追い出していた。
+   =scripts/reload.py= 等の Python スクリプトから実装をコピーした際、意識せず
+   引き継いでしまったオプションである。
+2. =emacs -Q --batch --load FILE.el -- ARGS= という起動方法では、 =--load= のハンドラが
+   ファイルを見つけた時点で同期的に =load= を実行するため、読み込まれたファイルの
+   トップレベルフォームが走る間、区切りの ="--"= 自体が =command-line-args-left= の
+   先頭に残っている場合がある。 =(car command-line-args-left)= が ="--"= になり、
+   =file-exists-p= が偽になって usage エラーで落ちていた。
 
-=scripts/check-emphasis.el=（Appendix を参照）を新設し、=make check-emphasis= および
-=make lint= から呼び出せるようにした。=check-tangle= と異なり、検査本体は
-=README.org= 内の Makefile ブロックへ =--eval= で直書きしない。シェルの引用符と
-Elisp の文字リテラル・正規表現のエスケープが何重にも重なり、検証も保守もできなくなる
-ためである。通常の Elisp ファイルとして独立させ、=--load= で読み込む。
+いずれも「実行して確かめられない環境で書いた Elisp」に起因する。Python なら本環境で
+実際に実行・検証できるため、 =scripts/check_emphasis.py= として書き直した。ロジックは
+Elisp 版と同一で、 =scripts/reload.py= と同じく標準ライブラリのみに依存する。
 
-検出方法は README.org 側で使ってきた自動修正スクリプトと同じ判定規則を踏襲する。
+*検出方法*
+
 =/= verbatim と ~code~ を先に確定させて保護領域とし、 =*bold*= はそれと重ならない候補
-だけを検査する。=*scratch*= のように verbatim の内側にある =*= を誤って bold 候補と
+だけを検査する。 =*scratch*= のように verbatim の内側にある =*= を誤って bold 候補と
 見なさないよう、直前・直後が =/~ の場合は除外する。コードブロック本文・見出し行・
 drawer/keyword/table 行は検査対象から除外する。
+
+*Python 版で実際に検出した回帰*
+
+書き換えた =check_emphasis.py= を =README.org= 自身に対して実行したところ、直近の
+Changelog エントリ（この節を含む）に和文と =code= が直接隣接する箇所が 13 件見つかった。
+Elisp 版では実行して確かめられなかったため気づけなかった回帰であり、Python 化した
+直接の効果として解消した。
 
 ** Emacs 30/31 の廃止シンボルへの追随
 
