@@ -55,7 +55,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- 既定ターゲット（引数なし）--------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle check-emphasis
 all: onepass-init
 
 # ---- ワンパス（early+init 環境）: tangle -> 差分コンパイル -----------------------
@@ -197,10 +197,24 @@ check-tangle:
 	                         (kill-emacs 1)) \
 	                (message \"[check-tangle] ok\")))))"
 
-# ---- lint : check-tangle + check-cookies + checkdoc をまとめて実行 ----------------
+# ---- check-emphasis : 効かない Org 強調記法（=verbatim=/~code~/*bold*）を検出 -----
+# org-emphasis-regexp-components の既定値では、開始マーカーの直前・終了マーカーの
+# 直後が半角空白・タブ・- – — ( " ' { （直前側）／ . , : ! ? ; ' " ) } [ （直後側）・
+# 行頭・行末のいずれかでなければ強調は成立しない。全角文字（、。（）「」等）は
+# この集合に含まれないため、和文の直後に =code= を続けるとマーカーが素通しされ、
+# リテラルの "=" 文字としてそのまま表示される（シンタックスハイライトも失われる）。
+# tangle には影響しないため、見た目の欠陥として気づかれにくい。
+#
+# 検査本体は scripts/check_emphasis.py（Appendix を参照）。標準ライブラリのみに
+# 依存する Python スクリプトであり、Emacs のバッチモードは介さない。
+.PHONY: check-emphasis
+check-emphasis:
+	@python3 scripts/check_emphasis.py "$(ORG)"
+
+# ---- lint : check-tangle + check-emphasis + check-cookies + checkdoc をまとめて実行 --
 # コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
 .PHONY: checkdoc lint
-lint: check-tangle check-cookies checkdoc
+lint: check-tangle check-emphasis check-cookies checkdoc
 	@echo "[lint] all checks passed"
 
 # ---- package-lint : 任意 — load-path 上に package-lint が必要 --------------------
