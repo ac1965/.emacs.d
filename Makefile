@@ -12,13 +12,16 @@ EMACS  ?= emacs
 ORG    ?= README.org
 EARLY  ?= early-init.el
 INIT   ?= init.el
+RSVG_CONVERT ?= rsvg-convert
 
 # これらは常にリポジトリルート直下として扱う
 LISPDIR_REL     ?= lisp
 PERSONALDIR_REL ?= personal
+SVGDIR_REL      ?= svg
 
 LISPDIR     := $(abspath $(ROOT)/$(LISPDIR_REL))
 PERSONALDIR := $(abspath $(ROOT)/$(PERSONALDIR_REL))
+SVGDIR      := $(abspath $(ROOT)/$(SVGDIR_REL))
 ORG := $(abspath $(ROOT)/$(ORG))
 EARLY := $(abspath $(ROOT)/$(EARLY))
 INIT  := $(abspath $(ROOT)/$(INIT))
@@ -55,7 +58,7 @@ EVAL_LEAF := \
             (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
 # ---- 既定ターゲット（引数なし）--------------------------------------------------
-.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle check-emphasis
+.PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures
 all: onepass-init
 
 # ---- ワンパス（early+init 環境）: tangle -> 差分コンパイル -----------------------
@@ -99,6 +102,7 @@ echo-paths:
 	echo "INIT=$(INIT)"; \
 	echo "LISPDIR=$(LISPDIR)"; \
 	echo "PERSONALDIR=$(PERSONALDIR)"; \
+	echo "SVGDIR=$(SVGDIR)"; \
 	echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
 	echo "LEAF_DIR=$(LEAF_DIR)"; \
 	echo "LEAFKW_DIR=$(LEAFKW_DIR)"
@@ -111,6 +115,50 @@ clean:
 distclean: clean
 	@echo "[distclean] remove stray *.eln"
 	@find "$(ROOT)" -type f -name '*.eln' -delete
+
+# ---- figures : *.svg を rsvg-convert で同名の *.pdf へ事前変換 -------------------
+# design_spec.org（および他の org 文書）の LaTeX/PDF エクスポートは、SVG を
+# svg パッケージ経由で Inkscape に渡す方式を採用していない（mactex-no-gui 環境に
+# Inkscape が無く、実機で `Inkscape version not detected` により失敗することを
+# 確認済み）。代わりに $(SVGDIR)/*.svg を事前に同名の *.pdf へ変換しておき、
+# orgx-export--svg-to-pdf-graphics（orgx/orgx-export.el 側）が LaTeX エクスポート時に
+# \includegraphics の拡張子を .svg -> .pdf に書き換える運用を前提とする。
+#
+# 差分のみ変換する（*.svg が対応する *.pdf より新しい、または *.pdf が無い場合のみ
+# rsvg-convert を実行）。rsvg-convert コマンドが無ければ、その場でインストール手順を
+# 案内して失敗する（CI では未インストールを黙って無視しない）。
+figures:
+	@command -v "$(RSVG_CONVERT)" >/dev/null 2>&1 || { \
+	  echo "[figures] $(RSVG_CONVERT) not found. Install with: brew install librsvg"; \
+	  exit 1; \
+	}
+	@if [ ! -d "$(SVGDIR)" ]; then \
+	  echo "[figures] $(SVGDIR) not found; nothing to do"; \
+	  exit 0; \
+	fi
+	@echo "[figures] converting *.svg -> *.pdf under $(SVGDIR) ..."
+	@count=0; \
+	 for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
+	   pdf="$${f%.svg}.pdf"; \
+	   if [ ! -f "$$pdf" ] || [ "$$f" -nt "$$pdf" ]; then \
+	     echo "  $$f -> $$pdf"; \
+	     "$(RSVG_CONVERT)" -f pdf -o "$$pdf" "$$f" || exit 1; \
+	     count=$$((count + 1)); \
+	   fi; \
+	 done; \
+	 echo "[figures] done ($$count converted)"
+
+# ---- clean-figures : figures が生成した *.pdf を削除 ------------------------------
+# *.svg と同名の *.pdf のみを対象とする（$(SVGDIR) 配下に手動で置いた無関係な
+# *.pdf を誤って消さないよう、対応する *.svg が存在するものだけ削除する）。
+clean-figures:
+	@echo "[clean-figures] remove generated *.pdf under $(SVGDIR)"
+	@if [ -d "$(SVGDIR)" ]; then \
+	  for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
+	    pdf="$${f%.svg}.pdf"; \
+	    [ -f "$$pdf" ] && rm -f "$$pdf"; \
+	  done; \
+	fi
 
 tangle:
 	@echo "[tangle] $(ORG)"

@@ -12,26 +12,38 @@
 #+LATEX_HEADER: \usepackage[a4paper,margin=20mm]{geometry}
 #+LATEX_HEADER: \usepackage{luatexja}
 #+LATEX_HEADER: \usepackage{luatexja-fontspec}
-#+LATEX_HEADER: \usepackage[inkscapelatex=false]{svg}
 #+LATEX_HEADER_EXTRA: \newfontfamily\EmojiFont{Apple Color Emoji}
 #+LATEX_HEADER_EXTRA: \sloppy
 
 #+begin_comment
-SVG 埋め込みの依存(shell-escape 方式):
+SVG 埋め込みの依存(事前変換方式。shell-escape 方式から変更 — 経緯は下記):
 
-- svg パッケージは既定で Inkscape CLI を呼ぶが、mactex-no-gui 環境には
-  Inkscape 本体が無い前提のため inkscapelatex=false を指定し、
-  rsvg-convert（librsvg 同梱）に切り替えている。
+- 当初 \usepackage[inkscapelatex=false]{svg} + -shell-escape で試したが、
+  inkscapelatex=false は「Inkscape に LaTeX テキストを処理させるか」を
+  切り替えるだけのオプションであり、svg パッケージ自体は変換手段として
+  常に Inkscape 本体の CLI を要求する（rsvg-convert 等への切り替え手段は
+  svg パッケージには無い）。mactex-no-gui 環境には Inkscape が無いため
+  実際にビルドすると `Inkscape version not detected` で失敗する
+  （2026-07 に実際に発生・特定済み）。
+- そのため svg パッケージ／shell-escape は使わず、SVG を事前に（LaTeX の
+  外側で）PDF へ変換しておき、本文の画像リンクは通常の graphicx の
+  \includegraphics{...} として扱う方式に変更した。
+- 変換コマンド（rsvg-convert は librsvg 同梱、CLI のみで GUI 不要）:
     brew install librsvg
-- PDF 生成は org-latex-pdf-process（orgx/orgx-export.el 側、README.org 参照）が
-  latexmk に -shell-escape 付きで委譲する構成に統一済み。
-  この文書だけを個別に処理する追加設定は不要。
+    for f in svg/*.svg; do rsvg-convert -f pdf -o "${f%.svg}.pdf" "$f"; done
+  更新分だけ変換したい場合:
+    for f in svg/*.svg; do
+      pdf="${f%.svg}.pdf"
+      [ "$f" -nt "$pdf" ] && rsvg-convert -f pdf -o "$pdf" "$f"
+    done
 - 本文中の [[file:svg/NN_*.svg]] リンクは書き換えていない。org は既定で
-  \includegraphics{...} を出力し、svg パッケージ側の \includesvg には
-  自動変換されないが、この変換は orgx/orgx-export.el の
-  orgx-export--svg-to-includesvg（org-export-filter-link-functions 経由）が
-  LaTeX バックエンドの出力時にのみ行う。したがって本文の各画像リンクを
-  個別に書き換える必要はなく、このファイル側の対応はこれで完結している。
+  \includegraphics{svg/NN_*.svg} を出力し、これを orgx/orgx-export.el の
+  orgx-export--svg-to-pdf-graphics（org-export-filter-link-functions 経由）が
+  LaTeX バックエンドの出力時にのみ拡張子を .svg → .pdf に置き換える。
+  したがって本文側の画像リンクを個別に書き換える必要はないが、
+  対応する svg/NN_*.pdf を事前に生成しておくことが前提になる
+  （上記コマンドを図の更新時に実行すること。README.org の設計上、
+  自動化はまだしていない — 必要なら Makefile へ組み込む）。
 #+end_comment
 
 * 概要
