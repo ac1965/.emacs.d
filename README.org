@@ -9486,7 +9486,7 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
 **** utils-ime.el — 入力ソース（IME）制御
 
 日本語 IME をかな入力にしたままだと、リーダーキー =M-SPC= の後続打鍵
-（ =b l= など）や =dired=/=magit-status=/ターミナル系バッファでのナビゲーション・
+（ =b l= など）や =dired= / =magit-status= /ターミナル系バッファでのナビゲーション・
 操作キー（ =RET= / =g= / =d= / =s= など）が IME に composed されて誤動作する。
 本モジュールは =macism= を同期呼び出しして、次の契機で OS の入力ソースを
 ASCII（英字）へ切り替える。
@@ -10598,6 +10598,15 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
     (setq org-roam-ui-sync-theme t
           org-roam-ui-follow t
           org-roam-ui-update-on-save t))
+
+  ;; python-mode 初期化時 (define-derived-mode python-mode 本体) で
+  ;; python-indent-guess-indent-offset-verbose を呼ぶタイミングが
+  ;; hack-local-variables より早いため、ファイルローカル変数
+  ;; (# -*- python-indent-offset: ... -*-) では抑制できない。
+  ;; 実測確認済み（Emacs 29.3, ob-tangle :comments link 環境）。
+  ;; 値自体は変えず、"Can't guess python-indent-offset" の
+  ;; メッセージだけを黙らせる。
+  (setq python-indent-guess-indent-offset-verbose nil)
 
   ;; 拡張子 → prog-mode の登録
   ;;
@@ -11804,176 +11813,176 @@ python3 scripts/reload.py --only check-cookies
 ** reload.py
 
 #+begin_src python
-#!/usr/bin/env python3
-"""make reload equivalent: clean *.elc -> tangle README.org -> check lexical-binding cookies.
+  #!/usr/bin/env python3
+  """make reload equivalent: clean *.elc -> tangle README.org -> check lexical-binding cookies.
 
-This mirrors the Makefile `reload` target (clean -> tangle -> check-cookies)
-without requiring `make`.  It is intentionally dependency-free (standard library
-only) so it can run in minimal environments and be invoked from editors, CI, or
-file-watchers.
-"""
+  This mirrors the Makefile `reload` target (clean -> tangle -> check-cookies)
+  without requiring `make`.  It is intentionally dependency-free (standard library
+  only) so it can run in minimal environments and be invoked from editors, CI, or
+  file-watchers.
+  """
 
-from __future__ import annotations
+  from __future__ import annotations
 
-import argparse
-import os
-import shutil
-import subprocess
-import sys
-from pathlib import Path
+  import argparse
+  import os
+  import shutil
+  import subprocess
+  import sys
+  from pathlib import Path
 
-# --- Emacs binary resolution ------------------------------------------------
-# On macOS the self-contained NS build installs a $prefix/bin/emacs that does
-# not work outside the .app bundle, so prefer the in-bundle binary.  An explicit
-# EMACS environment variable always wins.
-_MACOS_APP_EMACS = "/Applications/Emacs.app/Contents/MacOS/Emacs"
-
-
-def resolve_emacs() -> str:
-    """Return the Emacs binary to use for batch tangling."""
-    env = os.environ.get("EMACS")
-    if env:
-        return env
-    if sys.platform == "darwin" and Path(_MACOS_APP_EMACS).is_file():
-        return _MACOS_APP_EMACS
-    found = shutil.which("emacs")
-    if found:
-        return found
-    # Fall back to the app path so the error message is actionable.
-    return _MACOS_APP_EMACS
+  # --- Emacs binary resolution ------------------------------------------------
+  # On macOS the self-contained NS build installs a $prefix/bin/emacs that does
+  # not work outside the .app bundle, so prefer the in-bundle binary.  An explicit
+  # EMACS environment variable always wins.
+  _MACOS_APP_EMACS = "/Applications/Emacs.app/Contents/MacOS/Emacs"
 
 
-# --- Step 1: clean ----------------------------------------------------------
-def clean(lisp_dir: Path, personal_dir: Path) -> int:
-    """Delete every *.elc under lisp/ and personal/.  Best-effort (never fatal).
-
-    Stale .elc files shadow freshly tangled .el files, so removing them is worth
-    doing even if some deletions fail.  Returns the number of files removed.
-    """
-    removed = 0
-    for base in (lisp_dir, personal_dir):
-        if not base.is_dir():
-            continue
-        for elc in base.rglob("*.elc"):
-            try:
-                elc.unlink()
-                removed += 1
-            except OSError as err:
-                print(f"  WARN: could not delete {elc}: {err}", file=sys.stderr)
-    print(f"[clean] removed {removed} .elc file(s) under "
-          f"{lisp_dir} and {personal_dir}")
-    return removed
+  def resolve_emacs() -> str:
+      """Return the Emacs binary to use for batch tangling."""
+      env = os.environ.get("EMACS")
+      if env:
+          return env
+      if sys.platform == "darwin" and Path(_MACOS_APP_EMACS).is_file():
+          return _MACOS_APP_EMACS
+      found = shutil.which("emacs")
+      if found:
+          return found
+      # Fall back to the app path so the error message is actionable.
+      return _MACOS_APP_EMACS
 
 
-# --- Step 2: tangle ---------------------------------------------------------
-def tangle(emacs: str, org: Path) -> None:
-    """Tangle ORG with `emacs -Q --batch`, matching the Makefile tangle target.
+  # --- Step 1: clean ----------------------------------------------------------
+  def clean(lisp_dir: Path, personal_dir: Path) -> int:
+      """Delete every *.elc under lisp/ and personal/.  Best-effort (never fatal).
 
-    Uses the built-in Org (Emacs 32.0.50 ships Org 9.8.7), so no third-party
-    packages are required.  Exits the process on failure.
-    """
-    if not org.is_file():
-        sys.exit(f"[tangle] ERROR: {org} not found")
-
-    print(f"[tangle] {org}")
-    cmd = [
-        emacs, "-Q", "--batch",
-        "--eval", "(require 'org)",
-        "--eval", "(require 'ob-core)",
-        "--eval",
-        "(org-babel-do-load-languages 'org-babel-load-languages "
-        "'((emacs-lisp . t)))",
-        "--eval", "(setq org-confirm-babel-evaluate nil noninteractive t)",
-        "--eval", f'(org-babel-tangle-file "{org}")',
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-    except FileNotFoundError:
-        sys.exit(f"[tangle] ERROR: Emacs binary not found: {emacs}\n"
-                 f"          set EMACS=/path/to/emacs and retry")
-    except subprocess.CalledProcessError as err:
-        sys.exit(f"[tangle] ERROR: emacs exited with status {err.returncode}")
+      Stale .elc files shadow freshly tangled .el files, so removing them is worth
+      doing even if some deletions fail.  Returns the number of files removed.
+      """
+      removed = 0
+      for base in (lisp_dir, personal_dir):
+          if not base.is_dir():
+              continue
+          for elc in base.rglob("*.elc"):
+              try:
+                  elc.unlink()
+                  removed += 1
+              except OSError as err:
+                  print(f"  WARN: could not delete {elc}: {err}", file=sys.stderr)
+      print(f"[clean] removed {removed} .elc file(s) under "
+            f"{lisp_dir} and {personal_dir}")
+      return removed
 
 
-# --- Step 3: check-cookies --------------------------------------------------
-def check_cookies(lisp_dir: Path) -> int:
-    """Verify every .el under lisp/ has `lexical-binding: t` on line 1.
+  # --- Step 2: tangle ---------------------------------------------------------
+  def tangle(emacs: str, org: Path) -> None:
+      """Tangle ORG with `emacs -Q --batch`, matching the Makefile tangle target.
 
-    Returns 0 when all files pass, 1 when any file is missing the cookie.
-    """
-    if not lisp_dir.is_dir():
-        print(f"[check-cookies] {lisp_dir} does not exist; skipping")
-        return 0
+      Uses the built-in Org (Emacs 32.0.50 ships Org 9.8.7), so no third-party
+      packages are required.  Exits the process on failure.
+      """
+      if not org.is_file():
+          sys.exit(f"[tangle] ERROR: {org} not found")
 
-    print(f"[check-cookies] scanning {lisp_dir} ...")
-    fail = 0
-    for el in sorted(lisp_dir.rglob("*.el")):
-        try:
-            with el.open(encoding="utf-8", errors="replace") as handle:
-                line1 = handle.readline().rstrip("\n")
-        except OSError as err:
-            print(f"  ERROR reading {el}: {err}")
-            fail = 1
-            continue
-        if "lexical-binding: t" not in line1:
-            print(f"  MISSING: {el}")
-            print(f"    line1: {line1}")
-            fail = 1
-
-    if fail:
-        print("[check-cookies] FAILED: some files lack the lexical-binding cookie")
-    else:
-        print("[check-cookies] ok")
-    return fail
+      print(f"[tangle] {org}")
+      cmd = [
+          emacs, "-Q", "--batch",
+          "--eval", "(require 'org)",
+          "--eval", "(require 'ob-core)",
+          "--eval",
+          "(org-babel-do-load-languages 'org-babel-load-languages "
+          "'((emacs-lisp . t)))",
+          "--eval", "(setq org-confirm-babel-evaluate nil noninteractive t)",
+          "--eval", f'(org-babel-tangle-file "{org}")',
+      ]
+      try:
+          subprocess.run(cmd, check=True)
+      except FileNotFoundError:
+          sys.exit(f"[tangle] ERROR: Emacs binary not found: {emacs}\n"
+                   f"          set EMACS=/path/to/emacs and retry")
+      except subprocess.CalledProcessError as err:
+          sys.exit(f"[tangle] ERROR: emacs exited with status {err.returncode}")
 
 
-# --- Orchestration ----------------------------------------------------------
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="make reload equivalent (clean -> tangle -> check-cookies)")
-    parser.add_argument(
-        "--root", type=Path, default=Path.cwd(),
-        help="repository root containing README.org (default: current dir)")
-    parser.add_argument(
-        "--org", default="README.org",
-        help="Org file to tangle, relative to --root (default: README.org)")
-    parser.add_argument(
-        "--lisp", default="lisp",
-        help="lisp directory, relative to --root (default: lisp)")
-    parser.add_argument(
-        "--personal", default="personal",
-        help="personal directory, relative to --root (default: personal)")
-    parser.add_argument(
-        "--only", choices=("clean", "tangle", "check-cookies"),
-        help="run only one step instead of the full reload")
-    args = parser.parse_args(argv)
+  # --- Step 3: check-cookies --------------------------------------------------
+  def check_cookies(lisp_dir: Path) -> int:
+      """Verify every .el under lisp/ has `lexical-binding: t` on line 1.
 
-    root = args.root.expanduser().resolve()
-    org = (root / args.org).resolve()
-    lisp_dir = (root / args.lisp).resolve()
-    personal_dir = (root / args.personal).resolve()
-    emacs = resolve_emacs()
+      Returns 0 when all files pass, 1 when any file is missing the cookie.
+      """
+      if not lisp_dir.is_dir():
+          print(f"[check-cookies] {lisp_dir} does not exist; skipping")
+          return 0
 
-    if args.only == "clean":
-        clean(lisp_dir, personal_dir)
-        return 0
-    if args.only == "tangle":
-        tangle(emacs, org)
-        return 0
-    if args.only == "check-cookies":
-        return check_cookies(lisp_dir)
+      print(f"[check-cookies] scanning {lisp_dir} ...")
+      fail = 0
+      for el in sorted(lisp_dir.rglob("*.el")):
+          try:
+              with el.open(encoding="utf-8", errors="replace") as handle:
+                  line1 = handle.readline().rstrip("\n")
+          except OSError as err:
+              print(f"  ERROR reading {el}: {err}")
+              fail = 1
+              continue
+          if "lexical-binding: t" not in line1:
+              print(f"  MISSING: {el}")
+              print(f"    line1: {line1}")
+              fail = 1
 
-    # Full reload: clean -> tangle -> check-cookies.
-    clean(lisp_dir, personal_dir)
-    tangle(emacs, org)
-    rc = check_cookies(lisp_dir)
-    if rc == 0:
-        print(f"[reload] on-disk modules now reflect {org}; restart Emacs to load.")
-    return rc
+      if fail:
+          print("[check-cookies] FAILED: some files lack the lexical-binding cookie")
+      else:
+          print("[check-cookies] ok")
+      return fail
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+  # --- Orchestration ----------------------------------------------------------
+  def main(argv: list[str] | None = None) -> int:
+      parser = argparse.ArgumentParser(
+          description="make reload equivalent (clean -> tangle -> check-cookies)")
+      parser.add_argument(
+          "--root", type=Path, default=Path.cwd(),
+          help="repository root containing README.org (default: current dir)")
+      parser.add_argument(
+          "--org", default="README.org",
+          help="Org file to tangle, relative to --root (default: README.org)")
+      parser.add_argument(
+          "--lisp", default="lisp",
+          help="lisp directory, relative to --root (default: lisp)")
+      parser.add_argument(
+          "--personal", default="personal",
+          help="personal directory, relative to --root (default: personal)")
+      parser.add_argument(
+          "--only", choices=("clean", "tangle", "check-cookies"),
+          help="run only one step instead of the full reload")
+      args = parser.parse_args(argv)
+
+      root = args.root.expanduser().resolve()
+      org = (root / args.org).resolve()
+      lisp_dir = (root / args.lisp).resolve()
+      personal_dir = (root / args.personal).resolve()
+      emacs = resolve_emacs()
+
+      if args.only == "clean":
+          clean(lisp_dir, personal_dir)
+          return 0
+      if args.only == "tangle":
+          tangle(emacs, org)
+          return 0
+      if args.only == "check-cookies":
+          return check_cookies(lisp_dir)
+
+      # Full reload: clean -> tangle -> check-cookies.
+      clean(lisp_dir, personal_dir)
+      tangle(emacs, org)
+      rc = check_cookies(lisp_dir)
+      if rc == 0:
+          print(f"[reload] on-disk modules now reflect {org}; restart Emacs to load.")
+      return rc
+
+
+  if __name__ == "__main__":
+      raise SystemExit(main())
 #+end_src
 
 * Appendix: claude_org_roam_export.py — Claude チャットの org-roam 化
@@ -12042,204 +12051,204 @@ python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
 ** claude_org_roam_export.py
 
 #+begin_src python
-#!/usr/bin/env python3
-"""Convert a Claude.ai data export (conversations.json) into org-roam nodes.
+  #!/usr/bin/env python3
+  """Convert a Claude.ai data export (conversations.json) into org-roam nodes.
 
-One org-roam node file is written per conversation.  The conversation uuid is
-reused as the :ID:, so re-running the export updates existing nodes in place
-rather than creating duplicates.
+  One org-roam node file is written per conversation.  The conversation uuid is
+  reused as the :ID:, so re-running the export updates existing nodes in place
+  rather than creating duplicates.
 
-Data export procedure on Claude.ai:
-    Settings -> Privacy -> Export data.  A ZIP archive is delivered by
-    email.  After extraction it contains user.json, conversations.json,
-    projects.json and artifacts.json.  This script consumes
-    conversations.json.
+  Data export procedure on Claude.ai:
+      Settings -> Privacy -> Export data.  A ZIP archive is delivered by
+      email.  After extraction it contains user.json, conversations.json,
+      projects.json and artifacts.json.  This script consumes
+      conversations.json.
 
-Usage:
-    python3 claude_org_roam_export.py conversations.json ~/org/roam/claude
-    python3 claude_org_roam_export.py conversations.json ~/org/roam/claude \\
-        --no-heading-per-message --tag claude --tag import
+  Usage:
+      python3 claude_org_roam_export.py conversations.json ~/org/roam/claude
+      python3 claude_org_roam_export.py conversations.json ~/org/roam/claude \\
+          --no-heading-per-message --tag claude --tag import
 
-After conversion, run `M-x org-roam-db-sync` in Emacs so the new nodes are
-registered in the org-roam database.
-"""
+  After conversion, run `M-x org-roam-db-sync` in Emacs so the new nodes are
+  registered in the org-roam database.
+  """
 
-from __future__ import annotations
+  from __future__ import annotations
 
-import argparse
-import json
-import re
-import sys
-import uuid as uuidlib
-from datetime import datetime
-from pathlib import Path
+  import argparse
+  import json
+  import re
+  import sys
+  import uuid as uuidlib
+  from datetime import datetime
+  from pathlib import Path
 
-SENDER_NAMES = {"human": "User", "assistant": "Claude"}
-
-
-def parse_time(value: str | None) -> datetime | None:
-    """Parse an ISO 8601 string into a datetime, or return None."""
-    if not value:
-        return None
-    text = value.strip().replace("Z", "")
-    text = text.split(".")[0]  # drop fractional seconds
-    try:
-        return datetime.fromisoformat(text)
-    except ValueError:
-        return None
+  SENDER_NAMES = {"human": "User", "assistant": "Claude"}
 
 
-def org_timestamp(value: str | None) -> str | None:
-    """Return an inactive Org timestamp for an ISO 8601 string, or None."""
-    dt = parse_time(value)
-    return dt.strftime("[%Y-%m-%d %a %H:%M]") if dt else None
+  def parse_time(value: str | None) -> datetime | None:
+      """Parse an ISO 8601 string into a datetime, or return None."""
+      if not value:
+          return None
+      text = value.strip().replace("Z", "")
+      text = text.split(".")[0]  # drop fractional seconds
+      try:
+          return datetime.fromisoformat(text)
+      except ValueError:
+          return None
 
 
-def message_text(message: dict) -> str:
-    """Return the textual body of a message.
-
-    The top-level ``text`` field is preferred.  When it is empty, the text
-    blocks inside the ``content`` array are concatenated.
-    """
-    text = message.get("text") or ""
-    if text:
-        return text
-    blocks = message.get("content") or []
-    return "\n".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+  def org_timestamp(value: str | None) -> str | None:
+      """Return an inactive Org timestamp for an ISO 8601 string, or None."""
+      dt = parse_time(value)
+      return dt.strftime("[%Y-%m-%d %a %H:%M]") if dt else None
 
 
-def slugify(title: str) -> str:
-    """Return a filesystem-safe slug, preserving kana and CJK characters."""
-    ascii_only = re.sub(r"[^0-9A-Za-z\u3040-\u30ff\u4e00-\u9fff]+", "-",
-                        (title or "").lower())
-    trimmed = ascii_only.strip("-")
-    return trimmed or "untitled"
+  def message_text(message: dict) -> str:
+      """Return the textual body of a message.
+
+      The top-level ``text`` field is preferred.  When it is empty, the text
+      blocks inside the ``content`` array are concatenated.
+      """
+      text = message.get("text") or ""
+      if text:
+          return text
+      blocks = message.get("content") or []
+      return "\n".join(b.get("text", "") for b in blocks if isinstance(b, dict))
 
 
-def conversation_title(conversation: dict) -> str:
-    """Return a non-empty title for a conversation."""
-    name = (conversation.get("name") or "").strip()
-    if name:
-        return name
-    messages = conversation.get("chat_messages") or []
-    if messages:
-        body = message_text(messages[0]).strip()
-        first_line = body.split("\n")[0] if body else ""
-        if first_line:
-            return first_line if len(first_line) <= 60 else first_line[:57] + "..."
-    return "Untitled"
+  def slugify(title: str) -> str:
+      """Return a filesystem-safe slug, preserving kana and CJK characters."""
+      ascii_only = re.sub(r"[^0-9A-Za-z\u3040-\u30ff\u4e00-\u9fff]+", "-",
+                          (title or "").lower())
+      trimmed = ascii_only.strip("-")
+      return trimmed or "untitled"
 
 
-def node_id(conversation: dict, reuse_uuid: bool) -> str:
-    """Return the org-roam ID to assign to a conversation."""
-    conv_uuid = conversation.get("uuid")
-    if reuse_uuid and conv_uuid:
-        return conv_uuid
-    return str(uuidlib.uuid4())
+  def conversation_title(conversation: dict) -> str:
+      """Return a non-empty title for a conversation."""
+      name = (conversation.get("name") or "").strip()
+      if name:
+          return name
+      messages = conversation.get("chat_messages") or []
+      if messages:
+          body = message_text(messages[0]).strip()
+          first_line = body.split("\n")[0] if body else ""
+          if first_line:
+              return first_line if len(first_line) <= 60 else first_line[:57] + "..."
+      return "Untitled"
 
 
-def output_filename(conversation: dict, title: str, directory: Path) -> Path:
-    """Return an absolute output path following YYYYMMDDHHMMSS-slug.org."""
-    created = parse_time(conversation.get("created_at")) or datetime.now()
-    stamp = created.strftime("%Y%m%d%H%M%S")
-    return directory / f"{stamp}-{slugify(title)}.org"
+  def node_id(conversation: dict, reuse_uuid: bool) -> str:
+      """Return the org-roam ID to assign to a conversation."""
+      conv_uuid = conversation.get("uuid")
+      if reuse_uuid and conv_uuid:
+          return conv_uuid
+      return str(uuidlib.uuid4())
 
 
-def render_message(message: dict, heading_per_message: bool) -> str:
-    """Return an Org fragment for one message."""
-    label = SENDER_NAMES.get(
-        message.get("sender"),
-        (message.get("sender") or "unknown").capitalize())
-    stamp = org_timestamp(message.get("created_at"))
-    body = message_text(message).strip()
-    if heading_per_message:
-        parts = [f"** {label}"]
-        if stamp:
-            parts += [":PROPERTIES:", f":CREATED: {stamp}", ":END:"]
-        parts += ["", body, ""]
-        return "\n".join(parts)
-    header = f"*{label}:*" + (f" {stamp}" if stamp else "")
-    return "\n".join([header, "", body, ""])
+  def output_filename(conversation: dict, title: str, directory: Path) -> Path:
+      """Return an absolute output path following YYYYMMDDHHMMSS-slug.org."""
+      created = parse_time(conversation.get("created_at")) or datetime.now()
+      stamp = created.strftime("%Y%m%d%H%M%S")
+      return directory / f"{stamp}-{slugify(title)}.org"
 
 
-def render_conversation(conversation: dict, tags: list[str], reuse_uuid: bool,
-                        heading_per_message: bool) -> str:
-    """Return the full Org document string for a conversation."""
-    title = conversation_title(conversation)
-    lines = [
-        ":PROPERTIES:",
-        f":ID:       {node_id(conversation, reuse_uuid)}",
-    ]
-    created = org_timestamp(conversation.get("created_at"))
-    updated = org_timestamp(conversation.get("updated_at"))
-    model = conversation.get("model")
-    if created:
-        lines.append(f":CREATED:  {created}")
-    if updated:
-        lines.append(f":UPDATED:  {updated}")
-    if isinstance(model, str) and model:
-        lines.append(f":MODEL:    {model}")
-    lines += [":SOURCE:   Claude.ai", ":END:", f"#+title: {title}"]
-    if tags:
-        lines.append("#+filetags: :" + ":".join(tags) + ":")
-    lines.append("")
-    for message in conversation.get("chat_messages") or []:
-        lines.append(render_message(message, heading_per_message))
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+  def render_message(message: dict, heading_per_message: bool) -> str:
+      """Return an Org fragment for one message."""
+      label = SENDER_NAMES.get(
+          message.get("sender"),
+          (message.get("sender") or "unknown").capitalize())
+      stamp = org_timestamp(message.get("created_at"))
+      body = message_text(message).strip()
+      if heading_per_message:
+          parts = [f"** {label}"]
+          if stamp:
+              parts += [":PROPERTIES:", f":CREATED: {stamp}", ":END:"]
+          parts += ["", body, ""]
+          return "\n".join(parts)
+      header = f"*{label}:*" + (f" {stamp}" if stamp else "")
+      return "\n".join([header, "", body, ""])
 
 
-def export(json_file: Path, directory: Path, tags: list[str], reuse_uuid: bool,
-           heading_per_message: bool) -> int:
-    """Convert every conversation in json_file into a node file.
-
-    Return the number of node files written.
-    """
-    with json_file.open(encoding="utf-8") as handle:
-        conversations = json.load(handle)
-    directory.mkdir(parents=True, exist_ok=True)
-    count = 0
-    for conversation in conversations:
-        title = conversation_title(conversation)
-        path = output_filename(conversation, title, directory)
-        content = render_conversation(conversation, tags, reuse_uuid,
-                                      heading_per_message)
-        path.write_text(content, encoding="utf-8")
-        count += 1
-    return count
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("json_file", type=Path,
-                        help="path to conversations.json")
-    parser.add_argument("directory", type=Path,
-                        help="output directory for .org nodes")
-    parser.add_argument("--tag", dest="tags", action="append", default=None,
-                        help="filetag to apply (repeatable; default: claude)")
-    parser.add_argument("--fresh-uuid", dest="reuse_uuid", action="store_false",
-                        help="generate new IDs instead of reusing Claude uuids")
-    parser.add_argument("--no-heading-per-message", dest="heading_per_message",
-                        action="store_false",
-                        help="concatenate messages instead of one heading each")
-    parser.set_defaults(reuse_uuid=True, heading_per_message=True)
-    args = parser.parse_args(argv)
-
-    if not args.json_file.exists():
-        parser.error(f"JSON file not found: {args.json_file}")
-    tags = args.tags if args.tags is not None else ["claude"]
-
-    count = export(args.json_file, args.directory, tags,
-                   args.reuse_uuid, args.heading_per_message)
-    print(f"claude-org-roam: wrote {count} node(s) into {args.directory}")
-    print("Next: run M-x org-roam-db-sync in Emacs to register the nodes.")
-    return 0
+  def render_conversation(conversation: dict, tags: list[str], reuse_uuid: bool,
+                          heading_per_message: bool) -> str:
+      """Return the full Org document string for a conversation."""
+      title = conversation_title(conversation)
+      lines = [
+          ":PROPERTIES:",
+          f":ID:       {node_id(conversation, reuse_uuid)}",
+      ]
+      created = org_timestamp(conversation.get("created_at"))
+      updated = org_timestamp(conversation.get("updated_at"))
+      model = conversation.get("model")
+      if created:
+          lines.append(f":CREATED:  {created}")
+      if updated:
+          lines.append(f":UPDATED:  {updated}")
+      if isinstance(model, str) and model:
+          lines.append(f":MODEL:    {model}")
+      lines += [":SOURCE:   Claude.ai", ":END:", f"#+title: {title}"]
+      if tags:
+          lines.append("#+filetags: :" + ":".join(tags) + ":")
+      lines.append("")
+      for message in conversation.get("chat_messages") or []:
+          lines.append(render_message(message, heading_per_message))
+          lines.append("")
+      return "\n".join(lines).rstrip() + "\n"
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+  def export(json_file: Path, directory: Path, tags: list[str], reuse_uuid: bool,
+             heading_per_message: bool) -> int:
+      """Convert every conversation in json_file into a node file.
+
+      Return the number of node files written.
+      """
+      with json_file.open(encoding="utf-8") as handle:
+          conversations = json.load(handle)
+      directory.mkdir(parents=True, exist_ok=True)
+      count = 0
+      for conversation in conversations:
+          title = conversation_title(conversation)
+          path = output_filename(conversation, title, directory)
+          content = render_conversation(conversation, tags, reuse_uuid,
+                                        heading_per_message)
+          path.write_text(content, encoding="utf-8")
+          count += 1
+      return count
+
+
+  def main(argv: list[str] | None = None) -> int:
+      parser = argparse.ArgumentParser(
+          description=__doc__,
+          formatter_class=argparse.RawDescriptionHelpFormatter)
+      parser.add_argument("json_file", type=Path,
+                          help="path to conversations.json")
+      parser.add_argument("directory", type=Path,
+                          help="output directory for .org nodes")
+      parser.add_argument("--tag", dest="tags", action="append", default=None,
+                          help="filetag to apply (repeatable; default: claude)")
+      parser.add_argument("--fresh-uuid", dest="reuse_uuid", action="store_false",
+                          help="generate new IDs instead of reusing Claude uuids")
+      parser.add_argument("--no-heading-per-message", dest="heading_per_message",
+                          action="store_false",
+                          help="concatenate messages instead of one heading each")
+      parser.set_defaults(reuse_uuid=True, heading_per_message=True)
+      args = parser.parse_args(argv)
+
+      if not args.json_file.exists():
+          parser.error(f"JSON file not found: {args.json_file}")
+      tags = args.tags if args.tags is not None else ["claude"]
+
+      count = export(args.json_file, args.directory, tags,
+                     args.reuse_uuid, args.heading_per_message)
+      print(f"claude-org-roam: wrote {count} node(s) into {args.directory}")
+      print("Next: run M-x org-roam-db-sync in Emacs to register the nodes.")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main())
 #+end_src
 
 * Changelog
