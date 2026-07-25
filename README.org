@@ -5278,6 +5278,7 @@ that benefit from single-chord access (no prefix).
   s-←/→ → previous/next-buffer (macOS Super key, 2 keys)
   s-↑/↓ → beginning/end-of-buffer
   <f1>  → help-command
+  C-c c → org-capture        (Org community standard; global)
 Former C-c b/k/o/r bindings removed: all are reachable via M-SPC (2-3 keys).
 C-? (undo-redo) replaced with s-z: aligns Emacs undo/redo with the
 macOS system-wide Cmd+Z convention shared by every other application on the
@@ -5302,7 +5303,11 @@ binding would add keymap surface without practical benefit."
     (keymap-global-set "s-<up>"    #'beginning-of-buffer)
     (keymap-global-set "s-<down>"  #'end-of-buffer)
     ;; ヘルプ（どの文脈でも見つけやすいよう F キーに割り当て）
-    (keymap-global-set "<f1>"      #'help-command))
+    (keymap-global-set "<f1>"      #'help-command)
+    ;; Org キャプチャ — コミュニティ標準の C-c c を全バッファで有効化。
+    ;; org-capture は任意のバッファから起動できる必要があるため
+    ;; orgx-core.el ではなくここ（グローバルキー）に置く。
+    (keymap-global-set "C-c c"     #'org-capture))
 
   (add-hook 'after-init-hook #'ui-global-keys--startup-init)
 
@@ -10090,6 +10095,32 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
   ;; eglot バックエンド（既定）では flymake が唯一のチェッカーである。
   (leaf flycheck :straight t)
 
+  ;; python-flymake は pyflakes / flake8 / ruff / pylint のいずれかが PATH に
+  ;; 存在することを要求する。見つからない場合は Python バッファを開くたびに
+  ;; "Cannot find a suitable checker" 警告を出して無効化される。
+  ;; eglot が有効なバッファでは LSP が診断を担当するため python-flymake は
+  ;; 不要かつ重複になる。以下のフックで両方のケースを処理する。
+  (defun utils-lint--python-flymake-setup ()
+    "Configure python-flymake backend for the current Python buffer.
+When eglot is managing the buffer, removes python-flymake from
+`flymake-diagnostic-functions' (LSP already provides diagnostics).
+When eglot is absent and no external checker is on PATH, sets
+`python-flymake-command' to nil to suppress the warning silently."
+    (when (and (derived-mode-p 'python-mode 'python-ts-mode)
+               (boundp 'flymake-diagnostic-functions))
+      (if (and (fboundp 'eglot-managed-p) (eglot-managed-p))
+          ;; eglot がバックエンドを提供するので python-flymake を除去
+          (remove-hook 'flymake-diagnostic-functions #'python-flymake t)
+        ;; LSP なし: 外部チェッカーが PATH になければ警告なしで無効化
+        (unless (or (executable-find "pyflakes")
+                    (executable-find "flake8")
+                    (executable-find "ruff")
+                    (executable-find "pylint"))
+          (setq-local python-flymake-command nil)))))
+
+  (add-hook 'python-mode-hook    #'utils-lint--python-flymake-setup)
+  (add-hook 'python-ts-mode-hook #'utils-lint--python-flymake-setup)
+
   (provide 'utils-lint)
   ;;; utils/utils-lint.el ends here
 #+end_src
@@ -10925,6 +10956,81 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;;
   ;; 規則 6: auth-keychain-enable は defcustom である。setopt を用いる。
   (setopt auth-keychain-enable t)
+
+  ;; ---------------------------------------------------------------------------
+  ;; all-posts.org（Hugo ブログ）の既存タグ補完付きタグ設定
+  ;; ---------------------------------------------------------------------------
+  ;; my:f:capture-blog-file（本ファイル上部で all-posts.org に上書き済み）を走査し、
+  ;; 過去に使ったインラインタグを補完候補にした状態で org-set-tags-command を呼ぶ。
+  ;;
+  ;; キャプチャ用の *Capture* バッファ自体には他の見出しが無いため、補完対象は
+  ;; カレントバッファではなく my:f:capture-blog-file を直接開いて集める。
+
+  (defun ac1965--org-hugo-tag-alist-from-buffer ()
+    "`my:f:capture-blog-file' 内の既存インラインタグを org-tag-alist 形式で返す.
+  ファイルが未設定・未存在の場合は nil を返す。"
+    (let (tags)
+      (when (and (bound-and-true-p my:f:capture-blog-file)
+                 (file-exists-p my:f:capture-blog-file))
+        (with-current-buffer (find-file-noselect my:f:capture-blog-file)
+          (org-map-entries
+           (lambda ()
+             (dolist (tag (org-get-tags nil t))
+               (unless (member tag tags) (push tag tags)))))))
+      (mapcar #'list tags)))
+
+  (defun ac1965/org-hugo-set-tags ()
+    "all-posts.org の既存タグ補完付きで、現在の見出しにタグを設定する."
+    (interactive)
+    (let ((org-tag-alist (ac1965--org-hugo-tag-alist-from-buffer)))
+      (call-interactively #'org-set-tags-command)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; ブログ投稿キャプチャの確定前にタグ設定を挟む
+  ;; ---------------------------------------------------------------------------
+  ;; org-capture-before-finalize-hook はキャプチャバッファがまだ生きている
+  ;; （= このタイミングならタグを付けても org-capture-after-finalize-hook 経由の
+  ;; orgx-auto-hugo による ox-hugo 自動エクスポートに、付けたタグが反映される）
+  ;; 段階で走る。テンプレートキーが "b"（orgx-core.el の "Blog post"）のときだけ動作する。
+
+  (defun ac1965--org-capture-set-blog-tags ()
+    "ブログ投稿キャプチャ（テンプレートキー \"b\"）の確定前にタグを設定する."
+    (when (equal (org-capture-get :key) "b")
+      (ac1965/org-hugo-set-tags)))
+
+  (add-hook 'org-capture-before-finalize-hook #'ac1965--org-capture-set-blog-tags)
+
+  ;; ---------------------------------------------------------------------------
+  ;; （任意）ブログ投稿テンプレートの :EXPORT_HUGO_TAGS: %^{Tags} プロンプトを外す
+  ;; ---------------------------------------------------------------------------
+  ;; orgx-core.el の "b" テンプレートは :EXPORT_HUGO_TAGS: %^{Tags} で別途タグ入力を
+  ;; 求める。上のフックでインラインタグを付けるなら二重にタグ入力を求めることになる
+  ;; ので、"b" エントリだけをここで上書きし、EXPORT_HUGO_TAGS の入力欄を外す。
+  ;;
+  ;; 実行タイミングに関する注記:
+  ;;   orgx-core.el の org-capture-templates 設定は (leaf org :config ...) の中にあり、
+  ;;   with-eval-after-load 'org として登録される。この登録は modules.el 経由で
+  ;;   本ファイルより「後」（init.el ステップ9）に行われる。
+  ;;   一方 with-eval-after-load の同一 feature に対するコールバックは登録順
+  ;;   （FIFO）で実行されるため、本ファイル（ステップ8でロード）が単純に
+  ;;   with-eval-after-load 'org を使うと、orgx-core より「先」に走ってしまい、
+  ;;   後から orgx-core 側の setq に上書きされて負ける。
+  ;;   これを避けるため、登録そのものを after-init-hook（全モジュールのロード完了後）
+  ;;   まで遅らせる。こうすると with-eval-after-load 'org への登録が orgx-core より
+  ;;   確実に後になり、実際に org がロードされたときの実行順も orgx-core → 本関数、
+  ;;   の順になって上書きが効く。
+
+  (defun ac1965--org-capture-templates-override ()
+    "org-capture-templates の \"b\"（Blog post）エントリを、EXPORT_HUGO_TAGS の
+  プロンプト無しの版に上書きする。ac1965--org-capture-set-blog-tags によるインライン
+  タグ設定と重複しないようにするため。"
+    (with-eval-after-load 'org
+      (setf (alist-get "b" org-capture-templates nil nil #'equal)
+            '("Blog post" entry
+              (file+olp my:f:capture-blog-file "blog")
+              "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_FILE_NAME: %(org-id-new)\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+
+  (add-hook 'after-init-hook #'ac1965--org-capture-templates-override 20)
 
   (provide 'ac1965)
   ;;; personal/ac1965.el ends here
