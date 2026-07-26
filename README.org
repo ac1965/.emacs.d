@@ -5263,6 +5263,10 @@ local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
   ;; - 高頻度の単一和音ナビゲーション用に C-s、C-.、s-z、M-x をバインドする
   ;; - macOS 風のバッファ移動をバインドする（s-left/right/up/down）
   ;; - <f1> を `help-command' にバインドする
+  ;; - macOS 風のフレーム／ウィンドウ操作をバインドする（s-o/s-m/s-w/s-./s-j）
+  ;; - 単発ファイル操作（C-c o/v）、置換・行移動（C-c r/M-g g）、
+  ;;   コメント・整列（C-c ;/:/M-a）、スクロール（C-s-up/down、
+  ;;   s-wheel-up/down）、文字サイズ（C-+/C--）をバインドする
   ;; - すべての登録を `ui-global-keys--startup-init' により
   ;;   `after-init-hook' に遅延する
   ;;; Code:
@@ -5270,16 +5274,45 @@ local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
   (defun ui-global-keys--startup-init ()
     "Register global key bindings after all modules are loaded.
 Global keys are intentionally minimal: only the highest-frequency primitives
-that benefit from single-chord access (no prefix).
-  C-s   → consult-line       (search within buffer, replaces isearch)
-  C-.   → other-window       (window navigation, 2 keys)
-  s-z   → undo-redo          (macOS-convention undo/redo; replaced C-?)
-  M-x   → execute-extended-command
-  s-←/→ → previous/next-buffer (macOS Super key, 2 keys)
-  s-↑/↓ → beginning/end-of-buffer
-  <f1>  → help-command
-  C-c c → org-capture        (Org community standard; global)
-Former C-c b/k/o/r bindings removed: all are reachable via M-SPC (2-3 keys).
+that benefit from single-chord access (no prefix), plus a curated set of
+frame/window/editing conveniences documented on the ty07.net cheat-sheet
+post (備忘録: Emacsのショートカットキー).
+  C-s     → consult-line       (search within buffer, replaces isearch)
+  C-.     → other-window       (window navigation, 2 keys)
+  s-z     → undo-redo          (macOS-convention undo/redo; replaced C-?)
+  M-x     → execute-extended-command
+  s-←/→   → previous/next-buffer (macOS Super key, 2 keys)
+  s-↑/↓   → beginning/end-of-buffer
+  <f1>    → help-command
+  C-c c   → org-capture        (Org community standard; global)
+  s-o     → find-file-other-frame
+  s-m     → make-frame-command
+  s-w     → delete-frame
+  s-.     → window-toggle-split-direction (guarded by fboundp; Emacs 27+)
+  s-j     → find-file-other-window
+  C-c o   → find-file          (re-added: direct chord faster than M-SPC for
+                                 the single highest-frequency file action)
+  C-c v   → find-file-read-only
+  C-c r   → query-replace      (distinct from M-SPC s r = consult-ripgrep;
+                                 this is in-buffer string replacement, not
+                                 a project search — no overlap in practice)
+  M-g g   → consult-goto-line
+  C-c ;   → comment-region
+  C-c :   → uncomment-region
+  C-c M-a → align-regexp
+  C-s-↑   → scroll-down-command      (reveal text above point, same window)
+  C-s-↓   → scroll-up-command        (reveal text below point, same window)
+  s-<wheel-up>   → scroll-other-window-down
+  s-<wheel-down> → scroll-other-window
+  C-+     → text-scale-increase
+  C--     → text-scale-decrease
+Former C-c b/k bindings remain removed: reachable via M-SPC (2-3 keys).
+C-c o/v/r were reintroduced deliberately (2026-07) after cross-checking
+against the ty07.net memo: o/v duplicate no leader binding (find-file and
+find-file-read-only were never given M-SPC equivalents), and r is a
+genuinely different command (query-replace) from the already-leader-bound
+consult-ripgrep, so none of the three re-create the redundancy that C-c
+b/k avoided by living under M-SPC.
 C-? (undo-redo) replaced with s-z: aligns Emacs undo/redo with the
 macOS system-wide Cmd+Z convention shared by every other application on the
 machine, reducing cross-application muscle-memory conflict.  C-z was
@@ -5307,7 +5340,44 @@ binding would add keymap surface without practical benefit."
     ;; Org キャプチャ — コミュニティ標準の C-c c を全バッファで有効化。
     ;; org-capture は任意のバッファから起動できる必要があるため
     ;; orgx-core.el ではなくここ（グローバルキー）に置く。
-    (keymap-global-set "C-c c"     #'org-capture))
+    (keymap-global-set "C-c c"     #'org-capture)
+
+    ;; macOS 風のフレーム／ウィンドウ操作（ty07.net 備忘録より）
+    (keymap-global-set "s-o"       #'find-file-other-frame)
+    (keymap-global-set "s-m"       #'make-frame-command)
+    (keymap-global-set "s-w"       #'delete-frame)
+    ;; window-toggle-split-direction は Emacs 27 以降の同梱コマンド。
+    ;; 古いバージョンでも起動時エラーにならないよう fboundp で防御する。
+    (when (fboundp 'window-toggle-split-direction)
+      (keymap-global-set "s-." #'window-toggle-split-direction))
+    (keymap-global-set "s-j"       #'find-file-other-window)
+
+    ;; ファイル操作 — 高頻度な単発操作のため直接和音を再導入。
+    ;; consult-find（M-SPC s f）はプロジェクト内あいまい検索用であり、
+    ;; パスが分かっている単発オープンには find-file の直接和音が速い。
+    (keymap-global-set "C-c o"     #'find-file)
+    (keymap-global-set "C-c v"     #'find-file-read-only)
+
+    ;; 置換・行移動
+    ;; C-c r は query-replace（バッファ内文字列置換）。
+    ;; M-SPC s r の consult-ripgrep（プロジェクト横断検索）とは役割が異なる。
+    (keymap-global-set "C-c r"     #'query-replace)
+    (keymap-global-set "M-g g"     #'consult-goto-line)
+
+    ;; コメント・整列
+    (keymap-global-set "C-c ;"     #'comment-region)
+    (keymap-global-set "C-c :"     #'uncomment-region)
+    (keymap-global-set "C-c M-a"   #'align-regexp)
+
+    ;; スクロール — 現在のウィンドウ（C-s-↑/↓）と他のウィンドウ（s-wheel-up/down）
+    (keymap-global-set "C-s-<up>"        #'scroll-down-command)
+    (keymap-global-set "C-s-<down>"      #'scroll-up-command)
+    (keymap-global-set "s-<wheel-up>"    #'scroll-other-window-down)
+    (keymap-global-set "s-<wheel-down>"  #'scroll-other-window)
+
+    ;; 文字サイズ調整
+    (keymap-global-set "C-+"       #'text-scale-increase)
+    (keymap-global-set "C--"       #'text-scale-decrease))
 
   (add-hook 'after-init-hook #'ui-global-keys--startup-init)
 
@@ -6321,13 +6391,20 @@ cleanup pattern used by `completion-corfu--init'."
   ;; 本ファイルの責務:
   ;; - `prefix-help-command' を `embark-prefix-help-command' に設定する
   ;; - `embark-collect' バッファで `consult-preview-at-point-mode' を有効化する
+  ;; - Embark 本体のグローバルキーバインドを設定する（s-/、s-;、C-<f2>）
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
   (leaf embark
     :straight t
-    :custom ((prefix-help-command . #'embark-prefix-help-command)))
+    :custom ((prefix-help-command . #'embark-prefix-help-command))
+    ;; s-/ act、s-; dwim、C-<f2> でバインディング一覧（ty07.net 備忘録より）。
+    ;; パッケージ固有のコマンドのため、汎用の ui-global-keys.el ではなく
+    ;; ここ（Embark 自身の leaf ブロック）にまとめる。
+    :bind (("s-/"    . embark-act)
+           ("s-;"    . embark-dwim)
+           ("C-<f2>" . embark-bindings)))
   (leaf embark-consult
     :straight t
     :after (embark consult)
@@ -7032,6 +7109,16 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;; file+olp ターゲットに合わせ、"* blog" の下に挿入する。
     ;; EXPORT_FILE_NAME は org-id-new で生成し、all-posts.org における既存の
     ;; UUID 由来スラッグの慣習に合わせている。
+    ;; EXPORT_HUGO_COVER という独自プロパティ名は ox-hugo が認識しない（front matter に
+    ;; 変換されない）ため使わない。任意キーをfront matterに追加したい場合、ox-hugo が
+    ;; 唯一受け付ける経路は EXPORT_HUGO_CUSTOM_FRONT_MATTER（plist形式）であるため、
+    ;; ここに :cover "" を空文字のプレースホルダーとして常に挿入しておく。
+    ;; 記事固有のカバー画像を用意した場合は、実ファイルを
+    ;; assets/img/cover/custom/<EXPORT_FILE_NAME>.jpg に置いた上で、この値を
+    ;; :cover "custom/<EXPORT_FILE_NAME>.jpg" に書き換える（deploy.sh の Tier1: 明示指定）。
+    ;; 空文字のままなら deploy.sh 側で post_front_matter_cover() が空文字を返し、
+    ;; 従来通り Tier2（タグ）→Tier3（季節）→Tier4（デフォルト）へフォールスルーする
+    ;; ため、既存の自動選択の挙動は変わらない。
     ;; my:f:capture-blog-file の個人設定による上書き（all-posts.org を指す等）は、
     ;; orgx-core のロード前に personal/<user>.el で行うこと。
     (setq org-capture-templates
@@ -7045,7 +7132,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
              "* MEETING with %? :meeting:\n  %U\n  %a")
             ("b" "Blog post" entry
              (file+olp my:f:capture-blog-file "blog")
-             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_FILE_NAME: %(org-id-new)\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_FILE_NAME: %(org-id-new)\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
 
   ;; アーカイブ先
   (with-eval-after-load 'org
@@ -11024,12 +11111,16 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   (defun ac1965--org-capture-templates-override ()
     "org-capture-templates の \"b\"（Blog post）エントリを、EXPORT_HUGO_TAGS の
   プロンプト無しの版に上書きする。ac1965--org-capture-set-blog-tags によるインライン
-  タグ設定と重複しないようにするため。"
+  タグ設定と重複しないようにするため。EXPORT_HUGO_COVER という独自プロパティ名は
+  ox-hugo が認識しないため使わない。ox-hugo が唯一受け付ける任意キー用の経路である
+  EXPORT_HUGO_CUSTOM_FRONT_MATTER（plist形式）に :cover \"\" を空文字のプレースホルダー
+  として挿入する（deploy.sh の Tier1 明示指定用。空文字のままなら従来通りTier2以降へ
+  フォールスルーする）。"
     (with-eval-after-load 'org
       (setf (alist-get "b" org-capture-templates nil nil #'equal)
             '("Blog post" entry
               (file+olp my:f:capture-blog-file "blog")
-              "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_FILE_NAME: %(org-id-new)\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+              "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_FILE_NAME: %(org-id-new)\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
 
   (add-hook 'after-init-hook #'ac1965--org-capture-templates-override 20)
 
