@@ -5187,6 +5187,8 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
       (ui-keymap--bind 'ui-leader-o-map "i" #'org-roam-node-insert))    ; NEW
     (when (fboundp 'org-roam-buffer-toggle)
       (ui-keymap--bind 'ui-leader-o-map "b" #'org-roam-buffer-toggle))  ; NEW
+    (when (fboundp 'org-roam-capture)
+      (ui-keymap--bind 'ui-leader-o-map "n" #'org-roam-capture))        ; NEW
 
     ;; ── a: アプリ（旧: 空） ────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-a-map "v"
@@ -7281,6 +7283,10 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;; - org-roam を設定し、DB を `my:d:org-roam' 配下に置く。
   ;;   `org-roam-db-autosync-mode' は起動時に自動起動しない（Org の遅延ロードを保つため）。
   ;;   有効化は対話コマンド my/org-roam-autosync-enable による
+  ;; - org-roam-capture-templates を設定し、ノード新規作成時にドメイン×種別タグと
+  ;;   :ID:/:ROAM_REFS:/:STATUS: の PROPERTIES drawer を強制する。タグ語彙・命名規則等の
+  ;;   運用ポリシー本体は roam ノート側（meta-knowledge-base-conventions、
+  ;;   id: cba75214-acbb-4b04-ab07-46bd63cb3e36）を正とし、ここにはコードのみを置く。
   ;; - org-download、toc-org、org-cliplink を導入する
   ;;; Code:
 
@@ -7336,6 +7342,20 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     (with-eval-after-load 'org-roam
       (when (fboundp 'org-roam-db--file-hash)
         (advice-add 'org-roam-db--file-hash :around #'orgx--org-roam-file-hash-guard)))
+
+    ;; capture template: ドメイン×種別タグ運用（meta-knowledge-base-conventions 参照）。
+    ;; ファイル名は `<domain>-<slug>.org' 相当になるよう日付プレフィックス+スラッグで生成し、
+    ;; :ID:/:ROAM_REFS:/:STATUS: を PROPERTIES drawer として強制する。
+    ;; タグ語彙（ドメイン一覧・種別一覧）自体はこのファイルでは管理しない — 増減の度に
+    ;; tangle/コミットが発生するのを避けるため、正規リストは roam ノート側に置く。
+    (setopt org-roam-capture-templates
+            '(("d" "domain note" plain
+               "%?"
+               :target
+               (file+head
+                "%<%Y%m%d>-${slug}.org"
+                ":PROPERTIES:\n:ID: %(org-id-uuid)\n:ROAM_REFS: %^{出典URL（複数可、スペース区切り、省略可）}\n:STATUS: n/a\n:END:\n#+TITLE: ${title}\n#+FILETAGS: :%^{ドメインタグ}:%^{種別タグ}:\n#+CATEGORY: %\\1\n#+DATE: %U\n")
+               :unnarrowed t)))
 
     ;; 以前はここで (run-with-idle-timer 5 nil #'orgx--org-roam-autosync-enable) を
     ;; 呼び、起動 5 秒後に autosync を有効化していた。しかし org-roam-db-autosync-mode を
