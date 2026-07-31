@@ -11390,13 +11390,16 @@ hydra is not installed."
   ;; 本ファイル内では改めて `my:wsl-p' や `system-type' のガードを行わない。
   ;;
   ;; 本ファイルの責務:
+  ;; - リーダーキーを `M-SPC' から `C-c SPC' へ切り替える（Alt+Space は Windows
+  ;;   側のシステムショートカットと衝突しやすく、人間工学的にも押しにくいため）
   ;; - `win32yank.exe' が存在すれば、kill-ring と Windows クリップボードを
   ;;   `interprogram-cut-function' / `interprogram-paste-function' 経由で橋渡しする
   ;; - `wslview'（wslu パッケージ）が存在すれば、`browse-url' の既定を
   ;;   Windows 側の既定ブラウザ起動に切り替える
   ;; - 現在のディレクトリを Explorer で開くコマンドを提供する
   ;; - 現在のファイルパスを Windows 形式（`wslpath -w'）に変換してコピーするコマンドを提供する
-  ;; - hydra-wsl を定義し、init 後に M-SPC a w へバインドする
+  ;; - hydra-wsl を定義し、init 後にリーダー a w（本ファイルの変更により
+  ;;   WSL では C-c SPC a w）へバインドする
   ;;
   ;; 前提（Emacs の外側で用意するもの、本ファイルの範囲外）:
   ;; - win32yank.exe: `winget install --id=equalsraf.win32yank' 等で Windows 側に導入し、
@@ -11412,6 +11415,31 @@ hydra is not installed."
   ;; 本ファイルは `leaf' マクロを使わない（`defvar'/`defun'/`setq' のみ）ため、
   ;; `device-darwin.el' と異なり `(eval-when-compile (require 'leaf))' は不要。
   ;; `-Q --batch' 単体ロードでも straight.el のブートストラップなしに読み込める。
+
+  ;; ---------------------------------------------------------------------------
+  ;; リーダーキーの代替 — M-SPC → C-c SPC
+  ;; ---------------------------------------------------------------------------
+  ;; Alt+Space はWindowsのシステムメニュー・ショートカットと衝突しやすく、
+  ;; また人間工学的にも押しにくいため、WSLでは3打鍵に戻る形にはなるが
+  ;; 衝突が少なく確実な `C-c SPC' を使う。
+  ;;
+  ;; 注意: `ui-leader--bind-root'（ui-leader モジュール）と
+  ;; `utils-ime--install-leader'（utils-ime モジュール、IME切替でリーダーを
+  ;; 包む処理）は、いずれも本ファイル（personal オーバーレイ）より前に
+  ;; ロードされ、その時点の既定値 "M-SPC" で global-map に一度結線済みである。
+  ;; そのため `ui-leader-key' を setopt するだけでは実際のキーバインドは
+  ;; 変わらない。旧バインドを明示的に解除してから新キーへ張り直す必要がある。
+  ;; （`utils-ime--install-leader' の IME切替ラッパーは macism 依存＝macOS
+  ;;  限定の機能であり、WSL 上ではもともと不活性なので、ここでは単純な
+  ;;  `ui-leader-map' への張り替えでよい。）
+
+  (when (and (boundp 'ui-leader-key) (stringp ui-leader-key)
+             (boundp 'ui-leader-map) (keymapp ui-leader-map))
+    (keymap-global-unset ui-leader-key)   ; 旧 "M-SPC" を解除
+    (setopt ui-leader-key "C-c SPC")
+    (if (fboundp 'keymap-global-set)
+        (keymap-global-set ui-leader-key ui-leader-map)
+      (global-set-key (kbd ui-leader-key) ui-leader-map)))
 
   ;; ---------------------------------------------------------------------------
   ;; クリップボード連携 — win32yank.exe
@@ -11493,7 +11521,71 @@ Windows クリップボードとの橋渡しに使う。
         (message "[device-wsl] wslpath コマンドが見つかりません"))))
 
   ;; ---------------------------------------------------------------------------
-  ;; hydra-wsl — M-SPC a w
+  ;; macOS Super(s-)キーバインドの置き換え
+  ;; ---------------------------------------------------------------------------
+  ;; WSL では Super キーのイベントが実用上届かない
+  ;; （ターミナルは Super を伝える手段を持たず、WSLg 環境でも Windows キーは
+  ;;   Windows 側にシステムショートカットとして横取りされることが多い）ため、
+  ;; `lisp/ui/ui-global-keys.el' が定義する `s-' 系バインドは WSL 上では
+  ;; 事実上デッドコードになる（無害だが発火しない）。
+  ;;
+  ;; ここでは共有ファイル（ui-global-keys.el）には一切手を入れず、WSL 専用の
+  ;; 代替バインドを本ファイルに追加登録する。方針は頻度で2段階に分ける:
+  ;;
+  ;;   高頻度クラスタ（undo/redo、バッファ間移動、他ウィンドウのスクロール）
+  ;;     → C-M-（Control+Alt 同時押し）、または C-z（core init で既に unset
+  ;;       済みのため衝突なく再利用できる。lisp/ui/ui-global-keys.el の
+  ;;       "s-z was selected..." のコメントを参照）
+  ;;   低頻度クラスタ（フレーム／ウィンドウ管理）
+  ;;     → 既存の `ui-leader-w-map'（WSL では C-c SPC w）に統合
+  ;;
+  ;; C-M-<left>/<right>/<up>/<down> は vanilla Emacs・org-mode いずれの既定
+  ;; バインドとも衝突しない（sexp 移動は C-M-f/C-M-b であり arrow 版は無い。
+  ;; org の見出し操作は素の M-<arrow> であり C-M- ではない）ことを確認済み。
+
+  (defun device-wsl--global-keys-init ()
+    "macOS の Super(s-)系グローバルキーを WSL 用に代替登録する.
+Runs on `after-init-hook'."
+    ;; undo/redo — macOS の s-z、Windows 標準の Ctrl+Z 規約とも一致する
+    (keymap-global-set "C-z" #'undo-redo)
+    ;; バッファ間移動 — 元 s-<left>/<right>/<up>/<down>
+    (keymap-global-set "C-M-<left>"  #'previous-buffer)
+    (keymap-global-set "C-M-<right>" #'next-buffer)
+    (keymap-global-set "C-M-<up>"    #'beginning-of-buffer)
+    (keymap-global-set "C-M-<down>"  #'end-of-buffer)
+    ;; 他ウィンドウのスクロール — 元 s-<wheel-up>/<wheel-down>
+    (keymap-global-set "C-M-<wheel-up>"   #'scroll-other-window-down)
+    (keymap-global-set "C-M-<wheel-down>" #'scroll-other-window)
+    ;; 現在ウィンドウのスクロール — 元 C-s-<up>/<down>（元々3キー和音のため、
+    ;; C-c プレフィックス［逐次2打鍵］へ格下げしても体感の重さは同程度）
+    (keymap-global-set "C-c <up>"   #'scroll-down-command)
+    (keymap-global-set "C-c <down>" #'scroll-up-command))
+
+  (add-hook 'after-init-hook #'device-wsl--global-keys-init 10)
+
+  ;; ---------------------------------------------------------------------------
+  ;; フレーム／ウィンドウ管理 — ui-leader-w-map への統合
+  ;; ---------------------------------------------------------------------------
+  ;; 元 s-o/s-m/s-w/s-./s-j。既存の ui-leader-w-map（既存の割り当て:
+  ;; s/v/d/o/=/w/r/R/m/M）とは文字が重複しない。`ui-leader--define-maps' が
+  ;; 済んでいる必要があるため、`device-wsl--hydra-init' と同じ理由で
+  ;; after-init-hook depth 10 で実行する。
+
+  (defun device-wsl--leader-window-keys-init ()
+    "フレーム／ウィンドウ管理コマンドを `ui-leader-w-map' に追加登録する.
+Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+(depth 0) has called `ui-leader--define-maps'."
+    (ui-keymap--bind 'ui-leader-w-map "f" #'find-file-other-frame)  ; f = frame
+    (ui-keymap--bind 'ui-leader-w-map "j" #'find-file-other-window) ; 元 s-j を継承
+    (ui-keymap--bind 'ui-leader-w-map "n" #'make-frame-command)     ; n = new
+    (ui-keymap--bind 'ui-leader-w-map "k" #'delete-frame)           ; k = kill
+    (when (fboundp 'window-toggle-split-direction)
+      (ui-keymap--bind 'ui-leader-w-map "t" #'window-toggle-split-direction))) ; t = toggle
+
+  (add-hook 'after-init-hook #'device-wsl--leader-window-keys-init 10)
+
+  ;; ---------------------------------------------------------------------------
+  ;; hydra-wsl — リーダー a w（WSL では C-c SPC a w）
   ;; ---------------------------------------------------------------------------
   ;; `device-darwin--apple-music-init' と同じ理由（hydra と `ui-leader-a-map' の
   ;; 準備完了を待つ）により after-init-hook depth 10 で実行する。
