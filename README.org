@@ -10636,16 +10636,10 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
 | ファイル | 目的 |
 |------+---------|
-| =personal/user.el= | 全マシン共通の個人設定 |
+| =personal/user.el= | 全マシン共通の個人設定、`my:wsl-p'、デバイスファイルのロード |
 | =personal/<login>.el= | 識別情報、フォント、UI、LSP スイッチ |
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Apple Music 操作 |
-| =personal/personal-messages.el= | macOS Messages.app のアーカイバ |
-| =personal/personal-ai.el= | Org Babel と Claude API の統合 |
-| ファイル | 目的 |
-|------+---------|
-| =personal/user.el= | 全マシン共通の個人設定 |
-| =personal/<login>.el= | 識別情報、フォント、UI、LSP スイッチ |
-| =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Apple Music 操作 |
+| =personal/device-wsl.el= | WSL のクリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
 | =personal/personal-messages.el= | macOS Messages.app のアーカイバ |
 | =personal/personal-ai.el= | Org Babel と Claude API の統合 |
 *** personal/user.el
@@ -10741,13 +10735,33 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
     (set-selection-coding-system 'utf-8)
     (setenv "LANG" "en_US.UTF-8"))
 
+  ;; WSL 判定ユーティリティ
+  ;;
+  ;; WSL (Windows Subsystem for Linux) 上の `system-type' は素の Linux と同じ
+  ;; `gnu/linux' であり、`system-type' だけでは区別できない。WSL は環境変数
+  ;; `WSL_DISTRO_NAME'（wsl.exe が各ディストロ起動時に設定する）で確実に判定できる。
+  ;;
+  ;; この関数はデバイスファイルのロード（直後）と、後段の `personal/ac1965.el'
+  ;; （`my:d:org*' 等のパス分岐）の両方から参照されるため、両者より前に位置する
+  ;; 本ファイル（`personal/user.el'）内で定義する。
+  (defun my:wsl-p ()
+    "現在 WSL 上で動作していれば non-nil を返す."
+    (and (eq system-type 'gnu/linux)
+         (getenv "WSL_DISTRO_NAME")))
+
   ;; デバイス固有の設定をロードする
+  ;;
+  ;; WSL は `system-type' が `gnu/linux' と衝突するため、`my:wsl-p' を優先判定し、
+  ;; 該当すれば `device-wsl.el' を、そうでなければ従来どおり
+  ;; `device-<system-type>.el' をロードする。
   (let* ((personal-dir
           (expand-file-name "personal/"
                             (or (bound-and-true-p my:d) user-emacs-directory)))
          (device-file
           (expand-file-name
-           (concat "device-" (symbol-name system-type) ".el")
+           (if (my:wsl-p)
+               "device-wsl.el"
+             (concat "device-" (symbol-name system-type) ".el"))
            personal-dir)))
     (when (file-exists-p device-file)
       (load device-file nil 'nomessage)))
@@ -11349,6 +11363,163 @@ hydra is not installed."
 
   (provide 'device-darwin)
   ;;; personal/device-darwin.el ends here
+#+end_src
+
+*** personal/device-wsl.el
+:PROPERTIES:
+:CUSTOM_ID: device-wsl
+:header-args:emacs-lisp: :tangle personal/device-wsl.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/device-wsl.el --- WSL デバイス固有の設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; WSL (Windows Subsystem for Linux) デバイス固有の設定:
+  ;; Windows クリップボードとの連携、既定ブラウザの起動、Explorer 連携。
+  ;;
+  ;; `personal/user.el' の `my:wsl-p' によって WSL 判定済みの状態でのみ
+  ;; ロードされる（`device-darwin.el' の macOS 判定と対になる位置づけ）ため、
+  ;; 本ファイル内では改めて `my:wsl-p' や `system-type' のガードを行わない。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `win32yank.exe' が存在すれば、kill-ring と Windows クリップボードを
+  ;;   `interprogram-cut-function' / `interprogram-paste-function' 経由で橋渡しする
+  ;; - `wslview'（wslu パッケージ）が存在すれば、`browse-url' の既定を
+  ;;   Windows 側の既定ブラウザ起動に切り替える
+  ;; - 現在のディレクトリを Explorer で開くコマンドを提供する
+  ;; - 現在のファイルパスを Windows 形式（`wslpath -w'）に変換してコピーするコマンドを提供する
+  ;; - hydra-wsl を定義し、init 後に M-SPC a w へバインドする
+  ;;
+  ;; 前提（Emacs の外側で用意するもの、本ファイルの範囲外）:
+  ;; - win32yank.exe: `winget install --id=equalsraf.win32yank' 等で Windows 側に導入し、
+  ;;   WSL 側の $PATH からも解決できるようにしておく
+  ;;   （WSLg 由来の /mnt/c 経由 PATH で通常は解決される。`which win32yank.exe' で確認）
+  ;; - wslu: `sudo apt install wslu'（`wslview' を含む）
+  ;; - GPG pinentry: `~/.gnupg/gpg-agent.conf' で `pinentry-program' を
+  ;;   `pinentry-curses'（または WSLg 利用時は `pinentry-gtk'）に設定する
+  ;;   （macOS の pinentry-touchid に相当する処理だが、gpg-agent 側の設定であり
+  ;;   Emacs Lisp では制御しないため、ここにはコードを置かない）
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  ;; ---------------------------------------------------------------------------
+  ;; クリップボード連携 — win32yank.exe
+  ;; ---------------------------------------------------------------------------
+  ;; win32yank.exe は標準入出力経由でテキストを受け渡すだけの単純なブリッジである。
+  ;; コピー（cut）は非同期プロセスへ標準入力として書き込み、ペースト（paste）は
+  ;; 同期的に標準出力を読む。win32yank.exe が見つからない場合は双方とも no-op のままとし、
+  ;; Emacs 標準の（WSL 内では機能しない）kill-ring 動作にフォールバックする。
+
+  (defvar device-wsl--win32yank-executable (executable-find "win32yank.exe")
+    "win32yank.exe のパス。見つからなければ nil。
+Windows クリップボードとの橋渡しに使う。
+未インストールなら `winget install --id=equalsraf.win32yank' 等で導入する。")
+
+  (defun device-wsl--clipboard-cut (text &optional _push)
+    "TEXT を win32yank.exe 経由で Windows クリップボードへコピーする.
+`interprogram-cut-function' として使う。"
+    (when device-wsl--win32yank-executable
+      (let ((proc (make-process :name "win32yank-cut"
+                                 :command (list device-wsl--win32yank-executable
+                                                "-i" "--crlf")
+                                 :connection-type 'pipe
+                                 :noquery t)))
+        (process-send-string proc text)
+        (process-send-eof proc))))
+
+  (defun device-wsl--clipboard-paste ()
+    "win32yank.exe 経由で Windows クリップボードの内容を返す.
+`interprogram-paste-function' として使う。取得失敗時は nil を返す。"
+    (when device-wsl--win32yank-executable
+      (let ((result (shell-command-to-string
+                     (concat (shell-quote-argument device-wsl--win32yank-executable)
+                             " -o --lf"))))
+        (unless (string-empty-p result) result))))
+
+  (when device-wsl--win32yank-executable
+    (setq interprogram-cut-function   #'device-wsl--clipboard-cut
+          interprogram-paste-function #'device-wsl--clipboard-paste))
+
+  ;; ---------------------------------------------------------------------------
+  ;; ブラウザ起動 — wslview
+  ;; ---------------------------------------------------------------------------
+  ;; org-roam-ui 等が `browse-url' を呼ぶ際、既定の `browse-url-default-browser' は
+  ;; WSL 内に GUI ブラウザが無ければ失敗する。wslview（wslu パッケージ）を経由すると
+  ;; Windows 側の既定ブラウザで URL が開く。
+
+  (defvar device-wsl--wslview-executable (executable-find "wslview")
+    "wslview のパス。見つからなければ nil。
+未インストールなら `sudo apt install wslu' で導入する。")
+
+  (when device-wsl--wslview-executable
+    (setq browse-url-generic-program  device-wsl--wslview-executable
+          browse-url-browser-function #'browse-url-generic))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Explorer 連携
+  ;; ---------------------------------------------------------------------------
+
+  (defun device-wsl-open-in-explorer ()
+    "現在のバッファのディレクトリを Windows Explorer で開く.
+`dired-mode' 中はそのディレクトリを、それ以外は `default-directory' を対象とする。"
+    (interactive)
+    (let ((dir (expand-file-name default-directory)))
+      (if (executable-find "explorer.exe")
+          (call-process "explorer.exe" nil 0 nil dir)
+        (message "[device-wsl] explorer.exe が見つかりません（$PATH に Windows 側パスが含まれているか確認）"))))
+
+  (defun device-wsl-copy-windows-path ()
+    "現在のファイル（無ければ `default-directory'）のパスを Windows 形式に変換し、
+`wslpath -w' の結果を kill-ring へコピーする。"
+    (interactive)
+    (let ((file (or (buffer-file-name) default-directory)))
+      (if (executable-find "wslpath")
+          (let ((winpath (string-trim
+                          (shell-command-to-string
+                           (format "wslpath -w %s" (shell-quote-argument (expand-file-name file)))))))
+            (kill-new winpath)
+            (message "[device-wsl] Windows path copied: %s" winpath))
+        (message "[device-wsl] wslpath コマンドが見つかりません"))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; hydra-wsl — M-SPC a w
+  ;; ---------------------------------------------------------------------------
+  ;; `device-darwin--apple-music-init' と同じ理由（hydra と `ui-leader-a-map' の
+  ;; 準備完了を待つ）により after-init-hook depth 10 で実行する。
+  ;; `ui-leader-a-map' の "a" は device-darwin.el 側で Apple Music に割り当てられて
+  ;; いるが、両ファイルは排他的にロードされる（同一マシンで両方は読み込まれない）ため、
+  ;; キーの重複は実際には発生しない。ここでは記憶しやすさを優先し "w"（Windows）とする。
+
+  (defun device-wsl--hydra-init ()
+    "`hydra-wsl' を定義し、leader キーへバインドする.
+Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+(depth 0) has called `ui-leader--define-maps', so `ui-leader-a-map' is
+guaranteed to be a live keymap. Requires hydra at runtime; no-op if
+hydra is not installed."
+    (when (require 'hydra nil t)
+      (defhydra hydra-wsl (:hint nil :color blue)
+        "
+^WSL / Windows 連携^
+[_e_] Explorerで開く   [_p_] Windowsパスをコピー   [_q_] quit
+"
+        ("e" device-wsl-open-in-explorer)
+        ("p" device-wsl-copy-windows-path)
+        ("q" nil))
+      (ui-keymap--bind 'ui-leader-a-map "w" #'hydra-wsl/body)))
+
+  (add-hook 'after-init-hook #'device-wsl--hydra-init 10)
+
+  (provide 'device-wsl)
+  ;;; personal/device-wsl.el ends here
 #+end_src
 
 *** personal/personal-messages.el
