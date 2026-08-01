@@ -80,7 +80,8 @@ Emacs に =ob-dot= が入っていれば =C-c C-c= で再生成できる。
     ├── 09_utils_claude.svg
     ├── 10_orgtangle_hugo.svg
     ├── 11_leader_keymap.svg
-    └── 12_dev_ai_timing.svg
+    ├── 12_dev_ai_timing.svg
+    └── 13_personal_override_contract.svg
 #+end_example
 
 * 起動シーケンス
@@ -93,8 +94,15 @@ Emacs の起動は内部的に 3 段階に分かれてる。
   =package.el= を無効化して、ディレクトリを整えて、GC を一時的に緩める。
 - *Phase 2 (init.el)* — =straight.el= と =leaf= をブートストラップして、
   モジュールシステムを起動する手前の下ごしらえをする。
-- *Phase 3 (modules.el)* — 75 本のモジュールを決められた順番でロードする。
-  1 本コケても残りの 74 本は続く（delete-safety、後述）。
+- *Phase 3 (modules.el)* — 74 本のモジュールを決められた順番でロードする。
+  1 本コケても残りの 73 本は続く（delete-safety、後述）。
+
+#+begin_quote
+*以前との違い:* 「75 本」としていたが、README.org の =my:modules= を数え直したら 74 本
+だった（core 14 / ui 11 / auth 3 / completion 12 / orgx 8 / vcs 4 / dev 13 / utils 9）。
+デッドコード削除で =core-tools= / =core-api= / =utils-path= / =utils-async= の 4 モジュールが
+=my:modules= から抜けた結果の数字なので、実装側の変更を追いかけそこねていただけ。
+#+end_quote
 
 [[file:svg/01_boot_flow.svg]]
 
@@ -158,22 +166,42 @@ Emacs の起動は内部的に 3 段階に分かれてる。
   =void-variable= になってしまうから。
 
 #+begin_src emacs-lisp
-;; modules.el の核心部分
-(dolist (feature (append my:modules my:modules-extra))
-  (unless (memq feature my:modules-skip)
-    (let ((t0 (current-time)))
-      (condition-case err
-          (progn (require feature) t)
-        (error
-         (message "[modules] Failed to load %s: %s"
-                  feature (error-message-string err))
-         nil))
-      (when my:modules-verbose
-        (message "%-24s %s"
-                 feature
-                 (modules--format-seconds
-                  (float-time (time-subtract (current-time) t0))))))))
+;; modules.el の核心部分 — my/modules-load
+(defun my/modules-load ()
+  "Load all modules defined by `my:modules`, respecting options."
+  (let* ((all (append my:modules my:modules-extra))
+         (final (seq-remove (lambda (m) (not (modules--should-load-p m))) all))
+         (skipped (seq-remove (lambda (m) (memq m final)) all))
+         (ok 0) (ng 0)
+         (failed '())
+         (t0 (and my:modules-verbose (current-time))))
+    (dolist (mod final)
+      (let ((m0 (and my:modules-verbose (current-time))))
+        (if (modules--require-safe mod)
+            (setq ok (1+ ok))
+          (setq ng (1+ ng))
+          (push mod failed))
+        (when my:modules-verbose
+          (message "[modules] %-24s %s"
+                   mod
+                   (modules--format-seconds
+                    (float-time (time-subtract (current-time) m0)))))))
+    (when my:modules-verbose
+      (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
+               ok (length skipped) ng
+               (modules--format-seconds
+                (float-time (time-subtract (current-time) t0)))))
+    ok))
 #+end_src
+
+#+begin_quote
+*以前との違い:* ここに載せていたのは =dolist= で回すだけの簡略版だったが、実装は
+=modules--should-load-p= / =modules--require-safe= / =modules--format-seconds= の 3 つの
+ヘルパーに分割された =my/modules-load= になっている。ロード成功・失敗・スキップの件数を
+集計して起動完了時にまとめて報告する点が増えた（ =[modules]= プレフィックスで
+loaded / skipped / failed の件数をまとめて出す 1 行サマリ）。 =condition-case= で =error= だけを捕まえて =quit= は伝播させる、という
+delete-safety の核はそのまま。
+#+end_quote
 
 * core-session — Facade パターンと Dual-Timer スケジューラ
 
@@ -523,6 +551,137 @@ ty07.net の備忘録記事（Emacsショートカットキー一覧）と =READ
  (t
   (display-warning 'aidermacs "No API key found in auth-source.")))
 #+end_src
+
+* personal/ Layer — マシン固有オーバーレイ
+
+=lisp/= 配下が「共有ポリシー」なら、 =personal/= は「このユーザー・この機械でしか意味を
+持たない設定」の置き場。フォント、API キーの参照先、macOS 固有の挙動などを =lisp/= に
+混ぜると他の環境で不可解な動きをするので、境界をはっきり分けてある。
+
+| 特性 | 内容 |
+|------+------|
+| バージョン管理 | 共有コミットには含めない（各自でカスタマイズする前提） |
+| 編集の安全性 | 変更しても他ユーザーには影響しない |
+| ロード順 | =init.el= §8（ =modules.el= を require する §9 より *前* ） |
+
+ロード順が「モジュールより前」というのが地味に重要で、 =my:modules-extra= への
+追記や =my:d:org*= 系パス変数の上書きが、後続の =defvar= に対して先勝ちできるのは
+この順序があってこそ。
+
+| ファイル | 目的 |
+|----------+------|
+| =personal/user.el= | 全マシン共通の個人設定。ロケール初期化、WSL 判定 =my:wsl-p= 、デバイスファイルの読み込み分岐 |
+| =personal/ac1965.el= | ログイン名に対応する識別情報・パス上書き・フォント・UI/LSP スイッチ |
+| =personal/device-darwin.el= | macOS 固有: IME（sis）、マウス／トラックパッド、Apple Music 操作 |
+| =personal/device-wsl.el= | WSL 固有: クリップボード連携、既定ブラウザ、Explorer 連携 |
+| =personal/personal-messages.el= | macOS Messages.app のアーカイバ（org-roam へ） |
+| =personal/personal-ai.el= | Org Babel の =claude= 言語と、対話的な Claude 連携コマンド |
+
+** personal/user.el — 共通オーバーレイと my:modules-extra
+
+全マシンで読み込まれる唯一のファイル。ここでやってることは主に 3 つ。
+
+- =my:modules-extra= に =ui-visual-aids= / =orgx-typography= / =orgx-brain= / =ui-macos= を追記する。
+  =orgx-roam-ui= はあえて入れていない。理由は auth Layer の節でも触れた「Org の遅延ロードを
+  崩す」問題と同じで、 orgx の節を参照。
+- =set-language-environment "Japanese"= → =prefer-coding-system 'utf-8= の順で呼んで、
+  日本語ファイル検出のためのコーディングシステム優先順位を整える。 =set-locale-environment=
+  だけでは Emacs 内部の優先順位リストまでは変わらないので、この 2 段構えが必要。
+- =my:wsl-p= を定義して、 =device-<system-type>.el= か =device-wsl.el= かを振り分ける。
+  WSL 上の =system-type= は素の Linux と同じ =gnu/linux= になってしまうので、
+  =system-type= だけでは判定できず、環境変数 =WSL_DISTRO_NAME= を見て判定している。
+
+#+begin_quote
+*落とし穴:* =personal-messages= の自動アーカイブは =with-eval-after-load 'org= で
+Org 準備完了まで遅延させたうえで、 =run-with-idle-timer= の REPEAT 引数に =600= （10 分）
+を渡している。ここに =t= を渡すと「アイドルになるたびに毎回発火」という意味になり、
+意図よりはるかに高頻度で走ってしまう。地味だが踏みやすい罠。
+#+end_quote
+
+** personal/ac1965.el — ログイン単位の上書き
+
+=my:d:org= / =my:d:org-journal= / =my:d:org-roam= / =my:f:capture-blog-file= を
+=/Users/ac1965/Documents/org/= 配下と =all-posts.org= に上書きしている。これができるのは、
+本ファイルが =orgx-core.el= （モジュールロード）より *前* にロードされるため。 =defvar= は
+既存の束縛を上書きしないので、ここで先に =setq= しておけば =orgx-core= 側の =defvar= は
+何もしなくなる、という「上書きの契約」（orgx Layer の節を参照）がそのまま効いている。
+
+[[file:svg/13_personal_override_contract.svg]]
+
+図の要点はシンプルで、 =init.el= §8a/§8b でパス変数に =setq= してしまえば、その後
+§9 で走る =modules.el= 経由の =orgx-core.el= が同じ変数を =defvar= で宣言し直しても
+「先に束縛されているから無視される」だけ、というだけの話。順序が逆転する
+（ =personal/= より先に =orgx-core.el= がロードされる）と、この契約は即座に壊れる。
+
+フォントは =JetBrains Mono= （等幅）＋ =Noto Sans JP= （可変）、サイズ 18。UI/LSP は
+=my:use-ui 'nano= と =my:use-lsp 'eglot= を選択している（autoload-only モジュールの節を参照）。
+
+このファイルにはマシン固有の小物も同居している。 =.ps1= → =powershell-mode= 、
+=.bas= → =visual-basic-mode= の拡張子登録、nano-modeline 右セグメントに時計・文字コード・
+IME インジケータを出す =ac1965--nano-time-encoding= のオーバーライド、ブログ執筆用の
+タグ補完コマンドなど。いずれも「このホストでしか要らない」ものなので、共有の
+=personal/user.el= を汚さずここに閉じ込めてある。
+
+** personal/device-darwin.el / device-wsl.el — OS ごとの分岐
+
+=my:wsl-p= の判定結果で、どちらか一方だけがロードされる（両方同時にロードされることはない）。
+
+*** device-darwin.el
+
+- IME 切替は =sis= （smart-input-source）。 =macism= の有無にかかわらず =sis= 自体は
+  常にロードする。理由は nano-modeline の IME インジケータが =sis--current= を必要と
+  するため。 =macism= が実際に見つかったときだけ ISM とグローバルモードを有効化する。
+- Logitech MX Ergo S 向けにスクロール量・慣性・マージンを調整。
+- AppleScript 経由で Apple Music を操作するコマンド群と、それをまとめた
+  =hydra-apple-music= （ =M-SPC a a= ）。
+
+*** device-wsl.el
+
+*以前との違い:* リーダーキーを =M-SPC= から =C-c SPC= へ *丸ごと張り替えている* 。
+Windows 側で Alt+Space がシステムメニューのショートカットと衝突しやすく、人間工学的にも
+押しにくいという理由。 =ui-leader--bind-root= 等は本ファイルより前にロード済みで、
+その時点の既定値 =M-SPC= で =global-map= に一度結線されているため、 =ui-leader-key= を
+=setopt= するだけでは実際のバインドは変わらない。 =keymap-global-unset= で旧バインドを
+明示的に解除してから、新キーへ張り直す必要がある。
+
+このファイルはもう 1 つ変わったことをしていて、 =ui-global-keys.el= が定義する =s-= 系
+（macOS Super キー）バインドが WSL では実質デッドコードになる問題に対処している。
+=ui-global-keys.el= 自体には手を入れず、高頻度クラスタ（undo/redo、バッファ間移動、
+他ウィンドウのスクロール）は =C-M-= 系または =C-z= （core init で unset 済みなので
+衝突なく再利用できる）に、低頻度クラスタ（フレーム／ウィンドウ管理）は既存の
+=ui-leader-w-map= （WSL では =C-c SPC w= ）に統合する、という 2 段階の代替バインドを
+=after-init-hook= で追加登録する形。
+
+その他、 =win32yank.exe= 経由のクリップボード連携、 =wslview= 経由のブラウザ起動、
+Explorer 連携コマンド（ =device-wsl-open-in-explorer= 、 =device-wsl-copy-windows-path= ）、
+それらをまとめた =hydra-wsl= （リーダー =a w= ）を提供する。
+
+** personal/personal-messages.el — Messages.app アーカイバ
+
+macOS の =~/Library/Messages/chat.db= を =sqlite3= 経由で読み、新着メッセージを
+=org-roam= 配下へ日付＋相手名のファイルとして追記していくアーカイバ。
+
+- =personal-messages-last-archived= はセッションをまたいで持続させたい =defcustom= の
+  例外パターン。 =setopt= ではなく =customize-save-variable= で書き込む（変数代入ポリシー
+  の節にある setopt/setq の表とは別枠で、「永続化が要る defcustom」という第 3 のケース）。
+- =darwin= かつ =chat.db= が読めて =sqlite3= が使える場合のみ動く。それ以外の環境では
+  黙って no-op。
+
+** personal/personal-ai.el — Org Babel の claude 言語
+
+=utils-claude= （utils 層）に HTTP 通信をすべて委譲したうえで、2 つの使い方を提供している。
+
+- Org Babel 言語 =claude= を登録。 =#+begin_src claude :system "..." :model "..." :tokens N=
+  のブロック本文をユーザーメッセージとして送り、応答をブロック結果として挿入する。
+- 対話コマンド 3 つ: =my/claude-refactor-defun= （ポイント位置の defun をリファクタ
+  提案）、 =my/claude-complete-docstring= （docstring 生成）、
+  =my/claude-analyze-require-graph= （カレントバッファの =require= を層構造と突き合わせて
+  上位層への依存違反を報告する）。結果はすべて専用の =*Claude Output*= バッファ（org-mode）
+  に追記される。
+
+=my/claude-analyze-require-graph= がチェックする層順は
+=early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+10 層。これは =Layer Ownership= の設計原則をコマンドとして実装したもの、という位置づけ。
 
 * 命名規則と変数代入ポリシー
 
