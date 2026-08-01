@@ -11955,6 +11955,15 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
 
   SHELL := /bin/sh
 
+  # org-babel-tangle は既定でソースブロックの「共通の先頭空白」を列（column）単位で
+  # 計算して取り除くが、この計算はタブをいったんスペースに展開してから行うため、
+  # recipe 行の実体である「タブ 1 文字」が tab-width 分のスペース列に化けてしまい、
+  # tangle のたびに Make が "missing separator" で落ちる（recipe 行の先頭は
+  # 文字どおりタブでなければならないため）。この事故を根本から避けるため、
+  # recipe プレフィックス文字をタブから ">" へ変更する。">" は通常の文字なので
+  # org 側の空白除去処理に巻き込まれても壊れない。
+  .RECIPEPREFIX := >
+
   # ---- リポジトリルートと絶対化したディレクトリ -----------------------------------
   ROOT := $(CURDIR)
 
@@ -11963,6 +11972,12 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   EARLY  ?= early-init.el
   INIT   ?= init.el
   RSVG_CONVERT ?= rsvg-convert
+  DOT    ?= dot
+  MMDC   ?= mmdc
+  # mmdc が同梱の Chrome を解決できない環境向け。puppeteer 用の JSON 設定ファイルへの
+  # パスを渡すと `mmdc -p $(PUPPETEER_CONFIG)` として使われる。空なら渡さない。
+  #   例: {"executablePath": "/path/to/chrome", "args": ["--no-sandbox"]}
+  PUPPETEER_CONFIG ?=
 
   # これらは常にリポジトリルート直下として扱う
   LISPDIR_REL     ?= lisp
@@ -11975,6 +11990,11 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   ORG := $(abspath $(ROOT)/$(ORG))
   EARLY := $(abspath $(ROOT)/$(EARLY))
   INIT  := $(abspath $(ROOT)/$(INIT))
+
+  # design_spec.org — 図版（*.dot）の tangle 元のひとつ。ORG（README.org）とは別文書だが、
+  # 同じ svg/ ディレクトリへ tangle するため、dot/mermaid 系ターゲットは両方を対象にする。
+  DESIGN_SPEC ?= design_spec.org
+  DESIGN_SPEC := $(abspath $(ROOT)/$(DESIGN_SPEC))
 
   STRICT_BYTE_WARN ?= 0   # Treat byte-compile warnings as errors
   NATIVE_COMPILE   ?= 1   # Prefer native-compile if available
@@ -12008,63 +12028,202 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
               (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
   # ---- 既定ターゲット（引数なし）--------------------------------------------------
-  .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures
+  .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures dot-tangle dot-svg mmd-tangle mmd-svg diagrams clean-diagrams help
   all: onepass-init
 
   # ---- ワンパス（early+init 環境）: tangle -> 差分コンパイル -----------------------
   onepass-init: $(ORG)
-  	@echo "[onepass-init] tangle -> incremental byte-compile (init loaded)"
-  	@$(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" \
-  	  $(EVAL_STRICT) $(EVAL_NATIVE) \
-  	  --eval "(setq org-confirm-babel-evaluate nil)" \
-  	  --eval "(require 'org)" \
-  	  --eval "(org-babel-tangle-file \"$(ORG)\")" \
-  	  --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
-  	                                        (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
-  	            (dolist (d dirs) (byte-recompile-directory d 0)) \
-  	            (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
-  	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
-  	  --eval "(message \"[onepass-init] done\")"
+  >@echo "[onepass-init] tangle -> incremental byte-compile (init loaded)"
+  >@$(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" \
+    $(EVAL_STRICT) $(EVAL_NATIVE) \
+    --eval "(setq org-confirm-babel-evaluate nil)" \
+    --eval "(require 'org)" \
+    --eval "(org-babel-tangle-file \"$(ORG)\")" \
+    --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
+                                          (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
+              (dolist (d dirs) (byte-recompile-directory d 0)) \
+              (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
+                (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
+    --eval "(message \"[onepass-init] done\")"
 
   # ---- ワンパス（-Q 最小環境）: tangle -> 全コンパイル -----------------------------
   onepass-q: $(ORG)
-  	@echo "[onepass-q] -Q tangle -> full byte-compile (init not loaded)"
-  	@$(EMACS_Q) \
-  	  $(EVAL_LEAF) $(EVAL_STRICT) $(EVAL_NATIVE) \
-  	  --eval "(setq org-confirm-babel-evaluate nil)" \
-  	  --eval "(require 'org)" \
-  	  --eval "(org-babel-tangle-file \"$(ORG)\")" \
-  	  --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
-  	                                        (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
-  	            (dolist (d dirs) (byte-recompile-directory d t)) \
-  	            (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
-  	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
-  	  --eval "(message \"[onepass-q] done\")"
+  >@echo "[onepass-q] -Q tangle -> full byte-compile (init not loaded)"
+  >@$(EMACS_Q) \
+    $(EVAL_LEAF) $(EVAL_STRICT) $(EVAL_NATIVE) \
+    --eval "(setq org-confirm-babel-evaluate nil)" \
+    --eval "(require 'org)" \
+    --eval "(org-babel-tangle-file \"$(ORG)\")" \
+    --eval "(let* ((dirs (delq nil (list (and (file-directory-p \"$(LISPDIR)\") \"$(LISPDIR)\") \
+                                          (and (file-directory-p \"$(PERSONALDIR)\") \"$(PERSONALDIR)\"))))) \
+              (dolist (d dirs) (byte-recompile-directory d t)) \
+              (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
+                (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
+    --eval "(message \"[onepass-q] done\")"
+
+  # ---- help : 主要ターゲットの実行例を一覧表示する -----------------------------------
+  help:
+  >@echo "使い方の例（ROOT はこの Makefile があるディレクトリ）:"
+  >@echo ""
+  >@echo "  # ビルド"
+  >@echo "  make                          # 既定 = onepass-init（tangle -> 差分バイトコンパイル）"
+  >@echo "  make onepass-q                # -Q 最小環境で tangle -> 全バイトコンパイル"
+  >@echo "  make tangle                   # README.org を .el 群へ tangle するだけ"
+  >@echo "  make reload                   # clean + tangle + check-cookies（README.org 差し替え後に使う）"
+  >@echo "  make clean                    # *.elc を削除"
+  >@echo "  make distclean                # clean + 迷子の *.eln を削除"
+  >@echo ""
+  >@echo "  # 図版（dot / mermaid）"
+  >@echo "  make diagrams                 # dot-svg + mmd-svg をまとめて実行（推奨はこれ）"
+  >@echo "  make dot-tangle               # README.org / design_spec.org の dot ブロックを svg/*.dot へ"
+  >@echo "  make dot-svg                  # svg/*.dot を dot -Tsvg で svg/*.svg へレンダリング"
+  >@echo "  make mmd-tangle               # 同様に mermaid ブロックを svg/*.mmd へ"
+  >@echo "  make mmd-svg                  # svg/*.mmd を mmdc で svg/*.svg へレンダリング"
+  >@echo "  make mmd-svg PUPPETEER_CONFIG=puppeteer-config.json"
+  >@echo "                                # mmdc が Chrome を自動検出できない環境向け"
+  >@echo "  make clean-diagrams           # diagrams が生成した *.dot / *.mmd / *.svg を削除"
+  >@echo "  make figures                  # diagrams 実行後、svg/*.svg を同名の *.pdf へ変換（LaTeX/PDF export 用）"
+  >@echo "  make clean-figures            # figures が生成した *.pdf を削除"
+  >@echo ""
+  >@echo "  # 静的チェック"
+  >@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + checkdoc"
+  >@echo "  make check-tangle             # :tangle を継承できていない src block を検出"
+  >@echo "  make check-emphasis           # 効かない =verbatim=/~code~/*bold* を検出"
+  >@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
+  >@echo "  make checkdoc                 # 公開 defun の docstring を検証"
+  >@echo "  make package-lint             # MELPA 形式のパッケージヘッダ検証（要 package-lint）"
+  >@echo ""
+  >@echo "  # その他"
+  >@echo "  make show-files               # lisp/ と personal/ 配下の .el 一覧"
+  >@echo "  make echo-paths               # 解決済みの各種パスを表示（デバッグ用）"
+  >@echo ""
+  >@echo "個別の変数上書き例: make onepass-init STRICT_BYTE_WARN=1 NATIVE_COMPILE=0"
 
   # ---- ユーティリティ -------------------------------------------------------------
   show-files:
-  	@echo "[list] $(LISPDIR)";    { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } || true
-  	@echo "[list] $(PERSONALDIR)"; { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } || true
+  >@echo "[list] $(LISPDIR)";    { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } || true
+  >@echo "[list] $(PERSONALDIR)"; { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } || true
 
   echo-paths:
-  	@echo "ROOT=$(ROOT)"; \
-  	echo "EARLY=$(EARLY)"; \
-  	echo "INIT=$(INIT)"; \
-  	echo "LISPDIR=$(LISPDIR)"; \
-  	echo "PERSONALDIR=$(PERSONALDIR)"; \
-  	echo "SVGDIR=$(SVGDIR)"; \
-  	echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
-  	echo "LEAF_DIR=$(LEAF_DIR)"; \
-  	echo "LEAFKW_DIR=$(LEAFKW_DIR)"
+  >@echo "ROOT=$(ROOT)"; \
+  echo "EARLY=$(EARLY)"; \
+  echo "INIT=$(INIT)"; \
+  echo "LISPDIR=$(LISPDIR)"; \
+  echo "PERSONALDIR=$(PERSONALDIR)"; \
+  echo "SVGDIR=$(SVGDIR)"; \
+  echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
+  echo "LEAF_DIR=$(LEAF_DIR)"; \
+  echo "LEAFKW_DIR=$(LEAFKW_DIR)"
 
   clean:
-  	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
-  	@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
-  	@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+  >@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
+  >@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+  >@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 
   distclean: clean
-  	@echo "[distclean] remove stray *.eln"
-  	@find "$(ROOT)" -type f -name '*.eln' -delete
+  >@echo "[distclean] remove stray *.eln"
+  >@find "$(ROOT)" -type f -name '*.eln' -delete
+
+
+  # ---- dot-tangle : README.org / design_spec.org の dot ソースブロックを svg/*.dot として
+  # 書き出す -------------------------------------------------------------------------
+  # 各 Appendix の :header-args:dot: :tangle svg/*.dot に従い、org-babel-tangle-file の
+  # LANG 引数に "dot" を渡して dot 言語のブロックだけを対象に書き出す。両方の .org を
+  # 対象にし、存在しない方は静かにスキップする（design_spec.org は任意）。
+  dot-tangle: $(ORG)
+  >@echo "[dot-tangle] $(ORG), $(DESIGN_SPEC) -> $(SVGDIR)/*.dot"
+  >@$(EMACS_Q) \
+    --eval "(require 'org)" \
+    --eval "(require 'ob-core)" \
+    --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+    --eval "(dolist (f (list \"$(ORG)\" \"$(DESIGN_SPEC)\")) (when (file-exists-p f) (org-babel-tangle-file f nil \"dot\")))"
+
+  # ---- dot-svg : svg/*.dot を dot -Tsvg で同名の svg/*.svg へレンダリングする -----------
+  # figures と同じ差分ルール（*.dot が対応する *.svg より新しい、または *.svg が無い場合の
+  # み再生成）。dot コマンドが無ければ、その場でインストール手順を案内して失敗する。
+  # 日本語ラベルを含む図は、fontconfig で解決できる CJK 対応フォント
+  # （例: Noto Sans CJK JP）が dot ソース側の fontname に指定されている前提。
+  dot-svg: dot-tangle
+  >@command -v "$(DOT)" >/dev/null 2>&1 || { \
+    echo "[dot-svg] $(DOT) not found. Install with: brew install graphviz (or apt-get install graphviz)"; \
+    exit 1; \
+  }
+  >@if [ ! -d "$(SVGDIR)" ]; then \
+    echo "[dot-svg] $(SVGDIR) not found; nothing to do"; \
+    exit 0; \
+  fi
+  >@echo "[dot-svg] rendering *.dot -> *.svg under $(SVGDIR) ..."
+  >@count=0; \
+   for f in $$(find "$(SVGDIR)" -name '*.dot' | sort); do \
+     svg="$${f%.dot}.svg"; \
+     if [ ! -f "$$svg" ] || [ "$$f" -nt "$$svg" ]; then \
+       echo "  $$f -> $$svg"; \
+       "$(DOT)" -Tsvg "$$f" -o "$$svg" || exit 1; \
+       count=$$((count + 1)); \
+     fi; \
+   done; \
+   echo "[dot-svg] done ($$count rendered)"
+
+  # ---- mmd-tangle : README.org / design_spec.org の mermaid ソースブロックを svg/*.mmd
+  # として書き出す ---------------------------------------------------------------------
+  # :header-args:mermaid: :tangle svg/*.mmd に従い、LANG 引数に "mermaid" を渡して
+  # tangle する。現状 mermaid ブロックを持つのは README.org（tangle-flow.mmd）のみだが、
+  # design_spec.org 側に増えても同じ仕組みで拾えるよう両方を対象にしておく。
+  mmd-tangle: $(ORG)
+  >@echo "[mmd-tangle] $(ORG), $(DESIGN_SPEC) -> $(SVGDIR)/*.mmd"
+  >@$(EMACS_Q) \
+    --eval "(require 'org)" \
+    --eval "(require 'ob-core)" \
+    --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+    --eval "(dolist (f (list \"$(ORG)\" \"$(DESIGN_SPEC)\")) (when (file-exists-p f) (org-babel-tangle-file f nil \"mermaid\")))"
+
+  # ---- mmd-svg : svg/*.mmd を mmdc で同名の svg/*.svg へレンダリングする ----------------
+  # mmdc（@mermaid-js/mermaid-cli）は内部で Puppeteer 経由の Chrome を必要とする。
+  # sandboxed / headless 環境で Chrome の自動検出に失敗する場合は、PUPPETEER_CONFIG に
+  # executablePath を書いた JSON ファイルのパスを渡すこと
+  # （例: make mmd-svg PUPPETEER_CONFIG=puppeteer-config.json）。
+  mmd-svg: mmd-tangle
+  >@command -v "$(MMDC)" >/dev/null 2>&1 || { \
+    echo "[mmd-svg] $(MMDC) not found. Install with: npm install -g @mermaid-js/mermaid-cli"; \
+    exit 1; \
+  }
+  >@if [ ! -d "$(SVGDIR)" ]; then \
+    echo "[mmd-svg] $(SVGDIR) not found; nothing to do"; \
+    exit 0; \
+  fi
+  >@echo "[mmd-svg] rendering *.mmd -> *.svg under $(SVGDIR) ..."
+  >@count=0; \
+   for f in $$(find "$(SVGDIR)" -name '*.mmd' | sort); do \
+     svg="$${f%.mmd}.svg"; \
+     if [ ! -f "$$svg" ] || [ "$$f" -nt "$$svg" ]; then \
+       echo "  $$f -> $$svg"; \
+       if [ -n "$(PUPPETEER_CONFIG)" ]; then \
+         "$(MMDC)" -i "$$f" -o "$$svg" -b transparent -p "$(PUPPETEER_CONFIG)" || exit 1; \
+       else \
+         "$(MMDC)" -i "$$f" -o "$$svg" -b transparent || exit 1; \
+       fi; \
+       count=$$((count + 1)); \
+     fi; \
+   done; \
+   echo "[mmd-svg] done ($$count rendered)"
+
+  # ---- diagrams : dot-svg + mmd-svg をまとめて実行するショートハンド --------------------
+  diagrams: dot-svg mmd-svg
+  >@echo "[diagrams] $(SVGDIR)/*.dot, $(SVGDIR)/*.mmd -> $(SVGDIR)/*.svg up to date"
+
+  # ---- clean-diagrams : diagrams が生成した *.dot / *.mmd / *.svg を削除 ---------------
+  # *.dot・*.mmd と同名の *.svg のみを対象とする（$(SVGDIR) 配下に手動で置いた無関係な
+  # ファイル、たとえば demo.png や emacs_keybindings_cheatsheet.svg のような tangle 元を
+  # 持たない手動アセットを誤って消さないよう、tangle 由来のソースが存在するものだけ削除する）。
+  clean-diagrams:
+  >@echo "[clean-diagrams] remove generated *.dot / *.mmd / *.svg under $(SVGDIR)"
+  >@if [ -d "$(SVGDIR)" ]; then \
+    for f in $$(find "$(SVGDIR)" \( -name '*.dot' -o -name '*.mmd' \) | sort); do \
+      svg="$${f%.*}.svg"; \
+      [ -f "$$svg" ] && rm -f "$$svg"; \
+      rm -f "$$f"; \
+    done; \
+  fi
 
   # ---- figures : *.svg を rsvg-convert で同名の *.pdf へ事前変換 -------------------
   # design_spec.org（および他の org 文書）の LaTeX/PDF エクスポートは、SVG を
@@ -12077,68 +12236,71 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # 差分のみ変換する（*.svg が対応する *.pdf より新しい、または *.pdf が無い場合のみ
   # rsvg-convert を実行）。rsvg-convert コマンドが無ければ、その場でインストール手順を
   # 案内して失敗する（CI では未インストールを黙って無視しない）。
-  figures:
-  	@command -v "$(RSVG_CONVERT)" >/dev/null 2>&1 || { \
-  	  echo "[figures] $(RSVG_CONVERT) not found. Install with: brew install librsvg"; \
-  	  exit 1; \
-  	}
-  	@if [ ! -d "$(SVGDIR)" ]; then \
-  	  echo "[figures] $(SVGDIR) not found; nothing to do"; \
-  	  exit 0; \
-  	fi
-  	@echo "[figures] converting *.svg -> *.pdf under $(SVGDIR) ..."
-  	@count=0; \
-  	 for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
-  	   pdf="$${f%.svg}.pdf"; \
-  	   if [ ! -f "$$pdf" ] || [ "$$f" -nt "$$pdf" ]; then \
-  	     echo "  $$f -> $$pdf"; \
-  	     "$(RSVG_CONVERT)" -f pdf -o "$$pdf" "$$f" || exit 1; \
-  	     count=$$((count + 1)); \
-  	   fi; \
-  	 done; \
-  	 echo "[figures] done ($$count converted)"
+  # diagrams（dot/mmd -> svg）を先に実行し、変換元の *.svg が揃っていることを保証してから
+  # svg -> pdf の変換に入る。
+  #
+  figures: diagrams
+  >@command -v "$(RSVG_CONVERT)" >/dev/null 2>&1 || { \
+    echo "[figures] $(RSVG_CONVERT) not found. Install with: brew install librsvg"; \
+    exit 1; \
+  }
+  >@if [ ! -d "$(SVGDIR)" ]; then \
+    echo "[figures] $(SVGDIR) not found; nothing to do"; \
+    exit 0; \
+  fi
+  >@echo "[figures] converting *.svg -> *.pdf under $(SVGDIR) ..."
+  >@count=0; \
+   for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
+     pdf="$${f%.svg}.pdf"; \
+     if [ ! -f "$$pdf" ] || [ "$$f" -nt "$$pdf" ]; then \
+       echo "  $$f -> $$pdf"; \
+       "$(RSVG_CONVERT)" -f pdf -o "$$pdf" "$$f" || exit 1; \
+       count=$$((count + 1)); \
+     fi; \
+   done; \
+   echo "[figures] done ($$count converted)"
 
   # ---- clean-figures : figures が生成した *.pdf を削除 ------------------------------
   # *.svg と同名の *.pdf のみを対象とする（$(SVGDIR) 配下に手動で置いた無関係な
   # *.pdf を誤って消さないよう、対応する *.svg が存在するものだけ削除する）。
   clean-figures:
-  	@echo "[clean-figures] remove generated *.pdf under $(SVGDIR)"
-  	@if [ -d "$(SVGDIR)" ]; then \
-  	  for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
-  	    pdf="$${f%.svg}.pdf"; \
-  	    [ -f "$$pdf" ] && rm -f "$$pdf"; \
-  	  done; \
-  	fi
+  >@echo "[clean-figures] remove generated *.pdf under $(SVGDIR)"
+  >@if [ -d "$(SVGDIR)" ]; then \
+    for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
+      pdf="$${f%.svg}.pdf"; \
+      [ -f "$$pdf" ] && rm -f "$$pdf"; \
+    done; \
+  fi
 
   tangle:
-  	@echo "[tangle] $(ORG)"
-  	@$(EMACS_Q) \
-  	  --eval "(require 'org)" \
-  	  --eval "(require 'ob-core)" \
-  	  --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
-  	  --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
-  	  --eval "(org-babel-tangle-file \"$(ORG)\")"
+  >@echo "[tangle] $(ORG)"
+  >@$(EMACS_Q) \
+    --eval "(require 'org)" \
+    --eval "(require 'ob-core)" \
+    --eval "(org-babel-do-load-languages 'org-babel-load-languages '((emacs-lisp . t)))" \
+    --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+    --eval "(org-babel-tangle-file \"$(ORG)\")"
 
   # ---- check-cookies : 全 .el の 1 行目にある lexical-binding クッキーを検証 -------
   # `make tangle' の後に実行し、生成物すべてにクッキーがあることを確認する。
   # すべて合格なら 0 を返す。欠落があれば該当ファイルを列挙して 1 を返す。
   check-cookies:
-  	@echo "[check-cookies] scanning $(LISPDIR) ..."
-  	@fail=0; \
-  	 for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
-  	   line1=$$(head -1 "$$f"); \
-  	   if ! echo "$$line1" | grep -q 'lexical-binding: t'; then \
-  	     echo "  MISSING: $$f"; \
-  	     echo "    line1: $$line1"; \
-  	     fail=1; \
-  	   fi; \
-  	 done; \
-  	 if [ $$fail -eq 0 ]; then \
-  	   echo "[check-cookies] all files OK"; \
-  	 else \
-  	   echo "[check-cookies] FAILED — run: make reload"; \
-  	   exit 1; \
-  	 fi
+  >@echo "[check-cookies] scanning $(LISPDIR) ..."
+  >@fail=0; \
+   for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
+     line1=$$(head -1 "$$f"); \
+     if ! echo "$$line1" | grep -q 'lexical-binding: t'; then \
+       echo "  MISSING: $$f"; \
+       echo "    line1: $$line1"; \
+       fail=1; \
+     fi; \
+   done; \
+   if [ $$fail -eq 0 ]; then \
+     echo "[check-cookies] all files OK"; \
+   else \
+     echo "[check-cookies] FAILED — run: make reload"; \
+     exit 1; \
+   fi
 
   # ---- reload : .elc を削除してから再 tangle ---------------------------------------
   # README.org を新しい Claude の出力に差し替えた後に使う。古いバイトコンパイル済み
@@ -12146,24 +12308,24 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # このターゲットは、ソースには存在しない警告をディスク上の古いモジュールが出すという
   # 古いモジュールが出す）に対する運用上の対処である。
   reload: clean tangle check-cookies
-  	@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
+  >@echo "[reload] on-disk modules now reflect $(ORG); restart Emacs to load."
 
   # ---- checkdoc : すべての公開 defun の docstring を検証 ---------------------------
   # LISPDIR 配下の全 .el を走査し、docstring の欠落や不正を検出する。
   # 全ファイルが合格すれば 0、警告が出れば 1 を返す。
   checkdoc:
-  	@echo "[checkdoc] scanning $(LISPDIR) ..."; \
-  	 fail=0; \
-  	 for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
-  	   result=$$($(EMACS_Q) --eval \
-  	     "(progn (find-file \"$$f\") (checkdoc-current-buffer t) (kill-buffer))" \
-  	     2>&1); \
-  	   if echo "$$result" | grep -q 'Warning\|Error'; then \
-  	     echo "  FAIL: $$f"; echo "$$result" | grep 'Warning\|Error' | head -5; \
-  	     fail=1; \
-  	   fi; \
-  	 done; \
-  	 [ $$fail -eq 0 ] && echo "[checkdoc] all files OK" || exit 1
+  >@echo "[checkdoc] scanning $(LISPDIR) ..."; \
+   fail=0; \
+   for f in $$(find "$(LISPDIR)" -name '*.el' | sort); do \
+     result=$$($(EMACS_Q) --eval \
+       "(progn (find-file \"$$f\") (checkdoc-current-buffer t) (kill-buffer))" \
+       2>&1); \
+     if echo "$$result" | grep -q 'Warning\|Error'; then \
+       echo "  FAIL: $$f"; echo "$$result" | grep 'Warning\|Error' | head -5; \
+       fail=1; \
+     fi; \
+   done; \
+   [ $$fail -eq 0 ] && echo "[checkdoc] all files OK" || exit 1
 
   # ---- checkdoc-strict : 失敗時に終了する checkdoc ---------------------------------
   # 公開 defun に docstring が無いときビルドを失敗させたい CI で使う。
@@ -12179,21 +12341,21 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # "no" の emacs-lisp ブロックを行番号付きで列挙して失敗する。
   .PHONY: check-tangle
   check-tangle:
-  	@echo "[check-tangle] verifying :tangle inheritance in $(ORG) ..."
-  	@$(EMACS) -Q --batch \
-  	  --eval "(require 'org)" \
-  	  --eval "(with-current-buffer (find-file-noselect \"$(ORG)\") \
-  	            (let ((bad 0)) \
-  	              (org-babel-map-src-blocks nil \
-  	                (when (string= lang \"emacs-lisp\") \
-  	                  (let ((tgt (cdr (assq :tangle (nth 2 (org-babel-get-src-block-info t)))))) \
-  	                    (when (or (null tgt) (equal tgt \"no\")) \
-  	                      (setq bad (1+ bad)) \
-  	                      (message \"  ORPHAN src block at line %d\" (line-number-at-pos)))))) \
-  	              (if (> bad 0) \
-  	                  (progn (message \"[check-tangle] FAILED: %d block(s) without a tangle target\" bad) \
-  	                         (kill-emacs 1)) \
-  	                (message \"[check-tangle] ok\")))))"
+  >@echo "[check-tangle] verifying :tangle inheritance in $(ORG) ..."
+  >@$(EMACS) -Q --batch \
+    --eval "(require 'org)" \
+    --eval "(with-current-buffer (find-file-noselect \"$(ORG)\") \
+              (let ((bad 0)) \
+                (org-babel-map-src-blocks nil \
+                  (when (string= lang \"emacs-lisp\") \
+                    (let ((tgt (cdr (assq :tangle (nth 2 (org-babel-get-src-block-info t)))))) \
+                      (when (or (null tgt) (equal tgt \"no\")) \
+                        (setq bad (1+ bad)) \
+                        (message \"  ORPHAN src block at line %d\" (line-number-at-pos)))))) \
+                (if (> bad 0) \
+                    (progn (message \"[check-tangle] FAILED: %d block(s) without a tangle target\" bad) \
+                           (kill-emacs 1)) \
+                  (message \"[check-tangle] ok\")))))"
 
   # ---- check-emphasis : 効かない Org 強調記法（=verbatim=/~code~/*bold*）を検出 -----
   # org-emphasis-regexp-components の既定値では、開始マーカーの直前・終了マーカーの
@@ -12207,13 +12369,13 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # 依存する Python スクリプトであり、Emacs のバッチモードは介さない。
   .PHONY: check-emphasis
   check-emphasis:
-  	@python3 scripts/check_emphasis.py "$(ORG)"
+  >@python3 scripts/check_emphasis.py "$(ORG)"
 
   # ---- lint : check-tangle + check-emphasis + check-cookies + checkdoc をまとめて実行 --
   # コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
   .PHONY: checkdoc lint
   lint: check-tangle check-emphasis check-cookies checkdoc
-  	@echo "[lint] all checks passed"
+  >@echo "[lint] all checks passed"
 
   # ---- package-lint : 任意 — load-path 上に package-lint が必要 --------------------
   # MELPA 形式のパッケージヘッダと依存宣言を検証する。
@@ -12222,13 +12384,13 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # インストール: M-x package-install RET package-lint RET
   .PHONY: package-lint
   package-lint:
-  	@echo "[package-lint] scanning $(LISPDIR) ..."; \
-  	 $(EMACS_Q) $(EVAL_LEAF) \
-  	   --eval "(require 'package-lint nil t)" \
-  	   --eval "(if (featurep 'package-lint) \
-  	               (let ((files (directory-files-recursively \"$(LISPDIR)\" \"\\\\.el$$\"))) \
-  	                 (dolist (f files) (package-lint-batch-and-exit))) \
-  	               (message \"[package-lint] not installed; skipping\"))""
+  >@echo "[package-lint] scanning $(LISPDIR) ..."; \
+   $(EMACS_Q) $(EVAL_LEAF) \
+     --eval "(require 'package-lint nil t)" \
+     --eval "(if (featurep 'package-lint) \
+                 (let ((files (directory-files-recursively \"$(LISPDIR)\" \"\\\\.el$$\"))) \
+                   (dolist (f files) (package-lint-batch-and-exit))) \
+                 (message \"[package-lint] not installed; skipping\"))""
 #+end_src
 
 * Appendix: check_emphasis.py — 効かない Org 強調記法の検出スクリプト
@@ -12934,6 +13096,141 @@ python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
 
   if __name__ == "__main__":
       sys.exit(main())
+#+end_src
+
+* Appendix: tangle-flow.mmd — tangle フローの図解ソース（Mermaid）
+:PROPERTIES:
+:CUSTOM_ID: appendix-tangle-flow-mmd
+:header-args:mermaid: :tangle svg/tangle-flow.mmd :mkdirp yes
+:END:
+
+Overview 節の [[file:svg/tangle-flow.svg]] は元々 Mermaid Live Editor 等で作った手動アセットで、
+本文中に再現可能なソースが存在しなかった。ここに Mermaid ソースを置き、 =make mmd-svg= で
+同じファイルへ再レンダリングできるようにする。
+
+#+begin_src mermaid
+  flowchart LR
+      src["README.org<br/>(single source of truth)"]
+
+      subgraph tangle["org-babel-tangle"]
+          extract["extract<br/>src blocks"]
+      end
+
+      ei["early-init.el"]
+      ii["init.el"]
+      mo["lisp/modules.el"]
+      mods["lisp/&lt;layer&gt;/&lt;module&gt;.el<br/>(89+ files)"]
+
+      src --> tangle
+      tangle --> ei
+      tangle --> ii
+      tangle --> mo
+      tangle --> mods
+
+      classDef src fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+      classDef tangle fill:#E1F5EE,stroke:#0F6E56,color:#085041
+      classDef config fill:#FAEEDA,stroke:#BA7517,color:#633806
+      classDef modules fill:#FAECE7,stroke:#993C1D,color:#712B13
+
+      class src src
+      class extract tangle
+      class ei,ii,mo config
+      class mods modules
+#+end_src
+
+=make mmd-svg= は =mmdc= （ =npm install -g @mermaid-js/mermaid-cli= ）を使って
+=svg/tangle-flow.mmd= を =svg/tangle-flow.svg= へレンダリングする。サンドボックス環境で
+Puppeteer が Chrome を自動検出できない場合は、 =PUPPETEER_CONFIG= に =executablePath= を
+書いた JSON ファイルのパスを渡すこと（Makefile 冒頭のコメント参照）。
+
+* Appendix: emacs_config_layer_architecture.dot — レイヤーアーキテクチャ図の近似ソース
+:PROPERTIES:
+:CUSTOM_ID: appendix-emacs-config-layer-architecture-dot
+:header-args:dot: :tangle svg/emacs_config_layer_architecture.dot :file svg/emacs_config_layer_architecture.svg :cmdline -Tsvg
+:END:
+
+Architecture 節の [[file:svg/emacs_config_layer_architecture.svg]] も手動アセットだった。
+Graphviz で近い内容を再現したソースをここに置く。ただし元絵は座標を手動で調整した精密な
+レイアウト（サブ層の横並びの間隔など）なので、Graphviz の自動配置に置き換わる分、
+見た目は完全には一致しない。あくまで内容（10 層構成・依存関係・key tenets）を
+再現するためのものである。
+
+#+begin_src dot
+  digraph emacs_config_layer_architecture {
+    rankdir=TB;
+    fontname="Noto Sans CJK JP";
+    node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11];
+    edge [color="#73726C"];
+
+    ei [label="early-init.el\nGC deferral / dirs / package.el off / macOS toolchain / early UI" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#085041"];
+    ii [label="init.el\nstraight.el / leaf / org / exec-path-from-shell / gcmh / personal overlay" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#085041"];
+    mo [label="modules.el — orchestration only\nordered require / skip+extra hooks / per-module timing / error isolation" fillcolor="#EEEDFE" color="#534AB7" fontcolor="#3C3489"];
+
+    subgraph cluster_layers {
+      label="Layers";
+      style=invis;
+      {rank=same; core; ui; completion; orgx; dev; vcs; utils;}
+      core       [label="core\nruntime"     fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+      ui         [label="ui\nvisual"        fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+      completion [label="completion\nvertico etc" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+      orgx       [label="orgx\norg ext"     fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+      dev        [label="dev\ntooling"      fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+      vcs        [label="vcs\nmagit"        fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+      utils      [label="utils\nhelpers"    fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+      core -> ui -> completion -> orgx -> dev -> vcs -> utils [style=invis];
+    }
+
+    personal [label="personal/ — optional overlay, loaded last\nuser.el / <login>.el / must not mutate earlier layers" fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#444441"];
+    note [label="Dependency rule: upper layers may use lower;\nlower must never use upper" shape=note fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+    tenets [label="Key tenets: deterministic / explicit deps / layer ownership /\ndelete-safe modules / public-API only / setopt for defcustom" shape=note fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#444441"];
+
+    ei -> ii -> mo -> core;
+    utils -> personal;
+    personal -> note [style=dashed arrowhead=none];
+    note -> tenets [style=dashed arrowhead=none];
+  }
+#+end_src
+
+* Appendix: emacs_keybindings_cheatsheet_concept.dot — キーバインド概念図
+:PROPERTIES:
+:CUSTOM_ID: appendix-emacs-keybindings-cheatsheet-concept-dot
+:header-args:dot: :tangle svg/emacs_keybindings_cheatsheet_concept.dot :file svg/emacs_keybindings_cheatsheet_concept.svg :cmdline -Tsvg
+:END:
+
+ui 節が参照する [[file:svg/emacs_keybindings_cheatsheet.svg]] は、フォントをアウトライン化して
+ベクター化した文書（テキスト要素を持たない、キーバインド一覧の全ページ）であり、Graphviz や
+Mermaid で再現できる種類の図ではない。この Appendix はその代替ソースではなく、
+=ui-leader.el= の =M-SPC= リーダー構成（13 サブマップ）とグローバル単発和音、Embark を
+簡略化した概念図として別ファイルに書き出すためのものである。 =emacs_keybindings_cheatsheet.svg=
+そのものは今後も手動管理のアセットのままとする。
+
+#+begin_src dot
+  digraph keybindings_concept {
+    rankdir=TB;
+    fontname="Noto Sans CJK JP";
+    node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11];
+    edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
+
+    root [label="Keybindings" fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
+
+    leader [label="M-SPC leader\n13 submaps: a b c e g h m o p q s t w" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+    global [label="グローバル単発和音\ns-* (macOS) / C-c* / M-g g" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+    embark [label="Embark\ns-/ act / s-; dwim / C-<f2> bindings" fillcolor="#EEEDFE" color="#534AB7" fontcolor="#3C3489"];
+
+    root -> leader;
+    root -> global;
+    root -> embark;
+
+    la [label="a apps" fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
+    lb [label="b buffer"]; lc [label="c code"]; le [label="e embark/eval"];
+    lg [label="g git"]; lh [label="h help"]; lm [label="m major-mode"];
+    lo [label="o org"]; lp [label="p project"]; lq [label="q quit"];
+    ls [label="s search"]; lt [label="t toggle"]; lw [label="w window/frame"];
+
+    leader -> la; leader -> lb; leader -> lc; leader -> le; leader -> lg;
+    leader -> lh; leader -> lm; leader -> lo; leader -> lp; leader -> lq;
+    leader -> ls; leader -> lt; leader -> lw;
+  }
 #+end_src
 
 * Changelog
