@@ -9140,9 +9140,20 @@ Called on `after-init-hook'."
   ;; 実行時に emms-directory に依存するため、emms-directory が確定した後の :config 内で
   ;; setopt により算出・適用する。残りの変数はすべて defcustom であり :custom へ移した。
   ;;
+  ;; 以前との違い: :config は my:modules のロード時（＝毎回の起動時）に無条件で
+  ;; 走っていたため、emms-all / emms-default-players / emms-mode-line-mode の初期化に
+  ;; 実機で 6 秒以上かかることが判明した（原因は emms-all が引き込む多数のサブ
+  ;; ライブラリの初期化コストと見られるが、正確な内訳までは特定していない）。
+  ;; music を使わないセッションでも毎回この税金を払うのは割に合わないため、
+  ;; docker / eglot / lsp / tempel と同じ :commands パターンに変更し、実際に
+  ;; EMMS のコマンドを呼んだ瞬間まで :config の実行を遅延させる。dired 統合の
+  ;; キーバインド登録自体は :commands が作る autoload だけで足りる（emms 本体は
+  ;; まだロードされない）ため、:config の外に出して無条件で早期に行う。
   (leaf emms
     :straight t
     :if dev-music-enable-p
+    :commands (emms-play-dired emms-play-directory emms-play-directory-tree
+               emms-play-file emms-play-playlist emms-smart-browse)
     :pre-setq
     `((emms-directory . ,(expand-file-name "emms/" my:d:var)))
     :custom
@@ -9158,12 +9169,16 @@ Called on `after-init-hook'."
     (setopt emms-history-file (expand-file-name "history" emms-directory))
     (setopt emms-cache-file   (expand-file-name "cache"   emms-directory))
     (my/ensure-directory-exists emms-directory)
-    (emms-mode-line-mode 1)
-    (add-hook 'dired-mode-hook #'dev-music--setup-dired))
+    (emms-mode-line-mode 1))
 
   (leaf emms-player-mpv
     :straight nil
     :after emms)
+
+  ;; emms-play-dired は :commands による autoload スタブなので、ここで束縛しても
+  ;; emms 本体はまだロードされない（キーを押した瞬間に初めてロードされる）。
+  (when dev-music-enable-p
+    (add-hook 'dired-mode-hook #'dev-music--setup-dired))
 
   (provide 'dev-music)
 
