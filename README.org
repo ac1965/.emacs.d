@@ -761,7 +761,7 @@ macOS では =exec-path-from-shell= がログインシェルを起動して =exe
 - =straight-base-dir= :: =.cache/= 配下
 - =native-comp-eln-load-path= :: =.cache/eln-cache=
 - =read-process-output-max= :: 4 MiB（一時的）
-- =gcmh-high-cons-threshold= :: 16 MiB
+- =gcmh-high-cons-threshold= :: 128 MiB
 
 *** Usage Guidelines
 
@@ -7537,7 +7537,15 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;; ox-hugo も :require t を外した。org-hugo-front-matter-format は defcustom であり、
     ;; :custom による先行登録は ox-hugo のロード時に反映される。エクスポートは
     ;; org-hugo-export-wim-to-md 等の autoload から起動される。
-    (leaf ox-hugo :straight t :require t :custom ((org-hugo-front-matter-format . "toml")))
+    ;;
+    ;; 以前との違い: Changelog の「Org の遅延ロード」節にはこの :require t 削除が
+    ;; 既に完了したと記載されていたが、実際のコードには反映されていなかった
+    ;; （orgx-auto-hugo.el 側は同じ理由で正しく遅延化されていたのに、こちらだけ
+    ;; 直し忘れていたと見られる）。ox-hugo は ox を、ox は org を require するため、
+    ;; :require t を残したままだと「Org の遅延ロード」の効果がここから漏れて
+    ;; 無に帰していた。orgx-auto-hugo--on-capture-finalize が実際のエクスポート
+    ;; 直前に (require 'ox-hugo) しているので、ここでの遅延化は安全。
+    (leaf ox-hugo :straight t :custom ((org-hugo-front-matter-format . "toml")))
     (leaf markdown-mode :straight t)
     (leaf markdown-preview-mode :straight t)
     (leaf edit-indirect :straight t)
@@ -11600,6 +11608,7 @@ Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
     (ui-keymap--bind 'ui-leader-w-map "j" #'find-file-other-window) ; 元 s-j を継承
     (ui-keymap--bind 'ui-leader-w-map "n" #'make-frame-command)     ; n = new
     (ui-keymap--bind 'ui-leader-w-map "k" #'delete-frame)           ; k = kill
+    ;; window-toggle-split-direction は Emacs 27 以降の同梱コマンド。
     (when (fboundp 'window-toggle-split-direction)
       (ui-keymap--bind 'ui-leader-w-map "t" #'window-toggle-split-direction))) ; t = toggle
 
@@ -12261,6 +12270,7 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
 	@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + checkdoc"
 	@echo "  make check-tangle             # :tangle を継承できていない src block を検出"
 	@echo "  make check-emphasis           # 効かない =verbatim=/~code~/*bold* を検出"
+	@echo "  make check-fboundp-guards     # (fboundp 'X) ガードと #'X 参照の整合性を検査"
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
 	@echo "  make checkdoc                 # 公開 defun の docstring を検証"
 	@echo "  make package-lint             # MELPA 形式のパッケージヘッダ検証（要 package-lint）"
@@ -12419,10 +12429,23 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   check-emphasis:
 	@python3 scripts/check_emphasis.py "$(ORG)"
 
-  # ---- lint : check-tangle + check-emphasis + check-cookies + checkdoc をまとめて実行 --
+  # ---- check-fboundp-guards : (fboundp 'X) ガード + #'X 参照の整合性を検査する -------
+  # (when/if (fboundp 'X) ... #'X ...) という形（X をコマンドとして登録・束縛している
+  # 箇所）だけを対象に、X が実際に解決可能か（ローカル定義 / leaf の :commands /
+  # 同名 leaf パッケージの eager load / ドキュメント上の autoload 明記）を機械的に
+  # 検査する。dev-music.el の emms 抜け、restart-emacs の宣言忘れ、のような
+  # 「エラーは出ないが黙って何も起きない」バグを次に防ぐためのツール。
+  # $(LISPDIR) と $(PERSONALDIR) を対象にするため、事前に tangle 済みであること。
+  # 検査本体は scripts/check_fboundp_guards.py（Appendix を参照）。
+  .PHONY: check-fboundp-guards
+  check-fboundp-guards:
+	@python3 scripts/check_fboundp_guards.py "$(LISPDIR)" "$(PERSONALDIR)" "$(EARLY)" "$(INIT)"
+
+  # ---- lint : check-tangle + check-emphasis + check-cookies + check-fboundp-guards +
+  # checkdoc をまとめて実行 -----------------------------------------------------------
   # コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
   .PHONY: checkdoc lint
-  lint: check-tangle check-emphasis check-cookies checkdoc
+  lint: check-tangle check-emphasis check-cookies check-fboundp-guards checkdoc
 	@echo "[lint] all checks passed"
 
   # ---- package-lint : 任意 — load-path 上に package-lint が必要 --------------------
@@ -12647,6 +12670,228 @@ $ python3 scripts/check_emphasis.py README.org design_spec.org
 
   if __name__ == "__main__":
       raise SystemExit(main(sys.argv[1:]))
+#+end_src
+
+* Appendix: check_fboundp_guards.py — fboundp ガードの整合性検出スクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-check-fboundp-guards-py
+:header-args:python: :tangle scripts/check_fboundp_guards.py :mkdirp yes :comments link
+:END:
+
+=make check-fboundp-guards= （ =make lint= にも含まれる）が呼び出す検査本体です。
+
+*何を検出するためのツールか*
+
+=(when (fboundp 'X) ... #'X ...)= という形——つまり X をコマンドとして
+キーバインドやフックに登録している箇所——で、X が実際に解決できない状態を検出する。
+このパターンは =condition-case= のようにエラーを出して落ちるわけではなく、
+=fboundp= が =nil= を返すだけで *黙って何も登録されない* 。実機で動かして
+初めて気づく、という壊れ方をする。
+
+このリポジトリで実際にこの形のバグが 2 件見つかっている: =dev-music.el= を
+=leaf= の =:commands= 経由の遅延ロードに変えたとき、素の =emms= コマンド自体を
+=:commands= リストに入れ忘れていたケースと、 =restart-emacs= パッケージの
+=leaf= 宣言自体がどこにも存在しないのに =(fboundp 'restart-emacs)= だけ
+書かれていたケース。どちらも起動時にエラーは出ず、該当のキーバインドが
+静かに機能しないだけだった。
+
+*検査の絞り込み方*
+
+単なる機能検出のための =fboundp= （例: =(when (fboundp 'treesit-available-p) ...)= ）は
+対象外にしている。 =X= が本文中で =#'X= として sharp-quote 参照されている
+——つまり「コマンドとして束縛している」——ケースだけに絞ることで、
+組み込み関数のバージョン互換チェックのような正当な用途を誤検出しないようにしている。
+
+X の解決可否は、次のいずれかを満たすかで判定する。
+
+1. 同じコーパス内に =(defun X ...)= / =(defalias 'X ...)= がある（ローカル定義）
+2. どこかの =leaf= の =:commands (...)= に =X= が載っている（autoload 経由）
+3. =X= の接頭辞と一致する =leaf= パッケージが =:commands= を持たない
+   （＝ eager load されている）
+4. =`X'= という Emacs docstring 引用記法の直後に "autoload" という語がある
+   （ =org-roam-ui-open= のような、パッケージ側の =;;;###autoload= を
+   コメントで明記しているケース）
+5. =fboundp= チェックの近くに「Emacs NN 以降」のようなバージョン言及がある
+   （組み込みコマンドのバージョン互換チェックだと判断する）
+
+*限界*
+
+完全な elisp パーサーではなく正規表現ベースの静的解析なので、誤検出
+（false positive）はあり得る。実際、このツールを作った際に =find_autoload_hints=
+の初版実装で =emms= という語が =dev-music.el= 中に大量に出現するせいで
+"autoload" という語と偶然近接し、意図的に再現させた =emms= バグを見逃す
+という誤検出を自分自身で踏んだ。判定条件を =`symbol'= という引用記法必須に
+絞ることで直している。指摘された箇所は最終的に人間が目視で確認すること
+——このツールは「洗い出しの手間を減らす」ためのものであり、無条件に
+信頼できる完全な保証ではない。
+
+#+begin_src python
+  #!/usr/bin/env python3
+  """check_fboundp_guards.py --- fboundp ガードで参照されるコマンドシンボルが、
+  実際に解決可能（ローカル定義 / leaf の :commands 経由の autoload / 同名 leaf
+  パッケージの eager load / 明示的な autoload コメント）かどうかを検査する。
+
+  対象パターンは (when (fboundp 'X) ... #'X ...) / (if (fboundp 'X) ... #'X ...) の
+  形だけに絞る。X が sharp-quote で参照されている、つまり「コマンドとして登録・束縛
+  している」箇所だけが対象で、単なる機能検出のための fboundp（例:
+  (when (fboundp 'treesit-available-p) ...)）は対象外。前者は解決できていないと
+  「エラーは出ないが黙って何も起きない」バグになりやすく、後者は素朴な分岐に過ぎない
+  ため。
+
+  このスクリプトは静的なテキスト解析であり、完全な elisp パーサーではない。
+  誤検出（false positive）はあり得るので、指摘された箇所は最終的に人間が確認すること。
+  """
+
+  from __future__ import annotations
+
+  import re
+  import sys
+  from pathlib import Path
+
+  # fboundp ガード + sharp-quote 参照のペアを拾う。
+  # 例: (when (fboundp 'emms) ... #'emms ...)
+  FBOUNDP_GUARD_RE = re.compile(
+      r"\((?:when|if)\s+\(fboundp\s+'([A-Za-z0-9_/:*+=<>!?-]+)\)(.*?)\)\s*(?:\)|$)",
+      re.DOTALL,
+  )
+
+  DEFUN_RE = re.compile(r"\(def(?:un|macro|subst)\s+([A-Za-z0-9_/:*+=<>!?-]+)")
+  DEFALIAS_RE = re.compile(r"\(defalias\s+'([A-Za-z0-9_/:*+=<>!?-]+)")
+  LEAF_RE = re.compile(r"\(leaf\s+([A-Za-z0-9_/:*+=<>!?-]+)\b(.*?)(?=\n\s*\(leaf\s|\Z)", re.DOTALL)
+  COMMANDS_RE = re.compile(r":commands\s*\(([^)]*)\)", re.DOTALL)
+
+
+  def collect_corpus_text(paths: list[Path]) -> str:
+      chunks = []
+      for p in paths:
+          if p.is_file():
+              chunks.append(p.read_text(encoding="utf-8", errors="replace"))
+      return "\n".join(chunks)
+
+
+  def find_local_defs(text: str) -> set[str]:
+      names = set(DEFUN_RE.findall(text))
+      names |= set(DEFALIAS_RE.findall(text))
+      return names
+
+
+  def find_commands_symbols(text: str) -> set[str]:
+      symbols: set[str] = set()
+      for m in COMMANDS_RE.finditer(text):
+          symbols |= set(m.group(1).split())
+      return symbols
+
+
+  def find_eager_leaf_prefixes(text: str) -> set[str]:
+      """:commands を持たない leaf パッケージ名を集める（= eager load とみなす）。"""
+      prefixes = set()
+      for m in LEAF_RE.finditer(text):
+          name, body = m.group(1), m.group(2)
+          # 次の leaf までの body には後続 leaf の中身が混ざらないよう、
+          # 直近の 400 文字程度に絞って :commands の有無だけ見る。
+          head = body[:2000]
+          if ":commands" not in head:
+              prefixes.add(name)
+      return prefixes
+
+
+  def symbol_covered_by_eager_leaf(symbol: str, prefixes: set[str]) -> bool:
+      for prefix in prefixes:
+          if symbol == prefix or symbol.startswith(prefix + "-"):
+              return True
+      return False
+
+
+  def find_autoload_hints(text: str, symbol: str) -> bool:
+      """`symbol' という Emacs docstring 引用記法の直後（100 文字以内）に "autoload" が
+      あれば、ドキュメント上で明示的に autoload されると宣言されているとみなす。
+      単に symbol という文字列が autoload という単語の近くに出現するだけでは
+      誤検出になりやすいため（symbol が頻出する語のときに特に）、
+      引用記法を要求して的を絞る。
+      """
+      pattern = re.compile(r"`" + re.escape(symbol) + r"'")
+      for m in pattern.finditer(text):
+          window = text[m.end() : m.end() + 100]
+          if "autoload" in window:
+              return True
+      return False
+
+
+  VERSION_COMMENT_RE = re.compile(r"Emacs\s*\d+")
+
+
+  def has_version_compat_comment(text: str, match_start: int, lookback: int = 400) -> bool:
+      """fboundp チェックの直前に「Emacs NN 以降」等のバージョン言及があれば、
+      意図的な組み込みコマンドのバージョン互換チェックとみなして除外する。
+      このリポジトリでは version-gate されたビルトインコマンドに
+      「Emacs 27 以降の同梱コマンド」のような注記を付ける慣習が既にあるため、
+      新しい抑制コメント記法を追加するのではなく、既存の書き方をそのまま検出する。
+      """
+      window = text[max(0, match_start - lookback) : match_start]
+      return bool(VERSION_COMMENT_RE.search(window))
+
+
+  def main(argv: list[str]) -> int:
+      if len(argv) < 2:
+          print("usage: check_fboundp_guards.py <lisp-dir> [<lisp-dir> ...]", file=sys.stderr)
+          return 2
+
+      roots = [Path(a) for a in argv[1:]]
+      el_files: list[Path] = []
+      for root in roots:
+          if root.is_file():
+              el_files.append(root)
+          elif root.is_dir():
+              el_files.extend(sorted(root.rglob("*.el")))
+
+      if not el_files:
+          print(f"[check-fboundp-guards] no .el files found under {roots}", file=sys.stderr)
+          return 1
+
+      print(f"[check-fboundp-guards] scanning {len(el_files)} file(s) ...")
+
+      corpus = collect_corpus_text(el_files)
+      local_defs = find_local_defs(corpus)
+      commands_symbols = find_commands_symbols(corpus)
+      eager_prefixes = find_eager_leaf_prefixes(corpus)
+
+      findings: list[tuple[str, str, int]] = []  # (file, symbol, line)
+
+      for path in el_files:
+          text = path.read_text(encoding="utf-8", errors="replace")
+          for m in FBOUNDP_GUARD_RE.finditer(text):
+              symbol, body = m.group(1), m.group(2)
+              # sharp-quote でそのシンボル自身を参照しているものだけを対象にする
+              if f"#'{symbol}" not in body and f"#'{symbol})" not in body:
+                  continue
+
+              resolved = (
+                  symbol in local_defs
+                  or symbol in commands_symbols
+                  or symbol_covered_by_eager_leaf(symbol, eager_prefixes)
+                  or find_autoload_hints(corpus, symbol)
+                  or has_version_compat_comment(text, m.start())
+              )
+              if not resolved:
+                  line_no = text.count("\n", 0, m.start()) + 1
+                  findings.append((str(path), symbol, line_no))
+
+      if findings:
+          print(f"[check-fboundp-guards] {len(findings)} unresolved guard(s) — needs manual review:")
+          for file, symbol, line in findings:
+              print(f"  {file}:{line}: (fboundp '{symbol}) — パッケージ宣言 / :commands / ローカル定義が見つからない")
+          print(
+              "[check-fboundp-guards] NOTE: このスクリプトは静的なテキスト解析なので誤検出があり得る。"
+              " 指摘箇所は目視で確認すること。"
+          )
+          return 1
+
+      print("[check-fboundp-guards] ok")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv))
 #+end_src
 
 * Appendix: reload.py — make reload 相当の Python 実装

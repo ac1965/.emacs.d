@@ -290,6 +290,7 @@
 	@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + checkdoc"
 	@echo "  make check-tangle             # :tangle を継承できていない src block を検出"
 	@echo "  make check-emphasis           # 効かない =verbatim=/~code~/*bold* を検出"
+	@echo "  make check-fboundp-guards     # (fboundp 'X) ガードと #'X 参照の整合性を検査"
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
 	@echo "  make checkdoc                 # 公開 defun の docstring を検証"
 	@echo "  make package-lint             # MELPA 形式のパッケージヘッダ検証（要 package-lint）"
@@ -448,10 +449,23 @@
   check-emphasis:
 	@python3 scripts/check_emphasis.py "$(ORG)"
 
-  # ---- lint : check-tangle + check-emphasis + check-cookies + checkdoc をまとめて実行 --
+  # ---- check-fboundp-guards : (fboundp 'X) ガード + #'X 参照の整合性を検査する -------
+  # (when/if (fboundp 'X) ... #'X ...) という形（X をコマンドとして登録・束縛している
+  # 箇所）だけを対象に、X が実際に解決可能か（ローカル定義 / leaf の :commands /
+  # 同名 leaf パッケージの eager load / ドキュメント上の autoload 明記）を機械的に
+  # 検査する。dev-music.el の emms 抜け、restart-emacs の宣言忘れ、のような
+  # 「エラーは出ないが黙って何も起きない」バグを次に防ぐためのツール。
+  # $(LISPDIR) と $(PERSONALDIR) を対象にするため、事前に tangle 済みであること。
+  # 検査本体は scripts/check_fboundp_guards.py（Appendix を参照）。
+  .PHONY: check-fboundp-guards
+  check-fboundp-guards:
+	@python3 scripts/check_fboundp_guards.py "$(LISPDIR)" "$(PERSONALDIR)" "$(EARLY)" "$(INIT)"
+
+  # ---- lint : check-tangle + check-emphasis + check-cookies + check-fboundp-guards +
+  # checkdoc をまとめて実行 -----------------------------------------------------------
   # コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
   .PHONY: checkdoc lint
-  lint: check-tangle check-emphasis check-cookies checkdoc
+  lint: check-tangle check-emphasis check-cookies check-fboundp-guards checkdoc
 	@echo "[lint] all checks passed"
 
   # ---- package-lint : 任意 — load-path 上に package-lint が必要 --------------------
