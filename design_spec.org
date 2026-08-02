@@ -456,7 +456,25 @@ Changelog には「完了した」と書かれていたのに、実際のコー�
 
 どちらのフックも、発火する時点で Org は必ずロード済みという前提が成り立つ
 （ =orgx-auto-tangle= は =org-mode-hook= 経由でしか登録されないし、 =orgx-auto-hugo= の
-=org-capture-after-finalize-hook= も同様）ので、この遅延化は安全。
+=org-capture-after-finalize-hook= も同様）ので、この遅延化は安全 *だが、それはあくまで
+プログラムから呼ばれる経路の話* 。
+
+#+begin_quote
+*落とし穴（実機で踏んだ）:* =ox-hugo= の =:require t= を外した直後、 =M-x
+org-hugo-export-wim-to-md= のような直接呼び出しは autoload 経由で問題なく動くのに、
+=C-c C-e= の対話的ディスパッチメニューに Hugo の項目が出なくなった
+（ =C-c C-e H A= が選べない）。原因は =org-export-dispatch= が
+=org-export-registered-backends= を直接見てメニューを組み立てる点で、この一覧への
+登録（ =org-export-define-derived-backend= ）は =ox-hugo.el= が *実際にロードされた*
+副作用として起きるのであって、個々のコマンドの autoload cookie では発生しない。
+つまり「関数呼び出しの autoload」と「バックエンドのメニュー登録」は別物で、
+後者は :require t を外すと起動時だけでなく *ずっと* 登録されないままになる。
+
+対処として、 =org-export-dispatch= 自体に =:before= advice を付け、メニューを開く
+直前にだけ =ox-hugo= を require するようにした（ =orgx-export--ensure-ox-hugo-before-dispatch= ）。
+通常起動時のコストは避けたまま、対話的なディスパッチメニューでも Hugo が正しく
+選べるようにしている。
+#+end_quote
 
 ただし、既定構成では起動直後のアイドル時間に =orgx-extensions= が =org-roam-db-autosync-mode=
 を有効化するため、結局 Org はそこそこ早めにロードされる。org-roam を使わない構成
