@@ -7535,17 +7535,43 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;; 宣言は不要である（2026-07 に削除）。
     ;;
     ;; ox-hugo も :require t を外した。org-hugo-front-matter-format は defcustom であり、
-    ;; :custom による先行登録は ox-hugo のロード時に反映される。エクスポートは
-    ;; org-hugo-export-wim-to-md 等の autoload から起動される。
+    ;; :custom による先行登録は ox-hugo のロード時に反映される。
     ;;
     ;; 以前との違い: Changelog の「Org の遅延ロード」節にはこの :require t 削除が
     ;; 既に完了したと記載されていたが、実際のコードには反映されていなかった
     ;; （orgx-auto-hugo.el 側は同じ理由で正しく遅延化されていたのに、こちらだけ
     ;; 直し忘れていたと見られる）。ox-hugo は ox を、ox は org を require するため、
     ;; :require t を残したままだと「Org の遅延ロード」の効果がここから漏れて
-    ;; 無に帰していた。orgx-auto-hugo--on-capture-finalize が実際のエクスポート
-    ;; 直前に (require 'ox-hugo) しているので、ここでの遅延化は安全。
+    ;; 無に帰していた。
+    ;;
+    ;; 落とし穴（実機で踏んだ）: 上の理由で :require t を外したところ、
+    ;; `M-x org-hugo-export-wim-to-md' のような直接呼び出しは autoload 経由で
+    ;; 問題なく動くのに、`C-c C-e' の対話的ディスパッチメニューに Hugo の項目が
+    ;; 出なくなった（`C-c C-e H A' が選べない）。原因は、`org-export-dispatch' が
+    ;; メニューを組み立てる際に `org-export-registered-backends' を直接見るため。
+    ;; この一覧への登録（`org-export-define-derived-backend'）は ox-hugo.el が
+    ;; 実際にロードされた副作用として起きるのであって、個々のコマンドに付いている
+    ;; autoload cookie では発生しない。つまり「関数呼び出しの autoload」と
+    ;; 「バックエンドのメニュー登録」は別物で、後者は :require t を外すと
+    ;; 起動時だけでなく *ずっと* 登録されないままになる。
+    ;;
+    ;; 対処: `org-export-dispatch' そのものに :before advice を付け、メニューを
+    ;; 開く直前にだけ ox-hugo を require する。通常起動時のコストはそのまま避けつつ、
+    ;; 対話的なディスパッチメニューでも Hugo が正しく選べるようにする。
     (leaf ox-hugo :straight t :custom ((org-hugo-front-matter-format . "toml")))
+
+    (defun orgx-export--ensure-ox-hugo-before-dispatch (&rest _)
+      "Require `ox-hugo' before `org-export-dispatch' builds its backend menu.
+  `org-export-dispatch' reads `org-export-registered-backends' directly; the
+  Hugo backend is only added there as a side effect of loading ox-hugo.el
+  itself (via `org-export-define-derived-backend'), not by the autoload
+  cookies on its individual interactive commands. Without this advice,
+  `C-c C-e H A' silently omits the Hugo entry even though calling
+  `org-hugo-export-wim-to-md' directly works fine."
+      (require 'ox-hugo))
+
+    (advice-add 'org-export-dispatch :before #'orgx-export--ensure-ox-hugo-before-dispatch)
+
     (leaf markdown-mode :straight t)
     (leaf markdown-preview-mode :straight t)
     (leaf edit-indirect :straight t)
