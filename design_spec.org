@@ -523,7 +523,8 @@ org-hugo-export-wim-to-md= のような直接呼び出しは autoload 経由で�
 
 =M-SPC= を起点に 13 個のサブマップ（ =a b c e g h m o p q s t w= ）が並んでる。
 元は =C-c SPC= （3 キー）だったのを =M-SPC= （2 キー）に変更して、
-全リーダーコマンドのキーストロークを 1 つ短縮した。
+全リーダーコマンドのキーストロークを 1 つ短縮した。これは =ui-leader.el= が持つ既定値で、
+WSL では =personal/device-wsl.el= がこれを =C-c SPC= に張り替える（後述の personal Layer の節）。
 
 キーマップの定義はロード時に即座に実行される。 =after-init-hook= には遅延させない。
 =ui-keymap.el= がロードされる前にマップが確定している必要があるため。
@@ -640,21 +641,43 @@ Org 準備完了まで遅延させたうえで、 =run-with-idle-timer= の REPE
 
 ** personal/ac1965.el — ログイン単位の上書き
 
-=my:d:org= / =my:d:org-journal= / =my:d:org-roam= / =my:f:capture-blog-file= を
-=/Users/ac1965/Documents/org/= 配下と =all-posts.org= に上書きしている。これができるのは、
-本ファイルが =orgx-core.el= （モジュールロード）より *前* にロードされるため。 =defvar= は
-既存の束縛を上書きしないので、ここで先に =setq= しておけば =orgx-core= 側の =defvar= は
-何もしなくなる、という「上書きの契約」（orgx Layer の節を参照）がそのまま効いている。
+=my:d:org= / =my:d:org-journal= / =my:d:org-roam= / =my:f:capture-blog-file= を上書きしている。
+これができるのは、本ファイルが =orgx-core.el= （モジュールロード）より *前* にロードされるため。
+=defvar= は既存の束縛を上書きしないので、ここで先に =setq= しておけば =orgx-core= 側の
+=defvar= は何もしなくなる、という「上書きの契約」（orgx Layer の節を参照）がそのまま効いている。
+
+上書き先のパスは =my:wsl-p= で分岐していて、macOS と WSL で別の値になる。
+
+| 変数 | macOS | WSL |
+|------+-------+-----|
+| =my:d:org= | =/Users/ac1965/Documents/org/= | =/home/ac1965/org/= |
+| =my:d:org-journal= | =/Users/ac1965/Documents/org/journal/= | =/home/ac1965/org/journal/= |
+| =my:d:org-roam= | =/Users/ac1965/Documents/org/org-roam/= | =/home/ac1965/org/org-roam/= |
+| =my:f:capture-blog-file= | =/Users/ac1965/Projects/blog/mysite/all-posts.org= | =/home/ac1965/Projects/blog/mysite/all-posts.org= |
+
+WSL 側の =my:f:capture-blog-file= はホームパスを機械的に置き換えただけの値なので、
+=~/Projects/blog/mysite/= を WSL 側で clone していない場合は実在しないパスになる。
+その場合は個別に上書きするか、 =orgx-core.el= 側の nil ガードに委ねて未設定のままにする。
+
+#+begin_quote
+*以前との違い:* もともとこのファイルは macOS の =/Users/ac1965/Documents/org/= 決め打ちだった。
+WSL でも同じ =ac1965.el= を共有する必要が出てきたため、 =(if (my:wsl-p) ... ...)= で
+macOS 用と WSL 用の =setq= を分岐する形に変えた。 =my:wsl-p= は本ファイルより前にロードされる
+=personal/user.el= 側の定義を参照しているので、この位置から呼んでも問題ない。
+#+end_quote
 
 [[file:svg/13_personal_override_contract.svg]]
 
-図の要点はシンプルで、 =init.el= §8a/§8b でパス変数に =setq= してしまえば、その後
-§9 で走る =modules.el= 経由の =orgx-core.el= が同じ変数を =defvar= で宣言し直しても
-「先に束縛されているから無視される」だけ、というだけの話。順序が逆転する
-（ =personal/= より先に =orgx-core.el= がロードされる）と、この契約は即座に壊れる。
+図の要点はシンプルで、 =init.el= §8a/§8b でパス変数に =setq= してしまえば（今は OS 分岐を
+挟むだけで、setq すること自体は変わらない）、その後 §9 で走る =modules.el= 経由の
+=orgx-core.el= が同じ変数を =defvar= で宣言し直しても「先に束縛されているから無視される」
+だけ、というだけの話。順序が逆転する（ =personal/= より先に =orgx-core.el= がロードされる）と、
+この契約は即座に壊れる。
 
 フォントは =JetBrains Mono= （等幅）＋ =Noto Sans JP= （可変）、サイズ 18。UI/LSP は
 =my:use-ui 'nano= と =my:use-lsp 'eglot= を選択している（autoload-only モジュールの節を参照）。
+なお、フォント設定は今のところ OS 分岐していない（ =ui-font-emoji= の =Apple Color Emoji= は
+macOS 専用フォントだが、WSL 向けの上書きはまだ入っていない）。
 
 このファイルにはマシン固有の小物も同居している。 =.ps1= → =powershell-mode= 、
 =.bas= → =visual-basic-mode= の拡張子登録、nano-modeline 右セグメントに時計・文字コード・
@@ -677,12 +700,31 @@ IME インジケータを出す =ac1965--nano-time-encoding= のオーバーラ�
 
 *** device-wsl.el
 
-*以前との違い:* リーダーキーを =M-SPC= から =C-c SPC= へ *丸ごと張り替えている* 。
-Windows 側で Alt+Space がシステムメニューのショートカットと衝突しやすく、人間工学的にも
-押しにくいという理由。 =ui-leader--bind-root= 等は本ファイルより前にロード済みで、
-その時点の既定値 =M-SPC= で =global-map= に一度結線されているため、 =ui-leader-key= を
-=setopt= するだけでは実際のバインドは変わらない。 =keymap-global-unset= で旧バインドを
-明示的に解除してから、新キーへ張り直す必要がある。
+リーダーキーを =M-SPC= から =C-c SPC= へ *丸ごと張り替えている* 。Windows 側で Alt+Space が
+システムメニューのショートカットと衝突しやすく、人間工学的にも押しにくいという理由。
+
+#+begin_quote
+*以前との違い（実機で踏んだバグ）:* このドキュメントには以前、「 =ui-leader--bind-root= 等は
+本ファイルより前にロード済みだから、 =keymap-global-unset= で旧バインドを解除してから
+=setopt ui-leader-key= して張り直せばよい」と書いてあった。これは *前提が逆* だった。
+
+実際のロード順は =init.el= §8（ personal オーバーレイ）→ §9（ =(require 'modules)= ）で、
+=device-wsl.el= は =personal/user.el= の内部から §8 の時点で同期的にロードされる。一方
+=ui-leader.el= は =ui= 層のモジュールなので §9 の =modules.el= 経由でしか読み込まれない。
+つまり =device-wsl.el= のトップレベルが評価される時点では =ui-leader-key= も
+=ui-leader-map= も =boundp= ですらなく、旧実装の =(when (and (boundp 'ui-leader-key) ...) ...)=
+は条件不成立で *黙ってスキップ* されていた。その後 §9 で =ui-leader.el= がロードされ、
+=ui-leader--bind-root= が既定値 =M-SPC= で結線して終わり——つまりリーダーキーは
+=C-c SPC= に切り替わらず =M-SPC= のまま残っていた。デバッガにも警告にも出ない、
+静かな不具合だった。
+
+対処として、トップレベル直書きをやめ、 =(with-eval-after-load 'ui-leader ...)= で
+「 =ui-leader= がロードされ =ui-leader--bind-root= が =M-SPC= で一度結線した *直後* 」に
+確実に実行されるよう変更した。これなら =personal/user.el= → =modules.el= という実際の
+ロード順序に依存せず、常に「結線の後」に上書きできる。ちなみに =utils-ime.el= の
+=utils-ime--install-leader= （IME 切替でリーダーを包む処理）も同じ理由で元から
+=with-eval-after-load 'ui-leader= を使っており、今回の修正はそれと同じパターンに揃えた形。
+#+end_quote
 
 このファイルはもう 1 つ変わったことをしていて、 =ui-global-keys.el= が定義する =s-= 系
 （macOS Super キー）バインドが WSL では実質デッドコードになる問題に対処している。
@@ -1221,7 +1263,7 @@ digraph leader_keymap {
   node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=10 fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
   edge [color="#5F5E5A"];
 
-  root [label="M-SPC\nui-leader-map" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  root [label="リーダーキー\nui-leader-map\n既定 M-SPC / WSL は C-c SPC" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
 
   a [label="a\napps"]; b [label="b\nbuffer"]; c [label="c\ncode"];
   e [label="e\nembark/eval"]; g [label="g\ngit"]; h [label="h\nhelp"];
@@ -1274,10 +1316,10 @@ digraph personal_override_contract {
   edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
 
   s1 [label="init.el §8a — personal/user.el\nmy:modules-extraにsetqで追記"];
-  s2 [label="init.el §8b — personal/ac1965.el\nmy:d:org*にsetqで先に値を設定"];
+  s2 [label="init.el §8b — personal/ac1965.el\n(if (my:wsl-p) ...) でOS分岐しつつ\nmy:d:org*にsetqで先に値を設定"];
   s3 [label="init.el §9 — (require 'modules)\nmodules.elが全モジュールをロード開始"];
   s4 [label="orgx-core.el: (defvar my:d:org …)\n既に束縛済み→この defvar は無視される" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-  s5 [label="結果\nmy:d:org は ac1965.el が設定した値のまま" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  s5 [label="結果\nmy:d:org はac1965.elが設定した値のまま\n(macOS/WSLで異なる値)" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
 
   s1 -> s2 -> s3 -> s4 -> s5;
 }
