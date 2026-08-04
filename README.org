@@ -5239,11 +5239,13 @@ local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
 
     (with-eval-after-load 'org
       (when (boundp 'org-mode-map)
-        ;; ローカルリーダーのエイリアス: M-SPC m t/s/d はグローバルの M-SPC o t/s/d と同義。
-        ;; 既に org-mode で作業していて、手が m を覚えている場合に有用。
-        (keymap-set org-mode-map "M-SPC m t" #'org-todo)
-        (keymap-set org-mode-map "M-SPC m s" #'org-schedule)
-        (keymap-set org-mode-map "M-SPC m d" #'org-deadline))))
+        ;; ローカルリーダーのエイリアス: <leader> m t/s/d はグローバルの
+        ;; <leader> o t/s/d と同義。ハードコードの "M-SPC" ではなく
+        ;; ui-leader-key を直接参照することで、personal/device-*.el が
+        ;; リーダーキーを変更した環境（例: WSL の C-c SPC）にも追従する。
+        (keymap-set org-mode-map (concat ui-leader-key " m t") #'org-todo)
+        (keymap-set org-mode-map (concat ui-leader-key " m s") #'org-schedule)
+        (keymap-set org-mode-map (concat ui-leader-key " m d") #'org-deadline))))
 
   (defun ui-keymap--startup-init ()
     "Initialize UI key bindings at startup."
@@ -10891,7 +10893,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; 本ファイルの責務:
   ;; - このマシンの `user-full-name' と `user-mail-address' を設定する
   ;; - auth・暗号化モジュール向けに `GPG_KEY_ID' を export する
-  ;; - `my:d:org*' のパスを /Users/ac1965/Documents/org/ に上書きする
+  ;; - `my:d:org*' のパスを、macOS では /Users/ac1965/Documents/org/ に、
+  ;;   WSL では /home/ac1965/org/ に上書きする（`my:wsl-p' で分岐）
   ;; - フォントを設定する: JetBrains Mono（等幅）、Noto Sans JP（可変）、サイズ 18
   ;; - `my:use-ui 'nano' と `my:use-lsp 'eglot' を有効化する
   ;; - .ps1 → powershell-mode、.bas → visual-basic-mode を登録する
@@ -10920,10 +10923,25 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; 存在せず、"* blog" 見出しも含まない。実際の ox-hugo 単一ファイル・ソースは
   ;; all-posts.org であり、(file+olp ... "blog") のキャプチャ・ターゲットが要求する
   ;; "* blog" トップレベル見出しを持っている。
-  (setq my:d:org          "/Users/ac1965/Documents/org/"
-        my:d:org-journal   "/Users/ac1965/Documents/org/journal/"
-        my:d:org-roam      "/Users/ac1965/Documents/org/org-roam/"
-        my:f:capture-blog-file "/Users/ac1965/Projects/blog/mysite/all-posts.org")
+  ;;
+  ;; マシン（ログイン）単位ではなく OS 単位で値を変える必要があるため、`my:wsl-p'
+  ;; （personal/user.el で定義済み。本ファイルは user.el の後にロードされるため
+  ;; 参照可能）で分岐する。WSL 側は macOS の /Users/ac1965/ に対応するホームである
+  ;; /home/ac1965/ を使い、org ルート配下のサブディレクトリ構成（journal/、
+  ;; org-roam/）は macOS 側とそろえてミラーする。my:f:capture-blog-file も同じ
+  ;; 規則でホームパスだけを置き換えているが、WSL 側に blog プロジェクト
+  ;; （~/Projects/blog/mysite/）を未 clone の場合は個別に上書きするか、
+  ;; orgx-core.el 側の (bound-and-true-p my:f:capture-blog-file) ガードに委ねて
+  ;; 未設定のままにしてよい。
+  (if (my:wsl-p)
+      (setq my:d:org              "/home/ac1965/org/"
+            my:d:org-journal      "/home/ac1965/org/journal/"
+            my:d:org-roam         "/home/ac1965/org/org-roam/"
+            my:f:capture-blog-file "/home/ac1965/Projects/blog/mysite/all-posts.org")
+    (setq my:d:org              "/Users/ac1965/Documents/org/"
+          my:d:org-journal      "/Users/ac1965/Documents/org/journal/"
+          my:d:org-roam         "/Users/ac1965/Documents/org/org-roam/"
+          my:f:capture-blog-file "/Users/ac1965/Projects/blog/mysite/all-posts.org"))
 
   ;; フォント設定
   ;; ui-font-default、ui-font-variable-pitch、ui-font-size は
@@ -11478,23 +11496,31 @@ hydra is not installed."
   ;; また人間工学的にも押しにくいため、WSLでは3打鍵に戻る形にはなるが
   ;; 衝突が少なく確実な `C-c SPC' を使う。
   ;;
-  ;; 注意: `ui-leader--bind-root'（ui-leader モジュール）と
-  ;; `utils-ime--install-leader'（utils-ime モジュール、IME切替でリーダーを
-  ;; 包む処理）は、いずれも本ファイル（personal オーバーレイ）より前に
-  ;; ロードされ、その時点の既定値 "M-SPC" で global-map に一度結線済みである。
-  ;; そのため `ui-leader-key' を setopt するだけでは実際のキーバインドは
-  ;; 変わらない。旧バインドを明示的に解除してから新キーへ張り直す必要がある。
+  ;; 注意（読み込み順序）: 本ファイル（personal/device-wsl.el）は
+  ;; `personal/user.el' の内部から、`(require 'modules)'（ui 層・
+  ;; `ui-leader' を含む）より *前* に同期的にロードされる。つまり本ファイルの
+  ;; トップレベルが評価される時点では `ui-leader-key' も `ui-leader-map' も
+  ;; まだ `boundp' ですらない。ここでトップレベルに直接リバインド処理を
+  ;; 書くと `when' の条件が黙って不成立になり、後から `ui-leader--bind-root'
+  ;; が既定値 "M-SPC" で結線した状態が最終的に残ってしまう（実機で発生した
+  ;; 不具合）。
+  ;;
+  ;; そのため `with-eval-after-load' で 'ui-leader を待ち、`ui-leader.el' が
+  ;; ロードされ `ui-leader--bind-root' が "M-SPC" で一度結線した *直後* に
+  ;; 確実に実行されるようにする。これなら `personal/user.el' → `modules.el'
+  ;; という実際のロード順序に依存せず、常に「結線の後」に上書きできる。
   ;; （`utils-ime--install-leader' の IME切替ラッパーは macism 依存＝macOS
   ;;  限定の機能であり、WSL 上ではもともと不活性なので、ここでは単純な
   ;;  `ui-leader-map' への張り替えでよい。）
 
-  (when (and (boundp 'ui-leader-key) (stringp ui-leader-key)
-             (boundp 'ui-leader-map) (keymapp ui-leader-map))
-    (keymap-global-unset ui-leader-key)   ; 旧 "M-SPC" を解除
-    (setopt ui-leader-key "C-c SPC")
-    (if (fboundp 'keymap-global-set)
-        (keymap-global-set ui-leader-key ui-leader-map)
-      (global-set-key (kbd ui-leader-key) ui-leader-map)))
+  (with-eval-after-load 'ui-leader
+    (when (and (boundp 'ui-leader-key) (stringp ui-leader-key)
+               (boundp 'ui-leader-map) (keymapp ui-leader-map))
+      (keymap-global-unset ui-leader-key)   ; 旧 "M-SPC" を解除
+      (setopt ui-leader-key "C-c SPC")
+      (if (fboundp 'keymap-global-set)
+          (keymap-global-set ui-leader-key ui-leader-map)
+        (global-set-key (kbd ui-leader-key) ui-leader-map))))
 
   ;; ---------------------------------------------------------------------------
   ;; クリップボード連携 — win32yank.exe
