@@ -3148,7 +3148,18 @@ established before the persistence files are loaded."
       ;; (list 'x ...) をクォートされたリストに変更した。
       ;; leaf :custom はマクロ展開時に (setopt var value) へ展開されるため、(list ...) は
       ;; シンボルのリストではなく未評価のフォームとして格納されてしまう。
-      ((dirvish-attributes . '(subtree-state vc-state git-msg file-size)))
+      ((dirvish-attributes . '(subtree-state vc-state git-msg file-size))
+       ;; dirvish は自前の mode-line パイプラインを持ち、編集バッファの
+       ;; nano-modeline（M-SPC 経由ではなく起動時にグローバル適用される方）を
+       ;; 経由しない。そのため IME（sis）状態がウィンドウ最大化時に判別できなくなる
+       ;; 問題があった。:right に `ime' セグメントを追加することで、dirvish 自身の
+       ;; mode-line 上に IME 表示を出す。セグメント本体（`ime'）の定義は
+       ;; personal/ac1965.el 側（sis-change-hook のキャッシュ `ac1965--sis-indicator'
+       ;; の定義箇所）に置く — `dirvish-mode-line-format' はセグメント名のリストに
+       ;; すぎず、実際に mode-line が描画されるタイミング（dirvish バッファを開いた
+       ;; とき、= init 完了よりずっと後）までにセグメント関数が登録されていれば
+       ;; よいため、この setopt の位置とセグメント定義の位置の前後関係は問わない。
+       (dirvish-mode-line-format . '(:left (sort symlink) :right (omit yank index ime))))
       :config
       (setopt dirvish-cache-dir
               (expand-file-name "dirvish/" my:d:cache))
@@ -5224,6 +5235,45 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
     (dired-find-file-other-window)
     (read-only-mode 1))
 
+  ;; `z' — dirvish 一覧を保持したまま file-at-point を別ウィンドウに RO 表示する。
+  ;;
+  ;; 上の `ui-keymap--dirvish-open-read-only'（"O" にバインド）は
+  ;; `dired-find-file-other-window' + `read-only-mode' の組み合わせだが、これは
+  ;; 「編集可能なバッファを開いてから明示的に read-only にする」経路であり、
+  ;; view-mode 特有の挙動（"q" で閉じてウィンドウ配置ごと元に戻る、末尾に
+  ;; カーソルを置いても編集は一切できない、等）を持たない。
+  ;;
+  ;; `view-file-other-window' は最初から view-mode で開くため、「素早く中身を
+  ;; 確認して q で戻る」用途に向いている。dired 標準の "v"（`dired-view-file'）は
+  ;; カレントウィンドウを置き換えてしまい、dirvish の一覧が隠れてしまうため、
+  ;; その代替として "z" に別ウィンドウ版を割り当てる。
+  (defun ui-keymap--dirvish-view-file-other-window ()
+    "View file-at-point read-only in another window via `view-file-other-window'.
+  Unlike `dired-view-file' (bound to the dired-native \"v\"), this keeps the
+  current dirvish listing window intact instead of replacing it, and opens
+  the target buffer directly in `view-mode' (not merely `read-only-mode'
+  layered on top of a normal buffer)."
+    (interactive)
+    (view-file-other-window (dired-get-filename nil t)))
+
+  ;; view-mode バッファの出現位置を固定する。
+  ;;
+  ;; `view-file-other-window' は内部的に `switch-to-buffer-other-window' →
+  ;; `display-buffer' を通るため、`display-buffer-alist' の対象になる。指定が
+  ;; ないと分割方向がフレームの状態（既存ウィンドウ数・フォーカス位置）に依存して
+  ;; 毎回揺れる。フレーム最大化運用（ウィンドウ分割の目視手がかりが少ない）と
+  ;; 特に相性が悪いため、常に右側の専用サイドウィンドウに固定する。
+  ;;
+  ;; `dedicated . t' により、view-mode を抜けた後（"q" で `view-mode' が
+  ;; バッファを kill/quit する際）にこのサイドウィンドウ自体も片付く。
+  (add-to-list 'display-buffer-alist
+               '((lambda (buf _action)
+                   (with-current-buffer buf (derived-mode-p 'view-mode)))
+                 (display-buffer-reuse-window display-buffer-in-side-window)
+                 (side . right)
+                 (window-width . 0.5)
+                 (dedicated . t)))
+
   (defun ui-keymap--local-leader-binds ()
     "Install local leader bindings for specific major modes.
 Org task commands (todo/schedule/deadline) are now bound in the global
@@ -5235,6 +5285,10 @@ local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
         (keymap-set dirvish-mode-map "i"   #'dirvish-subtree-toggle)
         (keymap-set dirvish-mode-map "o"   #'dired-find-file-other-window)
         (keymap-set dirvish-mode-map "O"   #'ui-keymap--dirvish-open-read-only)
+        ;; "z" は dired 標準では `dired-do-compress'（マークしたファイルの圧縮）に
+        ;; 割り当てられている。dirvish セッションでは頻度が低いと判断し、
+        ;; view-mode での別ウィンドウ RO 表示に明示的に上書きする。
+        (keymap-set dirvish-mode-map "z"   #'ui-keymap--dirvish-view-file-other-window)
         (keymap-set dirvish-mode-map "q"   #'dirvish-quit)))
 
     (with-eval-after-load 'org
@@ -11038,6 +11092,34 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   (with-eval-after-load 'sis
     (add-hook 'sis-change-hook #'ac1965--sis-update-indicator))
+
+  ;; dirvish 用 IME mode-line セグメント — nano-modeline とキャッシュを共有する
+  ;;
+  ;; dirvish は編集バッファの nano-modeline パイプラインを通らない独自の
+  ;; mode-line（`dirvish-mode-line-format'、core/core-editing.el の leaf dirvish
+  ;; :custom で :right に `ime' を追加済み）を持つため、ウィンドウ最大化時など
+  ;; 見た目上の手がかりが少ない状況では dirvish バッファに入った瞬間 IME 状態が
+  ;; 分からなくなっていた。
+  ;;
+  ;; ここでは新たに osascript/macism を呼ぶのではなく、上で定義済みの
+  ;; `ac1965--sis-indicator'（sis-change-hook が更新するグローバルキャッシュ）を
+  ;; そのまま読むだけのセグメントを `dirvish-define-mode-line' で登録する。
+  ;; プロセス起動コストはゼロで、編集バッファ側と表示内容も常に一致する。
+  ;;
+  ;; `dirvish-define-mode-line' はマクロであり dirvish がロード済みである必要が
+  ;; あるが、my:modules の起動順は core-editing（dirvish 本体）→ ... →
+  ;; personal（このファイル）なので通常は既にロード済みである。順序変更に対して
+  ;; 堅牢にするため、念のため `with-eval-after-load' で包む。
+  (with-eval-after-load 'dirvish
+    (dirvish-define-mode-line ime
+      "Show the cached sis IME indicator (`ac1965--sis-indicator') in dirvish's
+  own mode-line. Mirrors the editing-buffer nano-modeline segment so IME
+  state (English / Japanese) stays legible while browsing in dirvish,
+  including when the frame is maximized. Reads the shared cache only —
+  no subprocess is spawned here; `ac1965--sis-update-indicator' (attached to
+  `sis-change-hook') is what keeps the cache current."
+      (when (boundp 'ac1965--sis-indicator)
+        (string-trim ac1965--sis-indicator))))
   ;;
   ;; 目的: メジャーモードにかかわらず全バッファで nano-modeline を表示し、
   ;; 標準のモードラインは完全に隠す。
