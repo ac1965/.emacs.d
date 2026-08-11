@@ -516,6 +516,25 @@ org-hugo-export-wim-to-md= のような直接呼び出しは autoload 経由で�
 しまうため。 =org-note-abort= が非 nil なら（ =C-c C-k= でキャンセルされた場合）エクスポートを
 スキップする。 =ox-hugo= のロードも同様に、トップレベルの =require= ではなく関数内部まで遅延している。
 
+*確定前の手動ブラウザプレビュー:* =org-capture-mode-map= に =C-c C-p=
+（ =orgx-auto-hugo-preview-capture= ）を割り当ててある。 =org-hugo-export-wim-to-md=
+は使わない — キャプチャ対象ファイルが =#+HUGO_BASE_DIR= を持っていることが多く、
+一時ディレクトリへの動的束縛より優先されて実 content へ書き出されてしまう危険があるため。
+代わりに =org-export-as= を SUBTREEP 付きで直接呼び、現在のエントリだけをディスクに触れず
+文字列化する。結果はキャプチャセッションごとの使い捨てスクラッチファイル（保持先は
+バッファローカル変数ではなく =org-capture-put= のセッションプロパティ。バッファは確定・中断の
+どちらでもフック前後に kill されうるため）に書き出し、そこで =markdown-preview-mode= を
+有効化する。セッション終了時（確定・中断どちらでも）は =orgx-auto-hugo-preview--cleanup= が
+スクラッチディレクトリを削除する。
+
+*落とし穴（実機で踏んだ）:* =markdown-preview-mode= はブラウザへの更新送信
+（スクロール同期）でプレビューバッファの *ウィンドウ* を参照する。 =find-file-noselect=
+だけで作った、一度も表示されていないバッファに対して呼ぶと "Wrong type argument:
+number-or-marker-p, nil" で失敗する（スクラッチファイル自体は正しく書き込まれるが、
+送信だけ失敗する）。対処として、更新中だけスクラッチバッファを実ウィンドウに
+=pop-to-buffer= し、直後にフォーカスをキャプチャバッファへ戻してタイピングを
+妨げないようにしている。
+
 * ui-leader.el — M-SPC リーダーキー階層
 
 #+ATTR_LATEX: :height 0.85\textheight :placement [h!]
@@ -1282,11 +1301,15 @@ digraph orgtangle_hugo {
   tangleok [label="org-babel-tangle 実行" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
   hugoexport [label="ox-hugo エクスポート" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
   abort [label="org-note-abort が非nil\n→ エクスポートをスキップ" fillcolor="#FCEBEB" color="#A32D2D" fontcolor="#501313"];
+  previewkey [label="C-c C-p\n(キャプチャ中、確定前)"];
+  preview [label="orgx-auto-hugo-preview-capture\norg-export-as (SUBTREEP)\nディスク非書込み"];
+  previewbuf [label="使い捨てスクラッチファイル\n+ markdown-preview-mode" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
 
   savehook -> tangle -> tangleok;
   capturehook -> hugo;
   hugo -> hugoexport [label="通常確定"];
   hugo -> abort [label="C-c C-kでキャンセル"];
+  previewkey -> preview -> previewbuf;
 }
 #+end_src
 
