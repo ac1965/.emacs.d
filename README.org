@@ -12312,27 +12312,6 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   # Make のバージョンに依存しない。
   EVAL_PRESERVE_INDENT := --eval "(setq org-src-preserve-indentation t)"
 
-  # -Q 実行時の leaf の任意注入
-  STRAIGHT_BASE_DIR ?= $(shell \
-    if [ -f "$(EARLY)" ]; then \
-      $(EMACS_Q) -l "$(EARLY)" \
-        --eval "(princ (expand-file-name (or (ignore-errors STRAIGHT_BASE_DIR) \
-                                             (ignore-errors (and (boundp 'straight-base-dir) straight-base-dir)) \
-                                             (expand-file-name \"straight\" user-emacs-directory))))"; \
-    else \
-      printf "%s" "$$HOME/.emacs.d/straight"; \
-    fi)
-  LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf
-  LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords
-
-  EVAL_LEAF := \
-    --eval "(let* ((ldir \"$(LEAF_DIR)\") (kwdir \"$(LEAFKW_DIR)\")) \
-              (when (file-directory-p ldir)  (add-to-list 'load-path ldir)) \
-              (when (file-directory-p kwdir) (add-to-list 'load-path kwdir)) \
-              (ignore-errors (require 'leaf)) \
-              (ignore-errors (require 'leaf-keywords)) \
-              (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
-
   # ---- 既定ターゲット（引数なし）--------------------------------------------------
   .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures dot-tangle dot-svg mmd-tangle mmd-svg diagrams clean-diagrams help
   all: onepass-init
@@ -12352,6 +12331,39 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   	            (when (and (featurep 'comp) (bound-and-true-p comp-deferred-compilation)) \
   	              (dolist (d dirs) (ignore-errors (native-compile-async d 'recursively)))))" \
   	  --eval "(message \"[onepass-init] done\")"
+
+  # ---- onepass-q 専用: -Q 実行時の leaf の任意注入 --------------------------------
+  # -Q（init.el を読まない最小環境）は straight 経由でインストールした leaf /
+  # leaf-keywords を自動では load-path に乗せない。onepass-q はこれを手動で
+  # 注入するため、ここで STRAIGHT_BASE_DIR / LEAF_DIR / LEAFKW_DIR / EVAL_LEAF
+  # を解決する。
+  #
+  # スコープの注記: この一連の変数を参照するのは onepass-q と、デバッグ用の
+  # echo-paths（値の表示のみ）だけである。reload（= clean tangle
+  # check-cookies）・tangle 単体・clean はいずれも参照しない。STRAIGHT_BASE_DIR
+  # は再帰展開変数（?=）なので、$(shell ...) はどこかのターゲットが実際に
+  # この変数を参照したときにのみ評価される — 参照されなければ、straight や
+  # leaf が未インストールの環境で `make reload` 等を実行してもこの行が原因で
+  # 失敗することはない。
+  STRAIGHT_BASE_DIR ?= $(shell \
+    if [ -f "$(EARLY)" ]; then \
+      $(EMACS_Q) -l "$(EARLY)" \
+        --eval "(princ (expand-file-name (or (ignore-errors STRAIGHT_BASE_DIR) \
+                                             (ignore-errors (and (boundp 'straight-base-dir) straight-base-dir)) \
+                                             (expand-file-name \"straight\" user-emacs-directory))))"; \
+    else \
+      printf "%s" "$$HOME/.emacs.d/straight"; \
+    fi)
+  LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf
+  LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords
+
+  EVAL_LEAF := \
+    --eval "(let* ((ldir \"$(LEAF_DIR)\") (kwdir \"$(LEAFKW_DIR)\")) \
+              (when (file-directory-p ldir)  (add-to-list 'load-path ldir)) \
+              (when (file-directory-p kwdir) (add-to-list 'load-path kwdir)) \
+              (ignore-errors (require 'leaf)) \
+              (ignore-errors (require 'leaf-keywords)) \
+              (when (featurep 'leaf-keywords) (leaf-keywords-init)))"
 
   # ---- ワンパス（-Q 最小環境）: tangle -> 全コンパイル -----------------------------
   onepass-q: $(ORG)
