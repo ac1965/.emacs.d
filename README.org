@@ -12335,7 +12335,7 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
   EVAL_PRESERVE_INDENT := --eval "(setq org-src-preserve-indentation t)"
 
   # ---- 既定ターゲット（引数なし）--------------------------------------------------
-  .PHONY: all onepass-init onepass-q clean distclean show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures dot-tangle dot-svg mmd-tangle mmd-svg diagrams clean-diagrams help
+  .PHONY: all onepass-init onepass-q clean distclean distclean-deps show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures dot-tangle dot-svg mmd-tangle mmd-svg diagrams clean-diagrams help
   all: onepass-init
 
   # ---- ワンパス（early+init 環境）: tangle -> 差分コンパイル -----------------------
@@ -12424,9 +12424,33 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
 	@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 	@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 
+  # distclean は README.org からの tangle 生成物一式を削除し、fresh clone 相当に戻す。
+  # 対象は早期に消えても実害のない「ソースから常に再生成できるもの」だけ（early-init.el
+  # / init.el / lisp/ / personal/ / scripts/ / Makefile 自身、および svg/ 配下の *.dot
+  # / *.mmd / *.pdf 中間生成物）。svg/*.svg は git 管理下の成果物なので対象外。
+  # straight/ の package clone や eln-cache 等の依存物・実行時キャッシュは distclean には
+  # 含めない（再取得・再コンパイルに数分〜かかり、distclean を打つたびに発生させたくない
+  # ため）。それらを消したい場合は distclean-deps を使う。
+  #
+  # 注意: Makefile 自身も削除されるため、実行後は make が一切使えなくなる。再び使うには
+  # Tangle 節の「初回ブートストラップ」コマンド（emacs -Q --batch tangle）が必要。
   distclean: clean
 	@echo "[distclean] remove stray *.eln"
 	@find "$(ROOT)" -type f -name '*.eln' -delete
+	@echo "[distclean] remove tangle-generated files (early-init.el init.el lisp/ personal/ scripts/ svg intermediates)"
+	@rm -f "$(EARLY)" "$(INIT)"
+	@rm -rf "$(LISPDIR)" "$(PERSONALDIR)" "$(ROOT)/scripts"
+	@{ [ -d "$(SVGDIR)" ] && find "$(SVGDIR)" \( -name '*.dot' -o -name '*.mmd' -o -name '*.pdf' \) -delete; } 2>/dev/null || true
+	@echo "[distclean] remove Makefile (re-bootstrap: see README.org Tangle section)"
+	@rm -f "$(ROOT)/Makefile"
+
+  # distclean-deps は distclean よりさらに踏み込んだ、破壊的な操作。straight/ のパッケージ
+  # clone・ネイティブコンパイルキャッシュ・no-littering の実行時状態を削除する。再取得や
+  # 再コンパイルに数分〜十数分かかりうるため distclean には含めず、独立したターゲットに
+  # している。
+  distclean-deps:
+	@echo "[distclean-deps] remove straight/ eln-cache .cache .etc .var (package clones & runtime caches)"
+	@rm -rf "$(ROOT)/straight" "$(ROOT)/eln-cache" "$(ROOT)/.cache" "$(ROOT)/.etc" "$(ROOT)/.var"
 
   # ---- dot-tangle : README.org / design_spec.org の dot ソースブロックを svg/*.dot として
   # 書き出す -------------------------------------------------------------------------
@@ -12555,7 +12579,9 @@ Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
 	@echo "  make tangle                   # README.org を .el 群へ tangle するだけ"
 	@echo "  make reload                   # clean + tangle + check-cookies（README.org 差し替え後に使う）"
 	@echo "  make clean                    # *.elc を削除"
-	@echo "  make distclean                # clean + 迷子の *.eln を削除"
+	@echo "  make distclean                # clean + tangle 生成物一式を削除（fresh clone 相当。"
+	@echo "                                #   Makefile 自身も消えるので要再ブートストラップ）"
+	@echo "  make distclean-deps           # straight/ eln-cache .cache .etc .var を削除（破壊的・低頻度用）"
 	@echo ""
 	@echo "  # 図版（dot / mermaid）"
 	@echo "  make diagrams                 # dot-svg + mmd-svg をまとめて実行（推奨はこれ）"
