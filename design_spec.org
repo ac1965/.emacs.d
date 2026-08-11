@@ -366,6 +366,22 @@ Org の =#+begin_src= ブロック内で言語固有の補完が効くのは、�
 | =completion-corfu-org-src= | =edit-indirect= バッファで =corfu-mode= 有効化 |
 | =completion-orderless-org-src= | Org src ブロックのみ =orderless= スタイル適用 |
 
+** completion-core.el — orderless による補完スタイルの基盤
+
+CAPF スタックより手前でロードされる、補完スタイルの土台。 =orderless= を導入し
+=completion-styles= を =(orderless basic)= にするだけの薄いモジュールだが、
+=completion-category-overrides= はあえてここでは設定しない。正式な上書きテーブル
+（file・symbol・keyword・tex・dabbrev）は本モジュールより後にロードされる
+completion-capf.el 側にあり、両方で定義すると「後勝ち」で completion-capf.el が
+静かに勝ってしまうため、正となる情報源を1つに絞っている。
+
+Emacs 31 以降では、Vertico が既に担っている候補表示と二重に出ないよう
+=completion-eager-display= / =completion-eager-update= を nil に固定し、
+=completion-pcm-leading-wildcard= を有効化して partial-completion を
+substring（どこでも一致）的に振る舞わせる。 =flex= スタイルも Emacs 31 で
+再実装（高速化・ランキング改善）されたため、orderless のディスパッチャに
+頼らず file カテゴリで直接使う。
+
 * dev Layer — LSP バックエンド非依存設計
 
 [[file:svg/08_lsp_agnostic.svg]]
@@ -534,6 +550,45 @@ number-or-marker-p, nil" で失敗する（スクラッチファイル自体は�
 送信だけ失敗する）。対処として、更新中だけスクラッチバッファを実ウィンドウに
 =pop-to-buffer= し、直後にフォーカスをキャプチャバッファへ戻してタイピングを
 妨げないようにしている。
+
+* ui Layer — フォント・テーマ・ウィンドウ管理
+
+=ui-leader.el=（キーマップ、次節）より土台にある3モジュール。
+
+** ui-font.el — フォント設定
+
+OS ごとのフォールバックを持つフォント適用モジュール。 =ui-font-apply= が等幅・
+可変ピッチ・絵文字のフェイスをまとめて設定し、 =after-init-hook= と
+=after-make-frame-functions= の両方にフックする（デーモンモード対応。デーモン時は
+フレームごとに適用し直す必要があるため =after-make-frame-functions= 経由に切り替える）。
+
+*設計上の注記:* デーモン分岐には元は無名 lambda を使っていたが、名前付き関数
+=ui-font--apply-to-frame= へ抽出済み。無名関数のままだと hook から除去も検査も
+できないため。
+
+** ui-theme.el — Nano テーマとフェイスポリシー
+
+Nano テーマのロードと、太字・斜体・括弧対応ハイライトなどのフェイスポリシーを
+まとめる。 =ui-nano-palette= への依存は =fboundp= ガード越しの疎結合 —
+=my:use-ui= が ='doom= や ='none= のときに nano パレットのロードを強制しない設計。
+
+*ui-nano-palette の正式なロード経路は ui-theme.el のみ:* ui-theme は常に
+=my:modules= に含まれるため無条件にロードされ、その中の
+=(require 'ui-nano-palette nil t)= が唯一の初回ロード起点になる。
+=ui-nano-modeline.el= や =dev-term.el= は =with-eval-after-load= で反応するだけで、
+自分から require してはならない。
+
+テーマ再読込（ =enable-theme=）やフレーム生成のたびにフェイスを再適用するため、
+=enable-theme-functions=（Emacs 30+）があればそちらに、無ければ
+=advice-add 'enable-theme :after= にフォールバックしてフックする。
+
+** ui-window.el — ウィンドウ管理の補助
+
+黄金比風の自動リサイズ（ =zoom= ）、セッション間のレイアウト永続化
+（ =desktop-save-mode= ）、ウィンドウ構成の undo/redo（ =winner-mode= ）、
+名前付きスナップショット（ =my/save-window-layout= / =my/restore-window-layout= ）
+の4つを束ねるモジュール。 =desktop= 関連の8変数はすべて defcustom なので、
+setter と型検証を効かせるため let 内でも素の =setq= ではなく =setopt= を使っている。
 
 * ui-leader.el — M-SPC リーダーキー階層
 
