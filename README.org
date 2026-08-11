@@ -8169,7 +8169,17 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   from there.
 
   Intended to be bound in `org-capture-mode-map'; signals a `user-error'
-  outside a capture buffer."
+  outside a capture buffer.
+
+  `markdown-preview-mode' reads the preview buffer's *window* when it pushes
+  an update to the browser (`markdown-preview--send-preview-to', used for
+  scroll-sync). Called on a buffer that was never actually displayed — as
+  happens with plain `find-file-noselect' — it errors with \"Wrong type
+  argument: number-or-marker-p, nil\" instead of pushing the update (the
+  scratch file itself still gets written correctly; only the push fails).
+  To avoid that, the scratch buffer is popped into a real window for the
+  duration of the update, then focus is restored to the capture buffer so
+  typing is not interrupted."
     (interactive)
     (unless (bound-and-true-p org-capture-mode)
       (user-error "orgx-auto-hugo-preview-capture: not in an org-capture buffer"))
@@ -8183,14 +8193,25 @@ LSP バックエンド非依存という設計を、補完の側から支える�
                        (error-message-string err))
               nil))))
       (when md-string
-        (let* ((file (orgx-auto-hugo-preview--scratch-file))
+        (let* ((capture-buf (current-buffer))
+               (file (orgx-auto-hugo-preview--scratch-file))
                (buf (find-file-noselect file)))
-          (with-current-buffer buf
+          (save-selected-window
+            (pop-to-buffer buf)
             (erase-buffer)
             (insert md-string)
             (save-buffer)
-            (unless (bound-and-true-p markdown-preview-mode)
-              (markdown-preview-mode 1)))
+            ;; The mode's own initial "send to browser" can still throw the
+            ;; error above in edge cases (e.g. the websocket client has not
+            ;; connected yet); by that point the server has already started
+            ;; and the buffer-local mode is already on, so it is safe to
+            ;; swallow and let the next save (or a manual browser reload of
+            ;; the printed URL) pick up the content.
+            (ignore-errors
+              (unless (bound-and-true-p markdown-preview-mode)
+                (markdown-preview-mode 1))))
+          (when (buffer-live-p capture-buf)
+            (pop-to-buffer capture-buf))
           (message "[orgx-auto-hugo] preview updated.")))))
 
   (with-eval-after-load 'org-capture
