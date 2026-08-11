@@ -305,7 +305,9 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
 - =orgx-auto-hugo= — =org-capture-after-finalize-hook= を契機とする =ox-hugo= の
   全サブツリー・エクスポート（保存時ではなく =C-c C-c= の確定時に発火）。中断された
   キャプチャ（ =org-note-abort= ）はスキップし、対象ファイルは確定時に
-  =my:f:capture-blog-file= で判定する
+  =my:f:capture-blog-file= で判定する。あわせて =org-capture-mode-map= に
+  =C-c C-p= を割り当て、確定前のエントリを =markdown-preview-mode= で
+  ブラウザプレビューできる（実 content ディレクトリには一切書き込まない）
 - =orgx-typography= — =valign-mode= （ピクセル精度のテーブル整列）と
   =org-appear-mode= （強調・リンク・上下付き記号の自動表示）。 =personal/user.el=
   が =my:modules-extra= に追加するオプション拡張
@@ -8041,6 +8043,8 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;;; Commentary:
   ;;
   ;; org-capture の確定を契機とする、ox-hugo の全サブツリー自動エクスポート。
+  ;; あわせて、確定前のキャプチャ中に手動で 1 回だけ呼び出す、ブラウザでの
+  ;; 簡易プレビュー（markdown-preview-mode 活用）。
   ;;
   ;; 本ファイルの責務:
   ;; - ブログ記事のキャプチャ項目が C-c C-c で確定されたときにのみエクスポートする
@@ -8050,6 +8054,8 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;; - 再入的なエクスポート呼び出しを防ぐガードフラグを用いる
   ;; - ox-hugo はエクスポート直前に require する（トップレベルでは require しない。
   ;;   Org の遅延ロードを保つため）
+  ;; - キャプチャ中、`org-capture-mode-map' のキー 1 つで現在のエントリを
+  ;;   markdown-preview-mode でブラウザプレビューできるようにする（確定はしない）
   ;;
   ;; 設計の根拠:
   ;;
@@ -8064,6 +8070,26 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;; 閉じられた後に走る。キャプチャが中断された場合 `org-note-abort' が非 nil になる。
   ;; フックは中断時にも走るため、中断条件は明示的に確認しなければならない。
   ;;
+  ;; プレビュー機能の設計根拠:
+  ;;
+  ;; プレビューは「確定（エクスポート）とは独立した、副作用のない下書き確認」でなければ
+  ;; ならない。そのため `org-hugo-export-wim-to-md' のようなファイル書き出し系の
+  ;; コマンドは使わない。`org-hugo-base-dir' はキャプチャ対象ファイル（
+  ;; `my:f:capture-blog-file'）自身の #+HUGO_BASE_DIR キーワードで既に決まっている
+  ;; ことが多く、これを一時ディレクトリへ動的束縛で上書きしようとしても、キーワード側が
+  ;; 優先されて実ファイルへ書き出されてしまう危険がある。
+  ;;
+  ;; 代わりに `org-export-as' を直接呼び、SUBTREEP を指定して現在のエントリだけを
+  ;; 文字列として取り出す。これはディスクに一切触れず、`org-hugo-base-dir' の解決にも
+  ;; 依存しない。得られた文字列は、キャプチャセッションごとに 1 つ用意する使い捨ての
+  ;; スクラッチファイルへ書き出し、そのバッファ上で `markdown-preview-mode' を有効化する。
+  ;; 実ブログの content ディレクトリは常に無傷のままになる。
+  ;;
+  ;; スクラッチファイルの置き場所はキャプチャセッションのプロパティリストに
+  ;; `org-capture-put'/`org-capture-get' で保持する。バッファローカル変数ではなく
+  ;; セッションプロパティを使うのは、キャプチャバッファが確定・中断のどちらでも
+  ;; `org-capture-after-finalize-hook' の実行前後で kill される可能性があり、
+  ;; バッファローカル変数だけでは後始末のタイミングで参照できない場合があるため。
   ;;
     ;;; Code:
 
@@ -8110,6 +8136,76 @@ LSP バックエンド非依存という設計を、補完の側から支える�
            (message "[orgx-auto-hugo] error: %s" (error-message-string err)))))))
 
   (add-hook 'org-capture-after-finalize-hook #'orgx-auto-hugo--on-capture-finalize)
+
+  ;; --- キャプチャ中の手動ブラウザプレビュー -----------------------------
+
+  (declare-function markdown-preview-mode "markdown-preview-mode" (&optional arg))
+
+  (defun orgx-auto-hugo-preview--scratch-file ()
+    "Return this capture session's scratch preview file, creating it on first use.
+  The path (and its containing temp directory) is stashed via `org-capture-put'
+  under :orgx-hugo-preview-file so repeated calls to
+  `orgx-auto-hugo-preview-capture' within the same capture session reuse the
+  same file and `markdown-preview-mode' buffer/server instead of spawning a
+  new one on every keystroke."
+    (or (org-capture-get :orgx-hugo-preview-file)
+        (let* ((dir (file-name-as-directory (make-temp-file "orgx-hugo-preview-" t)))
+               (file (expand-file-name "preview.md" dir)))
+          (org-capture-put :orgx-hugo-preview-file file)
+          file)))
+
+  (defun orgx-auto-hugo-preview-capture ()
+    "Render the entry currently being captured through ox-hugo and show it in
+  `markdown-preview-mode' as a one-shot browser preview. Does not finalize or
+  abort the capture, and never writes into the real Hugo content tree.
+
+  Uses `org-export-as' with the `hugo' backend and SUBTREEP non-nil to export
+  only the current entry to a string, entirely in memory — this deliberately
+  avoids `org-hugo-export-wim-to-md' and `org-hugo-base-dir', since the
+  capture target file may already set #+HUGO_BASE_DIR, which would take
+  precedence over any dynamic let-binding and could export straight into the
+  real content directory. The resulting string is written to a per-session
+  scratch file (see `orgx-auto-hugo-preview--scratch-file') and previewed
+  from there.
+
+  Intended to be bound in `org-capture-mode-map'; signals a `user-error'
+  outside a capture buffer."
+    (interactive)
+    (unless (bound-and-true-p org-capture-mode)
+      (user-error "orgx-auto-hugo-preview-capture: not in an org-capture buffer"))
+    (require 'ox-hugo)
+    (require 'markdown-preview-mode)
+    (let ((md-string
+           (condition-case err
+               (org-export-as 'hugo t nil nil nil)
+             (error
+              (message "[orgx-auto-hugo] preview export failed: %s"
+                       (error-message-string err))
+              nil))))
+      (when md-string
+        (let* ((file (orgx-auto-hugo-preview--scratch-file))
+               (buf (find-file-noselect file)))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert md-string)
+            (save-buffer)
+            (unless (bound-and-true-p markdown-preview-mode)
+              (markdown-preview-mode 1)))
+          (message "[orgx-auto-hugo] preview updated.")))))
+
+  (with-eval-after-load 'org-capture
+    (keymap-set org-capture-mode-map "C-c C-p" #'orgx-auto-hugo-preview-capture))
+
+  (defun orgx-auto-hugo-preview--cleanup ()
+    "Delete this capture session's scratch preview directory, if one was created.
+  Runs on `org-capture-after-finalize-hook' for both finalize and abort;
+  harmless when no preview was ever requested during the session."
+    (when-let* ((file (org-capture-get :orgx-hugo-preview-file))
+                (dir (file-name-directory file)))
+      (when (file-directory-p dir)
+        (delete-directory dir t))))
+
+  (add-hook 'org-capture-after-finalize-hook #'orgx-auto-hugo-preview--cleanup)
 
   (provide 'orgx-auto-hugo)
   ;;; orgx/orgx-auto-hugo.el ends here
