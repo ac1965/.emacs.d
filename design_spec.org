@@ -766,35 +766,53 @@ mode-line（ =dirvish-mode-line-format= ）を持つため、ウィンドウ最�
 
 [[file:svg/12_dev_ai_timing.svg]]
 
-** キー検索は :init ではなく after-init-hook で
+** キー検索は :init でも after-init-hook でもなく、aidermacs-run への advice で
 
 以前は =:init= （モジュールロード時）で API キーを検索していたが、その時点ではまだ
 =~/.authinfo.gpg= が =auth-sources= に追加されておらず、常に "no key found" になっていた。
-=after-init-hook= に移したうえで、auth Layer の節で触れた =dev-ai--ensure-authinfo-in-sources=
-による自前チェックも加えた。
 
 #+begin_quote
-*落とし穴（実機で踏んだ）:* 上の対処だけでは直らなかった。 =add-hook= は APPEND 引数を
-渡さない限り新しい関数を *フックリストの先頭* に追加するため、同じ DEPTH（既定 0）内では
-「後から登録した関数ほど先に走る」。 =auth-core= （ =epa-file-enable= を呼ぶ）と =auth-gpg=
-（ =~/.authinfo.gpg= を =auth-sources= に追加する）はどちらも =my:modules= 上では
-=dev-ai= より前にロードされるが、3 つとも =after-init-hook= への登録時に DEPTH を
-指定していなかったため、実際の実行順は「ロード順」ではなく「登録順の逆」になっていた。
-結果、 =dev-ai--setup-api-key= が =auth-core--startup-init= より *先に* 走り、
-epa-file が未初期化のまま =auth-source-search= が =~/.authinfo.gpg= を読みに行くため
-復号に失敗し、"No API key found" の警告が出る——しかしファイル自体は（復号できないまま）
-開かれる、という一見矛盾した挙動になっていた。design_spec.org のこの節が「実行順序に
-依存しない」と書いていたのは実装が追いついていなかったための誤りで、現在は下記の対処で
-実際に順序非依存になっている。
-
-対処として =dev-ai--setup-api-key= の登録に DEPTH =10= を明示した
-（ =(add-hook 'after-init-hook #'dev-ai--setup-api-key 10)= ）。DEPTH は
-=personal/ac1965.el= の =ac1965--bind-leader-keys= と同じ仕組みで、既定 DEPTH（0）の
-フックがすべて走り終えたあとに実行されることを、モジュールのロード順に関係なく保証する。
-=dev-ai--ensure-authinfo-in-sources= は =auth-gpg--configure-sources= の実行結果に
-頼らない自前の安全策として引き続き残してあるが、 =epa-file-enable= 自体は
-=auth-core--startup-init= 側でしか行わないため、DEPTH による実行順の保証が本質的な修正。
+*落とし穴 その1（実機で踏んだ）:* =:init= から =after-init-hook= へ移し、
+=dev-ai--ensure-authinfo-in-sources= による自前チェックも加えたが、これだけでは
+直らなかった。 =add-hook= は APPEND 引数を渡さない限り新しい関数を *フックリストの
+先頭* に追加するため、同じ DEPTH（既定 0）内では「後から登録した関数ほど先に走る」。
+=auth-core= （ =epa-file-enable= を呼ぶ）と =auth-gpg= （ =~/.authinfo.gpg= を
+=auth-sources= に追加する）はどちらも =my:modules= 上では =dev-ai= より前に
+ロードされるが、3 つとも =after-init-hook= への登録時に DEPTH を指定していなかった
+ため、実際の実行順は「ロード順」ではなく「登録順の逆」になっていた。結果、
+=dev-ai--setup-api-key= が =auth-core--startup-init= より *先に* 走り、epa-file が
+未初期化のまま =auth-source-search= が =~/.authinfo.gpg= を読みに行くため復号に
+失敗し、"No API key found" の警告が出る——しかしファイル自体は（復号できないまま）
+開かれる、という一見矛盾した挙動になっていた。
 #+end_quote
+
+#+begin_quote
+*落とし穴 その2（実機で踏んだ）:* その1の対処として =dev-ai--setup-api-key= の
+登録に DEPTH =10= を明示した（ =personal/ac1965.el= の =ac1965--bind-leader-keys=
+と同じ仕組み）。これで実行順は正しくなったが、*毎回の Emacs 起動時に無条件で
+キーを検索する* という設計そのものに問題が残っていた。 =auth-source-backends=
+（auth-source.el 組み込みマクロ）はキャッシュを持たず、呼ばれるたびに
+=auth-sources= の全エントリを再パースする——つまり =~/.authinfo.gpg= も呼ばれる
+たびに epa-file 経由で再復号される。旧実装は openrouter.ai と api.openai.com を
+別々に *2 回* =auth-source-search= していたため、Emacs 起動直後に GPG 復号
+（macOS では pinentry-touchid 経由の Touch ID 生体認証）が短時間に 2 回連続で
+走ってしまい、2 回目が "No secret key" で失敗する（LAContext の生体評価は
+極端に短い間隔で連続実行できない）という形で、 *毎起動ごとに再現する* かたちで
+表面化した。design_spec.org のこの節が「実行順序に依存しない」と書いていたのは
+実装が追いついていなかったための誤りで、現在は下記の対処で実際に解決している。
+#+end_quote
+
+最終対処は 2 点セット。
+
+1. 検索を =auth-source-search= 1 回にまとめる。 =:host= にリスト
+   =("openrouter.ai" "api.openai.com")= を渡して 1 回だけ検索し、結果を
+   =seq-find= で host ごとに振り分ける。無条件の 2 回検索を 1 回に減らす。
+2. =after-init-hook= を完全にやめ、 =aidermacs-run= への =:before= advice に
+   変更する（ =(advice-add 'aidermacs-run :before #'dev-ai--setup-api-key)= ）。
+   これにより GPG/Touch ID 認証は「実際に aidermacs を使う瞬間」だけに発生し、
+   通常の Emacs 起動では一切発生しない。 =dev-ai--api-key-configured= フラグで
+   1 セッション 1 回だけに絞り、 =aidermacs-run= を呼ぶたびに再認証が走らない
+   ようにしてある。
 
 ** dev-ai--setup-api-key の cond ロジック
 

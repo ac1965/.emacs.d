@@ -5870,13 +5870,28 @@ SECRET may be a string or a zero-argument function (auth-source lazy form)."
        ((< (length s) 4) (concat s "…"))
        (t (concat (substring s 0 4) "…")))))
 
-  (defun auth-gpg--lookup (host user)
-    "Return auth-source plist for HOST and USER, or nil if not found."
-    (car (auth-source-search
-          :host    host
-          :user    user
-          :require '(:secret)
-          :max     1)))
+  (defun auth-gpg--lookup-all (services)
+    "Return an alist of (SVC . ENTRY) for SERVICES via a single auth-source-search.
+ENTRY is nil when no matching entry was found for SVC's :host and :user.
+
+A single combined search is deliberate: `auth-source-backends' has no
+cache of its own and rebuilds every backend — including re-decrypting
+`auth-gpg-file' via epa-file — on every call.  Looking up each service
+with its own `auth-source-search' call used to trigger one Touch ID
+prompt per service on macOS (three services, three prompts in immediate
+succession, later ones prone to fail); see dev-ai.el's :config comment
+for the same bug diagnosed in a different module."
+    (let ((entries (auth-source-search
+                    :host    (mapcar (lambda (svc) (plist-get svc :host)) services)
+                    :max     (length services)
+                    :require '(:secret))))
+      (mapcar (lambda (svc)
+                (cons svc
+                      (seq-find (lambda (e)
+                                  (and (equal (plist-get e :host) (plist-get svc :host))
+                                       (equal (plist-get e :user) (plist-get svc :user))))
+                                entries)))
+              services)))
 
   ;; ---------------------------------------------------------------------------
   ;; 公開コマンド
@@ -5887,9 +5902,12 @@ SECRET may be a string or a zero-argument function (auth-source lazy form)."
 Opens a *Auth-GPG Status* buffer listing each service entry as:
   ✓ PRESENT  — entry found; secret preview shown
   ✗ MISSING  — no matching entry in auth-source
-  → Hint line with the expected netrc format for missing entries."
+  → Hint line with the expected netrc format for missing entries.
+Looks up all services with a single `auth-gpg--lookup-all' call so only
+one Touch ID prompt (on macOS) is needed, not one per service."
     (interactive)
-    (let ((buf (get-buffer-create "*Auth-GPG Status*")))
+    (let ((buf (get-buffer-create "*Auth-GPG Status*"))
+          (results (auth-gpg--lookup-all auth-gpg-services)))
       (with-current-buffer buf
         (read-only-mode -1)
         (erase-buffer)
@@ -5902,12 +5920,11 @@ Opens a *Auth-GPG Status* buffer listing each service entry as:
                         (if (file-exists-p auth-gpg-file)
                             auth-gpg-file
                           "(file not found — using fallback or pass)")))
-        (dolist (svc auth-gpg-services)
-          (let* ((label  (plist-get svc :label))
-                 (host   (plist-get svc :host))
-                 (user   (plist-get svc :user))
+        (dolist (pair results)
+          (let* ((svc    (car pair))
+                 (entry  (cdr pair))
+                 (label  (plist-get svc :label))
                  (note   (plist-get svc :note))
-                 (entry  (auth-gpg--lookup host user))
                  (secret (when entry (plist-get entry :secret))))
             (if entry
                 (insert (format "  ✓ PRESENT  %s
@@ -6039,7 +6056,7 @@ Emacs 本体の =auth-source.el= が提供する =macos-keychain-internet= /
 理由は =:host= の意味づけにある。
 
 - =macos-keychain-internet= — =:host= はそのまま =security find-internet-password -s HOST= の
-  =-s= （サービス名）に渡る。 =auth-gpg--lookup= や =dev-ai--setup-api-key= など、他の
+  =-s= （サービス名）に渡る。 =auth-gpg--lookup-all= や =dev-ai--setup-api-key= など、他の
   auth-source バックエンドと同じ「 =:host= = 対象ホスト」という素直な意味づけになる。
 - =macos-keychain-generic= — =:host= は =-c HOST= （Keychain の「creator」フィールド）に
   マップされ、 =-s= （サービス名）には代わりに =:port= を渡さなければならない。
@@ -8795,32 +8812,46 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
           (append aidermacs-extra-args
                   (seq-remove (lambda (arg) (member arg aidermacs-extra-args)) args))))
 
+  ;; dev-ai--api-key-configured を defun より前に置く。dev-ai--setup-api-key が
+  ;; 実行時に参照するため、インタプリタ実行時の void-variable エラーを避ける
+  ;; （aidermacs-extra-args と同じ理由。上のコメント参照）。
+  (defvar dev-ai--api-key-configured nil
+    "Non-nil once `dev-ai--setup-api-key' has run in this session.")
+
   (leaf aidermacs
     :straight t
     :custom
     ((aidermacs-retry-attempts . 3)
      (aidermacs-retry-delay   . 2.0))
     :config
-    ;; API キーの参照は after-init-hook で行う。
+    ;; API キーの参照は `aidermacs-run' への :before advice で行う。after-init-hook
+    ;; では *ない*。
     ;;
-    ;; 落とし穴（実機で踏んだ）: `add-hook' は APPEND 引数を渡さない限り新しい関数を
-    ;; フックリストの *先頭* に追加する（同じ DEPTH 内では後から登録した関数ほど先に
-    ;; 走る）。auth-core（epa-file-enable）と auth-gpg（~/.authinfo.gpg を auth-sources
-    ;; へ追加）はどちらも my:modules 上では dev-ai より前にロードされるが、3 つとも
-    ;; DEPTH を指定せず既定の 0 で `add-hook' していたため、実際の実行順は
-    ;; 「ロード順」ではなく「登録順の逆」になり、dev-ai--setup-api-key が
-    ;; auth-core--startup-init／auth-gpg--configure-sources より *先に* 走っていた。
-    ;; epa-file が未初期化のまま auth-source-search が ~/.authinfo.gpg を読むため
-    ;; 復号に失敗し、"No API key found" の警告が出る一方でファイル自体は開かれる、
-    ;; という一見矛盾した挙動になっていた。
+    ;; 落とし穴その1（実機で踏んだ）: `add-hook' は APPEND 引数を渡さない限り新しい
+    ;; 関数をフックリストの *先頭* に追加する（同じ DEPTH 内では後から登録した関数
+    ;; ほど先に走る）。当初 after-init-hook DEPTH 10 で登録していたが、これは
+    ;; auth-core（epa-file-enable）／auth-gpg（~/.authinfo.gpg を auth-sources へ
+    ;; 追加）の既定 DEPTH（0）より後に走ることは保証できても、それ以外の問題までは
+    ;; 解決しなかった（落とし穴その2参照）。
     ;;
-    ;; 対処として dev-ai--setup-api-key の登録に DEPTH 10 を明示した。DEPTH は
-    ;; personal/ac1965.el の ac1965--bind-leader-keys と同じ仕組みで、既定 DEPTH（0）の
-    ;; フックがすべて走り終えたあとに実行されることを、モジュールのロード順に関係なく
-    ;; 保証する。 dev-ai--ensure-authinfo-in-sources は auth-gpg--configure-sources の
-    ;; 実行結果に頼らない自前の安全策として残してあるが、epa-file-enable 自体は
-    ;; auth-core--startup-init 側でしか行わないため、DEPTH による実行順の保証が
-    ;; 本質的な修正である。
+    ;; 落とし穴その2（実機で踏んだ）: after-init-hook で毎起動時に無条件でキーを
+    ;; 検索する設計そのものが問題だった。 =auth-source-backends= （auth-source.el
+    ;; 組み込みマクロ）はキャッシュを持たず、呼ばれるたびに =auth-sources= の
+    ;; 全エントリを再パースする——=~/.authinfo.gpg= も呼ばれるたびに epa-file 経由で
+    ;; 再復号される。旧実装は openrouter.ai と api.openai.com を別々に2回
+    ;; =auth-source-search= していたため、Emacs 起動直後に GPG 復号（macOS では
+    ;; Touch ID 生体認証）が短時間に2回連続で走ってしまい、2回目が
+    ;; "No secret key" で失敗する（LAContext の生体評価は極端に短い間隔で連続実行
+    ;; できないため）という、毎起動ごとに再現する形で表面化した。
+    ;;
+    ;; 対処（この2つを両方やって初めて解決する）:
+    ;;   1. 検索を1回の =auth-source-search= にまとめる（:host にリストを渡し、
+    ;;      結果を host で振り分ける）。無条件の2回検索を1回に減らす。
+    ;;   2. after-init-hook を完全にやめ、`aidermacs-run' への :before advice に
+    ;;      変更する。これにより GPG/Touch ID 認証は「実際に aidermacs を使う
+    ;;      瞬間」だけに発生し、通常の Emacs 起動では一切発生しない。
+    ;;      `dev-ai--api-key-configured' で 1 セッション 1 回だけに絞り、
+    ;;      `aidermacs-run' を呼ぶたびに再認証が走らないようにする。
     ;;
     ;; ~/.authinfo.gpg のエントリ形式:
     ;;   machine openrouter.ai login ac1965  password sk-or-...
@@ -8843,48 +8874,57 @@ Called by `dev-ai--setup-api-key'."
           (setopt auth-sources (cons gpg-file auth-sources))
           (auth-source-forget-all-cached))))
 
-    (defun dev-ai--setup-api-key ()
+    (defun dev-ai--setup-api-key (&rest _ignore)
       "Configure OPENAI_API_KEY and OPENAI_API_BASE from auth-source.
-Reads ~/.authinfo.gpg via `auth-source-search' for:
+Reads ~/.authinfo.gpg via a *single* `auth-source-search' call for:
   machine openrouter.ai login ac1965  (preferred)
   machine api.openai.com login org-ai (fallback)
+A single call is deliberate: `auth-source-backends' rebuilds every backend
+(including re-decrypting ~/.authinfo.gpg via epa-file) on every call, with
+no cache of its own.  Two back-to-back calls used to trigger two Touch ID
+prompts in immediate succession, and the second reliably failed with
+\"No secret key\" (see the :config comment above).
 Calls `dev-ai--ensure-authinfo-in-sources' first so the lookup succeeds
 even if `auth-gpg--configure-sources' has not added the file yet.
-Registered on `after-init-hook' at DEPTH 10 (see the :config comment above)
-so it runs after `auth-core--startup-init' has enabled epa-file decryption."
-      (dev-ai--ensure-authinfo-in-sources)
-      (require 'auth-source)
-      (let* ((router-entry (car (auth-source-search
-                                  :host "openrouter.ai"
-                                  :user "ac1965"
-                                  :require '(:secret))))
-             (openai-entry (car (auth-source-search
-                                  :host "api.openai.com"
-                                  :user "org-ai"
-                                  :require '(:secret))))
-             (router-key (when router-entry
-                           (let ((s (plist-get router-entry :secret)))
-                             (if (functionp s) (funcall s) s))))
-             (openai-key (when openai-entry
-                           (let ((s (plist-get openai-entry :secret)))
-                             (if (functionp s) (funcall s) s)))))
-        (cond
-         (router-key
-          (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-          (setenv "OPENAI_API_KEY"  router-key)
-          (setopt aidermacs-default-model "openrouter/anthropic/claude-sonnet-4-5"))
-         (openai-key
-          (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-          (setenv "OPENAI_API_KEY"  openai-key)
-          (setopt aidermacs-default-model "gpt-4o-mini"))
-         (t
-          (display-warning
-           'aidermacs
-           (concat "No API key found in auth-source.  "
-                   "Add to ~/.authinfo.gpg:\n"
-                   "  machine openrouter.ai login ac1965 password <key>\n"
-                   "  machine api.openai.com login org-ai password <key>"))))))
-    (add-hook 'after-init-hook #'dev-ai--setup-api-key 10)
+Added as `:before' advice on `aidermacs-run' (not `after-init-hook'), so
+this — and the GPG/Touch ID prompt it triggers — only happens when
+aidermacs is actually invoked, never on ordinary Emacs startup.
+Runs at most once per session, guarded by `dev-ai--api-key-configured'."
+      (unless dev-ai--api-key-configured
+        (setq dev-ai--api-key-configured t)
+        (dev-ai--ensure-authinfo-in-sources)
+        (require 'auth-source)
+        (let* ((entries (auth-source-search
+                          :host '("openrouter.ai" "api.openai.com")
+                          :max 2
+                          :require '(:secret)))
+               (router-entry (seq-find (lambda (e) (equal (plist-get e :host) "openrouter.ai"))
+                                        entries))
+               (openai-entry (seq-find (lambda (e) (equal (plist-get e :host) "api.openai.com"))
+                                        entries))
+               (router-key (when router-entry
+                             (let ((s (plist-get router-entry :secret)))
+                               (if (functionp s) (funcall s) s))))
+               (openai-key (when openai-entry
+                             (let ((s (plist-get openai-entry :secret)))
+                               (if (functionp s) (funcall s) s)))))
+          (cond
+           (router-key
+            (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
+            (setenv "OPENAI_API_KEY"  router-key)
+            (setopt aidermacs-default-model "openrouter/anthropic/claude-sonnet-4-5"))
+           (openai-key
+            (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
+            (setenv "OPENAI_API_KEY"  openai-key)
+            (setopt aidermacs-default-model "gpt-4o-mini"))
+           (t
+            (display-warning
+             'aidermacs
+             (concat "No API key found in auth-source.  "
+                     "Add to ~/.authinfo.gpg:\n"
+                     "  machine openrouter.ai login ac1965 password <key>\n"
+                     "  machine api.openai.com login org-ai password <key>")))))))
+    (advice-add 'aidermacs-run :before #'dev-ai--setup-api-key)
 
     ;; 順序を確実にするため、ロード後の設定はすべてここに集約している。
     (let ((env-file (expand-file-name ".env" my:d:aider)))
