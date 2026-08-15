@@ -264,11 +264,12 @@ macOS では Keychain バックエンド（ =auth-keychain= ）が既定で有�
 Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 =auth= 、 =completion= のみに
 依存し、 =vcs= や =dev= には依存しません。
 
-本層は 11 モジュールで構成されます。 =my:modules= に含まれる正規モジュールは 8 つです。
-残る 3 つ（ =orgx-typography= 、 =orgx-brain= 、 =orgx-roam-ui= ）はオプション拡張です。
-このうち =orgx-typography= と =orgx-brain= は =personal/user.el= が =my:modules-extra= に
-宣言します。 =orgx-roam-ui= は tangle されますが、既定では =my:modules-extra= に含めません
-（Org を起動時に引き込まないため。理由は当該モジュールと =personal/user.el= を参照）。
+本層は 12 モジュールで構成されます。 =my:modules= に含まれる正規モジュールは 8 つです。
+残る 4 つ（ =orgx-typography= 、 =orgx-brain= 、 =orgx-roam-ui= 、 =orgx-citar= ）はオプション
+拡張です。このうち =orgx-typography= 、 =orgx-brain= 、 =orgx-citar= は =personal/user.el= が
+=my:modules-extra= に宣言します。 =orgx-roam-ui= は tangle されますが、既定では
+=my:modules-extra= に含めません（Org を起動時に引き込まないため。理由は当該モジュールと
+=personal/user.el= を参照）。
 
 モジュール別の責務:
 
@@ -319,6 +320,10 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
   ロード後にアイドルタイマー（8 秒）で UI を開く。ただし既定ではこのリストに含めない
 - =orgx-brain= — =my:d:org-roam= をノートディレクトリとして共有する =org-brain=
   マインドマップビュー。コマンドは =my/brain-visualize=
+- =orgx-citar= — =citar= + =org-cite= による文献引用管理。 =citar-bibliography= は
+  =my:d:org-biblio= （ =my:d:org= 配下、新設）を参照し、ホームディレクトリ直書きの
+  パスをハードコードしない。 =citar-embark= が =embark-act= 経由の文献アクション
+  （開く／挿入など）を追加する
 
 *Org Babel の言語登録について*
 
@@ -7137,12 +7142,14 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   (defvar my:d:org-journal (expand-file-name "journal" my:d:org))
   (defvar my:d:org-roam (expand-file-name "org-roam" my:d:org))
   (defvar my:d:org-pictures (expand-file-name "pictures" my:d:org))
+  (defvar my:d:org-biblio (expand-file-name "biblio" my:d:org))
   (defvar my:f:capture-blog-file (expand-file-name "blog.org" my:d:org))
 
   (my/ensure-directory-exists my:d:org)
   (my/ensure-directory-exists my:d:org-journal)
   (my/ensure-directory-exists my:d:org-roam)
   (my/ensure-directory-exists my:d:org-pictures)
+  (my/ensure-directory-exists my:d:org-biblio)
 
   (defun my/org-buffer-files ()
     "Return a list of *.org files currently visited in live buffers."
@@ -8530,6 +8537,58 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
 
   (provide 'orgx-brain)
   ;;; orgx/orgx-brain.el ends here
+#+end_src
+
+
+*** orgx/orgx-citar.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-citar
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-citar.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-citar.el --- citar / org-cite による文献引用管理 -*- lexical-binding: t; -*-
+
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; citar は org-cite のバックエンドとして文献データベース（CSL-JSON）を検索・挿入・
+  ;; フォローする UI を提供する。citar-embark はそこに Embark 経由の文脈依存アクション
+  ;; （開く、引用挿入など）を追加する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - citar-bibliography を my:d:org-biblio（orgx-core.el が定義する my:d:org 配下の
+  ;;   ディレクトリ）配下のパスとして解決する。ホームディレクトリを直書きした
+  ;;   固定パスは持たない
+  ;; - org-cite-*-processor をすべて citar に統一する
+  ;; - citar-embark-mode を有効化する
+  ;;
+  ;; ロード経路: personal/user.el が `my:modules-extra' に追加する。
+  ;; 本モジュールは正規の `my:modules' リストに現れてはならない。
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf citar
+    :straight t
+    :custom
+    ((citar-bibliography . (list (expand-file-name "gov-standards.json" my:d:org-biblio)))
+     (org-cite-global-bibliography . citar-bibliography)
+     (org-cite-insert-processor . 'citar)
+     (org-cite-follow-processor . 'citar)
+     (org-cite-activate-processor . 'citar)))
+
+  (leaf citar-embark
+    :straight t
+    :after (citar embark)
+    :config
+    (citar-embark-mode 1))
+
+  (provide 'orgx-citar)
+  ;;; orgx/orgx-citar.el ends here
 #+end_src
 
 *** dev/
@@ -10954,6 +11013,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
                  '(ui-visual-aids
                    orgx-typography
                    orgx-brain
+                   orgx-citar
                    ui-macos))))
 
   ;; ロケールとエンコーディングの初期化。
