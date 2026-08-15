@@ -323,23 +323,66 @@ machine api.openai.com login org-ai password sk-proj-...
 ** after-init-hook 頼みだけじゃない、二段構えの安全策
 
 =auth-gpg= が =dev-ai= よりも先に =modules.el= でロードされ、両者とも =after-init-hook= に
-処理を登録している——なので通常は「先に auth-gpg が =~/.authinfo.gpg= を =auth-sources= の
-先頭に追加し、その後で dev-ai がキーを検索する」という順序で成功する。
+処理を登録している。ただし =add-hook= は APPEND を渡さない限り新しい関数をフックリストの
+*先頭* に追加するため、同じ DEPTH（既定 0）のままでは「後から登録した関数ほど先に走る」
+——つまり *ロード順の逆* になる。この前提を誤って「先に登録した auth-gpg の処理が先に走る」
+と思い込んでいたのが後述の「dev-ai.el — aidermacs の認証タイミング」節で説明した実機バグの
+原因で、現在は =dev-ai--setup-api-key= の登録に DEPTH =10= を明示し、既定 DEPTH（0）の
+=auth-gpg--configure-sources= より確実に後で走るようにしてある。
 
 #+begin_example
-auth-gpg ロード → after-init-hook に configure-sources を登録
-dev-ai   ロード → after-init-hook に setup-api-key を登録
-  ↓ after-init-hook 発火
-  #1: auth-gpg--configure-sources → ~/.authinfo.gpg を auth-sources 先頭に追加
-  #2: dev-ai--setup-api-key → auth-source-search が成功 ✓
+auth-gpg ロード → after-init-hook に configure-sources を DEPTH 0 で登録
+dev-ai   ロード → after-init-hook に setup-api-key を DEPTH 10 で登録
+  ↓ after-init-hook 発火（DEPTH の昇順で実行）
+  #1 (depth 0):  auth-gpg--configure-sources → ~/.authinfo.gpg を auth-sources 先頭に追加
+  #2 (depth 10): dev-ai--setup-api-key → auth-source-search が成功 ✓
 #+end_example
 
-ただ、これだけだと =after-init-hook= 内でのフック登録順という、やや繊細な前提に依存してしまう。
-なので =dev-ai--setup-api-key= 自身にも =dev-ai--ensure-authinfo-in-sources= を仕込んであり、
-検索前に「 =auth-gpg-file= （未ロードなら =~/.authinfo.gpg= にフォールバック）が
-=auth-sources= に入っているか」を自前でチェックして、無ければ先頭に追加してキャッシュを
-クリアする。つまり *auth-gpg のロード順や実行順序がどうであれ* 、dev-ai 側だけで
-検索が成功するように二重に保険を掛けてある。
+DEPTH による順序保証に加えて、 =dev-ai--setup-api-key= 自身にも
+=dev-ai--ensure-authinfo-in-sources= を仕込んであり、検索前に「 =auth-gpg-file= （未ロードなら
+=~/.authinfo.gpg= にフォールバック）が =auth-sources= に入っているか」を自前でチェックして、
+無ければ先頭に追加してキャッシュをクリアする。つまり *auth-gpg の実行が何らかの理由で
+スキップされても* 、dev-ai 側だけで検索が成功するように二重に保険を掛けてある。
+
+** auth-keychain.el — 独自バックエンドから組み込みへの置き換え
+
+#+begin_quote
+*落とし穴（実機で踏んだ）:* =M-x my/auth-gpg-verify= を実行すると
+=⛔ Error excessive-lisp-nesting= 、そして =Command attempted to use minibuffer
+while in minibuffer= が発生した。バックトレースを取ると、 =auth-source-backend-parse=
+と =auth-keychain--make-backend= が交互に無限に呼び合っていた。
+
+原因は =auth-keychain--make-backend= （ =auth-source-backend-parser-functions= に
+登録される関数）の実装ミス。 =auth-source-backend-parse= はディスパッチャで、
+=auth-source-backend-parser-functions= を先頭から順に試して最初に非nilを返した
+関数の結果を使う。ところが =auth-keychain--make-backend= は、eieio の
+コンストラクタで直接オブジェクトを組み立てる代わりに、このディスパッチャ自身を
+再帰的に呼び出していた。呼び出すたびに =auth-source-backend-parser-functions= には
+まだ =auth-keychain--make-backend= 自身が残っているため、二度と終わらない。
+
+調査の過程で、この Emacs（32.0.50、開発版）には *組み込みの* macOS Keychain
+バックエンド（ =auth-source-backends-parser-macos-keychain= ）が既に存在すると
+判明した。 =security(1)= を独自に呼ぶ実装は、この組み込み機能が入る前に書かれた
+ものだったと見られる。バグを個別に直すのではなく、独自実装を丸ごと廃止して
+組み込みバックエンドへの委譲に置き換えた。
+#+end_quote
+
+*:host の意味づけがバックエンド種別で変わる罠:* 組み込みの macOS Keychain
+バックエンドには =macos-keychain-internet= と =macos-keychain-generic= の
+2種類があり、 =:host= の意味が異なる。
+
+- =macos-keychain-internet= — =:host= は素直に =security find-internet-password -s HOST=
+  の =-s= （サービス名）に渡る。 =auth-gpg= や =dev-ai= など他のバックエンドと同じ
+  「 =:host= = 対象ホスト」という意味づけ。
+- =macos-keychain-generic= — =:host= は =-c HOST= （Keychain の「creator」フィールド）に
+  マップされ、 =-s= （サービス名）の方には代わりに =:port= を渡す必要がある。他のコードが
+  素直に =:host= だけ渡すと *サイレントに何も見つからない* 。
+
+このねじれのため =macos-keychain-internet= を採用し、Keychain エントリは
+=security add-internet-password= で保存する必要がある（旧実装が使っていた
+=add-generic-password= とは別物）。 =auth-keychain--startup-init= は
+=(add-to-list 'auth-sources 'macos-keychain-internet t)= を呼ぶだけの薄いラッパーに
+なり、 =auth-source-macos-keychain-search= の呼び出しは Emacs 本体に委ねる。
 
 * completion Layer — CAPF スタックと Org SRC ブロック補完
 
@@ -570,6 +613,30 @@ number-or-marker-p, nil" で失敗する（スクラッチファイル自体は�
 分岐など）が =my:d:org= 系のどの変数にも一律で効くようにするための、既存の
 「上書きの契約」（ =orgx-core= 節冒頭のコメント参照）に合わせた対応。
 
+#+begin_quote
+*落とし穴（実機で踏んだ）:* 初版は =citar-bibliography= と =org-cite-global-bibliography=
+も =:custom= に含めていたが、起動時に =⛔ Error (leaf): Attempt modify list= が出て
+両変数とも設定されなかった。原因は leaf 内部の =leaf-normalize-list-in-list= —
+=:custom= のペアは =(SYM . VALUE)= という真の dotted pair か、 =(SYM . 'quoted-value)=
+のような特別扱いされる形でなければならず、 =(citar-bibliography . (list
+(expand-file-name "gov-standards.json" my:d:org-biblio)))= のように任意の関数呼び出し
+式を値にすると、Lisp リーダはこれを単なる 3 要素の proper list
+=(citar-bibliography list (expand-file-name ...))= として読む。leaf はこれを
+「複数の変数に同じ値を配る省略記法」（ =((a b c) . d) => ((a . d) (b . d) (c . d))= ）
+と誤認し、 =citar-bibliography= ・ =list= ・ =expand-file-name= ・ =my:d:org-biblio=
+を別々の変数として =nil= に =customize-set-variable= しようとして失敗する。
+
+これは =org-todo-keywords= / =org-refile-targets= / =org-capture-templates= を
+=:custom= ではなく =setq= に置いている、orgx-core 節および「setopt vs setq」節の
+コーディング規則 §6 の例外と同じ種類の問題。値が実行時評価式（ =expand-file-name= の
+呼び出しなど）を含む defcustom は =:custom= に置けない。対処として
+=citar-bibliography= と =org-cite-global-bibliography= を =:config= 内の =setopt=
+に移した。 =:custom= の生成コードは常に =:config= の本体より前に展開されるため、
+=org-cite-global-bibliography= （ =citar-bibliography= の値をそのまま使う）を
+=:custom= に残すと =citar-bibliography= 代入前の古い値を読んでしまう——この2つは
+まとめて =:config= に置き、代入順序も保証する必要がある。
+#+end_quote
+
 * ui Layer — フォント・テーマ・ウィンドウ管理
 
 =ui-leader.el=（キーマップ、次節）より土台にある3モジュール。
@@ -704,7 +771,30 @@ mode-line（ =dirvish-mode-line-format= ）を持つため、ウィンドウ最�
 以前は =:init= （モジュールロード時）で API キーを検索していたが、その時点ではまだ
 =~/.authinfo.gpg= が =auth-sources= に追加されておらず、常に "no key found" になっていた。
 =after-init-hook= に移したうえで、auth Layer の節で触れた =dev-ai--ensure-authinfo-in-sources=
-による自前チェックも加え、実行順序に依存しない形にしてある。
+による自前チェックも加えた。
+
+#+begin_quote
+*落とし穴（実機で踏んだ）:* 上の対処だけでは直らなかった。 =add-hook= は APPEND 引数を
+渡さない限り新しい関数を *フックリストの先頭* に追加するため、同じ DEPTH（既定 0）内では
+「後から登録した関数ほど先に走る」。 =auth-core= （ =epa-file-enable= を呼ぶ）と =auth-gpg=
+（ =~/.authinfo.gpg= を =auth-sources= に追加する）はどちらも =my:modules= 上では
+=dev-ai= より前にロードされるが、3 つとも =after-init-hook= への登録時に DEPTH を
+指定していなかったため、実際の実行順は「ロード順」ではなく「登録順の逆」になっていた。
+結果、 =dev-ai--setup-api-key= が =auth-core--startup-init= より *先に* 走り、
+epa-file が未初期化のまま =auth-source-search= が =~/.authinfo.gpg= を読みに行くため
+復号に失敗し、"No API key found" の警告が出る——しかしファイル自体は（復号できないまま）
+開かれる、という一見矛盾した挙動になっていた。design_spec.org のこの節が「実行順序に
+依存しない」と書いていたのは実装が追いついていなかったための誤りで、現在は下記の対処で
+実際に順序非依存になっている。
+
+対処として =dev-ai--setup-api-key= の登録に DEPTH =10= を明示した
+（ =(add-hook 'after-init-hook #'dev-ai--setup-api-key 10)= ）。DEPTH は
+=personal/ac1965.el= の =ac1965--bind-leader-keys= と同じ仕組みで、既定 DEPTH（0）の
+フックがすべて走り終えたあとに実行されることを、モジュールのロード順に関係なく保証する。
+=dev-ai--ensure-authinfo-in-sources= は =auth-gpg--configure-sources= の実行結果に
+頼らない自前の安全策として引き続き残してあるが、 =epa-file-enable= 自体は
+=auth-core--startup-init= 側でしか行わないため、DEPTH による実行順の保証が本質的な修正。
+#+end_quote
 
 ** dev-ai--setup-api-key の cond ロジック
 
