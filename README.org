@@ -826,8 +826,13 @@ macOS では =exec-path-from-shell= がログインシェルを起動して =exe
 =file-chase-links= でシンボリックリンクを解決しているので、 =~/.emacs.d= 自体がシンボリック
 リンクであっても、設定はそのまま持ち運べます。
 
-=XDG_CACHE_HOME= を尊重するのは Linux の XDG 仕様に従うためです（macOS では
-=~/.emacs.d/.cache/emacs/= に解決されます）。
+=XDG_CACHE_HOME= を尊重するのは Linux の XDG 仕様に従うためです。未設定時のフォールバックは
+=$HOME/.cache/emacs/= です。GUI（Finder/Dock/Spotlight）から起動した =Emacs.app= には
+=XDG_CACHE_HOME= が渡らないため、フォールバックが =.zshenv= の既定値（=$HOME/.cache=）と
+食い違うとターミナル起動時と異なるキャッシュ場所を見てしまいます。かつてはリポジトリ内の
+=user-emacs-directory/.cache/= にフォールバックしていましたが、それが原因で GUI 起動時だけ
+straight のパッケージ群が見つからず再ブートストラップが走る不具合があったため、
+=$HOME/.cache/= に揃えています。
 
 これらの値は初期化後に変わってはいけないので、 =defvar= ではなく =defconst= を使っています。
 
@@ -953,7 +958,7 @@ gcmh が担当します。
     (expand-file-name
      "emacs/"
      (or (getenv "XDG_CACHE_HOME")
-         (expand-file-name ".cache/" my:d))))
+         (expand-file-name ".cache/" (getenv "HOME")))))
   (defconst my:d:eln-cache
     (expand-file-name "eln-cache/" my:d:cache))
 
@@ -1285,19 +1290,23 @@ native-comp が走ります。
 
   (let* ((base (or (bound-and-true-p straight-base-dir)
                    user-emacs-directory))
+         (repo-dir
+          (expand-file-name "straight/repos/straight.el" base))
          (bootstrap-file
-          (expand-file-name
-           "straight/repos/straight.el/bootstrap.el" base)))
+          (expand-file-name "bootstrap.el" repo-dir)))
     (unless (file-exists-p bootstrap-file)
-      ;; ネットワークアクセスは初回のみ
-      (let ((buf (url-retrieve-synchronously
-                  "https://raw.githubusercontent.com/radian-software/straight.el/develop/install.el"
-                  'silent 'inhibit-cookies)))
-        (unless (buffer-live-p buf)
-          (user-error "[straight] bootstrap failed"))
-        (with-current-buffer buf
-          (goto-char (point-max))
-          (eval-print-last-sexp))))
+      ;; ネットワークアクセスは初回のみ。raw.githubusercontent.com の単一ファイル
+      ;; 取得は CDN 側のレート制限（429）で頻繁に失敗し、その本文をそのまま Lisp
+      ;; として読もうとして invalid-read-syntax で落ちていた。git clone は別の
+      ;; レート制限系統かつ成功/失敗が明確なため、こちらに一本化する。
+      (unless (executable-find "git")
+        (user-error "[straight] bootstrap failed: git not found"))
+      (make-directory (file-name-directory repo-dir) t)
+      (unless (zerop (call-process "git" nil "*straight-bootstrap*" t
+                                    "clone" "--depth" "1" "--branch" "develop"
+                                    "https://github.com/radian-software/straight.el.git"
+                                    repo-dir))
+        (user-error "[straight] bootstrap failed: git clone error (see *straight-bootstrap* buffer)")))
     (load bootstrap-file nil 'nomessage))
 
   ;;; -------------------------------------------------------------------------
