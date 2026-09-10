@@ -1146,26 +1146,32 @@ gcmh が担当します。
   (setq initial-frame-alist
         (assq-delete-all 'fullscreen initial-frame-alist))
 
-  (defvar core--did-fullscreen nil)
+  (defvar core--did-fullscreen nil
+    "非 daemon 起動時、フルスクリーンを適用済みかどうか。")
+
+  (defun core--fullscreen-frame (frame)
+    "FRAME がグラフィカルなら、それをフルスクリーンにする。"
+    (when (display-graphic-p frame)
+      (set-frame-parameter frame 'fullscreen 'fullboth)))
 
   ;; window-setup-hook は --daemon 起動時、実フレームが無い状態で走ってしまう
   ;; （デーモンはクライアント接続を待つだけで、起動時にフレームを作らない）。
-  ;; そのまま (set-frame-parameter nil ...) すると存在しない/幽霊フレームに対して
-  ;; 適用され、かつ core--did-fullscreen が立ってしまうため、後から
-  ;; emacsclient -c で作られる実際のフレームには二度と適用されなくなる。
-  ;; ui-font.el のフォント適用・ligature 有効化と同じ daemon 分岐パターンに揃え、
-  ;; FRAME がグラフィカルであることを確認してから初回に限り適用する。
-  (defun core--fullscreen-once (&optional frame)
-    "初回のグラフィカルフレームをフルスクリーンにする。以降のフレーム
-（daemon での 2 枚目以降の `emacsclient -c` を含む）には適用しない。"
+  ;; そのため非 daemon 時のみこの関数を使い、初回のグラフィカルフレームに
+  ;; 限って（core--did-fullscreen で）適用する。
+  (defun core--fullscreen-once ()
+    "非 daemon 起動時、初回のグラフィカルフレームをフルスクリーンにする。"
     (unless core--did-fullscreen
-      (let ((f (or frame (selected-frame))))
+      (let ((f (selected-frame)))
         (when (display-graphic-p f)
           (setq core--did-fullscreen t)
-          (set-frame-parameter f 'fullscreen 'fullboth)))))
+          (core--fullscreen-frame f)))))
 
+  ;; daemon 起動時は core--fullscreen-once ではなく core--fullscreen-frame を
+  ;; 直接 after-make-frame-functions に繋ぐ。初回のみに限定すると、2 枚目以降の
+  ;; `emacsclient -c` で作られるフレームが最大化されないままになってしまうため、
+  ;; daemon が生きている限り、新しいグラフィカルフレームが繋がるたびに毎回適用する。
   (if (daemonp)
-      (add-hook 'after-make-frame-functions #'core--fullscreen-once)
+      (add-hook 'after-make-frame-functions #'core--fullscreen-frame)
     (add-hook 'window-setup-hook #'core--fullscreen-once))
 
   (when (fboundp 'menu-bar-mode)   (menu-bar-mode -1))
@@ -16389,3 +16395,29 @@ org-refile-targets / org-capture-templates の 3 つの =setq= で終わり、
    違反とする方針に改めた。
 
 修正後、=make check-emphasis= 相当のロジックを再実行し、0 件まで確認した。
+
+** early-init.el: daemon で 2 枚目以降のフレームがフルスクリーンにならない不具合を修正
+
+daemon 運用時、 =emacsclient -c= で開いたフレームが最大化されていない
+という報告を受けて調査した。
+
+*原因*
+
+=core--fullscreen-once= は「初回のグラフィカルフレームにのみフルスクリーンを
+適用し、以降は何もしない」設計だった（ =core--did-fullscreen= フラグで
+ガード）。これは元々、 =window-setup-hook= が --daemon 起動時に実フレームの
+無い状態で走ってしまい、存在しないフレームに適用してフラグだけ立ってしまう
+問題への対策として導入されたものだったが、対策自体が副作用として
+「2 枚目以降の =emacsclient -c= フレームには二度と適用されない」という
+新たな daemon 対応バグを生んでいた。 =ui-font-apply= や =ligature= が
+「グラフィカルフレームが繋がるたびに毎回」実行される設計になっているのに対し、
+=core--fullscreen-once= だけが単発ガード付きのままだったのが食い違いの原因。
+
+*修正*
+
+単発ガード付きの =core--fullscreen-once= （非 daemon 用、 =window-setup-hook=
+から呼ぶ）と、ガード無しで FRAME をフルスクリーンにするだけの
+=core--fullscreen-frame= （daemon 用、 =after-make-frame-functions= に直接繋ぐ）
+に分離した。非 daemon 起動時の挙動（初回のみ）は変えず、daemon 起動時のみ、
+新しいグラフィカルフレームが繋がるたびに毎回フルスクリーンを適用するように
+なった。
