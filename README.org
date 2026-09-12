@@ -10676,6 +10676,15 @@ ASCII（英字）へ切り替える。
   =dired-mode= 上のマイナーモードなので、 =dired-mode= を対象化するだけで
   wdired 編集中も自動的にカバーされる（個別フック不要）。dirvish も同様に
   =dired-mode= 土台のため自動的に対象になる。
+- *プログラミング言語バッファ進入／離脱時*（追加分） — =utils-ime-target-modes=
+  に =prog-mode= を加えることで、Python／Elisp／JS など、ほとんどの
+  プログラミング言語メジャーモードが =derived-mode-p= 経由で自動的に対象になる。
+  =org-edit-special=（ =C-c '= ）で開く Org Babel のソース編集バッファも、
+  その言語自身のメジャーモード（ =python-mode= 等）を持つ独立バッファであるため、
+  この一行追加だけで =buffer-list-update-hook= が既存の仕組みのまま検知し、
+  新規フックなしに自動的にカバーされる。 =org-mode= 自体は =prog-mode= の
+  派生ではないため、本文（日本語散文）側は影響を受けない。なおコード中に
+  日本語コメントを書く場合は、その間だけ手動で IME に切り替える必要がある。
 - *ミニバッファ使用時* — =M-x= や =find-file= などでミニバッファに入った瞬間に
   ASCII へ切り替え、抜けた瞬間に入る直前の入力ソースへ復帰する
   （ =minibuffer-setup-hook= / =minibuffer-exit-hook= ）。
@@ -10705,9 +10714,12 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
   ;;   1 打鍵（`b l' など）が日本語 IME に composed されず、確実に届くようにする。
   ;;   （単発ディスパッチのため復帰は行わない）
   ;; - `utils-ime-target-modes' に列挙したメジャーモード（dired/dirvish、
-  ;;   magit-status、vterm/eshell/term/comint）に入ったら ASCII へ切り替え、
-  ;;   `RET'/`g'/`d'/`s' などの操作キーが誤爆しないようにする。そのバッファから
-  ;;   離れたら、入る直前の入力ソースへ自動復帰する。
+  ;;   magit-status、vterm/eshell/term/comint、`prog-mode' 派生の全言語モード）
+  ;;   に入ったら ASCII へ切り替え、`RET'/`g'/`d'/`s' などの操作キーの誤爆や、
+  ;;   コード入力時の意図しない日本語 composition を防ぐ。そのバッファから
+  ;;   離れたら、入る直前の入力ソースへ自動復帰する。`prog-mode' を含めたことで、
+  ;;   Org Babel のソース編集バッファ（`org-edit-special' が開く独立バッファ、
+  ;;   実体は言語自身のメジャーモード）も同じ仕組みで自動的にカバーされる。
   ;; - ミニバッファ（`M-x'、`find-file' など）に入ったら ASCII へ切り替え、抜けたら
   ;;   入る直前の入力ソースへ自動復帰する。
   ;;
@@ -10761,12 +10773,19 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
     :group 'utils-ime)
 
   (defcustom utils-ime-target-modes
-    '(dired-mode magit-status-mode vterm-mode eshell-mode term-mode comint-mode)
+    '(dired-mode magit-status-mode vterm-mode eshell-mode term-mode comint-mode
+      prog-mode)
     "Major modes that force ASCII input on entry and restore the previous
   input source on exit.  Matched via `derived-mode-p', so modes derived from
-  any of these (e.g. `shell-mode' or `sql-interactive-mode' via `comint-mode')
-  are covered too.  Dirvish and `wdired-mode' need no separate entry: both are
-  built on top of `dired-mode' and are therefore already covered."
+  any of these (e.g. `shell-mode' or `sql-interactive-mode' via `comint-mode',
+  or `python-mode'/`emacs-lisp-mode'/etc. via `prog-mode') are covered too.
+  Dirvish and `wdired-mode' need no separate entry: both are built on top of
+  `dired-mode' and are therefore already covered.  Including `prog-mode' also
+  covers Org Babel source-edit buffers opened via `org-edit-special' (C-c '),
+  since each such buffer's major mode is the source language's own mode;
+  `org-mode' itself does not derive from `prog-mode', so ordinary prose
+  buffers are unaffected.  Typing Japanese comments inside a covered buffer
+  still requires switching the OS input source back manually for that span."
     :type '(repeat symbol)
     :group 'utils-ime)
 
@@ -13617,7 +13636,8 @@ prose the snippet happens to mix in."
   	  --eval "(with-current-buffer (find-file-noselect \"$(ORG)\") \
   	            (let ((bad 0)) \
   	              (org-babel-map-src-blocks nil \
-  	                (when (string= lang \"emacs-lisp\") \
+  	                (when (and (string= lang \"emacs-lisp\") \
+  	                           (not (equal (org-entry-get (point) \"CUSTOM_ID\" t) \"changelog\"))) \
   	                  (let ((tgt (cdr (assq :tangle (nth 2 (org-babel-get-src-block-info t)))))) \
   	                    (when (or (null tgt) (equal tgt \"no\")) \
   	                      (setq bad (1+ bad)) \
@@ -15165,9 +15185,16 @@ digraph personal_override_contract {
 * Changelog
 :PROPERTIES:
 :CUSTOM_ID: changelog
+:header-args:emacs-lisp: :tangle no
 :END:
 
-本 Change* 2026-07
+本 Changelog は 2026-07 にリセットされ、以後は Fix ID 方式を廃止した和文エントリのみを記録する
+（経緯は本節内「Changelog のリセットと Fix ID 方式の廃止」を参照）。
+
+また、本リポジトリは 2026-09-10 に再作成されており、それ以前の変更はすべて初回コミット
+（=feat: リポジトリ初期設定とドキュメント追加=）に一括で取り込まれている。そのため、本節の
+エントリのうち初回コミットより前に相当する部分は、=git log= 上の個別コミットとは対応しない。
+初回コミット以降に追加されたエントリのみが、実際のコミット単位の変更履歴と一致する。
 
 ** 未参照コードの削除（到達可能性解析）
 
@@ -16666,3 +16693,24 @@ Org-roam と dev（コーディング）バッファの双方から、ローカ�
 同じスクリプトを直接叩く運用も想定されるため、スクリプト名を
 =~/.local/bin/localllm= に変更して衝突を回避した。Homebrew 版 =llm= は
 そのまま残しており、削除や PATH の変更は行っていない。
+
+** utils-ime.el: =utils-ime-target-modes= に =prog-mode= を追加し、プログラミング言語バッファでも自動 ASCII 化されるようにした
+
+これまで =utils-ime-target-modes= は dired/dirvish・magit-status・vterm/eshell/
+term/comint のみを対象とし、操作キー（ =RET= / =g= / =d= / =s= 等）が IME に
+composed される誤爆防止に限定していた。org-mode で日本語散文とコードを
+混在させて書く際、本文中の日英切替の手間自体は解決していなかった。
+
+=utils-ime-target-modes= の既定値に =prog-mode= を追加した。 =derived-mode-p=
+によるマッチのため、 =python-mode= ・ =emacs-lisp-mode= ・ =js-mode= など
+=prog-mode= を継承するほぼ全てのプログラミング言語メジャーモードが
+新規フックなしに自動的に対象へ加わる。
+
+=org-edit-special=（ =C-c '= ）が開く Org Babel のソース編集バッファは、
+その言語自身のメジャーモードを持つ独立バッファであるため、この一行追加
+だけで既存の =buffer-list-update-hook= ベースの仕組みがそのまま検知する。
+=org-mode= 自体は =prog-mode= の派生ではないため、本文（日本語散文）側の
+挙動には影響しない。
+
+コード中に日本語コメントを書く場合は、その区間だけ手動で IME に
+切り替える必要がある点は変わらない。
