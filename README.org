@@ -13649,11 +13649,20 @@ prose the snippet happens to mix in."
   # \includegraphics の拡張子を .svg -> .pdf に書き換える運用を前提とする。
   #
   # 差分のみ変換する（*.svg が対応する *.pdf より新しい、または *.pdf が無い場合のみ
-  # rsvg-convert を実行）。rsvg-convert コマンドが無ければ、その場でインストール手順を
+  # 変換を実行）。rsvg-convert コマンドが無ければ、その場でインストール手順を
   # 案内して失敗する（CI では未インストールを黙って無視しない）。
   # diagrams（dot/mmd -> svg）を先に実行し、変換元の *.svg が揃っていることを保証してから
   # svg -> pdf の変換に入る。
   #
+  # mmdc（Mermaid）が出力する *.svg はラベルをすべて <foreignObject> 内の HTML
+  # （<div>/<span>）として埋め込む。librsvg は foreignObject を描画できない
+  # （実機で svg/tangle-flow.pdf のラベルが全て空白になることを確認済み）ため、
+  # 同名の *.mmd が存在する *.svg（= Mermaid 由来）だけは rsvg-convert を使わず、
+  # Puppeteer（実ブラウザエンジン）で HTML を正しく描画できる mmdc 自身に
+  # -o *.pdf -f（pdfFit）で直接 PDF を吐かせる。dot（Graphviz）由来の *.svg は
+  # ネイティブな <text> 要素だけで構成されるため、従来どおり rsvg-convert で問題ない。
+  # mmd-svg と同じ理由で mmdc 側の Chrome 解決に失敗しうるため、$(PUPPETEER_CONFIG)
+  # が設定されていれば同様に -p で渡す。
   figures: diagrams
 	@command -v "$(RSVG_CONVERT)" >/dev/null 2>&1 || { \
   	  echo "[figures] $(RSVG_CONVERT) not found. Install with: brew install librsvg"; \
@@ -13667,9 +13676,23 @@ prose the snippet happens to mix in."
 	@count=0; \
   	 for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
   	   pdf="$${f%.svg}.pdf"; \
+  	   mmd="$${f%.svg}.mmd"; \
   	   if [ ! -f "$$pdf" ] || [ "$$f" -nt "$$pdf" ]; then \
-  	     echo "  $$f -> $$pdf"; \
-  	     "$(RSVG_CONVERT)" -f pdf -o "$$pdf" "$$f" || exit 1; \
+  	     if [ -f "$$mmd" ]; then \
+  	       command -v "$(MMDC)" >/dev/null 2>&1 || { \
+  	         echo "[figures] $(MMDC) not found (needed for Mermaid-sourced $$mmd). Install with: npm install -g @mermaid-js/mermaid-cli"; \
+  	         exit 1; \
+  	       }; \
+  	       echo "  $$mmd -> $$pdf (via mmdc, foreignObject-safe)"; \
+  	       if [ -n "$(PUPPETEER_CONFIG)" ]; then \
+  	         "$(MMDC)" -i "$$mmd" -o "$$pdf" -f -p "$(PUPPETEER_CONFIG)" || exit 1; \
+  	       else \
+  	         "$(MMDC)" -i "$$mmd" -o "$$pdf" -f || exit 1; \
+  	       fi; \
+  	     else \
+  	       echo "  $$f -> $$pdf"; \
+  	       "$(RSVG_CONVERT)" -f pdf -o "$$pdf" "$$f" || exit 1; \
+  	     fi; \
   	     count=$$((count + 1)); \
   	   fi; \
   	 done; \
@@ -13683,7 +13706,7 @@ prose the snippet happens to mix in."
 	@if [ -d "$(SVGDIR)" ]; then \
   	  for f in $$(find "$(SVGDIR)" -name '*.svg' | sort); do \
   	    pdf="$${f%.svg}.pdf"; \
-  	    [ -f "$$pdf" ] && rm -f "$$pdf"; \
+  	    if [ -f "$$pdf" ]; then rm -f "$$pdf"; fi; \
   	  done; \
   	fi
 
