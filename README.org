@@ -629,9 +629,32 @@ macOS では =exec-path-from-shell= がログインシェルを起動して =exe
 詳細は [[#modular-loader-and-core-suite][Modular Loader & Core Suite]] を参照してください。
 
 ** License
+:PROPERTIES:
+:CUSTOM_ID: license
+:END:
 
 本設定は GNU General Public License v3 の下で公開されています。詳細は LICENSE ファイルを
-参照してください。
+参照してください。LICENSE 自身も本文書からの tangle 生成物であり（下記ソースブロックを
+=make tangle= が =early-init.el= 等と同様に書き出す）、ソース・オブ・トゥルースは常に
+本節である。
+
+#+begin_src text :tangle LICENSE :mkdirp no :padline no
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see https://www.gnu.org/licenses/.
+
+The complete text of the GNU General Public License version 3 can be found at:
+https://www.gnu.org/licenses/gpl-3.0.txt
+#+end_src
 
 * Installation
 :PROPERTIES:
@@ -13239,7 +13262,7 @@ prose the snippet happens to mix in."
   EVAL_PRESERVE_INDENT := --eval "(setq org-src-preserve-indentation t)"
 
   # ---- 既定ターゲット（引数なし）--------------------------------------------------
-  .PHONY: all onepass-init onepass-q clean distclean distclean-deps show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures dot-tangle dot-svg mmd-tangle mmd-svg diagrams clean-diagrams help
+  .PHONY: all onepass-init onepass-q clean distclean distclean-deps show-files echo-paths tangle reload check-cookies check-tangle check-emphasis figures clean-figures dot-tangle dot-svg mmd-tangle mmd-svg diagrams clean-diagrams changelog-tangle help
   all: onepass-init
 
   # ---- ワンパス（early+init 環境）: tangle -> 差分コンパイル -----------------------
@@ -13330,8 +13353,10 @@ prose the snippet happens to mix in."
 
   # distclean は README.org からの tangle 生成物一式を削除し、fresh clone 相当に戻す。
   # 対象は早期に消えても実害のない「ソースから常に再生成できるもの」だけ（early-init.el
-  # / init.el / lisp/ / personal/ / scripts/ / Makefile 自身、および svg/ 配下の *.dot
-  # / *.mmd / *.pdf 中間生成物）。svg/*.svg は git 管理下の成果物なので対象外。
+  # / init.el / lisp/ / personal/ / scripts/ / LICENSE / Makefile 自身、および svg/ 配下の
+  # *.dot / *.mmd / *.pdf 中間生成物）。svg/*.svg は git 管理下の成果物なので対象外。
+  # ChangeLog は README.org からの通常 tangle ではなく make changelog-tangle（ox-ascii
+  # エクスポート）由来の別の生成物だが、同じく常に再生成できるため distclean の対象。
   # straight/ の package clone や eln-cache 等の依存物・実行時キャッシュは distclean には
   # 含めない（再取得・再コンパイルに数分〜かかり、distclean を打つたびに発生させたくない
   # ため）。それらを消したい場合は distclean-deps を使う。
@@ -13341,10 +13366,12 @@ prose the snippet happens to mix in."
   distclean: clean
 	@echo "[distclean] remove stray *.eln"
 	@find "$(ROOT)" -type f -name '*.eln' -delete
-	@echo "[distclean] remove tangle-generated files (early-init.el init.el lisp/ personal/ scripts/ svg intermediates)"
-	@rm -f "$(EARLY)" "$(INIT)"
+	@echo "[distclean] remove tangle-generated files (early-init.el init.el lisp/ personal/ scripts/ LICENSE svg intermediates)"
+	@rm -f "$(EARLY)" "$(INIT)" "$(ROOT)/LICENSE"
 	@rm -rf "$(LISPDIR)" "$(PERSONALDIR)" "$(ROOT)/scripts"
 	@{ [ -d "$(SVGDIR)" ] && find "$(SVGDIR)" \( -name '*.dot' -o -name '*.mmd' -o -name '*.pdf' \) -delete; } 2>/dev/null || true
+	@echo "[distclean] remove ChangeLog (from README.org Changelog section via make changelog-tangle)"
+	@rm -f "$(ROOT)/ChangeLog"
 	@echo "[distclean] remove Makefile (re-bootstrap: see README.org Tangle section)"
 	@rm -f "$(ROOT)/Makefile"
 
@@ -13471,6 +13498,26 @@ prose the snippet happens to mix in."
      done; \
    fi
 
+  # ---- changelog-tangle : README.org の Changelog 節を ChangeLog として書き出す ------
+  # Changelog 節（:CUSTOM_ID: changelog）は見出し・表・強調記法を含む通常の Org
+  # 構造であり、内容をソースブロックへ複製すると二重管理になる。そのため tangle では
+  # なく、その subtree だけを ox-ascii でプレーンテキストへエクスポートする。
+  # GNU 系ディストリビューションの慣習にならい、出力名は拡張子なしの ChangeLog と
+  # する。$(ORG) 全体の tangle / reload には含めず、独立したターゲットにしている。
+  changelog-tangle: $(ORG)
+	@echo "[changelog-tangle] $(ORG)#changelog -> ChangeLog"
+	@$(EMACS_Q) \
+     --eval "(require 'org)" \
+     --eval "(require 'ox-ascii)" \
+     --eval "(setq org-confirm-babel-evaluate nil noninteractive t)" \
+     --eval "(with-current-buffer (find-file-noselect \"$(ORG)\") \
+               (let ((pos (org-find-property \"CUSTOM_ID\" \"changelog\"))) \
+                 (unless pos (error \"CUSTOM_ID changelog not found\")) \
+                 (goto-char pos) \
+                 (let ((org-export-with-broken-links t) \
+                       (org-ascii-charset 'utf-8)) \
+                   (org-export-to-file 'ascii \"$(ROOT)/ChangeLog\" nil t)))))"
+
   # ---- help : 主要ターゲットの実行例を一覧表示する -----------------------------------
   help:
 	@echo "使い方の例（ROOT はこの Makefile があるディレクトリ）:"
@@ -13496,6 +13543,10 @@ prose the snippet happens to mix in."
 	@echo "  make clean-diagrams           # diagrams が生成した *.dot / *.mmd / *.svg を削除"
 	@echo "  make figures                  # diagrams 実行後、svg/*.svg を同名の *.pdf へ変換（LaTeX/PDF export 用）"
 	@echo "  make clean-figures            # figures が生成した *.pdf を削除"
+	@echo ""
+	@echo "  # ChangeLog（GNU 系ディストリビューションの慣習にならった拡張子なしファイル。"
+	@echo "  #   LICENSE は README.org の License 節に埋め込み済みなので make tangle で生成される）"
+	@echo "  make changelog-tangle         # README.org の Changelog 節を ChangeLog へエクスポート"
 	@echo ""
 	@echo "  # 静的チェック"
 	@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + checkdoc"
@@ -15186,6 +15237,7 @@ digraph personal_override_contract {
 :PROPERTIES:
 :CUSTOM_ID: changelog
 :header-args:emacs-lisp: :tangle no
+:EXPORT_OPTIONS: toc:nil num:nil author:nil creator:nil date:nil
 :END:
 
 本 Changelog は 2026-07 にリセットされ、以後は Fix ID 方式を廃止した和文エントリのみを記録する
@@ -16714,3 +16766,28 @@ composed される誤爆防止に限定していた。org-mode で日本語散�
 
 コード中に日本語コメントを書く場合は、その区間だけ手動で IME に
 切り替える必要がある点は変わらない。
+
+** LICENSE / ChangeLog を GNU 系ディストリビューションの慣習にならって tangle 対象にした
+
+これまで LICENSE.org はリポジトリに単体で置かれた文書で、README.org の tangle
+パイプラインとは無関係だった。また Changelog 節（本節）はプレーンテキストの
+ChangeLog として書き出す手段を持たなかった。
+
+License 節（[[#license][License]]）に GPLv3 の要約文を =text= ソースブロック
+（ =:tangle LICENSE= ）として直接埋め込み、LICENSE.org は廃止した。README.org
+がすでに =early-init.el= / =init.el= / =lisp/= / =Makefile= 全ての単一のソース・
+オブ・トゥルースである以上、ライセンス文だけを別の literate ファイルに分離する
+理由はなく、=make tangle= の既定の（言語を絞らない） =org-babel-tangle-file=
+呼び出しがこのブロックもそのまま拾って =LICENSE= を書き出す。独立した
+=license-tangle= ターゲットは不要になったため削除した。
+
+Changelog 節は見出し・表・強調記法を含む通常の Org 構造であり、内容をソース
+ブロックへ複製すると二重管理になる。そのため tangle ではなく、
+=changelog-tangle= ターゲットが =ox-ascii= で本節の subtree をそのまま
+=ChangeLog= へエクスポートする（Changelog 見出しの =:EXPORT_OPTIONS:= で
+目次・番号・author/creator/date を抑制）。こちらは =$(ORG)= 全体の tangle とは
+別処理のため、引き続き独立したオプトインターゲットとした。
+
+生成される =LICENSE= / =ChangeLog= はいずれも拡張子なし（GNU 系ディストリビューション
+の慣習）で、README.org 由来の他の生成物と同様に =.gitignore= に追加し、常に
+再生成できるものとして扱う。=distclean= はこの 2 ファイルも削除する。
