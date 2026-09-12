@@ -11981,7 +11981,27 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; dirvish を require しておかないと、バイトコンパイラが
   ;; `dirvish-define-mode-line' を普通の関数呼び出しと誤解し、第1引数 `ime' を
   ;; （クォートされていない）自由変数として評価しようとして警告を出す。
-  (eval-when-compile (require 'dirvish))
+  ;;
+  ;; NOERROR (第2引数 nil、第3引数 t) が必須の理由:
+  ;; `eval-when-compile' はバイトコンパイル時にしか特別扱いされない —
+  ;; 本ファイルのようにインタプリタ実行（非コンパイル）される .el を
+  ;; `load' すると、Emacs のロード時 eager macro-expansion がこの
+  ;; トップレベルフォームを即座に展開しようとし、その際 `eval-when-compile'
+  ;; は単なる `progn' として本文を「今すぐ」評価する。personal/ac1965.el は
+  ;; init.el ステップ9で、modules.el（ステップ10、core-editing の
+  ;; `(leaf dirvish :straight t :require nil)' が dirvish を実際にインストール
+  ;; する箇所）より前にロードされるため、この時点では dirvish はまだ
+  ;; load-path 上に存在しない。NOERROR なしだと `(require 'dirvish)' が
+  ;; file-missing で失敗し、本ファイルの残り（下の `dirvish-define-mode-line'
+  ;; 登録を含む）が一切ロードされなくなる。結果として `dirvish-ime-ml' が
+  ;; 定義されないまま dirvish 側の `dirvish-mode-line-format' には `ime' が
+  ;; 残るため、dirvish バッファに入るたびに
+  ;; `(void-function dirvish-ime-ml)' が再描画のたびに発生する。
+  ;; NOERROR で「失敗したら nil を返すだけ」にしておけば、この時点では
+  ;; 単に require をあきらめて後続の `with-eval-after-load' 登録に進み、
+  ;; 実際に dirvish がロードされたとき（初回 dired 起動時）に遅延展開
+  ;; されて正しく `dirvish-ime-ml' が定義される。
+  (eval-when-compile (require 'dirvish nil t))
 
   (with-eval-after-load 'dirvish
     (dirvish-define-mode-line ime
@@ -16957,3 +16977,31 @@ repos/leaf.el= 等）で確認のうえ両方を修正した。
 =:CUSTOM_ID: init-el= を追加し、全 =[[#...]]= リンクが対応する
 =:CUSTOM_ID:= を持つことを確認した（ =-batch= での =org-export-to-file=
 'html= 実行で再現・解消を確認済み）。
+
+** personal/ac1965.el: dirvish 未インストール時に起動が失敗し、dirvish-ime-ml が void-function になる不具合を修正
+
+=personal/ac1965.el= は init.el ステップ9で、dirvish を =:straight t= で
+実際にインストールする core-editing.el のブロック（modules.el、
+ステップ10）より前にロードされる。同ファイル内の
+=(eval-when-compile (require 'dirvish))= は、バイトコンパイルされずに
+生の =.el= として =load= されるとき、Emacs のロード時 eager
+macro-expansion（=internal-macroexpand-for-load=）によって即座に
+展開され、その際 =eval-when-compile= は単なる =progn= として本文を
+その場で評価する。結果として dirvish がまだ load-path 上に存在しない
+時点で本物の =(require 'dirvish)= が実行され、
+=file-missing= で =personal/ac1965.el= 全体のロードが中断していた
+（ =[load] failed: .../personal/ac1965.el (Cannot open load file...)=
+としてログに現れる）。中断により、その直後にあるはずの
+=(with-eval-after-load 'dirvish (dirvish-define-mode-line ime ...))=
+の登録も一切実行されなくなり、後で実際に dirvish がロードされた
+（初回 =dired-noselect= 呼び出し時）ときには
+=dirvish-mode-line-format= の =ime= セグメント参照だけが残るため、
+dirvish バッファに入るたびに再描画のたびに
+=(void-function dirvish-ime-ml)= が発生していた。
+=(require 'dirvish nil t)= として NOERROR を渡し、この時点での
+require 失敗を無害な nil 戻り値にすることで、ファイルの残りが
+最後までロードされ、実際に dirvish が読み込まれた時点で
+=dirvish-define-mode-line= が正しく遅延展開されるようにした。
+=emacs -Q --batch= で dirvish 未ロード状態を再現し、旧フォームが
+同一のエラーで落ちること、新フォームがエラーなく通過することの
+両方を確認済み。
