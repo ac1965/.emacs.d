@@ -13287,24 +13287,50 @@ prose the snippet happens to mix in."
   # 注入するため、ここで STRAIGHT_BASE_DIR / LEAF_DIR / LEAFKW_DIR / EVAL_LEAF
   # を解決する。
   #
-  # スコープの注記: この一連の変数を参照するのは onepass-q と、デバッグ用の
-  # echo-paths（値の表示のみ）だけである。reload（= clean tangle
-  # check-cookies）・tangle 単体・clean はいずれも参照しない。STRAIGHT_BASE_DIR
-  # は再帰展開変数（?=）なので、$(shell ...) はどこかのターゲットが実際に
-  # この変数を参照したときにのみ評価される — 参照されなければ、straight や
-  # leaf が未インストールの環境で `make reload` 等を実行してもこの行が原因で
-  # 失敗することはない。
+  # スコープの注記: この一連の変数を参照するのは onepass-q・echo-paths・
+  # distclean-deps だけである。reload（= clean tangle check-cookies）・
+  # tangle 単体・clean はいずれも参照しない。STRAIGHT_BASE_DIR /
+  # MY_D_CACHE_DIR は再帰展開変数（?=）なので、$(shell ...) はどこかの
+  # ターゲットが実際にこの変数を参照したときにのみ評価される — 参照されなければ、
+  # straight や leaf が未インストールの環境で `make reload` 等を実行しても
+  # この行が原因で失敗することはない。
+  #
+  # 注意（$XDG_CACHE_HOME）: early-init.el の my:d:cache は
+  # `$XDG_CACHE_HOME/emacs/`（未設定時は `$HOME/.cache/emacs/`）に解決され、
+  # straight-base-dir にはこの my:d:cache がそのまま渡る（straight.el 自身が
+  # その配下に `straight/` を作る）。以前はここで straight-base-dir の値を
+  # そのまま「straight ディレクトリそのもの」として使っており、`straight/`
+  # の一段が欠落していた（LEAF_DIR / LEAFKW_DIR が実際には存在しないパスを
+  # 指し、onepass-q の leaf 注入が静かに失敗する不具合があった）。また未束縛時
+  # フォールバックも $XDG_CACHE_HOME を無視して $HOME/.emacs.d/straight に
+  # 固定されていた。両方とも my:d:cache の定義（early-init.el 3) 基本ディレクトリ
+  # 参照）に合わせて修正済み。
   STRAIGHT_BASE_DIR ?= $(shell \
     if [ -f "$(EARLY)" ]; then \
       $(EMACS_Q) -l "$(EARLY)" \
-        --eval "(princ (expand-file-name (or (ignore-errors STRAIGHT_BASE_DIR) \
-                                             (ignore-errors (and (boundp 'straight-base-dir) straight-base-dir)) \
-                                             (expand-file-name \"straight\" user-emacs-directory))))"; \
+        --eval "(princ (expand-file-name \"straight\" \
+                         (if (boundp 'straight-base-dir) straight-base-dir user-emacs-directory)))"; \
     else \
-      printf "%s" "$$HOME/.emacs.d/straight"; \
+      printf "%s" "$${XDG_CACHE_HOME:-$$HOME/.cache}/emacs/straight"; \
     fi)
-  LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf
-  LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords
+  LEAF_DIR   := $(STRAIGHT_BASE_DIR)/repos/leaf.el
+  LEAFKW_DIR := $(STRAIGHT_BASE_DIR)/repos/leaf-keywords.el
+
+  # MY_D_CACHE_DIR : early-init.el の my:d:cache（straight-base-dir の親であり、
+  # eln-cache や一部パッケージ（dirvish 等）のキャッシュも同居する、この設定専用の
+  # XDG キャッシュルート）。distclean-deps が実キャッシュ全体を一括削除するために
+  # 使う。STRAIGHT_BASE_DIR から逆算せず、my:d:cache を直接問い合わせる（両者の
+  # 親子関係という前提に依存しないため）。
+  MY_D_CACHE_DIR ?= $(shell \
+    if [ -f "$(EARLY)" ]; then \
+      $(EMACS_Q) -l "$(EARLY)" \
+        --eval "(princ (if (boundp 'my:d:cache) my:d:cache \
+                          (expand-file-name \"emacs\" \
+                            (or (getenv \"XDG_CACHE_HOME\") \
+                                (expand-file-name \".cache\" (getenv \"HOME\"))))))"; \
+    else \
+      printf "%s" "$${XDG_CACHE_HOME:-$$HOME/.cache}/emacs"; \
+    fi)
 
   EVAL_LEAF := \
     --eval "(let* ((ldir \"$(LEAF_DIR)\") (kwdir \"$(LEAFKW_DIR)\")) \
@@ -13344,7 +13370,8 @@ prose the snippet happens to mix in."
   	echo "SVGDIR=$(SVGDIR)"; \
   	echo "STRAIGHT_BASE_DIR=$(STRAIGHT_BASE_DIR)"; \
   	echo "LEAF_DIR=$(LEAF_DIR)"; \
-  	echo "LEAFKW_DIR=$(LEAFKW_DIR)"
+  	echo "LEAFKW_DIR=$(LEAFKW_DIR)"; \
+  	echo "MY_D_CACHE_DIR=$(MY_D_CACHE_DIR)"
 
   clean:
 	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
@@ -13379,9 +13406,21 @@ prose the snippet happens to mix in."
   # clone・ネイティブコンパイルキャッシュ・no-littering の実行時状態を削除する。再取得や
   # 再コンパイルに数分〜十数分かかりうるため distclean には含めず、独立したターゲットに
   # している。
+  #
+  # 実キャッシュ（straight/ の package clone・eln-cache）は $XDG_CACHE_HOME/emacs/
+  # （未設定時は $HOME/.cache/emacs/）配下にあり、$(ROOT) の外なので $(MY_D_CACHE_DIR)
+  # を使って削除する（$(ROOT)/straight や $(ROOT)/.cache ではない — 以前はここが
+  # 誤っており、$XDG_CACHE_HOME を考慮していなかった）。$(ROOT)/eln-cache は
+  # dot-tangle 等の `-Q` バッチ実行が early-init.el を経由せず作る別物の副産物
+  # （$HOME/.emacs.d が本リポジトリへのシンボリックリンクであるため、-Q の既定
+  # user-emacs-directory がここを指す）なので、これも別途削除する。$(ROOT)/.etc /
+  # $(ROOT)/.var（no-littering-etc-directory / -var-directory）はリポジトリ直下
+  # のままなので従来どおり。
   distclean-deps:
-	@echo "[distclean-deps] remove straight/ eln-cache .cache .etc .var (package clones & runtime caches)"
-	@rm -rf "$(ROOT)/straight" "$(ROOT)/eln-cache" "$(ROOT)/.cache" "$(ROOT)/.etc" "$(ROOT)/.var"
+	@echo "[distclean-deps] remove $(MY_D_CACHE_DIR) (straight/ + eln-cache/ + other per-package caches under XDG_CACHE_HOME)"
+	@rm -rf "$(MY_D_CACHE_DIR)"
+	@echo "[distclean-deps] remove stray $(ROOT)/eln-cache (from -Q batch runs; ~/.emacs.d symlinks here) and $(ROOT)/.etc $(ROOT)/.var"
+	@rm -rf "$(ROOT)/eln-cache" "$(ROOT)/.etc" "$(ROOT)/.var"
 
   # ---- dot-tangle : README.org の dot ソースブロックを svg/*.dot として書き出す ---------
   # Appendix の :header-args:dot: :tangle svg/*.dot に従い、org-babel-tangle-file の
@@ -13530,7 +13569,7 @@ prose the snippet happens to mix in."
 	@echo "  make clean                    # *.elc を削除"
 	@echo "  make distclean                # clean + tangle 生成物一式を削除（fresh clone 相当。"
 	@echo "                                #   Makefile 自身も消えるので要再ブートストラップ）"
-	@echo "  make distclean-deps           # straight/ eln-cache .cache .etc .var を削除（破壊的・低頻度用）"
+	@echo "  make distclean-deps           # XDG キャッシュ配下（straight/ eln-cache 等）+ .etc .var を削除（破壊的・低頻度用）"
 	@echo ""
 	@echo "  # 図版（dot / mermaid）"
 	@echo "  make diagrams                 # dot-svg + mmd-svg をまとめて実行（推奨はこれ）"
@@ -16791,3 +16830,33 @@ Changelog 節は見出し・表・強調記法を含む通常の Org 構造で�
 生成される =LICENSE= / =ChangeLog= はいずれも拡張子なし（GNU 系ディストリビューション
 の慣習）で、README.org 由来の他の生成物と同様に =.gitignore= に追加し、常に
 再生成できるものとして扱う。=distclean= はこの 2 ファイルも削除する。
+
+** Makefile: distclean-deps が =$XDG_CACHE_HOME= を考慮しておらず実キャッシュを削除できていなかった不具合を修正
+
+=distclean-deps= は =$(ROOT)/straight= =$(ROOT)/.cache= =$(ROOT)/eln-cache= を
+削除していたが、early-init.el の =my:d:cache= は =$XDG_CACHE_HOME/emacs/=
+（未設定時は =$HOME/.cache/emacs/=）に解決され、straight のパッケージ clone と
+（実起動時の）eln-cache はそちらに置かれる。 =$(ROOT)/.cache= はそもそも
+どこからも作られておらず、 =$(ROOT)/straight= も存在しないため、
+=distclean-deps= は実質何も削除できていなかった。
+
+=$(ROOT)/eln-cache= だけは削除の意味があった —  =~/.emacs.d= が本リポジトリへの
+シンボリックリンクであるため、 =-Q= バッチ実行（=dot-tangle= / =mmd-tangle= /
+=onepass-q= 等、early-init.el を経由しない）の既定 =user-emacs-directory= が
+ここを指し、Emacs 標準の相対 =eln-cache/= がここに生成されるため。
+
+あわせて、同じ根本原因（ =straight-base-dir= の値をそのまま「 =straight/=
+ディレクトリそのもの」として扱っていた）で =LEAF_DIR= / =LEAFKW_DIR= も
+実際には存在しないパス（ =straight/= の一段と、 =.el= サフィックスの両方が
+欠落）を指しており、 =onepass-q= の leaf / leaf-keywords 注入が
+「エラーは出ないが静かに何も起きない」形で失敗していた（ =ignore-errors= で
+握りつぶされるため気付きにくい）。実ディスク（ =$XDG_CACHE_HOME/emacs/straight/
+repos/leaf.el= 等）で確認のうえ両方を修正した。
+
+修正後は =MY_D_CACHE_DIR=（ =my:d:cache= を直接問い合わせて解決）を新設し、
+=distclean-deps= はこれを丸ごと削除する（ =straight/= ・ =eln-cache/= に加え、
+同じキャッシュルートに同居する他パッケージのキャッシュ、たとえば dirvish の
+サムネイルキャッシュも含めて一括削除される。これは元の意図「依存物・実行時
+キャッシュを一掃する」により合致する）。 =$(ROOT)/eln-cache= の削除は
+そのまま維持し、 =$(ROOT)/.cache= は対象から外した。 =echo-paths= にも
+=MY_D_CACHE_DIR= を追加して次に同種の不一致が起きても気付けるようにした。
