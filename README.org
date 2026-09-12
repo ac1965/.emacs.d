@@ -11868,6 +11868,16 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
           my:use-lsp 'eglot)
 
   ;;
+  ;; org-roam-ui はここでは require せず :straight のみで導入されるため、
+  ;; バイトコンパイル時にこれらの defcustom を未知の自由変数として警告される。
+  ;; bare defvar でコンパイラに「特殊変数である」とだけ伝え、警告を抑止する。
+  (defvar org-roam-ui-port)
+  (defvar org-roam-ui-browser-function)
+  (defvar org-roam-ui-open-on-start)
+  (defvar org-roam-ui-sync-theme)
+  (defvar org-roam-ui-follow)
+  (defvar org-roam-ui-update-on-save)
+
   (with-eval-after-load 'org-roam-ui
     ;; HTTP/WebSocket
     (setq org-roam-ui-port 35901)
@@ -11964,6 +11974,13 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; あるが、my:modules の起動順は core-editing（dirvish 本体）→ ... →
   ;; personal（このファイル）なので通常は既にロード済みである。順序変更に対して
   ;; 堅牢にするため、念のため `with-eval-after-load' で包む。
+  ;;
+  ;; マクロ定義そのものはコンパイル時に展開されるため、eval-when-compile で
+  ;; dirvish を require しておかないと、バイトコンパイラが
+  ;; `dirvish-define-mode-line' を普通の関数呼び出しと誤解し、第1引数 `ime' を
+  ;; （クォートされていない）自由変数として評価しようとして警告を出す。
+  (eval-when-compile (require 'dirvish))
+
   (with-eval-after-load 'dirvish
     (dirvish-define-mode-line ime
       "Show the cached sis IME indicator (`ac1965--sis-indicator') in dirvish's
@@ -12000,13 +12017,20 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;;   - すべての defun に docstring を付けること。
   ;;   - defcustom / defvar を変更しないこと。
 
+  ;; nano-modeline-position はトップレベルで require しない nano-modeline
+  ;; パッケージの内部変数（関数を保持する）であり、bare defvar でコンパイラに
+  ;; 存在を伝えておかないと自由変数警告が出る。
+  (defvar nano-modeline-position)
+
   (defun ac1965--nano-time-encoding ()
-    "Return a propertized \"HH:MM  CODING  IME\" string for the nano-modeline right segment.
+    "Return a propertized \"HH:MM  CODING  IME\" string for the
+  nano-modeline right segment.
   Evaluated every frame inside nano-modeline--make's :eval block.
   Time and coding system are computed directly; IME state is read from
   the cache `ac1965--sis-indicator', which is updated via `sis-change-hook'
   to avoid spawning osascript processes on every redisplay.
-  Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are stripped."
+  Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are
+  stripped."
     (let* ((time-str (format-time-string "%H:%M"))
            (cs       (or (and (boundp 'buffer-file-coding-system)
                               buffer-file-coding-system)
@@ -12161,6 +12185,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; （= このタイミングならタグを付けても org-capture-after-finalize-hook 経由の
   ;; orgx-auto-hugo による ox-hugo 自動エクスポートに、付けたタグが反映される）
   ;; 段階で走る。テンプレートキーが "b"（orgx-core.el の "Blog post"）のときだけ動作する。
+
+  (declare-function org-capture-get "org-capture" (&optional prop-name local))
 
   (defun ac1965--org-capture-set-blog-tags ()
     "ブログ投稿キャプチャ（テンプレートキー \"b\"）の確定前にタグを設定する.
@@ -12375,6 +12401,10 @@ Music.app is not available or the playlist list is empty."
           (when (and choice (not (string-empty-p choice)))
             (apple-music-playlist-play choice)
             (message "♫ Playing playlist: %s" choice))))))
+
+  ;; hydra-apple-music/body は defhydra が実行時に定義する関数であり、
+  ;; コンパイル時には存在しないため、コンパイラに存在を伝えておく。
+  (declare-function hydra-apple-music/body "hydra")
 
   (defun device-darwin--apple-music-init ()
     "Define `hydra-apple-music' and bind it to the leader key.
@@ -12648,6 +12678,10 @@ Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
   ;; `ui-leader-a-map' の "a" は device-darwin.el 側で Apple Music に割り当てられて
   ;; いるが、両ファイルは排他的にロードされる（同一マシンで両方は読み込まれない）ため、
   ;; キーの重複は実際には発生しない。ここでは記憶しやすさを優先し "w"（Windows）とする。
+
+  ;; hydra-wsl/body は defhydra が実行時に定義する関数であり、コンパイル時には
+  ;; 存在しないため、コンパイラに存在を伝えておく。
+  (declare-function hydra-wsl/body "hydra")
 
   (defun device-wsl--hydra-init ()
     "`hydra-wsl' を定義し、leader キーへバインドする.
@@ -12967,9 +13001,11 @@ Subsequent lines: describe arguments and return value.\n\n%s" src)))
        nil nil "You are an Emacs Lisp documentation expert. Be concise.")))
 
   (defun my/claude-analyze-require-graph ()
-    "Analyze require statements in the current buffer and report layer violations.
+    "Analyze require statements in the current buffer and report layer
+violations.
 Detects upward-layer dependencies relative to the 10-layer architecture:
-early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal.
+early-init → core → ui → auth → completion → orgx → vcs → dev → utils
+→ personal.
 Results are displayed in `personal-ai-output-buffer'."
     (interactive)
     (unless buffer-file-name
@@ -16860,3 +16896,28 @@ repos/leaf.el= 等）で確認のうえ両方を修正した。
 キャッシュを一掃する」により合致する）。 =$(ROOT)/eln-cache= の削除は
 そのまま維持し、 =$(ROOT)/.cache= は対象から外した。 =echo-paths= にも
 =MY_D_CACHE_DIR= を追加して次に同種の不一致が起きても気付けるようにした。
+
+** personal/ 配下 4 ファイルのバイトコンパイル警告（16件）をすべて解消
+
+=make= 実行時に =personal/ac1965.el= ・ =personal/device-darwin.el= ・
+=personal/device-wsl.el= ・ =personal/personal-ai.el= から出ていた自由変数・
+未定義関数・docstring 幅超過の警告を、コード自体の挙動は変えずに解消した。
+
+- =ac1965.el= の =org-roam-ui-*= 系 6 変数（ =with-eval-after-load
+  'org-roam-ui= 内で =setq= するのみで、パッケージ自体はトップレベルで
+  require しないため defcustom がコンパイラに未知だった）に bare =defvar=
+  を追加。
+- 同ファイルの =dirvish-define-mode-line= 呼び出し（macro）を
+  =eval-when-compile (require 'dirvish)= でコンパイル時に展開可能にし、
+  第1引数 =ime= が自由変数として誤評価される警告を解消。
+- 同ファイルの =nano-modeline-position=（関数を保持する
+  nano-modeline 側の内部変数、 =funcall= で呼ぶ）に bare =defvar= を追加。
+- 同ファイルの =org-capture-get= に =declare-function= を追加。
+- =device-darwin.el= の =hydra-apple-music/body= 、 =device-wsl.el= の
+  =hydra-wsl/body= （いずれも =defhydra= が実行時にのみ定義する関数）に
+  =declare-function= を追加。
+- =ac1965--nano-time-encoding= と =my/claude-analyze-require-graph= の
+  docstring を 80 桁以内に収まるよう改行位置を調整（内容は変更していない）。
+
+=make reload= 後に =personal/= のみを =-batch= でクリーンビルドし、
+7 ファイルすべてが警告ゼロでコンパイルされることを確認済み。
