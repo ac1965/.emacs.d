@@ -3517,11 +3517,11 @@ advice を素通りしてしまう（2 回目以降の呼び出しからしか d
     ;; `hs-hide-block-behavior' を `after-cursor' に設定する）。
     (leaf hideshow
       :straight nil
-      :hook ((prog-mode-hook . hs-minor-mode))
       :custom
       ((hs-show-indicators               . t)
        (hs-display-lines-hidden          . t)
        (hs-indicator-maximum-buffer-size . 500000))
+      :hook ((prog-mode-hook . hs-minor-mode))
       :config
       (keymap-set hs-minor-mode-map "<backtab>" #'hs-cycle)
       (keymap-set hs-minor-mode-map "C-c @ a"   #'hs-toggle-all))
@@ -7683,13 +7683,15 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;; blog.org）を指す。テンプレートは、ox-hugo のサブツリー単位エクスポートが使う
     ;; file+olp ターゲットに合わせ、"* blog" の下に挿入する。
     ;; Page Bundle化済み（2026-07-30〜）のため、EXPORT_FILE_NAME は常に "index" 固定。
-    ;; 記事固有のスラッグは format-time-string でタイムスタンプから生成する
-    ;; （%(org-id-new) は以前使っていたが、org-id-locations が未構築の状態で呼ばれると
-    ;; org-id-update-id-locations が org-agenda-files 全体（org-roam 配下含む数百ファイル）
-    ;; を走査してしまい、ox-hugo エクスポート中に一部ファイルの読み込みタイムアウト
-    ;; （Read error: Operation timed out / Resource deadlock avoided）でエクスポート
-    ;; そのものが失敗する原因になっていたため廃止した。タイムスタンプなら org-id の
-    ;; データベースに一切触れない）。
+    ;; 記事固有のスラッグは org-id-uuid でUUIDから生成する。
+    ;; （一時 format-time-string に置き換えていたことがあるが、原因は org-id-new
+    ;; ではなく org-hugo-export-wim-to-md が内部で無条件に呼ぶ
+    ;; org-id-update-id-locations が org-agenda-files 全体（org-roam 配下含む数百
+    ;; ファイル）を走査してしまうことだった（詳細はChangelog参照）。この経路は
+    ;; orgx-export--limit-agenda-files-during-hugo-export の :around advice で
+    ;; 既に塞いであるため、org-id-uuid を使ってもエクスポート失敗は再発しない。
+    ;; org-id-new ではなく org-id-uuid を使うのは、org-id-method の設定値に
+    ;; 依存せず、org-id-locations に一切触れない純粋なUUID生成のみを行うため。
     ;; EXPORT_HUGO_COVER という独自プロパティ名は ox-hugo が認識しない（front matter に
     ;; 変換されない）ため使わない。任意キーをfront matterに追加したい場合、ox-hugo が
     ;; 唯一受け付ける経路は EXPORT_HUGO_CUSTOM_FRONT_MATTER（plist形式）であるため、
@@ -7713,7 +7715,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
              "* MEETING with %? :meeting:\n  %U\n  %a")
             ("b" "Blog post" entry
              (file+olp my:f:capture-blog-file "blog")
-             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(format-time-string \"%Y%m%d%H%M%S\")\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(org-id-uuid)\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
 
   ;; org-emphasis-regexp-components の既定値（PRE/POST）は半角の空白・句読点のみを
   ;; 想定しており、全角の「」『』（）、。・ 等は含まれない。本ドキュメントのような
@@ -12325,7 +12327,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
       (setf (alist-get "b" org-capture-templates nil nil #'equal)
             '("Blog post" entry
               (file+olp my:f:capture-blog-file "blog")
-              "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(format-time-string \"%Y%m%d%H%M%S\")\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+              "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(org-id-uuid)\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
 
   (add-hook 'after-init-hook #'ac1965--org-capture-templates-override 20)
 
@@ -17167,3 +17169,37 @@ org-element-cache は各バッファを実際に開いた時点で遅延生成�
 ID 解決範囲を絞っても実害はない。実機で単一記事のエクスポートが
 成功し、=content/post/<bundle>/index.md= が正しく生成されることを
 確認した。
+
+** core/core-editing.el: leaf hideshow の :hook と :custom の順序を修正
+
+=(leaf hideshow ...)= で =:hook= が =:custom= より前に置かれており、
+コーディング規則が定める =:straight → :ensure → :after → :require →
+:pre-setq → :custom → :bind → :hook → :init → :config= の順序に
+違反していた。同じ src block 内にある =(leaf eldoc ...)= は
+=:straight → :custom → :config= の正しい順序になっており、
+=hideshow= だけがずれていた。=:custom= を =:hook= より前に移動し、
+順序を規則どおりに修正した。
+
+** orgx-core.el / personal/ac1965.el: ブログ投稿キャプチャの EXPORT_HUGO_BUNDLE 生成を format-time-string から org-id-uuid に変更
+
+=EXPORT_HUGO_BUNDLE= の生成方法を、以前 =org-id-new= から
+=format-time-string= に置き換えていたのを、=org-id-uuid= に変更した。
+
+置き換え時の理由（本節上部のエントリ参照）は「=org-id-new= が
+=org-id-update-id-locations= を走らせて =org-agenda-files= 全体を
+走査してしまう」というものだったが、Org本体（=org-id.el=）の
+=org-id-new= の実装を確認したところ、これは =org-id-method= に従って
+UUID／タイムスタンプ文字列を返すだけの純粋関数で、
+=org-id-locations= には一切触れない。実際に =org-id-update-id-locations=
+を無条件に呼んでいたのは =org-hugo-export-wim-to-md= 側であり
+（本節の別エントリ「orgx-export.el: ...ox-hugo エクスポート失敗の
+真因を修正」を参照）、この経路は既に
+=orgx-export--limit-agenda-files-during-hugo-export= の :around advice
+で塞いである。したがって =EXPORT_HUGO_BUNDLE= の生成方法をUUIDに
+戻しても、当時のエクスポート失敗は再発しない。
+
+=org-id-new= ではなく =org-id-uuid= を使うのは、=org-id-method= の
+設定値（'uuid／'org／'ts）に依存せず、=org-id-locations= を含む
+グローバルな状態に一切触れない、副作用のないUUID生成のみを行う
+関数だから。orgx-core.el の既定テンプレートと、それを上書きする
+personal/ac1965.el 側の両方を修正した。
