@@ -7683,8 +7683,13 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;; blog.org）を指す。テンプレートは、ox-hugo のサブツリー単位エクスポートが使う
     ;; file+olp ターゲットに合わせ、"* blog" の下に挿入する。
     ;; Page Bundle化済み（2026-07-30〜）のため、EXPORT_FILE_NAME は常に "index" 固定。
-    ;; 記事固有のスラッグは org-id-new で生成し EXPORT_HUGO_BUNDLE に入れる
-    ;; （all-posts.org における既存記事と同じ UUID 由来スラッグの慣習に合わせている）。
+    ;; 記事固有のスラッグは format-time-string でタイムスタンプから生成する
+    ;; （%(org-id-new) は以前使っていたが、org-id-locations が未構築の状態で呼ばれると
+    ;; org-id-update-id-locations が org-agenda-files 全体（org-roam 配下含む数百ファイル）
+    ;; を走査してしまい、ox-hugo エクスポート中に一部ファイルの読み込みタイムアウト
+    ;; （Read error: Operation timed out / Resource deadlock avoided）でエクスポート
+    ;; そのものが失敗する原因になっていたため廃止した。タイムスタンプなら org-id の
+    ;; データベースに一切触れない）。
     ;; EXPORT_HUGO_COVER という独自プロパティ名は ox-hugo が認識しない（front matter に
     ;; 変換されない）ため使わない。任意キーをfront matterに追加したい場合、ox-hugo が
     ;; 唯一受け付ける経路は EXPORT_HUGO_CUSTOM_FRONT_MATTER（plist形式）であるため、
@@ -7708,7 +7713,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
              "* MEETING with %? :meeting:\n  %U\n  %a")
             ("b" "Blog post" entry
              (file+olp my:f:capture-blog-file "blog")
-             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(org-id-new)\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(format-time-string \"%Y%m%d%H%M%S\")\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
 
   ;; org-emphasis-regexp-components の既定値（PRE/POST）は半角の空白・句読点のみを
   ;; 想定しており、全角の「」『』（）、。・ 等は含まれない。本ドキュメントのような
@@ -12278,7 +12283,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
       (setf (alist-get "b" org-capture-templates nil nil #'equal)
             '("Blog post" entry
               (file+olp my:f:capture-blog-file "blog")
-              "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(org-id-new)\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+              "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(format-time-string \"%Y%m%d%H%M%S\")\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
 
   (add-hook 'after-init-hook #'ac1965--org-capture-templates-override 20)
 
@@ -17052,3 +17057,21 @@ MELPA が commit 日時から自動生成する日付版バージョンとは無
 問題がないにもかかわらず誤検知していた。個別パッケージだけを除外する
 手段が straight.el 側にないため、=straight-check-dependency-versions= を
 =nil=（旧来の既定動作）にして全体を無効化した。
+
+** orgx-core.el / personal/ac1965.el: ブログ投稿キャプチャの EXPORT_HUGO_BUNDLE 生成を org-id-new から format-time-string に変更し、ox-hugo エクスポート失敗を修正
+
+ブログ投稿キャプチャテンプレート（"b"）は =EXPORT_HUGO_BUNDLE= の値を
+=%(org-id-new)= で生成していたが、=org-id-locations= が未構築（空）の
+状態でこれが評価されると、org-id 側が =org-id-update-id-locations= を
+走らせて =org-agenda-files=（=my:d:org= 配下を再帰スキャンした数百件、
+大半が org-roam のノート）を一括で開こうとしていた。この一括アクセスが
+一部ファイルで =Read error: Operation timed out= や
+=Resource deadlock avoided= を引き起こし、その途中で ox-hugo の
+=org-hugo-export-wim-to-md= 自体が失敗して *.md が生成されない
+（エラーメッセージがエコーエリアで一瞬しか見えず、症状としては
+「エラーは出ないのにエクスポートされない」ように見える）不具合の
+原因になっていた。=EXPORT_HUGO_BUNDLE= は一意な文字列であれば良く
+UUID である必要はないため、org-id のデータベースに一切触れない
+=%(format-time-string "%Y%m%d%H%M%S")= に置き換えた。orgx-core.el の
+既定テンプレートと、それを上書きする personal/ac1965.el 側の両方を
+修正した。
