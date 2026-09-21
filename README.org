@@ -7767,6 +7767,22 @@ LSP バックエンド非依存という設計を、補完の側から支える�
 
   (add-hook 'after-init-hook #'orgx-core--rebuild-agenda-files)
 
+  ;; org-persist-load-all は org（正確には org-persist.el）が自身のトップレベルで
+  ;; (add-hook 'after-init-hook #'org-persist-load-all) しており、このリポジトリの
+  ;; README.org 側には元々何の記述もない Org 標準の挙動である。org-persist--index
+  ;; （~/.emacs.d/.var/org/persist/index.eld）に記録された全エントリ（org-element-cache
+  ;; の永続化データ。my:d:org 配下、主に org-roam のノート数百件分が蓄積し得る）に
+  ;; 対応するファイルを起動時に一括で開いて検証する。org-roam 配下のファイルの一部で
+  ;; アクセスが不安定（Read error: Operation timed out / Resource deadlock avoided）に
+  ;; なっていた環境では、この一括検証がデーモンクラッシュの引き金になっていた
+  ;; （org.el が daemon 起動シーケンス中に何らかの理由で早期ロードされると、
+  ;; after-init-hook 実行前に登録が間に合ってしまう）。org-element-cache は各バッファを
+  ;; 実際に開いた時点で遅延生成されるため、起動時の一括ウォームアップを止めても
+  ;; 機能は失われない。org-persist 自体のロードより後に確実に除去されるよう
+  ;; with-eval-after-load 'org-persist の中で remove-hook する。
+  (with-eval-after-load 'org-persist
+    (remove-hook 'after-init-hook #'org-persist-load-all))
+
   (provide 'orgx-core)
   ;;; orgx/orgx-core.el ends here
 #+end_src
@@ -8180,6 +8196,32 @@ LSP バックエンド非依存という設計を、補完の側から支える�
       (require 'ox-hugo))
 
     (advice-add 'org-export-dispatch :before #'orgx-export--ensure-ox-hugo-before-dispatch)
+
+    ;; org-hugo-export-wim-to-md は内部で org-id-update-id-locations を無条件に
+    ;; 呼び出しており、これが org-agenda-files（my:d:org 配下を再帰スキャンした
+    ;; 数百件、大半が org-roam のノート）とそのアーカイブファイルを一括で開こうと
+    ;; する（org-add-archive-files 経由）。org-roam 配下の一部ファイルへの
+    ;; アクセスが不安定な環境では、この一括アクセスが Read error（Operation
+    ;; timed out / Resource deadlock avoided）を引き起こし、エクスポートそのものが
+    ;; 失敗する。実機のバックトレースで確認した呼び出し連鎖:
+    ;;   org-hugo-export-wim-to-md → org-id-update-id-locations →
+    ;;   org-agenda-files → org-add-archive-files →
+    ;;   org-get-agenda-file-buffer → find-file-noselect
+    ;; エクスポート実行中だけ org-agenda-files をエクスポート対象バッファの
+    ;; ファイル 1 件に絞ることで、この一括スキャンを回避する。ブログ記事内では
+    ;; id: リンクを使っていないため、ID 解決範囲を絞っても実害はない。
+    (defun orgx-export--limit-agenda-files-during-hugo-export (orig-fn &rest args)
+      "Narrow `org-agenda-files' to the current buffer's file while ORIG-FN runs.
+  Prevents the internal `org-id-update-id-locations' call inside
+  `org-hugo-export-wim-to-md' from scanning the full `org-agenda-files'
+  list (and its archive files), which can hang or error when some of
+  those files are on an unreliable filesystem path (e.g. org-roam notes
+  under iCloud)."
+      (let ((org-agenda-files (list (buffer-file-name (current-buffer)))))
+        (apply orig-fn args)))
+
+    (advice-add 'org-hugo-export-wim-to-md :around
+                #'orgx-export--limit-agenda-files-during-hugo-export)
 
     (leaf markdown-mode :straight t)
     (leaf markdown-preview-mode :straight t)
@@ -17075,3 +17117,53 @@ UUID である必要はないため、org-id のデータベースに一切触�
 =%(format-time-string "%Y%m%d%H%M%S")= に置き換えた。orgx-core.el の
 既定テンプレートと、それを上書きする personal/ac1965.el 側の両方を
 修正した。
+
+** orgx-core.el: org-persist-load-all を after-init-hook から除去し、daemon 起動直後の org-roam 全件アクセスによるクラッシュを修正
+
+上記の =EXPORT_HUGO_BUNDLE= 修正後も、daemon を再起動するたびに
+起動直後（recentf のクリーンアップ完了直後）に =org-mode-hook= が
+260 回以上発火し（=valign-mode= の "no effect in non-graphical
+display" 警告数から判明）、org-roam 配下の大量ファイルへの
+=Read error= / =Resource deadlock avoided= が繰り返され、daemon が
+何度もクラッシュ→launchd による自動再起動を繰り返す状態になっていた。
+
+原因は =org-persist-load-all= だった。これは README.org 側に一切
+記述のない、Org 標準（org-persist.el）が自身のトップレベルで
+=(add-hook 'after-init-hook #'org-persist-load-all)= している挙動で、
+=org-persist--index=（=~/.emacs.d/.var/org/persist/index.eld=）に
+蓄積された org-element-cache の永続化エントリ（263 件、大半が
+org-roam のノート）全件に対応するファイルを、起動時に一括で開いて
+検証する。org-roam 配下の一部ファイルへのアクセスが不安定な環境では、
+この一括検証自体が daemon クラッシュの引き金になっていた。
+org-element-cache は各バッファを実際に開いた時点で遅延生成されるため、
+起動時の一括ウォームアップを止めても機能は失われない。
+=(with-eval-after-load 'org-persist (remove-hook 'after-init-hook
+#'org-persist-load-all))= を追加して無効化した。
+
+** orgx-export.el: org-hugo-export-wim-to-md 実行中は org-agenda-files をエクスポート対象ファイルのみに絞り、ox-hugo エクスポート失敗の真因を修正
+
+上記 2 件の修正（EXPORT_HUGO_BUNDLE 生成方法の変更、org-persist-load-all
+の除去）を適用した後も、実際に =org-hugo-export-wim-to-md= を実行すると
+=/Users/ac1965/Documents/org/org-roam/= 配下の別ファイルへのアクセスで
+=Resource deadlock avoided= が発生し、エクスポートが失敗する事象が
+残っていた。実機で =find-file-noselect= に一時的な advice を付けて
+呼び出しスタックを採取したところ、次の連鎖が判明した:
+
+: org-hugo-export-wim-to-md → org-id-update-id-locations →
+: org-agenda-files → org-add-archive-files →
+: org-get-agenda-file-buffer → find-file-noselect
+
+=org-hugo-export-wim-to-md= は =EXPORT_HUGO_BUNDLE= の生成方法とは
+無関係に、内部で無条件に =org-id-update-id-locations= を呼び出しており、
+これが =org-agenda-files=（数百件、大半が org-roam のノート）と
+そのアーカイブファイルを一括で開こうとしていた。EXPORT_HUGO_BUNDLE
+修正はこの経路とは独立した別の改善であり、無効だったわけではないが、
+今回のエクスポート失敗の真因ではなかった。
+
+対処として、=org-hugo-export-wim-to-md= に :around advice
+（=orgx-export--limit-agenda-files-during-hugo-export=）を追加し、
+実行中だけ =org-agenda-files= をエクスポート対象バッファのファイル
+1 件に絞るようにした。ブログ記事内では =id:= リンクを使っていないため、
+ID 解決範囲を絞っても実害はない。実機で単一記事のエクスポートが
+成功し、=content/post/<bundle>/index.md= が正しく生成されることを
+確認した。
