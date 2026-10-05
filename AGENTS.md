@@ -37,9 +37,14 @@ treat a block as inert documentation.
 and everything under `lisp/{core,ui,auth,completion,orgx,vcs,dev,utils}/`
 and `personal/` are tangled output. `ChangeLog` is likewise generated
 (via `make changelog-tangle`, an `ox-ascii` export of the Changelog
-subtree). Do not edit any of these by hand — including `Makefile`
-itself. Edit the corresponding source block in `README.org`, then
-regenerate with `make reload`.
+subtree). `scripts/*.py` (`check_emphasis.py`,
+`check_fboundp_guards.py`, `reload.py`, `claude_org_roam_export.py`)
+are tangled from README.org's Python blocks, and `svg/*.dot` /
+`svg/*.mmd` are tangled diagram sources (git-ignored intermediates;
+`make dot-tangle` / `make mmd-tangle`). `svg/*.svg` are rendered from
+those (`make dot-svg` / `make mmd-svg`) and committed. Do not edit
+any of these by hand — including `Makefile` itself. Edit the corresponding source block in
+`README.org`, then regenerate with `make reload`.
 
 `personal/` sits directly under `.emacs.d/`, not under `lisp/`. The
 other module directories (`core/`, `ui/`, `auth/`, `completion/`,
@@ -79,6 +84,10 @@ cookie to line 2 and broke it. Do not reintroduce `:comments link`.
 │   ├── dev/        (15)
 │   └── utils/      (10)
 ├── personal/       (7) — user/device overlay, loaded before lisp/modules.el
+├── scripts/        (4) — tangled Python helpers (lint, reload, export)
+├── svg/            diagram sources (.dot/.mmd, tangled) and rendered .svg
+├── puppeteer-config.json   mmdc (Mermaid CLI) config, hand-maintained
+├── demo.png        screenshot referenced from README.org
 ├── .var/           runtime state — do not delete
 ├── .cache/         transient — safe to delete, auto-regenerates
 └── .etc/           external resources
