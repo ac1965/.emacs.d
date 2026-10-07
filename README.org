@@ -65,6 +65,94 @@
 
 [[file:demo.png]]
 
+** Clone and First Steps
+:PROPERTIES:
+:CUSTOM_ID: clone-and-first-steps
+:END:
+
+リポジトリは https://github.com/ac1965/.emacs.d です。 =git clone= した直後は
+=README.org= しか設定の実体がありません。 =early-init.el= 、 =init.el= 、 =lisp/= 、
+=personal/= 、 =Makefile= はすべて README.org からの tangle 生成物で、 =.gitignore=
+対象だからです。そのため、clone のあとに *tangle する* 作業が必須になります。
+
+1. 既存の =~/.emacs.d= があれば退避し、clone する。
+
+   #+begin_example
+   mv ~/.emacs.d ~/.emacs.d.bak        # 既存の設定がある場合のみ
+   git clone https://github.com/ac1965/.emacs.d ~/.emacs.d
+   cd ~/.emacs.d
+   #+end_example
+
+2. 初回の tangle を行う。この時点では =Makefile= がまだ無いので、 =make= ではなく
+   生の Emacs バッチコマンドを使う（理由は [[#tangling][Tangle]] の「初回ブートストラップ」を参照）。
+
+   #+begin_example
+   emacs -Q --batch --eval '(require (quote ob-tangle))' \
+                     --eval '(org-babel-tangle-file "README.org")'
+   #+end_example
+
+3. 以後は =make reload= で再生成する（ =clean= + =tangle= + =check-cookies= ）。
+
+   #+begin_example
+   make reload
+   #+end_example
+
+4. Emacs を起動する。初回起動は、straight.el による外部パッケージの取得と
+   ネイティブコンパイルが走るため、ネットワーク接続が必要で時間もかかります。
+   途中でウィンドウが固まったように見えても、終わるまで待ってください。
+   起動に失敗した場合は、 =*Messages*= と =*Warnings*= の内容を確認します。
+
+5. 自分用の設定を =personal/= に合わせる。 =personal/user.el= 、 =personal/device-darwin.el=
+   などは本人（ac1965）向けの内容を含む tangle 生成物です。そのまま使わず、
+   README.org の [[#personal-config][Personal Configuration]] 節にある該当ブロックを自分の環境向けに
+   書き換えてから =make reload= してください。 =personal/= 自体を直接編集しても、
+   次の tangle で上書きされます。
+
+6. 秘密情報（API キー、パスワード等）は設定に書かず、 =pass= + GnuPG や
+   auth-source に置きます（[[#prerequisites][Prerequisites]] の推奨ツールを参照）。
+
+*注意*
+
+- =.var/= は履歴などのランタイム状態です。消すと困るので残します。 =.cache/= は消しても
+  自動的に作り直されます。
+- 設定を変えるときは、生成物（ =.el= ）ではなく必ず README.org を編集します。
+
+** Emacs Version Numbers
+:PROPERTIES:
+:CUSTOM_ID: emacs-version-numbers
+:END:
+
+Emacs のバージョンは =メジャー.マイナー.リビジョン= の形で表されます。たとえば
+=32.0.50= なら、メジャーが 32、マイナーが 0、3 つ目が 50 です。
+
+| 表記             | 意味                                                         |
+|------------------+--------------------------------------------------------------|
+| =30.1= 、 =30.2= | 安定版のリリース。2 要素で、マイナーが 1 以上になる          |
+| =31.0.50=        | 開発版（ =master= ）。次の 31 リリースに向けた開発中の状態   |
+| =31.0.90=        | プレテスト版。リリース直前の試験版で、 =.91= 、 =.92= と続く |
+| =32.0.50=        | 31 の枝を切ったあとの =master= 。次の次の開発版              |
+
+- *3 つ目が 50* ... 開発版（ =master= ）。毎日のように変わるため、同じ =32.0.50= でも
+  コミットが違えば中身が違う。
+- *3 つ目が 90 以上* ... リリース前のプレテスト。90 から始まり、番号が進むほど
+  正式版に近づく。
+- *2 要素* （ =31.1= など）... 正式リリース。 =31.1= の次はバグ修正版の =31.2= になる。
+
+*本設定が対象とする版*
+
+本設定は Emacs 31 を対象にしており、作者の環境は =32.0.50= （ =master= ）です。
+[[#prerequisites][Prerequisites]] の表のとおり、同じ =32.0.50= でもコミットで挙動が変わるため、
+問題を報告するときはバージョン番号だけでなくコミットも併記してください。
+
+*自分の Emacs のバージョンを調べる*
+
+#+begin_example
+M-x emacs-version
+#+end_example
+
+Lisp からは =emacs-major-version= と =emacs-minor-version= で読めます。本設定のバージョン
+ガードも、 =(>= emacs-major-version 31)= のようにこれらで判定しています。
+
 ** Architecture
 :PROPERTIES:
 :CUSTOM_ID: architecture
@@ -97,18 +185,11 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 下の層を頼ってよいが、下の層は上の層のことを知らない。これだけで、ある層に手を入れたときの
 影響範囲が「その層と、それより上」に限定されます。
 
-ロード順は次のとおりで、これがそのまま依存の向きになります。
-
-1. early-init
-2. core（policy サブ層を含む）
-3. ui
-4. auth
-5. completion
-6. orgx
-7. vcs
-8. dev
-9. utils
-10. personal
+ロード順は上の一覧を下（layer 1）から上（layer 10）へ辿った順で、これがそのまま依存の向きになります。
+ただし personal だけは例外です。依存の向きでは最上位ですが、 =personal/user.el= と
+=personal/<ユーザー名>.el= は、 =my:modules-extra= や各種変数を先に決めておく必要があるため、
+=init.el= のステップ 9 で =lisp/modules.el= （ステップ 10）より前に読み込まれます。
+それ以外の =personal-*.el= は、 =user.el= が必要に応じて（Org のロード後やアイドル時などに）読み込みます。
 
 *守るべき不変条件*
 
@@ -146,13 +227,15 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 │   ├── dev/
 │   └── utils/
 ├── personal/    (ユーザー／デバイス固有のオーバーレイ)
+├── scripts/     (lint・リロード・エクスポート用の Python ヘルパー。tangle 生成物)
+├── svg/         (図のソース .dot/.mmd と、描画済みの .svg)
 ├── .var/        (ランタイム状態)
 ├── .cache/      (一時キャッシュ)
 └── .etc/        (外部リソース)
 #+end_example
 
-上に並んでいる =.el= ファイルと =Makefile= は、すべて =README.org= から tangle される生成物
-です。直接編集しても、次の tangle で上書きされます。
+=README.org= と =svg/*.svg= 、 =puppeteer-config.json= を除くファイルは、すべて =README.org=
+から tangle される生成物です（ =svg/*.svg= は =make diagrams= で描画してコミットします）。直接編集しても、次の tangle で上書きされます。
 
 | ディレクトリ | 役割 |
 |-------------+------|
@@ -160,7 +243,9 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 | =personal/= | ユーザー／デバイスのオーバーレイ（ =modules.el= より前に =init.el= が読み込む） |
 | =.var/=     | ランタイム状態（パッケージが書き出すデータ） |
 | =.cache/=   | 一時キャッシュ（削除しても自動的に再生成される） |
-| =.etc/=     | 外部リソース（テーマファイル等） |
+| =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる） |
+| =svg/=      | 図のソース（ =.dot= / =.mmd= ）と描画済みの =.svg= |
+| =.etc/=     | no-littering の設定系ファイル（ =custom.el= 等） |
 
 *状態ファイルを 3 つに分ける理由*
 
@@ -188,6 +273,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 - セッション永続化、履歴、バックアップ、自動保存ポリシー
   （ =core-history= 、 =core-persistence= 、 =core-editing= ）
 - バックグラウンドジョブ・スケジューラのファサード（ =core-session= / =core-session-private= ）
+- 永続的な =*scratch*= バッファの補助（ =core-buffers= ）
 - GC チューニングと起動性能（ =core-gc= 、 =core-runtime= ）
 - custom-file の管理（ =core-custom= ）と LSP/UI バックエンドの選択（ =core-switches= ）
 
@@ -321,7 +407,7 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
 - =orgx-brain= — =my:d:org-roam= をノートディレクトリとして共有する =org-brain=
   マインドマップビュー。コマンドは =my/brain-visualize=
 - =orgx-citar= — =citar= + =org-cite= による文献引用管理。 =citar-bibliography= は
-  =my:d:org-biblio= （ =my:d:org= 配下、新設）を参照し、ホームディレクトリ直書きの
+  =my:d:org-biblio= （ =my:d:org= 配下）を参照し、ホームディレクトリ直書きの
   パスをハードコードしない。 =citar-embark= が =embark-act= 経由の文献アクション
   （開く／挿入など）を追加する
 
@@ -361,6 +447,10 @@ vcs は dev 層に依存してはいけません。
 - AI 支援編集（aidermacs、gptel）
 - ターミナル統合（vterm）
 - コード整形（apheleia）
+- ビルド・Docker・SQL・REST・インフラ系ファイルのモード・プロジェクト基盤・検索／ナビゲーション
+  の補助（ =dev-build= 、 =dev-docker= 、 =dev-sql= 、 =dev-rest= 、 =dev-infra-modes= 、
+  =dev-web-core= 、 =dev-navigation= 、 =dev-tools= ）
+- EMMS による音楽プレイヤー統合（ =dev-music= ）
 
 なお、Org Babel と Claude API を組み合わせたワークフローは =personal/personal-ai.el= にあり、
 HTTP 通信は =utils/utils-claude.el= に依存します。AI 関連がすべて dev 層にあるわけではない
@@ -394,8 +484,8 @@ HTTP クライアントを介さずプロセス起動のみで完結するため
 ユーザー固有のカスタマイズです。
 
 - 任意（無くてもシステムは動く）
-- 最後にロードされる
-- 下位層を変更してはならない
+- 依存の向きでは最上位。ただし =user.el= と =<ユーザー名>.el= は =modules.el= より前に読み込まれ、変数の上書きだけを行う
+- 下位層の関数やモジュールを書き換えてはならない（上書きしてよいのは =defvar= / =defcustom= の値だけ）
 
 ** Module Structure
 :PROPERTIES:
@@ -473,10 +563,10 @@ autoload との違いは、遅延しない点にあります。ローダは =(ap
 | =ui-visual-aids=  | ui    | pulsar、hl-todo、rainbow-delimiters、indent-bars |
 | =ui-macos=        | ui    | macOS のタイトルバー、タスクバー、コンパイル中のスリープ抑止 |
 | =orgx-typography= | orgx  | valign、org-appear |
-| =orgx-roam-ui=    | orgx  | org-roam-ui グラフビジュアライザ（既定では無効。下記参照） |
 | =orgx-brain=      | orgx  | org-brain マインドマップビュー |
+| =orgx-citar=      | orgx  | citar + org-cite による文献引用管理 |
 
-=orgx-roam-ui= は上の表に挙げてありますが、既定の =my:modules-extra= からは外しています。
+=orgx-roam-ui= は上の表に含まれません。意図的に =my:modules-extra= から外しています。
 このモジュールを有効にすると org-roam-ui がモジュールのロード時に依存を導入し、
 =org-roam= → =org= を起動直後に引き込むため、Org の遅延ロードが崩れます。グラフビジュアライザを
 常用する場合のみ、 =personal/user.el= の =my:modules-extra= に =orgx-roam-ui= を戻してください。
@@ -684,7 +774,7 @@ https://www.gnu.org/licenses/gpl-3.0.txt
 
 *Emacs 30 でも動くのか*
 
-動きます。Emacs 31 固有のコードは、すべて  =(> emacs-major-version 31)= か =boundp= /
+動きます。Emacs 31 固有のコードは、すべて  =(>= emacs-major-version 31)= か =boundp= /
 =fboundp= でガードしてあります。31 の新機能が使えないぶん機能は落ちますが、設定が壊れる
 ことはありません。削除安全性という考え方を、モジュールだけでなく Emacs のバージョンにも
 適用している、と考えてください。
@@ -11701,7 +11791,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; `my:modules-extra' に追加する処理を core/core-custom-ui-extras.el からここへ移した。
   ;; core モジュールが上位層（ui、orgx）のモジュール名を注入してはならない。これは個人の
   ;; 表示上の選択であり、personal 層に属する。本ファイルは init.el のステップ 9 で、
-  ;; modules.el が require されるステップ 7 より前にロードされるため、my/modules-load が
+  ;; modules.el が require されるステップ 10 より前にロードされるため、my/modules-load が
   ;; 走る時点で extra リストは完全に構築済みである。
   ;;
   ;;
@@ -11720,7 +11810,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;;
   ;;
   ;; これは `modules.el' が require される前に走る: init.el はステップ 9 で
-  ;; personal/user.el をロードし、ステップ 7 で modules を require するため、
+  ;; personal/user.el をロードし、ステップ 10 で modules を require するため、
   ;; my/modules-load が最終リストを走査する時点で my:modules-extra は構築済みである。
   ;; orgx-roam-ui は意図的に含めない。org-roam-ui はモジュールのロード時に
   ;; (straight-use-package 'org-roam-ui) を行い、with-eval-after-load 'org-roam 経由で
@@ -15653,6 +15743,22 @@ digraph personal_override_contract {
 （=feat: リポジトリ初期設定とドキュメント追加=）に一括で取り込まれている。そのため、本節の
 エントリのうち初回コミットより前に相当する部分は、=git log= 上の個別コミットとは対応しない。
 初回コミット以降に追加されたエントリのみが、実際のコミット単位の変更履歴と一致する。
+
+** README.org の解説文を設定の実態に合わせて修正
+
+冒頭の解説文を実ファイルと突き合わせ、食い違いを直した。
+- バージョンガードを実コードどおり =(>= emacs-major-version 31)= に訂正した。
+- =personal/user.el= の =my:modules-extra= 一覧が表と一致しなかったため、表の =orgx-roam-ui= を =orgx-citar= に差し替えた。
+- personal 層は「最後にロード」ではなく、 =user.el= が =modules.el= より前（init.el のステップ 9）に読み込まれる旨を明記し、コメント中の「ステップ 7」を「ステップ 10」に直した。
+- Architecture のロード順リストが層の一覧と重複していたため統合した。
+- Directory Layout に =scripts/= と =svg/= を追加し、 =.etc/= の説明を実態（no-littering の設定系ファイル）に直した。
+- core / dev 層の責務に抜けていたモジュールを追記し、 =orgx-citar= の「新設」を削除した。
+
+** Installation に「Clone and First Steps」と「Emacs Version Numbers」を追加
+
+clone 直後は README.org 以外の生成物が存在しないため、初回 tangle の手順（Tangle 節の
+ブートストラップへの導線）、personal/ の書き換え方、初回起動時の注意を Installation 節にまとめた。
+あわせて Emacs のバージョン表記（32.0.50 や 31.0.90 の意味）を説明した。
 
 ** dirvish のカレント行ハイライトが表示されない不具合を修正
 
