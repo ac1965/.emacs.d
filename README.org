@@ -11110,6 +11110,13 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
     :type 'boolean
     :group 'utils-ime)
 
+  (defcustom utils-ime-enable-region-p t
+    "If non-nil, switch to ASCII while the region is active.
+範囲選択中の `M-w' / `C-w' などが日本語 IME に取られて Emacs に届かないのを防ぐ。
+選択を解除したら、切り替える直前の入力ソースへ戻す。"
+    :type 'boolean
+    :group 'utils-ime)
+
   (defvar utils-ime--in-target-p nil
     "Non-nil while the selected buffer is considered inside a target context.")
 
@@ -11119,6 +11126,10 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
 
   (defvar utils-ime--minibuffer-saved-source nil
     "Input source captured immediately before the minibuffer was activated.")
+
+  (defvar utils-ime--region-saved-source nil
+    "Input source captured immediately before the region became active.
+Nil when the source was already ASCII or the region is inactive.")
 
   (defun utils-ime-available-p ()
     "Return non-nil when macism can be used on this system."
@@ -11202,6 +11213,23 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
       (utils-ime--switch-to utils-ime--minibuffer-saved-source)
       (setq utils-ime--minibuffer-saved-source nil)))
 
+  (defun utils-ime--region-activate ()
+    "範囲選択が始まったとき、日本語入力なら ASCII に切り替えて元の入力ソースを保存する。
+すでに ASCII のとき、ミニバッファ内、保存済みのときは何もしない。"
+    (when (and utils-ime-enable-region-p
+               (not (minibufferp))
+               (not utils-ime--region-saved-source))
+      (let ((source (utils-ime--current-source)))
+        (when (and source (not (equal source utils-ime-ascii-source)))
+          (setq utils-ime--region-saved-source source)
+          (utils-ime-to-ascii)))))
+
+  (defun utils-ime--region-deactivate ()
+    "範囲選択が終わったとき、保存した入力ソースへ戻す。"
+    (when utils-ime--region-saved-source
+      (utils-ime--switch-to utils-ime--region-saved-source)
+      (setq utils-ime--region-saved-source nil)))
+
   ;; リーダー基盤のロード後にキーを包む。ui-leader が既に provide 済みなら即時実行。
   (with-eval-after-load 'ui-leader
     (utils-ime--install-leader))
@@ -11213,6 +11241,10 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
   ;; ミニバッファの ASCII 化／復帰。
   (add-hook 'minibuffer-setup-hook #'utils-ime--minibuffer-setup)
   (add-hook 'minibuffer-exit-hook #'utils-ime--minibuffer-exit)
+
+  ;; 範囲選択中の ASCII 化／復帰。
+  (add-hook 'activate-mark-hook #'utils-ime--region-activate)
+  (add-hook 'deactivate-mark-hook #'utils-ime--region-deactivate)
 
   (provide 'utils-ime)
   ;;; utils/utils-ime.el ends here
@@ -15880,6 +15912,14 @@ nano-theme 側のフェイスに任せるようにした（本体は =ui-nano--a
 =ui-theme= 、 =ui-nano-palette= 、 =ui-keymap= 、 =vcs-magit= 、 =completion-corfu= 、
 =completion-vertico= 、 =core-runtime= のブロックに、 =:CUSTOM_ID:= と同じ綴りで名前を付けた。
 既存ブロックへの一括付与は行っていない（AGENTS.md §5）。tangle 先と noweb の挙動は変わらない。
+
+** utils-ime: 範囲選択中は ASCII に切り替え、日本語 IME に M-w / C-w を取られないようにした
+
+散文バッファ（ =org-mode= や =*scratch*= など）で日本語 IME のまま範囲選択すると、 =M-w= や =C-w= が
+IME に取られて Emacs に届かない場合があった。 =activate-mark-hook= で ASCII に切り替え
+（切り替え前の入力ソースを保存）、 =deactivate-mark-hook= で元に戻す。すでに ASCII のとき、
+ミニバッファ内では何もしない。 =utils-ime-enable-region-p= で無効にできる。範囲選択中は日本語を
+入力できない（選択を解除すれば元に戻る）。
 
 ** nano-dark で dired / dirvish のフェイスに nano-theme の dark パレットを与えた
 
