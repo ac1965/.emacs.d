@@ -1722,7 +1722,7 @@ timers first."
   ;; ui-font.el / ui-nano-modeline.el の daemon 分岐と同じ after-make-frame-functions
   ;; に乗るが、それらより後に発火するよう depth 100 を指定する。さらに
   ;; nano-modeline 側は `run-with-timer 0 nil' で 1 ティック遅らせてから
-  ;; 「[ui] nano-modeline initialized.」を出す（`ui-nano--setup-after-frame-realized'
+  ;; 「[ui] nano-modeline initialized.」を出す（`core-runtime-run-on-first-graphic-frame'
   ;; を参照。色の問い合わせにはフレーム実体化後のもう 1 ティックが必要なため）ので、
   ;; こちらも同じだけ遅らせないと、depth 100 でも nano-modeline より先に出てしまう
   ;; 可能性がある。複数フレームで繰り返し表示されないよう、初回発火時に自分自身を
@@ -2955,6 +2955,7 @@ pre-existing *scratch* buffer, or content restored by `desktop-save'."
 | Escape | ⎋ | Broken Circle with Northwest Arrow |
 | Tab | ⇥ | Rightwards Arrow to Bar |
 
+#+NAME: core-runtime
 #+begin_src emacs-lisp
   ;;; lisp/core/core-runtime.el --- コアのランタイム不変条件（UX なし） -*- lexical-binding: t; -*-
   ;;
@@ -3004,6 +3005,37 @@ pre-existing *scratch* buffer, or content restored by `desktop-save'."
          (when (boundp 'w32-rwindow-modifier)
            (setq w32-rwindow-modifier 'super)))
         (_ nil))))
+
+  (defun core-runtime-add-hook-once (hook function)
+    "FUNCTION を HOOK に追加し、最初に実行された時点で自身をフックから外す。
+「一度だけ初期化する」ための共通の窓口。フラグ変数と `remove-hook' を各モジュールが
+手で持たずに済む。FUNCTION は HOOK の引数をそのまま受け取る。"
+    (letrec ((wrapper (lambda (&rest args)
+                        (remove-hook hook wrapper)
+                        (apply function args))))
+      (add-hook hook wrapper)))
+
+  (defun core-runtime-run-on-first-graphic-frame (function)
+    "最初のグラフィカルなフレームが実体化した 1 tick 後に FUNCTION を一度だけ呼ぶ。
+FUNCTION にはそのフレームを渡す。daemon 用の共通の窓口。
+- `after-make-frame-functions' はフレーム実体化の途中（色がまだ確定していない
+  状態）で同期的に走る。`face-foreground' 等の色の問い合わせは nil を返し、その nil が
+  フェイスに焼き込まれる。そのため `run-with-timer' で 1 tick 遅らせる。
+- ターミナルのフレームでは呼ばず、次のグラフィカルなフレームを待つ。
+- 2 枚のフレームが続けて作られても一度しか呼ばない。"
+    (let ((done nil) handler)
+      (setq handler
+            (lambda (frame)
+              (run-with-timer
+               0 nil
+               (lambda ()
+                 (when (and (not done)
+                            (frame-live-p frame)
+                            (display-graphic-p frame))
+                   (setq done t)
+                   (remove-hook 'after-make-frame-functions handler)
+                   (funcall function frame))))))
+      (add-hook 'after-make-frame-functions handler)))
 
   (defun core-runtime--startup-init ()
     "Apply runtime configuration that must run after all modules are loaded.
@@ -4137,6 +4169,7 @@ FRAME は省略可能にし、その場合は `selected-frame' を見る。"
 :header-args:emacs-lisp: :tangle lisp/ui/ui-nano-palette.el
 :END:
 
+#+NAME: ui-nano-palette
 #+begin_src emacs-lisp
   ;;; ui/ui-nano-palette.el --- Nano 風カラーパレット（発展版） -*- lexical-binding: t; -*-
   ;;
@@ -4282,12 +4315,44 @@ dark へ切り替えるとき、テーマが定義していない（light の固
   ;; 定義するフェイスは enable-theme が再計算するが、dirvish-hl-line のように
   ;; テーマが触れないフェイスには明るい背景色が残り、白い文字が読めなくなる。
   ;; `default' はフォント設定を失わないよう対象から除く。
+  ;; テーマ（nano-dark）が定義しない dired / dirvish のフェイスには、dark 用の色を
+  ;; nano-theme 自身のパレット（`nano-dark-*'、Nord 系）から与える。独自の dark 色は
+  ;; 作らない。`nano-dark-*' が未定義のときは何も設定しない（元の定義のまま）。
+  (defun ui-nano--dark-color (symbol)
+    "`nano-theme' の dark パレット SYMBOL の色を返す。未定義なら nil。"
+    (let ((value (and (boundp symbol) (symbol-value symbol))))
+      (and (stringp value) value)))
+
+  (defun ui-nano--apply-dark-extras ()
+    "dired / dirvish のフェイスに `nano-dark-*' の色を与える。"
+    (let ((salient  (ui-nano--dark-color 'nano-dark-salient))
+          (faded    (ui-nano--dark-color 'nano-dark-faded))
+          (critical (ui-nano--dark-color 'nano-dark-critical))
+          (strong   (ui-nano--dark-color 'nano-dark-strong))
+          (popout   (ui-nano--dark-color 'nano-dark-popout))
+          (subtle   (ui-nano--dark-color 'nano-dark-subtle)))
+      (when (and salient faded critical strong popout subtle)
+        (ui-nano--safe-face 'dired-directory :foreground salient :weight 'bold)
+        (ui-nano--safe-face 'dired-symlink :foreground salient)
+        (ui-nano--safe-face 'dired-ignored :foreground faded)
+        (ui-nano--safe-face 'dired-flagged :foreground critical :weight 'bold)
+        (ui-nano--safe-face 'dired-marked :foreground salient :weight 'bold)
+        (ui-nano--safe-face 'dired-header :foreground strong :weight 'bold)
+        (ui-nano--safe-face 'dired-warning :foreground popout :weight 'bold)
+        (ui-nano--safe-face 'dirvish-hl-line :background subtle)
+        (ui-nano--safe-face 'dirvish-git-commit-message-face :foreground faded)
+        (ui-nano--safe-face 'dirvish-header-line-path-face
+                            :foreground strong :weight 'bold)
+        (ui-nano--safe-face 'dirvish-subtree-state-face :foreground salient))))
+
   (defun my/nano-apply-faces ()
-    "Apply Nano palette, or restore the faces it touched when dark is active."
+    "Apply Nano palette; in dark, restore touched faces and apply dark extras."
     (if (eq frame-background-mode 'dark)
-        (dolist (face ui-nano--touched-faces)
-          (unless (eq face 'default)
-            (face-spec-recalc face nil)))
+        (progn
+          (dolist (face ui-nano--touched-faces)
+            (unless (eq face 'default)
+              (face-spec-recalc face nil)))
+          (ui-nano--apply-dark-extras))
       (ui-nano--apply-palette)))
 
   (defun ui-nano--apply-palette ()
@@ -4587,20 +4652,15 @@ dark へ切り替えるとき、テーマが定義していない（light の固
     :after nano-emacs
     :require nil)
 
-  ;; after-make-frame-functions は、フレームの生成中（ウィンドウシステムが
-  ;; まだ実際の色を確定させる前）に同期的に走る。ui-font-apply のように
-  ;; :foreground/:height を明示的に「設定」するだけなら問題ないが、
-  ;; nano-modeline の defface は (face-foreground 'default) のように現在の
-  ;; 色を「問い合わせる」ため、この早すぎるタイミングでは値がまだ確定して
-  ;; おらず nil が返る（display-graphic-p のガードだけでは防げなかった、
-  ;; 実機検証で判明した問題）。run-with-timer で 1 ティック遅らせ、フレームが
-  ;; 完全に実体化してから実行することで回避する。
-  (defun ui-nano--setup-after-frame-realized (frame)
-    "フレームが完全に実体化してから `ui-nano--setup' を呼ぶ。"
-    (run-with-timer 0 nil #'ui-nano--setup frame))
+  ;; nano-modeline の defface は (face-foreground 'default) のように現在の色を
+  ;; 「問い合わせる」ため、フレーム実体化の途中では値が確定しておらず nil が返る
+  ;; （display-graphic-p のガードだけでは防げなかった、実機検証で判明した問題）。
+  ;; daemon では、フレームの実体化後に呼ぶ `core-runtime-run-on-first-graphic-frame'
+  ;; に任せる（1 tick の遅延とグラフィカル判定を一箇所にまとめたもの）。
+  (declare-function core-runtime-run-on-first-graphic-frame "core-runtime")
 
   (if (daemonp)
-      (add-hook 'after-make-frame-functions #'ui-nano--setup-after-frame-realized)
+      (core-runtime-run-on-first-graphic-frame #'ui-nano--setup)
     (add-hook 'after-init-hook #'ui-nano--setup))
 
   ;;;###autoload
@@ -4619,6 +4679,7 @@ dark へ切り替えるとき、テーマが定義していない（light の固
 :header-args:emacs-lisp: :tangle lisp/ui/ui-theme.el
 :END:
 
+#+NAME: ui-theme
 #+begin_src emacs-lisp
   ;;; ui/ui-theme.el --- UI 層のテーマ設定 -*- lexical-binding: t; -*-
   ;;
@@ -4698,6 +4759,12 @@ dark へ切り替えるとき、テーマが定義していない（light の固
 
   (setq-default line-spacing ui-theme-line-spacing)
 
+  (defun ui-theme--color (symbol fallback)
+    "パレット変数 SYMBOL の色を返す。未定義・空なら FALLBACK を返す。
+色の正本は `ui-nano-palette'。ここに色の固定値を重ねて持たないための窓口。"
+    (let ((value (and (boundp symbol) (symbol-value symbol))))
+      (if (and (stringp value) (not (string-empty-p value))) value fallback)))
+
   (defun ui-theme--safe-face (face &rest args)
     "Apply ARGS to FACE when FACE exists."
     (when (facep face)
@@ -4733,19 +4800,19 @@ dark へ切り替えるとき、テーマが定義していない（light の固
     (unless (eq frame-background-mode 'dark)
       (ui-theme--safe-face
        'electric-pair-overlay-face
-       :background "#e5e7eb")
+       :background (ui-theme--color 'nano-color-subtle "#e5e7eb"))
 
       (ui-theme--safe-face
        'show-paren-match
-       :background "#e5e7eb"
-       :foreground "#111827"
+       :background (ui-theme--color 'nano-color-subtle "#e5e7eb")
+       :foreground (ui-theme--color 'nano-color-strong "#111827")
        :weight 'bold))
 
     (ui-theme--sync-modeline-faces)
 
     (ui-theme--safe-face
      'show-paren-mismatch
-     :background "#dc2626"
+     :background (ui-theme--color 'nano-color-critical "#dc2626")
      :foreground "white"
      :weight 'bold))
 
@@ -4834,10 +4901,6 @@ dark へ切り替えるとき、テーマが定義していない（light の固
     ((spacious-padding-widths . '((left . 15) (right . 15)))
      (spacious-padding-subtle-mode-line . t)))
 
-  (defvar ui-theme--initialized-p nil
-    "Non-nil once `ui-theme--init' has run.
-デーモンモードでのみ、一度きりの初期化を守るために参照する（後述）。")
-
   ;; --daemon 起動時、`emacs-startup-hook' は実フレームが無い状態で走る。
   ;; `ui-theme--init' は nano-faces / nano-theme を require・適用するが、
   ;; nano-faces 内部の色計算（`face-foreground' / `face-background' 等）は
@@ -4846,26 +4909,11 @@ dark へ切り替えるとき、テーマが定義していない（light の固
   ;; 通常起動（ターミナルを含む）では従来どおり `emacs-startup-hook' から
   ;; 無条件に呼ぶ（ターミナルでも 256 色パレットとして意味があるため、
   ;; display-graphic-p では絞らない）。daemon の場合のみ、初回のグラフィカル
-  ;; フレームができるまで遅延させる。
-  (defun ui-theme--init-once-graphic (&optional frame)
-    "`ui-theme--init' を、実際にグラフィカルなフレームができてから一度だけ呼ぶ。
-daemon 用のエントリポイント。"
-    (unless ui-theme--initialized-p
-      (when (display-graphic-p (or frame (selected-frame)))
-        (setq ui-theme--initialized-p t)
-        (ui-theme--init))))
-
-  ;; after-make-frame-functions はフレーム実体化の途中（色がまだ確定して
-  ;; いない状態）で同期的に走る。nano-faces の (face-foreground/background ...)
-  ;; はこのタイミングでは nil を返す（ui-nano-modeline.el と同じ問題、
-  ;; 実機検証で判明。詳細は Changelog を参照）。run-with-timer で 1 ティック
-  ;; 遅らせ、フレームが完全に実体化してから呼ぶ。
-  (defun ui-theme--init-after-frame-realized (frame)
-    "フレームが完全に実体化してから `ui-theme--init-once-graphic' を呼ぶ。"
-    (run-with-timer 0 nil #'ui-theme--init-once-graphic frame))
+  ;; フレームが実体化するまで `core-runtime-run-on-first-graphic-frame' で遅延させる。
+  (declare-function core-runtime-run-on-first-graphic-frame "core-runtime")
 
   (if (daemonp)
-      (add-hook 'after-make-frame-functions #'ui-theme--init-after-frame-realized)
+      (core-runtime-run-on-first-graphic-frame (lambda (_frame) (ui-theme--init)))
     (add-hook 'emacs-startup-hook #'ui-theme--init))
 
   (provide 'ui-theme)
@@ -5660,6 +5708,7 @@ to reduce keystroke overhead for all leader-prefixed commands."
 
 この一手間のおかげで、 =ui-leader.el= がまだロードされていない状況でも、エラーで停止せずに
 安全に動きます。削除安全性の考え方を、キーバインドの層でも守っている形です。
+#+NAME: ui-keymap
 #+begin_src emacs-lisp
   ;;; ui/ui-keymap.el --- リーダーおよびローカルリーダーのバインド -*- lexical-binding: t; -*-
   ;;
@@ -5769,9 +5818,9 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
     (ui-keymap--bind 'ui-leader-w-map "d" #'delete-window)
     (ui-keymap--bind 'ui-leader-w-map "o" #'delete-other-windows)
     (ui-keymap--bind 'ui-leader-w-map "=" #'balance-windows)
-    (ui-keymap--bind 'ui-leader-w-map "w" #'ace-window)         ; NEW: pick window
-    (ui-keymap--bind 'ui-leader-w-map "r" #'winner-undo)        ; NEW: undo layout
-    (ui-keymap--bind 'ui-leader-w-map "R" #'winner-redo)        ; NEW: redo layout
+    (ui-keymap--bind 'ui-leader-w-map "w" #'ace-window)  ; pick window
+    (ui-keymap--bind 'ui-leader-w-map "r" #'winner-undo)  ; undo layout
+    (ui-keymap--bind 'ui-leader-w-map "R" #'winner-redo)  ; redo layout
     (ui-keymap--bind 'ui-leader-w-map "m" #'my/save-window-layout)
     (ui-keymap--bind 'ui-leader-w-map "M" #'my/restore-window-layout)
 
@@ -5779,22 +5828,22 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
     (ui-keymap--bind 'ui-leader-p-map "p" #'project-switch-project)
     (ui-keymap--bind 'ui-leader-p-map "f" #'project-find-file)
     (ui-keymap--bind 'ui-leader-p-map "d" #'project-dired)
-    (ui-keymap--bind 'ui-leader-p-map "b" #'project-switch-to-buffer)  ; NEW
+    (ui-keymap--bind 'ui-leader-p-map "b" #'project-switch-to-buffer)
 
     ;; ── s: 検索 ────────────────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-s-map "s" #'consult-line)       ; alias for /
     (ui-keymap--bind 'ui-leader-s-map "r" #'consult-ripgrep)    ; was C-c r (3 keys)
     (ui-keymap--bind 'ui-leader-s-map "m" #'consult-imenu)
-    (ui-keymap--bind 'ui-leader-s-map "f" #'consult-find)       ; NEW: find files
-    (ui-keymap--bind 'ui-leader-s-map "o" #'consult-outline)    ; NEW: outline nav
+    (ui-keymap--bind 'ui-leader-s-map "f" #'consult-find)  ; find files
+    (ui-keymap--bind 'ui-leader-s-map "o" #'consult-outline)  ; outline nav
     (ui-keymap--bind 'ui-leader-s-map "O" #'consult-org-heading) ; Org 見出しジャンプ
 
     ;; ── g: git ─────────────────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-g-map "s" #'magit-status)
     (ui-keymap--bind 'ui-leader-g-map "c" #'magit-commit)
-    (ui-keymap--bind 'ui-leader-g-map "d" #'magit-diff)         ; NEW
-    (ui-keymap--bind 'ui-leader-g-map "l" #'magit-log-current)  ; NEW
-    (ui-keymap--bind 'ui-leader-g-map "b" #'magit-blame)        ; NEW
+    (ui-keymap--bind 'ui-leader-g-map "d" #'magit-diff)
+    (ui-keymap--bind 'ui-leader-g-map "l" #'magit-log-current)
+    (ui-keymap--bind 'ui-leader-g-map "b" #'magit-blame)
 
     ;; ── c: コード ──────────────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-c-map "a" #'dev-lsp-code-actions)
@@ -5813,9 +5862,9 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
     ;; ── t: トグル ──────────────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-t-map "w" #'whitespace-mode)
     (ui-keymap--bind 'ui-leader-t-map "r" #'read-only-mode)
-    (ui-keymap--bind 'ui-leader-t-map "l" #'display-line-numbers-mode)  ; NEW
-    (ui-keymap--bind 'ui-leader-t-map "v" #'visual-line-mode)           ; NEW
-    (ui-keymap--bind 'ui-leader-t-map "t" #'load-theme)                 ; NEW
+    (ui-keymap--bind 'ui-leader-t-map "l" #'display-line-numbers-mode)
+    (ui-keymap--bind 'ui-leader-t-map "v" #'visual-line-mode)
+    (ui-keymap--bind 'ui-leader-t-map "t" #'load-theme)
     (ui-keymap--bind 'ui-leader-t-map "n" #'my/ui-theme-nano-switch)    ; nano light/dark
 
     ;; ── o: org / roam ──────────────────────────────────────────────────────────
@@ -5827,29 +5876,29 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
     (ui-keymap--bind 'ui-leader-o-map "d" #'org-deadline)               ; was m d
     ;; org-roam のショートカット
     (when (fboundp 'org-roam-node-find)
-      (ui-keymap--bind 'ui-leader-o-map "r" #'org-roam-node-find))      ; NEW
+      (ui-keymap--bind 'ui-leader-o-map "r" #'org-roam-node-find))
     (when (fboundp 'org-roam-node-insert)
-      (ui-keymap--bind 'ui-leader-o-map "i" #'org-roam-node-insert))    ; NEW
+      (ui-keymap--bind 'ui-leader-o-map "i" #'org-roam-node-insert))
     (when (fboundp 'org-roam-buffer-toggle)
-      (ui-keymap--bind 'ui-leader-o-map "b" #'org-roam-buffer-toggle))  ; NEW
+      (ui-keymap--bind 'ui-leader-o-map "b" #'org-roam-buffer-toggle))
     (when (fboundp 'org-roam-capture)
-      (ui-keymap--bind 'ui-leader-o-map "n" #'org-roam-capture))        ; NEW
+      (ui-keymap--bind 'ui-leader-o-map "n" #'org-roam-capture))
 
     ;; ── a: アプリ（旧: 空） ────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-a-map "v"
-                     (if (fboundp 'vterm-toggle) #'vterm-toggle #'eshell))  ; NEW
+                     (if (fboundp 'vterm-toggle) #'vterm-toggle #'eshell))
     (when (fboundp 'emms)
-      (ui-keymap--bind 'ui-leader-a-map "m" #'emms))                        ; NEW
+      (ui-keymap--bind 'ui-leader-a-map "m" #'emms))
     (when (fboundp 'docker)
-      (ui-keymap--bind 'ui-leader-a-map "d" #'docker))                      ; NEW
+      (ui-keymap--bind 'ui-leader-a-map "d" #'docker))
 
     ;; ── h: ヘルプ（旧: 空） ────────────────────────────────────────────────────
-    (ui-keymap--bind 'ui-leader-h-map "h" #'help-command)       ; NEW
-    (ui-keymap--bind 'ui-leader-h-map "f" #'describe-function)  ; NEW
-    (ui-keymap--bind 'ui-leader-h-map "v" #'describe-variable)  ; NEW
-    (ui-keymap--bind 'ui-leader-h-map "k" #'describe-key)       ; NEW
-    (ui-keymap--bind 'ui-leader-h-map "m" #'describe-mode)      ; NEW
-    (ui-keymap--bind 'ui-leader-h-map "p" #'describe-package)   ; NEW
+    (ui-keymap--bind 'ui-leader-h-map "h" #'help-command)
+    (ui-keymap--bind 'ui-leader-h-map "f" #'describe-function)
+    (ui-keymap--bind 'ui-leader-h-map "v" #'describe-variable)
+    (ui-keymap--bind 'ui-leader-h-map "k" #'describe-key)
+    (ui-keymap--bind 'ui-leader-h-map "m" #'describe-mode)
+    (ui-keymap--bind 'ui-leader-h-map "p" #'describe-package)
 
     ;; ── q: 終了 / セッション ───────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
@@ -6962,6 +7011,7 @@ Keychain へフォールスルーします。
 :header-args:emacs-lisp: :tangle lisp/completion/completion-vertico.el
 :END:
 
+#+NAME: completion-vertico
 #+begin_src emacs-lisp
   ;;; completion/completion-vertico.el --- Vertico によるミニバッファ UI -*- lexical-binding: t; -*-
   ;;
@@ -6986,37 +7036,30 @@ Keychain へフォールスルーします。
 
   (eval-when-compile (require 'leaf))
 
-  (defvar completion-vertico--initialized nil)
+  (declare-function core-runtime-add-hook-once "core-runtime")
 
   (defun completion-vertico--init ()
-    "Initialize Vertico and Marginalia exactly once.
-  Guards repeated invocation with `completion-vertico--initialized'.
+    "Initialize Vertico and Marginalia.
   These are frame-independent (minibuffer completion works without a
   display), so unlike posframe below, no daemon branch is needed here.
-  Removes itself from `window-setup-hook' after first run."
-    (unless completion-vertico--initialized
-     (setq completion-vertico--initialized t)
+  一度だけ実行する保証は `core-runtime-add-hook-once' が担う（下の登録を参照）。"
+    (vertico-mode 1)
+    (marginalia-mode 1))
 
-     (vertico-mode 1)
-     (marginalia-mode 1)
-
-     (remove-hook 'window-setup-hook #'completion-vertico--init)))
-
-  (add-hook 'window-setup-hook #'completion-vertico--init)
+  ;; 初回実行で自身を window-setup-hook から外す。
+  (core-runtime-add-hook-once 'window-setup-hook #'completion-vertico--init)
 
   ;; vertico-posframe だけは vertico-mode / marginalia-mode と切り離して
   ;; 扱う。--daemon 起動時、上の completion-vertico--init は実フレームの無い
   ;; window-setup-hook で走ってしまうため、その中で単純に (display-graphic-p)
   ;; を見るだけだと daemon では常に nil と判定され、しかも
-  ;; completion-vertico--initialized が立って自分自身をフックから除去して
+  ;; completion-vertico--init が自分自身をフックから除去して
   ;; しまうため、後から emacsclient -c で本物のフレームが繋がっても
   ;; 二度と再試行されない（posframe が永久に効かないバグ）。
   ;;
   ;; ligature / nano-modeline と同じパターンで、初回のグラフィカルフレームが
   ;; できるまで独立して遅延させる。
-  (defvar completion-vertico--posframe-initialized nil)
-
-  (defun completion-vertico--activate-posframe ()
+  (defun completion-vertico--activate-posframe (&optional _frame)
     "posframe / vertico-posframe を require し、有効化する。"
     (require 'posframe)
     (require 'vertico-posframe)
@@ -7024,24 +7067,21 @@ Keychain へフォールスルーします。
     (vertico-posframe-mode 1)
     (require 'vertico-multiform nil t))
 
-  (defun completion-vertico--maybe-init-posframe (&optional frame)
-    "FRAME が初回のグラフィカルフレームなら vertico-posframe を有効化する。"
-    (unless completion-vertico--posframe-initialized
-      (when (display-graphic-p (or frame (selected-frame)))
-        (setq completion-vertico--posframe-initialized t)
-        (completion-vertico--activate-posframe))))
-
   ;; nano-modeline / ui-theme と同じ理由（after-make-frame-functions はフレーム
   ;; 実体化の途中で走り、色がまだ確定していない）で、posframe の子フレーム背景色
-  ;; も同種の影響を受け得る。直接の破損は未確認だが、同じパターンで予防的に
-  ;; 1 ティック遅らせておく。
-  (defun completion-vertico--init-posframe-after-frame-realized (frame)
-    "フレームが完全に実体化してから `completion-vertico--maybe-init-posframe' を呼ぶ。"
-    (run-with-timer 0 nil #'completion-vertico--maybe-init-posframe frame))
+  ;; も同種の影響を受け得る。直接の破損は未確認だが、同じ
+  ;; `core-runtime-run-on-first-graphic-frame' で予防的に 1 tick 遅らせておく。
+  (defun completion-vertico--maybe-activate-posframe ()
+    "グラフィカルな画面なら vertico-posframe を有効化する。非 daemon 用。"
+    (when (display-graphic-p)
+      (completion-vertico--activate-posframe)))
+
+  (declare-function core-runtime-run-on-first-graphic-frame "core-runtime")
 
   (if (daemonp)
-      (add-hook 'after-make-frame-functions #'completion-vertico--init-posframe-after-frame-realized)
-    (add-hook 'window-setup-hook #'completion-vertico--maybe-init-posframe))
+      (core-runtime-run-on-first-graphic-frame #'completion-vertico--activate-posframe)
+    (core-runtime-add-hook-once 'window-setup-hook
+                                #'completion-vertico--maybe-activate-posframe))
 
   (leaf vertico
     :straight t
@@ -7159,6 +7199,7 @@ Keychain へフォールスルーします。
 :header-args:emacs-lisp: :tangle lisp/completion/completion-corfu.el
 :END:
 
+#+NAME: completion-corfu
 #+begin_src emacs-lisp
   ;;; completion/completion-corfu.el --- Corfu ポップアップ補完モジュール -*- lexical-binding: t; -*-
   ;;
@@ -7185,36 +7226,32 @@ Keychain へフォールスルーします。
 
   (eval-when-compile (require 'leaf))
 
-  (defvar completion-corfu--initialized nil)
+  (declare-function core-runtime-add-hook-once "core-runtime")
 
   (defun completion-corfu--init ()
-    "Initialize Corfu, kind-icon, and Cape exactly once on first frame setup.
-Guards against repeated invocation with `completion-corfu--initialized'.
+    "Initialize Corfu, kind-icon, and Cape.
 Activates `global-corfu-mode', registers kind-icon as a margin formatter,
 and prepends Cape sources (elisp-symbol, file, dabbrev) to the global CAPF list.
-Removes itself from `window-setup-hook' after the first run."
-    (unless completion-corfu--initialized
-      (setq completion-corfu--initialized t)
-      (require 'corfu)
-      ;; tab-always-indent は defcustom（indent.el）である。
-      ;; 下の leaf corfu :custom へ移し、ここからは削除した。
-      (global-corfu-mode 1)
-      (require 'kind-icon)
-      ;; kind-icon が既に存在する場合の重複登録を避けるため cl-pushnew を使う。
-      (cl-pushnew #'kind-icon-margin-formatter corfu-margin-formatters)
-      (require 'cape)
-      ;; 3 回の add-to-list を連ねるのではなく、単一の setq を用いる。
-      ;; add-to-list は重複検出のたびにリストを走査する（O(n) × 3）。
-      ;; setq + append なら目的のスタックを一手で構築でき、意図した優先順位
-      ;; （elisp-symbol > file > dabbrev > 既存）も明示できる。
-      (setq completion-at-point-functions
-            (append '(cape-elisp-symbol cape-file cape-dabbrev)
-                    completion-at-point-functions))
-      ;; 以降のフレーム生成で初期化が繰り返されないよう、自身を window-setup-hook から
-      ;; 除去する（completion-at-point-functions からではない）。
-      (remove-hook 'window-setup-hook #'completion-corfu--init)))
+一度だけ実行する保証は `core-runtime-add-hook-once' が担う（下の登録を参照）。"
+    (require 'corfu)
+    ;; tab-always-indent は defcustom（indent.el）である。
+    ;; 下の leaf corfu :custom へ移し、ここからは削除した。
+    (global-corfu-mode 1)
+    (require 'kind-icon)
+    ;; kind-icon が既に存在する場合の重複登録を避けるため cl-pushnew を使う。
+    (cl-pushnew #'kind-icon-margin-formatter corfu-margin-formatters)
+    (require 'cape)
+    ;; 3 回の add-to-list を連ねるのではなく、単一の setq を用いる。
+    ;; add-to-list は重複検出のたびにリストを走査する（O(n) × 3）。
+    ;; setq + append なら目的のスタックを一手で構築でき、意図した優先順位
+    ;; （elisp-symbol > file > dabbrev > 既存）も明示できる。
+    (setq completion-at-point-functions
+          (append '(cape-elisp-symbol cape-file cape-dabbrev)
+                  completion-at-point-functions)))
 
-  (add-hook 'window-setup-hook #'completion-corfu--init)
+  ;; 以降のフレーム生成で初期化が繰り返されないよう、初回実行で自身を
+  ;; window-setup-hook から外す（completion-at-point-functions からではない）。
+  (core-runtime-add-hook-once 'window-setup-hook #'completion-corfu--init)
 
   (leaf corfu :straight t
     :custom ((corfu-auto        . t)
@@ -10676,6 +10713,7 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
 :header-args:emacs-lisp: :tangle lisp/vcs/vcs-magit.el
 :END:
 
+#+NAME: vcs-magit
 #+begin_src emacs-lisp
   ;;; vcs/vcs-magit.el --- Magit の設定 -*- lexical-binding: t; -*-
   ;;
@@ -12168,22 +12206,22 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   (with-eval-after-load 'org-roam-ui
     ;; HTTP/WebSocket
-    (setq org-roam-ui-port 35901)
+    (setopt org-roam-ui-port 35901)
 
     ;; ブラウザで開く
     (setq browse-url-browser-function #'browse-url-default-browser)
-    (setq org-roam-ui-browser-function
-          (lambda (_url)
-            (browse-url (format "http://127.0.0.1:%d/"
-                               org-roam-ui-port))))
+    (setopt org-roam-ui-browser-function
+            (lambda (_url)
+              (browse-url (format "http://127.0.0.1:%d/"
+                                  org-roam-ui-port))))
 
     ;; 自動起動
-    (setq org-roam-ui-open-on-start t)
+    (setopt org-roam-ui-open-on-start t)
 
     ;; DB変更をリアルタイム反映
-    (setq org-roam-ui-sync-theme t
-          org-roam-ui-follow t
-          org-roam-ui-update-on-save t))
+    (setopt org-roam-ui-sync-theme t
+            org-roam-ui-follow t
+            org-roam-ui-update-on-save t))
 
 
   ;; ---------------------------------------------------------------------------
@@ -15837,6 +15875,48 @@ light のままだった。 =frame-background-mode= が =dark= のときは固�
 nano-theme 側のフェイスに任せるようにした（本体は =ui-nano--apply-palette= に分離）。
 =ui-theme--apply-faces= の対括弧・電気ペアの固定色も同様に dark では適用しない。
 
+** 今回編集した 7 つの source block に =#+NAME:= を付けた
+
+=ui-theme= 、 =ui-nano-palette= 、 =ui-keymap= 、 =vcs-magit= 、 =completion-corfu= 、
+=completion-vertico= 、 =core-runtime= のブロックに、 =:CUSTOM_ID:= と同じ綴りで名前を付けた。
+既存ブロックへの一括付与は行っていない（AGENTS.md §5）。tangle 先と noweb の挙動は変わらない。
+
+** nano-dark で dired / dirvish のフェイスに nano-theme の dark パレットを与えた
+
+テーマが定義しない =dired-*= 7 個と =dirvish-*= 4 個のフェイスは、dark では元の定義に戻すだけで
+配色が揃っていなかった。 =ui-nano--apply-dark-extras= が =nano-theme= 自身の =nano-dark-*= （Nord 系）
+の色を与える。独自の dark 色は作らず、 =nano-dark-*= が未定義のときは何も設定しない。light と
+テーマが定義する 18 個のフェイスには触れていない。
+
+** daemon 用の「初回のグラフィカルフレームで一度だけ」の共通化
+
+=core-runtime.el= に =core-runtime-run-on-first-graphic-frame= を追加した。 =after-make-frame-functions=
+への登録、 =run-with-timer= による 1 tick の遅延、グラフィカル判定、一度きりの保証をまとめた
+ものである。 =ui-nano-modeline= 、 =ui-theme= 、 =completion-vertico= （posframe）の daemon 分岐を
+これに置き換え、 =ui-nano--setup-after-frame-realized= 、 =ui-theme--init-after-frame-realized= 、
+=ui-theme--init-once-graphic= 、 =completion-vertico--init-posframe-after-frame-realized= 、
+=completion-vertico--maybe-init-posframe= と、フラグ変数 =ui-theme--initialized-p= 、
+=completion-vertico--posframe-initialized= を廃止した。非 daemon の経路は従来どおりである。
+=ui-nano-modeline= の =ui--nano-modeline-initialized= は、 =my/ui-enable-nano= の再呼び出しを
+守るため残している。
+
+** 「一度だけ初期化」の共通化: core-runtime-add-hook-once を追加し completion-corfu / completion-vertico に適用した
+
+各モジュールが =defvar= のフラグと =remove-hook= を手で書いていた「フックで一度だけ初期化する」
+処理の窓口として、 =core-runtime.el= に =core-runtime-add-hook-once= を追加した。
+=completion-corfu.el= と =completion-vertico.el= の =--init= に適用し、フラグ変数
+=completion-corfu--initialized= 、 =completion-vertico--initialized= を廃止した。
+daemon 用の「初回のグラフィカルフレームまで遅らせる」系（ui-theme、ui-nano-modeline、
+completion-vertico の posframe）は挙動の差が大きいため、今回は触れていない。
+
+** 色の固定値のパレット参照化、org-roam-ui の setopt 化、ui-keymap の履歴コメント整理
+
+- =ui-theme--apply-faces= の括弧ハイライト等の色の直書きを、 =ui-theme--color= 経由で
+  =ui-nano-palette= の値（ =nano-color-subtle= 、 =nano-color-strong= 、 =nano-color-critical= ）を
+  参照するようにした。パレット未ロード時は従来と同じ値にフォールバックする。
+- =orgx-roam-ui= の =org-roam-ui-*= の設定を、 =setq= から =setopt= に変えた（コーディング規則 6）。
+- =ui-keymap--leader-binds= に残っていた =; NEW= の履歴コメントを削除した（履歴は Changelog と git log にある）。
+
 ** nano の light / dark の選択を終了後も保持するようにした
 
 =M-SPC t n= で選んだ variant を =.var/nano-variant= に保存し、次回起動時の =ui-theme--init= の
@@ -16705,7 +16785,7 @@ Unable to load color "unspecified-bg"
 「posframe が効かない」という報告を受けて調査したところ、
 =completion-vertico.el= に2つの daemon 対応バグが重なっていた。
 
-*原因1: completion-vertico--init の一発除去ガード*
+*原因1: completion-vertico--init の一発除去ガード*（以下は修正前のコード。フラグ =completion-vertico--initialized= は後に廃止し、現在は =core-runtime-add-hook-once= で一度だけ実行している）
 
 #+begin_src emacs-lisp
 (defun completion-vertico--init ()
