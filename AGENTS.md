@@ -135,12 +135,16 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
 ├── demo.png        README.org から参照するスクリーンショット
 ├── .var/           実行時の状態 — 削除禁止
-├── .cache/         一時領域 — 削除可、自動再生成
 └── .etc/           外部リソース
 ```
 
-`.var/`, `.cache/`, `.etc/`（ドット始まり）は `.emacs.d/` 直下にあり、
-`lisp/` や `personal/` と並ぶ。ディレクトリ作成の標準ヘルパーは
+`.var/`, `.etc/`（ドット始まり）は `.emacs.d/` 直下にあり、
+`lisp/` や `personal/` と並ぶ。キャッシュ（`eln-cache/`, `straight/` を含む。
+削除可、自動再生成）は `.emacs.d/.cache/` ではなく、`early-init.el` の
+`my:d:cache` が決める。値は環境変数で変わり、`$XDG_CACHE_HOME` があれば
+`$XDG_CACHE_HOME/emacs/`、なければ `$HOME/.cache/emacs/` である（固定の
+パスではない。パスを仮定せず `my:d:cache` を参照すること）。
+ディレクトリ作成の標準ヘルパーは
 `early-init.el` の `my/ensure-directory-exists` である。
 
 `design_spec.org` は廃止され、完全に削除された。13 個の図 `.dot` ソースは

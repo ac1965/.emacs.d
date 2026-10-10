@@ -4260,17 +4260,38 @@ FRAME は省略可能にし、その場合は `selected-frame' を見る。"
   ;;;; ユーティリティ
   ;;;; ---------------------------------------------------------------------------
 
+  (defvar ui-nano--touched-faces nil
+    "`ui-nano--safe-face' が属性を設定したフェイスの一覧。
+dark へ切り替えるとき、テーマが定義していない（light の固定色が残る）フェイスを
+元の定義へ戻すために使う。")
+
   (defun ui-nano--safe-face (face &rest args)
     "Safely apply FACE attributes."
     (when (facep face)
+      (cl-pushnew face ui-nano--touched-faces)
       (apply #'set-face-attribute face nil args)))
 
   ;;;; ---------------------------------------------------------------------------
   ;;;; フェイスの適用
   ;;;; ---------------------------------------------------------------------------
 
+  ;; このパレットは明るい背景を前提にした固定色である。`nano-dark' に切り替えた後も
+  ;; `default' や font-lock を明るい配色で上書きしてしまい、light と dark の見た目が
+  ;; 同じになっていた。dark のときはパレットを適用せず、nano-theme 側のフェイスに任せる。
+  ;; dark では、light のとき set-face-attribute で焼いた固定色を戻す。テーマが
+  ;; 定義するフェイスは enable-theme が再計算するが、dirvish-hl-line のように
+  ;; テーマが触れないフェイスには明るい背景色が残り、白い文字が読めなくなる。
+  ;; `default' はフォント設定を失わないよう対象から除く。
   (defun my/nano-apply-faces ()
-    "Apply Nano palette."
+    "Apply Nano palette, or restore the faces it touched when dark is active."
+    (if (eq frame-background-mode 'dark)
+        (dolist (face ui-nano--touched-faces)
+          (unless (eq face 'default)
+            (face-spec-recalc face nil)))
+      (ui-nano--apply-palette)))
+
+  (defun ui-nano--apply-palette ()
+    "Apply the (light) Nano palette."
 
     ;; 既定フェイス
     (ui-nano--safe-face
@@ -4682,6 +4703,24 @@ FRAME は省略可能にし、その場合は `selected-frame' を見る。"
     (when (facep face)
       (apply #'set-face-attribute face nil args)))
 
+  ;; nano-modeline の `nano-modeline-active' / `-inactive' は defface のロード時に
+  ;; その時点の default / header-line の色を焼き込む。nano-theme はこの 2 つの
+  ;; 定義をコメントアウトしている（`(:inherit nano-subtle)' 相当を想定）ため、
+  ;; light で読み込まれた値が dark に切り替えた後も残り、明るい背景に dark の
+  ;; 文字色（白）が載って判読できなくなる。テーマ追従の `nano-subtle' を継承させる。
+  (defun ui-theme--sync-modeline-faces ()
+    "nano-modeline の基底フェイスを現在のテーマ（light / dark）に追従させる。"
+    (when (and (facep 'nano-modeline-active) (facep 'nano-subtle))
+      (dolist (face '(nano-modeline-active nano-modeline-inactive))
+        (set-face-attribute face nil
+                            :inherit 'nano-subtle
+                            :foreground 'unspecified
+                            :background 'unspecified
+                            :box nil))))
+
+  (with-eval-after-load 'nano-modeline
+    (ui-theme--sync-modeline-faces))
+
   (defun ui-theme--apply-faces ()
     "Apply UI face policy."
     (when (fboundp 'my/nano-apply-faces)
@@ -4690,15 +4729,19 @@ FRAME は省略可能にし、その場合は `selected-frame' を見る。"
     (ui-theme--safe-face 'bold :weight 'bold)
     (ui-theme--safe-face 'italic :slant 'italic)
 
-    (ui-theme--safe-face
-     'electric-pair-overlay-face
-     :background "#e5e7eb")
+    ;; 以下の固定色は明るい背景用。dark では nano-theme 側に任せる。
+    (unless (eq frame-background-mode 'dark)
+      (ui-theme--safe-face
+       'electric-pair-overlay-face
+       :background "#e5e7eb")
 
-    (ui-theme--safe-face
-     'show-paren-match
-     :background "#e5e7eb"
-     :foreground "#111827"
-     :weight 'bold)
+      (ui-theme--safe-face
+       'show-paren-match
+       :background "#e5e7eb"
+       :foreground "#111827"
+       :weight 'bold))
+
+    (ui-theme--sync-modeline-faces)
 
     (ui-theme--safe-face
      'show-paren-mismatch
@@ -4717,6 +4760,37 @@ FRAME は省略可能にし、その場合は `selected-frame' を見る。"
   (defun ui-theme--after-theme (&rest _)
     "Reapply UI policy after theme changes."
     (ui-theme--apply-faces))
+
+  (defvar ui-theme--nano-variant-file
+    (expand-file-name "nano-variant" my:d:var)
+    "最後に選んだ nano の variant（light / dark）を保存するファイル。")
+
+  (defun ui-theme--save-nano-variant (variant)
+    "VARIANT を `ui-theme--nano-variant-file' に保存する。失敗しても無視する。"
+    (ignore-errors
+      (with-temp-file ui-theme--nano-variant-file
+        (insert (symbol-name variant) "\n"))))
+
+  (defun ui-theme--restore-nano-variant ()
+    "保存された variant が dark なら nano-dark を適用する。"
+    (when (file-readable-p ui-theme--nano-variant-file)
+      (when (equal (string-trim
+                    (with-temp-buffer
+                      (insert-file-contents ui-theme--nano-variant-file)
+                      (buffer-string)))
+                   "dark")
+        (my/ui-theme-nano-switch 'dark))))
+
+  ;;;###autoload
+  (defun my/ui-theme-nano-switch (variant)
+    "nano テーマを VARIANT（`light' または `dark'）に切り替える。
+`nano-light' / `nano-dark' は `enable-theme' 経由で `nano' を再有効化し、
+`default-frame-alist' も更新する。`load-theme' で nano-light 等を重ねない。"
+    (interactive
+     (list (intern (completing-read "nano variant: " '("light" "dark") nil t))))
+    (require 'nano-theme-support)
+    (if (eq variant 'dark) (nano-dark) (nano-light))
+    (ui-theme--save-nano-variant variant))
 
   (defun ui-theme--init ()
     "Initialize UI theme configuration."
@@ -4738,7 +4812,9 @@ FRAME は省略可能にし、その場合は `selected-frame' を見る。"
           (add-hook 'enable-theme-functions #'ui-theme--after-theme)
         (advice-add 'enable-theme :after #'ui-theme--after-theme))
 
-      (ui-theme--apply-frame (selected-frame))))
+      (ui-theme--apply-frame (selected-frame))
+      ;; 前回終了時に選んだ variant を復元する（フックの登録後に行う）。
+      (ui-theme--restore-nano-variant)))
 
   (leaf nano-emacs
     :straight (nano-emacs
@@ -5711,6 +5787,7 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
     (ui-keymap--bind 'ui-leader-s-map "m" #'consult-imenu)
     (ui-keymap--bind 'ui-leader-s-map "f" #'consult-find)       ; NEW: find files
     (ui-keymap--bind 'ui-leader-s-map "o" #'consult-outline)    ; NEW: outline nav
+    (ui-keymap--bind 'ui-leader-s-map "O" #'consult-org-heading) ; Org 見出しジャンプ
 
     ;; ── g: git ─────────────────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-g-map "s" #'magit-status)
@@ -5739,6 +5816,7 @@ Submap commands reach 4 keystrokes.  Redundant paths via global keys are removed
     (ui-keymap--bind 'ui-leader-t-map "l" #'display-line-numbers-mode)  ; NEW
     (ui-keymap--bind 'ui-leader-t-map "v" #'visual-line-mode)           ; NEW
     (ui-keymap--bind 'ui-leader-t-map "t" #'load-theme)                 ; NEW
+    (ui-keymap--bind 'ui-leader-t-map "n" #'my/ui-theme-nano-switch)    ; nano light/dark
 
     ;; ── o: org / roam ──────────────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-o-map "a" #'org-agenda)
@@ -10623,6 +10701,13 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   (leaf magit :straight t
     :custom ((magit-display-buffer-function . #'magit-display-buffer-fullframe-status-v1)
              (magit-bury-buffer-function . #'magit-restore-window-configuration)))
+
+  ;; Ediff: 制御パネルを別フレームにせず同一フレームで開く（nano-modeline /
+  ;; posframe 環境でフレーム管理を増やさないため）。
+  (leaf ediff
+    :straight nil
+    :custom ((ediff-window-setup-function . #'ediff-setup-windows-plain)
+             (ediff-split-window-function . #'split-window-horizontally)))
 
   (provide 'vcs-magit)
   ;;; vcs/vcs-magit.el ends here
@@ -15743,6 +15828,43 @@ digraph personal_override_contract {
 （=feat: リポジトリ初期設定とドキュメント追加=）に一括で取り込まれている。そのため、本節の
 エントリのうち初回コミットより前に相当する部分は、=git log= 上の個別コミットとは対応しない。
 初回コミット以降に追加されたエントリのみが、実際のコミット単位の変更履歴と一致する。
+
+** nano-dark に切り替えても light と見た目が変わらない不具合を修正
+
+=my/nano-apply-faces= （ui-nano-palette.el）は明るい背景用の固定色で =default= や font-lock を
+上書きし、テーマの切替後にも必ず再適用される。そのため =nano-dark= を有効にしても配色が
+light のままだった。 =frame-background-mode= が =dark= のときは固定パレットを適用せず、
+nano-theme 側のフェイスに任せるようにした（本体は =ui-nano--apply-palette= に分離）。
+=ui-theme--apply-faces= の対括弧・電気ペアの固定色も同様に dark では適用しない。
+
+** nano の light / dark の選択を終了後も保持するようにした
+
+=M-SPC t n= で選んだ variant を =.var/nano-variant= に保存し、次回起動時の =ui-theme--init= の
+末尾（フック登録後）で dark なら復元する。daemon でも、初回のグラフィカルフレームの
+実体化後に同じ経路で復元される。
+
+** nano-dark で dirvish の現在行が判読できない不具合を修正
+
+light の固定パレットが =set-face-attribute= で焼き込んだ =dirvish-hl-line= などは、テーマが
+定義しないフェイスのため dark に切り替えても明るい背景のまま残っていた。パレットが触れた
+フェイスを =ui-nano--touched-faces= に記録し、dark のときは =face-spec-recalc= で元の定義へ
+戻すようにした（=default= はフォント設定を保つため対象外）。
+
+** nano-dark でモードラインの文字が判読できない不具合を修正
+
+nano-modeline の =nano-modeline-active= / =nano-modeline-inactive= は defface のロード時に
+色を焼き込む（light のまま固定される）。nano-theme 側の上書きはコメントアウトされているため、
+dark に切り替えると明るい背景に白い文字が載っていた。 =ui-theme--sync-modeline-faces= で
+両フェイスに =nano-subtle= を継承させ、テーマの切替ごと（および nano-modeline のロード時）に
+再適用するようにした。
+
+** consult-org-heading・Ediff・nano テーマ切替コマンドを追加
+
+既存設定との重複を照合したうえで、未設定だったものだけを足した。
+- =M-SPC s O= に =consult-org-heading= を割り当てた（ui-keymap.el）。
+- =vcs-magit.el= に Ediff の最小設定を追加した。制御パネルは同一フレームに開き、比較は左右分割にする。
+- =ui-theme.el= に =my/ui-theme-nano-switch= を追加し、 =M-SPC t n= で nano の light / dark を切り替える。実装は nano-theme 側の =nano-light= / =nano-dark= を呼ぶ形にした（=nano-light= テーマを =load-theme= で重ねると =nano= と二重に有効になるため）。
+- AGENTS.md の =.cache/= の説明を、 =early-init.el= の =my:d:cache= が =XDG_CACHE_HOME= の有無で決まる旨（固定パスではない）に直した。
 
 ** README.org の解説文を設定の実態に合わせて修正
 
