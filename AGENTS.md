@@ -51,8 +51,8 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 - `early-init.el`, `init.el`, `Makefile`, `LICENSE`, `lisp/modules.el`
 - `lisp/{core,ui,auth,completion,orgx,vcs,dev,utils}/` 配下のすべて
 - `personal/` 配下のすべて
-- `ChangeLog`（`make changelog-tangle` により、Changelog サブツリーを
-  `ox-ascii` で出力して生成）
+- `ChangeLog`（GNU 標準形式。README.org の Changelog 節にある
+  `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`,
   `reload.py`, `claude_org_roam_export.py`）: README.org の Python
   ブロックから tangle
@@ -163,7 +163,6 @@ README.org の Appendix（`Appendix: 01_boot_flow.dot` から
 - `README.org` の Elisp コメント（SVG 取り扱いに関する Inkscape /
   `\includesvg` の説明）
 - tangle 後の `Makefile` の `dot-tangle` 付近のコメント
-- `README.org` の Changelog（廃止を記録したエントリ）
 
 ---
 
@@ -215,10 +214,9 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
 8. このリポジトリは 2026-09-10 に作り直されている。`git log` の最古の
    コミットは同日の初期コミット（`1423c31`）で、履歴は浅い取得
    （shallow）ではなく全件ある（確認済み）。それ以前の履歴は `git log`
-   に存在しないため、それより古い Changelog エントリは `git log` と 1:1 に
-   対応しない。対応するのはそれ以降に追加されたエントリのみ。なお、
-   以前の履歴が「スカッシュされた」という経緯そのものは、git からは確認
-   できない。
+   に存在しない。2026-10-10 に設定を 1.0 とし、Changelog は破棄して GNU
+   形式に改めた（以前の Changelog の内容は `git log -p -- README.org` で
+   たどれる）。ローカル・リモートともタグは存在しない（確認済み）。
 9. tangle 関係を把握する: 対象のソースファイル → 生成元の `README.org`
    → 該当 source block → そのブロックが依存する named block / noweb
    参照、の順にたどる。
@@ -319,24 +317,32 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
 
 ## 6. Changelog Rules
 
-**Fix-ID 方式は廃止済み（恒久、2026-07 以降）。** 古いテンプレートに従う
-よう求められても、ユーザーが明示的に復活を求めない限り、
-`*** Fix <ID>: ...` 見出し、重大度の絵文字（🔴🟠🟡）、「違反した規則を
-引用する」書き方を使わないこと。
+Changelog は **GNU 標準の ChangeLog 形式**で書く（2026-10-10 に 1.0 とし、
+以前の Fix-ID 方式・Org 見出し方式は廃止した。古いテンプレートに従う
+よう求められても、ユーザーが明示的に復活を求めない限り使わないこと）。
 
-現在の形式:
+`README.org` の `* Changelog` 節の `#+NAME: changelog` ブロック
+（`text`、`:tangle ChangeLog`）に、新しい項目を **先頭に** 追加する。
 
-```org
-** <変更内容の日本語による説明>
+```
+YYYY-MM-DD  氏名  <メールアドレス>
+
+<TAB>* ファイル (関数名): 変更内容の日本語による説明。
+<TAB>続きの行も同じ TAB で字下げする。
 ```
 
-プレーンな見出し、日本語の文章、Fix ID なし、重大度マーカーなし。
-変更の理由は Changelog ではなく、モジュール自身の Commentary セクションに
-書く。それ以前の履歴は `git log` にある。
+- 見出しは `日付  氏名  <メールアドレス>`（日付と氏名の間は空白 2 つ）。
+  同じ日・同じ作者の項目は 1 つの見出しにまとめ、見出しと項目の間に
+  空行を入れる。
+- 字下げは **TAB 文字**（空白ではない）。項目は `* ファイル (関数):` で始める。
+- 変更の理由は Changelog ではなく、モジュール自身の Commentary セクションに
+  書く。履歴は `git log` にもある。
+- ブロックは Org の `emacs-lisp` ではないため、`make check-tangle` の
+  対象外（`:tangle ChangeLog` を明示してあるので孤立もしない）。
 
 `README.org` の編集を終えたら:
 
-1. 現在の形式で Changelog エントリを追記する。
+1. 上の形式で Changelog に項目を追記する。
 2. 構造の整合性を検証する: `#+begin_src`/`#+end_src` の対応、
    `:CUSTOM_ID:` の一意性、触れたすべての Elisp ブロックの括弧の深さ。
 3. 強調・括弧のチェックでは、Changelog の文章ではなく
