@@ -9,7 +9,7 @@
 Org 文書とソースコードを一体として管理する literate program であり、
 `README.org` を設計・仕様・実装の正本（Source of Truth）とする。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-97 個の `.el` ターゲット（`lisp/` 配下 88 個〔`lisp/modules.el` を含む〕、
+98 個の `.el` ターゲット（`lisp/` 配下 89 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 7 個、ルートの `early-init.el` と `init.el`）が生成される。
 
 ```
@@ -122,7 +122,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 ├── lisp/
 │   ├── modules.el
 │   ├── core/       (tangle ターゲット 15)
-│   ├── ui/         (16)
+│   ├── ui/         (17)
 │   ├── auth/       (3)
 │   ├── completion/ (12)
 │   ├── orgx/       (12; 標準 8 + 任意 4)
@@ -186,7 +186,7 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
   含めると起動時に `org-roam`/`org` が強制ロードされ、Org の遅延ロードの
   意味がなくなる
 - 一部のモジュール（`dev-lsp-eglot`, `dev-lsp-mode`, `ui-doom-modeline`,
-  `ui-nano-modeline`, `ui-nano-palette`）は autoload 専用で、
+  `ui-nano-modeline`, `ui-doom-nano-modeline`, `ui-nano-palette`）は autoload 専用で、
   `core-switches` / `ui-theme` 経由でオンデマンドにロードされ、どちらの
   リストにも現れない
 - LSP バックエンド（`eglot` / `lsp-mode` / `lsp-bridge`）は

@@ -541,6 +541,7 @@ tangle 対象でありながら、意図的に =my:modules= に載せていな�
 | =dev-lsp-mode=      | =core-switches= | after-init 時に =(my:use-lsp 'lsp)=     |
 | =ui-doom-modeline=  | =core-switches= | after-init 時に =(my:use-ui 'doom)=     |
 | =ui-nano-modeline=  | =core-switches= | after-init 時に =(my:use-ui 'nano)=     |
+| =ui-doom-nano-modeline= | =core-switches= | after-init 時に =(my:use-ui 'doom-nano)= |
 | =ui-nano-palette=   | =ui-theme=      | =(require 'ui-nano-palette nil t)=      |
 
 これらのモジュールは、 =leaf= 宣言で =:require t= を使ってはいけません。 =autoload= エントリが
@@ -3734,8 +3735,8 @@ advice を素通りしてしまう（2 回目以降の呼び出しからしか d
   ;; ランタイムスイッチ: 起動時に UI バンドルと LSP バックエンドを選択する。
   ;;
   ;; 本ファイルの責務:
-  ;; - `my:use-lsp'（eglot | lsp）と `my:use-ui'（none | doom | nano）を定義する
-  ;; - 4 つの有効化関数すべてに autoload を宣言し、バンドルを遅延ロードさせる
+  ;; - `my:use-lsp'（eglot | lsp）と `my:use-ui'（none | doom | nano | doom-nano）を定義する
+  ;; - 5 つの有効化関数すべてに autoload を宣言し、バンドルを遅延ロードさせる
   ;; - `after-init-hook' の発火後に、選択された UI と LSP を有効化する
   ;;
   ;; 注意: personal のオーバーレイ（例: personal/ac1965.el）は、本モジュールが走る前に
@@ -3754,11 +3755,14 @@ Set to `none' to disable LSP activation entirely."
     :type '(choice (const none) (const eglot) (const lsp)) :group 'my:switches)
 
   (defcustom my:use-ui 'none
-    "Which UI bundle to use. One of: `none`, `doom`, `nano`."
-    :type '(choice (const none) (const doom) (const nano)) :group 'my:switches)
+    "Which UI bundle to use. One of: `none`, `doom`, `nano`, `doom-nano`."
+    :type '(choice (const none) (const doom) (const nano) (const doom-nano))
+    :group 'my:switches)
 
   (autoload 'my/ui-enable-doom  "ui/ui-doom-modeline" "Enable Doom UI bundle." t)
   (autoload 'my/ui-enable-nano  "ui/ui-nano-modeline" "Enable Nano UI bundle." t)
+  (autoload 'my/ui-enable-doom-nano "ui/ui-doom-nano-modeline"
+    "Enable Doom Nano UI bundle." t)
   (autoload 'my/lsp-enable-eglot   "dev/dev-lsp-eglot" "Enable Eglot LSP." t)
   (autoload 'my/lsp-enable-lspmode "dev/dev-lsp-mode"  "Enable lsp-mode LSP." t)
 
@@ -3772,6 +3776,9 @@ Set to `none' to disable LSP activation entirely."
          ('nano (or (fboundp 'my/ui-enable-nano)
                     (locate-library "ui/ui-nano-modeline")
                     (locate-library "nano-modeline")))
+         ('doom-nano (or (fboundp 'my/ui-enable-doom-nano)
+                         (locate-library "ui/ui-doom-nano-modeline")
+                         (locate-library "doom-nano-modeline")))
          (_ t)))
       ('lsp
        (pcase choice
@@ -3798,7 +3805,7 @@ cond repeated in `core-switches--enable-ui' and `core-switches--enable-lsp'."
      (t (message "%s" not-found-msg) nil)))
 
   (defun core-switches--enable-ui (choice)
-    "Activate the UI bundle identified by CHOICE (`doom', `nano', or `none')."
+    "Activate the UI bundle identified by CHOICE (`doom', `nano', `doom-nano', or `none')."
     (pcase choice
       ('doom (core-switches--load-and-call
               'my/ui-enable-doom "ui/ui-doom-modeline"
@@ -3806,6 +3813,9 @@ cond repeated in `core-switches--enable-ui' and `core-switches--enable-lsp'."
       ('nano (core-switches--load-and-call
               'my/ui-enable-nano "ui/ui-nano-modeline"
               "[switches] Nano UI not found."))
+      ('doom-nano (core-switches--load-and-call
+                   'my/ui-enable-doom-nano "ui/ui-doom-nano-modeline"
+                   "[switches] Doom Nano UI not found."))
       ('none (message "[switches] UI bundle disabled.") t)
       (_ (message "[switches] Unknown UI choice: %s" choice) nil)))
 
@@ -4581,6 +4591,64 @@ dark へ切り替えるとき、テーマが定義していない（light の固
 
   (provide 'ui-doom-modeline)
   ;;; ui/ui-doom-modeline.el ends here
+#+end_src
+
+*** ui/ui-doom-nano-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-doom-nano-modeline
+:header-args:emacs-lisp: :tangle lisp/ui/ui-doom-nano-modeline.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-doom-nano-modeline.el --- Doom Nano modeline UI バンドル -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Doom Nano modeline UI バンドル: ronisbr/doom-nano-modeline の設定。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - doom-nano-modeline（rougier/nano-modeline の Doom 向け移植）を導入する
+  ;; - core-switches から呼ばれるエントリポイント `my/ui-enable-doom-nano' を提供する
+  ;;
+  ;; 設計メモ:
+  ;;
+  ;;   上流の doom-nano-modeline は `doom-themes' に依存する（`require' している）が、
+  ;;   Doom Emacs 本体には依存しない。evil の参照は `bound-and-true-p' で守られて
+  ;;   いるため、evil 無しでも動作する。モードラインの退避・復元は上流の
+  ;;   `doom-nano-modeline-mode' が自前で行うので、Doom の
+  ;;   `global-hide-mode-line-mode' は不要である。
+  ;;
+  ;;   nano バンドル（ui-nano-modeline）とは排他的に使う。`my:use-ui' で
+  ;;   どちらか一方だけを選ぶこと。本モジュールは `my:modules' に載せず、
+  ;;   core-switches の autoload からのみロードされる。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+  (declare-function doom-nano-modeline-mode "doom-nano-modeline")
+
+  (leaf doom-themes :straight t :require nil)
+
+  (leaf doom-nano-modeline
+    :straight (doom-nano-modeline :type git :host github
+                                  :repo "ronisbr/doom-nano-modeline")
+    :require nil)
+
+  ;;;###autoload
+  (defun my/ui-enable-doom-nano ()
+    "Activate the Doom Nano modeline UI bundle."
+    (interactive)
+    (when (require 'doom-nano-modeline nil 'noerror)
+      (doom-nano-modeline-mode 1)
+      (message "[ui] doom-nano-modeline enabled.")))
+
+  (provide 'ui-doom-nano-modeline)
+  ;;; ui/ui-doom-nano-modeline.el ends here
 #+end_src
 
 *** ui/ui-nano-modeline.el
@@ -6785,11 +6853,11 @@ Keychain へフォールスルーします。
 必要なら =personal/ac1965.el= （ログイン単位）で上書きします。後から読まれる方が勝ちます。
 
 #+begin_example
-;; personal/device-darwin.el — この macOS マシンで有効化する:
-(setopt auth-keychain-enable t)
+  ;; personal/device-darwin.el — この macOS マシンで有効化する:
+  (setopt auth-keychain-enable t)
 
-;; personal/ac1965.el — ログイン単位の上書き（デバイス設定より優先）:
-(setopt auth-keychain-enable t)   ; 確認、または nil で無効化
+  ;; personal/ac1965.el — ログイン単位の上書き（デバイス設定より優先）:
+  (setopt auth-keychain-enable t)   ; 確認、または nil で無効化
 #+end_example
 #+begin_src emacs-lisp
     ;;; auth/auth-keychain.el --- macOS Keychain の auth-source バックエンド -*- lexical-binding: t; -*-
@@ -15874,6 +15942,13 @@ digraph personal_override_contract {
 
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
+2026-10-11  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* README.org (ui/ui-doom-nano-modeline.el): ronisbr/doom-nano-modeline を
+	取り込む新規モジュールを追加。
+	* README.org (core/core-switches.el): `my:use-ui' に `doom-nano' を追加し、
+	autoload・存在確認・有効化の分岐を追従。
+
 2026-10-10  YAMASHITA Takao  <tjy1965@gmail.com>
 
 	* README.org: 本設定を 1.0 とする。これまでの Changelog は破棄し、以後は GNU 形式で記録する。
