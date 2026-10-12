@@ -788,7 +788,7 @@ https://www.gnu.org/licenses/gpl-3.0.txt
 |Commit|ecbeb91e803b6a63724296e880b377b5c859a9d2|
 |Branch|master|
 |System|aarch64-apple-darwin27.0.0|
-|Date|2026-10-11 22:58:46 (JST)|
+|Date|2026-10-12 21:23:00 (JST)|
 |Patch|N/A ns-inline.patch|
 |Features|ACL DBUS GIF GLIB GMP GNUTLS JPEG LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TIFF TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM ZLIB|
 |Options|CC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang CXX=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ AR=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar RANLIB=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib NM=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm --with-ns --with-native-compilation=aot --with-tree-sitter --with-gnutls --without-imagemagick --with-modules --prefix=/Users/ac1965/.local 'CFLAGS=-O3 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' 'CPPFLAGS=-I/opt/homebrew/opt/libgccjit/include -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/opt/homebrew/include' 'LDFLAGS=-L/opt/homebrew/opt/libgccjit/lib -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -L/opt/homebrew/lib -framework AppKit'|
@@ -11169,7 +11169,11 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   ;;   （`code -r -g' を使用）
   ;; - `my/show-env-variable': 環境変数の値を表示する
   ;; - `my/print-build-info': Emacs のビルド情報を Markdown の表として
-  ;;   *Build Info* バッファに描画する
+  ;;   *Build Info* バッファに描画する。Commit と Branch は、実行時の問い合わせ
+  ;;   ではなく、ビルド時に埋め込まれた `emacs-repository-version' と
+  ;;   `emacs-repository-branch' から取る（ソースを更新しても、ビルドした
+  ;;   コミットが表示される）。この出力は scripts/update_build_info.py が
+  ;;   README.org のビルド情報の表へ反映する
   ;;; Code:
 
   (defun my/open-by-vscode ()
@@ -11194,10 +11198,14 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
           (erase-buffer)
           (insert (format "- GNU Emacs *%s*\n\n" emacs-version))
           (insert "|Property|Value|\n|--------|-----|\n")
-          (insert (format "|Commit|%s|\n" (if (fboundp 'emacs-repository-get-version)
-                                              (emacs-repository-get-version) "N/A")))
-          (insert (format "|Branch|%s|\n" (if (fboundp 'emacs-repository-get-branch)
-                                              (emacs-repository-get-branch) "N/A")))
+          ;; Commit と Branch は、ビルド時に埋め込まれた変数から取る。関数
+          ;; `emacs-repository-get-version' は実行時にソースのリポジトリへ問い合わせ、
+          ;; 「いまのソースの先頭」を返す（docstring にも「実行中の Emacs と対応しない
+          ;; ことがある」とある）。ソースを pull して再ビルドしないままだと、ビルドに
+          ;; 使っていないコミットが表示されてしまう。変数が無い（リポジトリ由来でない
+          ;; ビルド）ときは、関数で推測せず N/A とする。
+          (insert (format "|Commit|%s|\n" (or (bound-and-true-p emacs-repository-version) "N/A")))
+          (insert (format "|Branch|%s|\n" (or (bound-and-true-p emacs-repository-branch) "N/A")))
           (insert (format "|System|%s|\n" system-configuration))
           (insert (format "|Date|%s|\n" (format-time-string "%Y-%m-%d %T (%Z)" emacs-build-time)))
           (insert (format "|Patch|%s ns-inline.patch|\n" (if (boundp 'mac-ime--cursor-type) "with" "N/A")))
@@ -15922,7 +15930,7 @@ python3 scripts/update_build_info.py --check    # 古ければ差分を出して
 *注意*
 
 - =lisp/dev/dev-tools.el= は =README.org= から tangle される生成物です。 =make tangle= （または =make reload= ）の後に実行します。
-- 日付（ =Date= ）は =emacs-build-time= 、コミット（ =Commit= ）は =emacs-repository-get-version= の値です。
+- 日付（ =Date= ）は =emacs-build-time= 、コミット（ =Commit= ）は =emacs-repository-version= （ビルド時に埋め込まれた値）です。
   ビルドスクリプトがソースのコミットを変えずに再ビルドしただけなら、日付だけが変わります。
 
 #+NAME: update-build-info-py
@@ -16988,6 +16996,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (dev/dev-tools.el) (my/print-build-info): Commit と Branch を、実行時に git へ問い合わせる
+	emacs-repository-get-version / -get-branch ではなく、ビルド時に埋め込まれた変数 emacs-repository-version /
+	emacs-repository-branch から取る。ソースを pull して再ビルドしない場合に、ビルドに使っていない
+	コミットが表示される問題を修正。変数が無ければ N/A。
 	* README.org (Installation): ビルド情報の表を `# build-info:begin' / `# build-info:end' で囲み、
 	再ビルド後に scripts/update_build_info.py で更新する手順を追記。
 	* README.org (Appendix: update_build_info.py): scripts/update_build_info.py を追加。再ビルドした Emacs の
