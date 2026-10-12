@@ -12584,6 +12584,50 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
        'face (when (fboundp 'nano-modeline-face)
                (nano-modeline-face 'secondary)))))
 
+  (defvar battery-load-low)
+  (defvar battery-load-critical)
+  (defvar battery-update-functions)
+
+  (defvar ac1965--nano-battery-data nil
+    "Last battery status alist reported through `battery-update-functions'.
+Keys are the `battery-status-function' format characters: ?L is the power
+source (\"AC\" or \"Battery\") and ?p is the load percentage.")
+
+  (defun ac1965--nano-battery-update (data)
+    "Remember DATA, the alist `battery-update' just computed, for the nano-modeline.
+Reusing it means the modeline never runs `pmset' itself on redisplay."
+    (setq ac1965--nano-battery-data data))
+
+  (with-eval-after-load 'battery
+    (add-hook 'battery-update-functions #'ac1965--nano-battery-update))
+
+  (defun ac1965--nano-battery ()
+    "Return \"AC 87%  \" or \"BATT 42%  \" for the nano-modeline right segment.
+
+  The text comes from `ac1965--nano-battery-data' (kept current by
+  `display-battery-mode').  On battery it uses the `battery-load-low' and
+  `battery-load-critical' faces below their thresholds.  Returns an empty
+  string when there is no battery information, for example before the first
+  update or on a machine without a battery."
+    (let* ((data ac1965--nano-battery-data)
+           (source (cdr (assq ?L data)))
+           (load (cdr (assq ?p data)))
+           (percent (and (stringp load) (string-match-p "\\`[0-9]+\\'" load)
+                         (string-to-number load)))
+           (on-ac (equal source "AC"))
+           (base (when (fboundp 'nano-modeline-face)
+                   (nano-modeline-face 'secondary))))
+      (if (not (and percent (member source '("AC" "Battery"))))
+          ""
+        (propertize
+         ;; モードラインは :eval の結果の % を解釈するため、% を %% に重ねて書く。
+         (format "%s %d%%%%  " (if on-ac "AC" "BATT") percent)
+         'face (cond ((and (not on-ac) (< percent battery-load-critical))
+                      (list 'battery-load-critical base))
+                     ((and (not on-ac) (< percent battery-load-low))
+                      (list 'battery-load-low base))
+                     (t base))))))
+
   (declare-function nerd-icons-faicon "nerd-icons")
   (declare-function nano-modeline-buffer-status "nano-modeline")
   (defvar nano-modeline-padding)
@@ -12668,7 +12712,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
                (nano-modeline-git-info) " "
                (nano-modeline-file-size) " "
                (nano-modeline-buffer-line-count))
-             '((ac1965--nano-time-encoding) " "
+             '((ac1965--nano-battery)
+               (ac1965--nano-time-encoding) " "
                (nano-modeline-cursor-position)
                (nano-modeline-window-dedicated))
              default))
@@ -12683,7 +12728,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
                (nano-modeline-git-info) " "
                (nano-modeline-file-size) " "
                (nano-modeline-buffer-line-count))
-             '((ac1965--nano-time-encoding) " "
+             '((ac1965--nano-battery)
+               (ac1965--nano-time-encoding) " "
                (nano-modeline-cursor-position)
                (nano-modeline-window-dedicated))
              default))
@@ -16433,6 +16479,8 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (personal/ac1965.el) (ac1965--nano-battery): 新規。nano-modeline の右側に電源表示
+	（AC 87% / BATT 42%）を追加。battery-update-functions で値を受け取るため、再描画のたびに pmset を呼ばない。
 	* README.org (Makefile): `stage' ターゲットを追加。追跡対象（TRACKED）だけを stage し、
 	それ以外がステージ済みなら中止する。`git add .' による無関係なファイルの混入を防ぐ。
 	* README.org (Appendix: demo.png): demo.png の撮影スクリプト scripts/demo-layout.el、
