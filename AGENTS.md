@@ -296,6 +296,14 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
    `personal/user.el` から設定する。`modules.el` の Design Notes にある
    「ロード順に関する例外」を参照）。`org-roam-db-connector` は
    `defcustom` であり `setopt` を使う。この例外リストに戻さないこと。
+   このほかに `setq` のままにしているもの（2026-10-12 の監査で確認）:
+   `package-enable-at-startup`, `package-quickstart`（`setopt` が `package.el` を
+   起動時に読み込んでしまう）、`custom-file`（標準的な書き方）、
+   `aidermacs-extra-args`（モジュール側の `defvar` へリストを追記する）。
+   **`setopt` は、自動読み込みの対象になっている `defcustom`（Org など）では
+   ライブラリを読み込むことがある。** 起動時に Org を読み込まないため、Org 関連の
+   `setopt` は `after-init-hook` ではなく `with-eval-after-load` の中で実行すること
+   （`orgx-visual.el` で、起動後のフィーチャーが 485 から 566 に増えて発覚した）。
 7. 命名: パス変数は `my:`、公開コマンドは `my/`、公開 API は `module-`、
    非公開シンボルは `module--`。
 8. `defun` はモジュールのトップレベルにのみ置く。`leaf` ブロックや

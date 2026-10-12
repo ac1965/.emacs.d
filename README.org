@@ -1080,6 +1080,9 @@ gcmh が担当します。
   ;; 2) package.el の無効化
   ;; ---------------------------------------------------------------------------
 
+  ;; この 2 変数だけは setq のままにする。setopt は変数の属するライブラリを読み込む
+  ;; ことがあり、実機で package.el が起動時に読み込まれる（featurep が t になる）のを
+  ;; 確認した。package.el を使わない設計なので、早期に読み込ませない。
   (setq package-enable-at-startup nil
         package-quickstart nil)
 
@@ -1226,7 +1229,7 @@ gcmh が担当します。
   ;; 上の native-comp-eln-load-path のブロックとは独立に、非同期ネイティブコンパイルの
   ;; 警告/エラー通知を抑制する（eln-load-path が未束縛の環境でも確実に適用するため）。
   (when (boundp 'native-comp-async-report-warnings-errors)
-    (setq native-comp-async-report-warnings-errors 'silent))
+    (setopt native-comp-async-report-warnings-errors 'silent))
 
   ;; ---------------------------------------------------------------------------
   ;; 8) no-littering との互換性
@@ -1241,14 +1244,14 @@ gcmh が担当します。
 
   ;; バックアップは var/backup/ 配下に保存する（no-littering のパスは core-editing で設定）。
   ;; early-init では世代付きバックアップを有効化する。パスは no-littering のロード後に上書きされる。
-  (setq make-backup-files     t
-        version-control       t        ; keep numbered backups
-        kept-new-versions     6
-        kept-old-versions     2
-        delete-old-versions   t        ; delete excess backups silently
-        backup-by-copying     t        ; preserve symlinks
-        auto-save-default     nil      ; disable legacy #file# auto-save
-        auto-save-list-file-prefix nil)
+  (setopt make-backup-files     t
+          version-control       t        ; keep numbered backups
+          kept-new-versions     6
+          kept-old-versions     2
+          delete-old-versions   t        ; delete excess backups silently
+          backup-by-copying     t        ; preserve symlinks
+          auto-save-default     nil      ; disable legacy #file# auto-save
+          auto-save-list-file-prefix nil)
 
   ;; ---------------------------------------------------------------------------
   ;; 10) 早期 UI の既定値
@@ -1261,6 +1264,7 @@ gcmh が担当します。
           window-divider-default-right-width 16
           window-divider-default-places 'right-only)
 
+  ;; ユーザーオプションではない（cus-start に無い）ため setq のまま。
   (setq inhibit-compacting-font-caches t)
 
   (dolist (it '((internal-border-width . 8)
@@ -1268,10 +1272,10 @@ gcmh が担当します。
     (add-to-list 'default-frame-alist it)
     (add-to-list 'initial-frame-alist it))
 
-  (setq default-frame-alist
-        (assq-delete-all 'fullscreen default-frame-alist))
-  (setq initial-frame-alist
-        (assq-delete-all 'fullscreen initial-frame-alist))
+  (setopt default-frame-alist
+          (assq-delete-all 'fullscreen default-frame-alist))
+  (setopt initial-frame-alist
+          (assq-delete-all 'fullscreen initial-frame-alist))
 
   (defvar core--did-fullscreen nil
     "非 daemon 起動時、フルスクリーンを適用済みかどうか。")
@@ -1310,7 +1314,7 @@ gcmh が担当します。
   ;; ---------------------------------------------------------------------------
 
   (when-let* ((u (core--login-username)))
-    (setq inhibit-startup-echo-area-message u))
+    (setopt inhibit-startup-echo-area-message u))
 
   (provide 'early-init)
   ;;; early-init.el ends here
@@ -8439,10 +8443,10 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   (defvar orgx-visual--initialized nil)
 
   (defun orgx-visual--configure-once ()
-    "Apply org-modern variable configuration exactly once."
+    "Apply the org and org-modern variable configuration exactly once."
     (unless orgx-visual--initialized
       (setq orgx-visual--initialized t)
-      (setq
+      (setopt
        org-startup-indented t
        org-hide-leading-stars t
        org-auto-align-tags nil
@@ -8463,16 +8467,19 @@ LSP バックエンド非依存という設計を、補完の側から支える�
        org-modern-list '((?+ . "◦") (?- . "–") (?* . "•"))
        org-modern-checkbox '((?X . "") (?- . "") (?\s . ""))
        org-modern-priority '((?A . "") (?B . "") (?C . ""))
-       org-modern-replace-stars ""
+       org-modern-replace-stars "")))
 
-       org-agenda-tags-column 0
-       org-agenda-block-separator ?─
-       org-agenda-time-grid
-       '((daily today require-timed)
-         (800 1000 1200 1400 1600 1800 2000)
-         " ┄┄┄┄┄ " " ┄┄┄┄┄ ")
-       org-agenda-current-time-string
-       "⭠ now ─────────────────────────────────────────────────")))
+  (defun orgx-visual--configure-agenda ()
+    "Apply the org-agenda variable configuration."
+    (setopt
+     org-agenda-tags-column 0
+     org-agenda-block-separator ?─
+     org-agenda-time-grid
+     '((daily today require-timed)
+       (800 1000 1200 1400 1600 1800 2000)
+       " ┄┄┄┄┄ " " ┄┄┄┄┄ ")
+     org-agenda-current-time-string
+     "⭠ now ─────────────────────────────────────────────────"))
 
   (defun orgx-visual--enable-mode ()
     "Enable org-modern in the current org-mode buffer."
@@ -8481,8 +8488,15 @@ LSP バックエンド非依存という設計を、補完の側から支える�
 
   (leaf org-modern :straight t)
 
-  ;; 変数の設定は init 後に一度だけ実行する（バッファごとではない）。
-  (add-hook 'after-init-hook #'orgx-visual--configure-once)
+  ;; 変数の設定は Org が読み込まれた時点で一度だけ実行する（バッファごとではない）。
+  ;; after-init-hook では実行しない: org の defcustom は自動読み込みの対象なので、
+  ;; その時点の setopt が Org（と org-agenda）を起動時に読み込んでしまう（実機で
+  ;; 起動後のフィーチャーが 485 から 566 に増えるのを確認した）。orgx 層は Org を
+  ;; 起動時に読み込まない。
+  (with-eval-after-load 'org
+    (orgx-visual--configure-once))
+  (with-eval-after-load 'org-agenda
+    (orgx-visual--configure-agenda))
   ;; モードの有効化は org-mode バッファごとに実行する。
   (add-hook 'org-mode-hook #'orgx-visual--enable-mode)
 
@@ -8841,6 +8855,10 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;; エクスポート実行中だけ org-agenda-files をエクスポート対象バッファの
     ;; ファイル 1 件に絞ることで、この一括スキャンを回避する。ブログ記事内では
     ;; id: リンクを使っていないため、ID 解決範囲を絞っても実害はない。
+    ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
+    ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、絞り込みが効かない。
+    (defvar org-agenda-files)
+
     (defun orgx-export--limit-agenda-files-during-hugo-export (orig-fn &rest args)
       "Narrow `org-agenda-files' to the current buffer's file while ORIG-FN runs.
   Prevents the internal `org-id-update-id-locations' call inside
@@ -9216,6 +9234,10 @@ LSP バックエンド非依存という設計を、補完の側から支える�
          buffer-file-name
          (string= (file-name-nondirectory buffer-file-name)
                   my/orgx-auto-tangle-target-file)))
+
+  ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
+  ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、確認の抑止が効かない。
+  (defvar org-confirm-babel-evaluate)
 
   (defun orgx-auto-tangle--maybe ()
     (when (and (orgx-auto-tangle--eligible-p)
@@ -10967,7 +10989,7 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
     ;;
     (setq eww-cache-directory (expand-file-name "cache/" my:d:eww))
     (make-directory eww-cache-directory t)
-    (setq eww-history-limit 200)
+    (setopt eww-history-limit 200)
     (add-hook 'eww-after-render-hook #'my/eww-after-render))
 
   (provide 'dev-navigation)
@@ -12673,7 +12695,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
     (setopt org-roam-ui-port 35901)
 
     ;; ブラウザで開く
-    (setq browse-url-browser-function #'browse-url-default-browser)
+    (setopt browse-url-browser-function #'browse-url-default-browser)
     (setopt org-roam-ui-browser-function
             (lambda (_url)
               (browse-url (format "http://127.0.0.1:%d/"
@@ -12703,7 +12725,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; 値自体は変えず、"Can't guess python-indent-offset" の
   ;; メッセージだけを黙らせる。
 
-  (setq python-indent-guess-indent-offset-verbose nil)
+  (setopt python-indent-guess-indent-offset-verbose nil)
 
 
   ;; ---------------------------------------------------------------------------
@@ -12912,6 +12934,10 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
                (unless (member tag tags)
                  (push tag tags)))))))
       (mapcar #'list tags)))
+
+  ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
+  ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、タグ候補の指定が効かない。
+  (defvar org-tag-alist)
 
   (defun ac1965/org-hugo-set-tags ()
     "Set Org tags on the current heading using existing Hugo tags as candidates.
@@ -13428,8 +13454,8 @@ Windows クリップボードとの橋渡しに使う。
 未インストールなら `sudo apt install wslu' で導入する。")
 
   (when device-wsl--wslview-executable
-    (setq browse-url-generic-program  device-wsl--wslview-executable
-          browse-url-browser-function #'browse-url-generic))
+    (setopt browse-url-generic-program  device-wsl--wslview-executable
+            browse-url-browser-function #'browse-url-generic))
 
   ;; ---------------------------------------------------------------------------
   ;; Explorer 連携
@@ -16535,6 +16561,22 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (orgx/orgx-visual.el): 変数の設定を after-init-hook から with-eval-after-load 'org に移し、
+	org-agenda 用は orgx-visual--configure-agenda に分けて with-eval-after-load 'org-agenda で実行する。
+	setopt を after-init-hook で実行すると Org が起動時に読み込まれてしまう（起動後のフィーチャーが 485 から 566 に
+	増える）ため。AGENTS.md の規則 6 に、この注意と setq のままにする変数を追記。
+	* README.org (early-init.el): ユーザーオプションに対する setq を setopt に変更（規則 6）。対象は
+	native-comp-async-report-warnings-errors、バックアップと自動保存の 8 変数、default-frame-alist、
+	initial-frame-alist、inhibit-startup-echo-area-message。package-enable-at-startup と package-quickstart は、
+	setopt が package.el を起動時に読み込むため setq のまま。file-name-handler-alist、user-emacs-directory、
+	inhibit-compacting-font-caches はユーザーオプションではないため setq のまま。
+	* README.org (orgx/orgx-visual.el, personal/device-wsl.el, personal/ac1965.el, dev/dev-navigation.el):
+	defcustom に対する setq を setopt に変更（コーディング規則 6）。対象は org-* / org-modern-* / org-agenda-* の
+	18 変数、browse-url-generic-program、browse-url-browser-function、python-indent-guess-indent-offset-verbose、
+	eww-history-limit。setopt は変数の属するライブラリを読み込まないため、Org の遅延読み込みは保たれる。
+	* README.org (orgx/orgx-auto-tangle.el, orgx/orgx-export.el, personal/ac1965.el): let で束縛している
+	org-confirm-babel-evaluate、org-agenda-files、org-tag-alist を defvar で特殊変数として宣言。
+	宣言が無いままコンパイルされると let が字句的束縛になり、上書きが効かなくなる（潜在バグ）。
 	* README.org (dev/dev-ai.el): dev-ai--ensure-authinfo-in-sources と dev-ai--setup-api-key を
 	leaf aidermacs の :config の中からトップレベルへ移動（コーディング規則 8）。
 	* README.org (orgx/orgx-fold.el): my/org-fold-subtree、my/org-unfold-subtree、my/org-toggle-fold を
