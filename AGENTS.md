@@ -389,10 +389,10 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |
 | `make stage` | `TRACKED`（`README.org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
 
-`make help` の echo 文は古い（確認済み）: `make lint` の説明行に
-`check-fboundp-guards` が含まれていない。実際の `lint` の依存は上の表の
-とおり（`README.org` の `* Makefile` セクションのレシピが正）。`help:` の
-出力を根拠にしないこと。
+`make help` の `make lint` の説明行は、`check-fboundp-guards` を含む形に直した
+（2026-10-12）。それでも、実際の `lint` の依存は上の表と
+`README.org` の `* Makefile` セクションのレシピが正であり、`help:` の出力を
+根拠にしないこと。
 
 変更の標準ワークフロー:
 

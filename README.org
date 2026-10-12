@@ -3761,6 +3761,8 @@ Set to `none' to disable LSP activation entirely."
 
   (autoload 'my/ui-enable-doom  "ui/ui-doom-modeline" "Enable Doom UI bundle." t)
   (autoload 'my/ui-enable-nano  "ui/ui-nano-modeline" "Enable Nano UI bundle." t)
+  (autoload 'my/ui-nano-modeline-toggle "ui/ui-nano-modeline"
+    "Toggle the nano-modeline header-line." t)
   (autoload 'my/ui-enable-doom-nano "ui/ui-doom-nano-modeline"
     "Enable Doom Nano UI bundle." t)
   (autoload 'my/lsp-enable-eglot   "dev/dev-lsp-eglot" "Enable Eglot LSP." t)
@@ -4675,13 +4677,41 @@ dark へ切り替えるとき、テーマが定義していない（light の固
   ;;
   ;;; Commentary:
   ;;
-  ;; Nano modeline UI バンドル: rougier/nano-modeline の設定。
+  ;; Nano modeline UI バンドル: rougier/nano-modeline の設定と、このリポジトリで使う
+  ;; ヘッダー行の表示内容。
   ;;
   ;; 本ファイルの責務:
   ;; - フラグで初期化をガードし、以降のフレーム生成時に再設定が走らないようにする
-  ;;
   ;; - nano-modeline のパディングとモード別フックを設定する
+  ;; - 全バッファ共通のヘッダー行を定義して全体に適用し、標準のモードラインを隠す
+  ;;   （表示項目は下の「表示項目」を参照）
+  ;; - 表示項目のフェイス（`ui-nano-status-icon*'、`ui-nano-battery-*'）を持つ
+  ;; - ヘッダー行の表示を切り替えるコマンド `my/ui-nano-modeline-toggle' を提供する
   ;; - core-switches から呼ばれるエントリポイント `my/ui-enable-nano' を提供する
+  ;;
+  ;; 表示項目:
+  ;;   左  状態アイコン（鍵 / 鉛筆 / ファイル）、ファイル種別アイコン、バッファ名、
+  ;;       git 情報、ファイルサイズ、総行数
+  ;;   右  電源（AC 87% / BATT 42%）、時刻、エンコーディング、IME、行:列、ウィンドウ固定
+  ;;
+  ;; 以前は personal/ac1965.el にあった（2026-10-12 に移動）:
+  ;;   表示内容は特定の利用者のものではなく UI の仕様であり、personal/ は他の層を
+  ;;   変更しないオーバーレイとする契約（Appendix: personal のロード順と defvar 上書きの
+  ;;   契約）に合わせた。personal/ に残すのは利用者固有の入力だけで、IME の状態は
+  ;;   `ui-nano-modeline-ime-function' を通して渡す。
+  ;;
+  ;; 設計上の判断:
+  ;; - 再描画のたびに評価される処理の費用は実測した（2026-10-12、nano 有効の実機）。
+  ;;   README.org（1.6 万行、586KB）でヘッダー行全体が 0.21 ms、283 行のファイルで
+  ;;   0.04 ms。25 万行・8.7MB の巨大ファイルでも初回 11.6 ms、2 回目以降は約 2.4 ms
+  ;;   で、60fps の予算（16.7 ms）に収まる。支配的なのは総行数の計算で、巨大ファイル
+  ;;   でだけ効く。よってキャッシュは入れない。10MB を超えるファイルを日常的に扱う
+  ;;   ようになったら、総行数を `buffer-chars-modified-tick' でキャッシュする。
+  ;; - 電源は Emacs 標準の `battery' が更新のたびに渡す値を `battery-update-functions'
+  ;;   で受け取る。再描画のたびに pmset を呼ばない。
+  ;; - ヘッダー行の文字列は、モードラインが `%' を解釈するため `%%' と書く。
+  ;; - アイコン用の文字には、状態のフェイスとは別にアイコンのフォントを指定する。
+  ;;   一つのフェイスで全体を塗ると、アイコンのフォント指定が消えるため。
   ;;
   ;; ui-nano-palette のロード責任:
   ;;
@@ -4695,10 +4725,271 @@ dark へ切り替えるとき、テーマが定義していない（light の固
 
   (eval-when-compile (require 'leaf))
 
+  (defgroup ui-nano-modeline nil
+    "Header-line contents for the nano-modeline bundle."
+    :group 'ui)
+
+  (defcustom ui-nano-modeline-ime-function nil
+    "Function returning the IME indicator string for the right segment, or nil.
+  The function is called without arguments on every redisplay, so it should
+  return a cached string.  A personal file sets it to feed the machine's IME
+  state to the modeline."
+    :type '(choice (const :tag "None" nil) function)
+    :group 'ui-nano-modeline)
+
+  ;; このファイルで使う外部シンボルの宣言（バイトコンパイラの警告を避けるため）。
+  (defvar nano-modeline-position)
+  (defvar nano-modeline-padding)
+  (defvar battery-load-low)
+  (defvar battery-load-critical)
+  (defvar battery-update-functions)
+  (defvar display-battery-mode)
+  (declare-function battery-update "battery")
+  (declare-function nano-modeline-face "nano-modeline")
+  (declare-function nano-modeline-buffer-status "nano-modeline")
+  (declare-function nano-modeline-prog-mode "nano-modeline")
+  (declare-function nano-modeline-text-mode "nano-modeline")
+  (declare-function nerd-icons-faicon "nerd-icons")
+  (declare-function nerd-icons-icon-for-buffer "nerd-icons")
+
   (defvar ui--nano-modeline-initialized nil)
 
   (defun ui-nano--available-p ()
     (require 'nano-modeline nil 'noerror))
+
+  (defun ui-nano--ime-indicator ()
+    "Return the IME indicator from `ui-nano-modeline-ime-function', or \"\"."
+    (or (and ui-nano-modeline-ime-function
+             (ignore-errors (funcall ui-nano-modeline-ime-function)))
+        ""))
+
+  (defun ui-nano--time-encoding ()
+    "Return a propertized \"HH:MM  CODING  IME\" string for the right segment.
+
+  Evaluated on every redisplay inside `nano-modeline--make'.  Time and coding
+  system are computed directly; the IME part comes from
+  `ui-nano-modeline-ime-function', which must return a cached string so that no
+  process is spawned here.  Coding system suffix modifiers (-unix, -dos, -mac,
+  -with-signature) are stripped."
+    (let* ((time-str (format-time-string "%H:%M"))
+           (cs       (or (and (boundp 'buffer-file-coding-system)
+                              buffer-file-coding-system)
+                         'utf-8))
+           (cs-name  (replace-regexp-in-string
+                      "-\\(?:unix\\|dos\\|mac\\|with-signature\\)\\'"
+                      ""
+                      (symbol-name (coding-system-base cs)))))
+      (propertize
+       (concat time-str "  " cs-name (ui-nano--ime-indicator))
+       'face (when (fboundp 'nano-modeline-face)
+               (nano-modeline-face 'secondary)))))
+
+  (defvar ui-nano--battery-data nil
+    "Last battery status alist reported through `battery-update-functions'.
+Keys are the `battery-status-function' format characters: ?L is the power
+source (\"AC\" or \"Battery\") and ?p is the load percentage.")
+
+  (defun ui-nano--battery-update (data)
+    "Remember DATA, the alist `battery-update' just computed, for the nano-modeline.
+Reusing it means the modeline never runs `pmset' itself on redisplay."
+    (setq ui-nano--battery-data data))
+
+  ;; このファイルは起動後（after-init）に読まれるため、`battery' の最初の更新は
+  ;; すでに終わっていることがある。その場合は値を受け取れるよう一度更新する。
+  (with-eval-after-load 'battery
+    (add-hook 'battery-update-functions #'ui-nano--battery-update)
+    (when (bound-and-true-p display-battery-mode)
+      (battery-update)))
+
+  ;; 低残量は橙色の文字、危険は赤い背景に白い文字。ヘッダー行の背景
+  ;; （dark は nano-subtle #434C5E、light は #ECEFF1）に対する明暗比が、
+  ;; 低残量で約 5:1（dark は #FFB74D）と約 4.7:1（light は #B54708）、
+  ;; 危険で約 5.6:1（白 on #C62828）になるように選んである。
+  (defface ui-nano-battery-low
+    '((((background dark)) :foreground "#FFB74D" :weight bold)
+      (t :foreground "#B54708" :weight bold))
+    "Face of the nano-modeline battery text when the load is low (orange)."
+    :group 'ui-nano-modeline)
+
+  (defface ui-nano-battery-critical
+    '((t :background "#C62828" :foreground "#FFFFFF" :weight bold))
+    "Face of the nano-modeline battery text when the load is critical."
+    :group 'ui-nano-modeline)
+
+  (defun ui-nano--battery ()
+    "Return \"AC 87%  \" or \"BATT 42%  \" for the nano-modeline right segment.
+
+  The text comes from `ui-nano--battery-data' (kept current by
+  `display-battery-mode').  On battery it uses the `ui-nano-battery-low'
+  and `ui-nano-battery-critical' faces below `battery-load-low' and
+  `battery-load-critical'.  Returns an empty
+  string when there is no battery information, for example before the first
+  update or on a machine without a battery."
+    (let* ((data ui-nano--battery-data)
+           (source (cdr (assq ?L data)))
+           (load (cdr (assq ?p data)))
+           (percent (and (stringp load) (string-match-p "\\`[0-9]+\\'" load)
+                         (string-to-number load)))
+           (on-ac (equal source "AC"))
+           (base (when (fboundp 'nano-modeline-face)
+                   (nano-modeline-face 'secondary))))
+      (if (not (and percent (member source '("AC" "Battery"))))
+          ""
+        (propertize
+         ;; モードラインは :eval の結果の % を解釈するため、% を %% に重ねて書く。
+         (format "%s %d%%%%  " (if on-ac "AC" "BATT") percent)
+         'face (cond ((and (not on-ac) (< percent battery-load-critical))
+                      (list 'ui-nano-battery-critical base))
+                     ((and (not on-ac) (< percent battery-load-low))
+                      (list 'ui-nano-battery-low base))
+                     (t base))))))
+
+  (defface ui-nano-status-icon
+    '((t :background "#FFD180" :foreground "#4E342E"))
+    "Face of the buffer status icon in the nano-modeline (amber)."
+    :group 'ui-nano-modeline)
+
+  (defface ui-nano-status-icon-modified
+    '((t :inherit ui-nano-status-icon :background "#FFAB40" :foreground "#3E2723"))
+    "Face of the status icon for a modified buffer (stronger amber)."
+    :group 'ui-nano-modeline)
+
+  (defface ui-nano-status-icon-read-only
+    '((t :inherit ui-nano-status-icon :background "#FFE9B8"))
+    "Face of the status icon for a read-only buffer (paler amber)."
+    :group 'ui-nano-modeline)
+
+  (defun ui-nano--type-icon ()
+    "Return the file type icon of the current buffer for the nano-modeline.
+
+  The icon comes from `nerd-icons-icon-for-buffer' (by major mode), so it keeps
+  its own colour and icon font.  Only the background is added, by inheriting
+  `nano-modeline-active', so that it sits on the same band as the rest of the
+  line.  Returns an empty string when there is no icon."
+    (let* ((icon  (nerd-icons-icon-for-buffer))
+           (props (and (stringp icon) (> (length icon) 0)
+                       (get-text-property 0 'face icon))))
+      (if (not (and (consp props) (plist-get props :family)))
+          ""
+        (concat
+         (propertize " " 'face 'nano-modeline-active)
+         (propertize (substring-no-properties icon)
+                     'face (list :family (plist-get props :family)
+                                 :inherit (delq nil (list (plist-get props :inherit)
+                                                          'nano-modeline-active))))))))
+
+  (defun ui-nano--buffer-status ()
+    "Return the buffer status segment, shown as an icon when possible.
+
+  Read-only buffers get a lock, modified ones a pencil and the rest a file
+  icon, on amber backgrounds that vary by state (`ui-nano-status-icon'
+  and its -modified / -read-only variants).  The
+  vertical padding is `nano-modeline-padding'.  Falls back to
+  `nano-modeline-buffer-status' (the text \"RO\" / \"**\" / \"RW\") on a
+  non-graphical display or when `nerd-icons' is unavailable.
+
+  The whole segment gets one face, so the icon font is set here as a separate
+  face ahead of it, and the padding spaces carry the face too.  The file type
+  icon of the buffer (`ui-nano--type-icon') follows the status icon."
+    (if (not (and (display-graphic-p) (require 'nerd-icons nil t)))
+        (nano-modeline-buffer-status)
+      (let* ((name  (cond (buffer-read-only      "nf-fa-lock")
+                          ((buffer-modified-p)   "nf-fa-pencil")
+                          (t                     "nf-fa-file_o")))
+             (glyph (substring-no-properties (nerd-icons-faicon name)))
+             (face  (cond (buffer-read-only      'ui-nano-status-icon-read-only)
+                          ((buffer-modified-p)   'ui-nano-status-icon-modified)
+                          (t                     'ui-nano-status-icon)))
+             (gap   (propertize " " 'display '(space :width 0.4)))
+             (top   (propertize " " 'display `(raise ,(car nano-modeline-padding))))
+             (bot   (propertize " " 'display `(raise ,(- (cdr nano-modeline-padding))))))
+        ;; top / bot（raise を指定しただけの空白）にも face が必要。
+        ;; 付けないと、アイコンの周りだけ地の色が見えて継ぎ目になる。
+        (concat
+         (propertize (concat top gap) 'face face)
+         (propertize glyph 'face (list '(:family "Symbols Nerd Font Mono") face))
+         (propertize (concat gap bot) 'face face)
+         (ui-nano--type-icon)))))
+
+  (defun ui-nano--line (&optional default)
+    "Install the nano-modeline layout used for every buffer.
+
+  DEFAULT is passed through to `nano-modeline-header':
+  t means global (setq-default), nil means buffer-local (setq-local).
+  The left segment shows the status icon, name, git info, file size and line
+  count; the right segment shows battery, time, encoding and cursor position."
+    (funcall nano-modeline-position
+             '((ui-nano--buffer-status) " "
+               (nano-modeline-buffer-name) " "
+               (nano-modeline-git-info) " "
+               (nano-modeline-file-size) " "
+               (nano-modeline-buffer-line-count))
+             '((ui-nano--battery)
+               (ui-nano--time-encoding) " "
+               (nano-modeline-cursor-position)
+               (nano-modeline-window-dedicated))
+             default))
+
+  (defun ui-nano--prog-mode (&optional default)
+    "Override `nano-modeline-prog-mode' with the shared layout.
+
+  DEFAULT is passed through to `ui-nano--line'."
+    (ui-nano--line default))
+
+  (defun ui-nano--text-mode (&optional default)
+    "Override `nano-modeline-text-mode' with the shared layout.
+
+  DEFAULT is passed through to `ui-nano--line'."
+    (ui-nano--line default))
+
+  (defvar ui-nano--saved-mode-line-format nil
+    "Saved value of `mode-line-format' before nano-modeline suppressed it.
+
+  Restored by `my/ui-nano-modeline-toggle' when toggling off.")
+
+  (defun ui-nano--apply-global ()
+    "Set nano-modeline as the global header-line and hide the mode-line.
+
+  Saves the current default `mode-line-format' into
+  `ui-nano--saved-mode-line-format' before clearing it, so that
+  `my/ui-nano-modeline-toggle' can restore it later.
+
+  Calls `ui-nano--prog-mode' with default=t so that
+  `nano-modeline-header' uses setq-default, covering every buffer
+  including those that never trigger a major-mode hook."
+    (unless ui-nano--saved-mode-line-format
+      (setq ui-nano--saved-mode-line-format
+            (default-value 'mode-line-format)))
+    (ui-nano--prog-mode t)
+    (setq-default mode-line-format nil))
+
+  ;;;###autoload
+  (defun my/ui-nano-modeline-toggle ()
+    "Toggle nano-modeline header-line display globally.
+
+  When header-line-format is set (visible), clears it globally and
+  restores `mode-line-format' from `ui-nano--saved-mode-line-format'.
+  When cleared, calls `ui-nano--apply-global' to re-enable the
+  header-line globally and suppress the mode-line again."
+    (interactive)
+    (unless ui--nano-modeline-initialized
+      (user-error "nano-modeline is not enabled (see `my:use-ui')"))
+    (if (default-value 'header-line-format)
+        (progn
+          (setq-default header-line-format nil)
+          (setq-default mode-line-format
+                        (or ui-nano--saved-mode-line-format
+                            mode-line-format)))
+      (ui-nano--apply-global)))
+
+  (defun ui-nano--install-layout ()
+    "Apply the shared header-line layout to every buffer and hide the mode-line.
+  Called once from `ui-nano--setup', after `nano-modeline' has been loaded.  The
+  mode-specific hooks that `ui-nano--setup' registers call the overridden
+  functions with DEFAULT nil, which is harmless."
+    (advice-add 'nano-modeline-prog-mode :override #'ui-nano--prog-mode)
+    (advice-add 'nano-modeline-text-mode :override #'ui-nano--text-mode)
+    (ui-nano--apply-global))
 
   ;; nano-modeline.el は defface（nano-modeline-active 等）の値を、
   ;; (face-foreground 'default) / (face-background 'header-line nil t) を
@@ -4719,6 +5010,7 @@ dark へ切り替えるとき、テーマが定義していない（light の固
       (setopt nano-modeline-padding '(0.20 . 0.25))
       (add-hook 'prog-mode-hook #'nano-modeline-prog-mode)
       (add-hook 'text-mode-hook #'nano-modeline-text-mode)
+      (ui-nano--install-layout)
       (setq ui--nano-modeline-initialized t)
       (message "[ui] nano-modeline initialized.")))
 
@@ -8341,30 +8633,40 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;;   `outline-invisible-p' にフォールバックする
   ;;; Code:
 
+  ;; Org は起動時に読み込まない（orgx 層の規則）。下の関数は org-mode のキーからだけ
+  ;; 呼ばれ、その時点で Org は読み込み済みなので、宣言だけしておく。
+  (declare-function org-fold-subtree "org-fold")
+  (declare-function org-fold-show-subtree "org-fold")
+  (declare-function org-fold-folded-p "org-fold")
+  (declare-function org-back-to-heading "org")
+  (declare-function outline-invisible-p "outline")
+
+  (defun my/org-fold-subtree ()
+    "Fold the subtree at point."
+    (interactive) (org-fold-subtree t))
+
+  (defun my/org-unfold-subtree ()
+    "Unfold (show) the subtree at point."
+    (interactive) (org-fold-show-subtree))
+
+  (defun my/org-toggle-fold ()
+    "Toggle fold state of the subtree at point."
+    (interactive)
+    (save-excursion
+      (org-back-to-heading t)
+      (if (if (fboundp 'org-fold-folded-p)
+              (org-fold-folded-p (point))
+            ;; Emacs 29 未満のフォールバック: outline の可視性を確認する
+            (outline-invisible-p (line-end-position)))
+          (org-fold-show-subtree)
+        (org-fold-subtree t))))
+
+  
+
   (with-eval-after-load 'org
     (require 'org-fold)
 
-    (defun my/org-fold-subtree ()
-      "Fold the subtree at point."
-      (interactive) (org-fold-subtree t))
-
-    (defun my/org-unfold-subtree ()
-      "Unfold (show) the subtree at point."
-      (interactive) (org-fold-show-subtree))
-
-    (defun my/org-toggle-fold ()
-      "Toggle fold state of the subtree at point."
-      (interactive)
-      (save-excursion
-        (org-back-to-heading t)
-        (if (if (fboundp 'org-fold-folded-p)
-                (org-fold-folded-p (point))
-              ;; Emacs 29 未満のフォールバック: outline の可視性を確認する
-              (outline-invisible-p (line-end-position)))
-            (org-fold-show-subtree)
-          (org-fold-subtree t))))
-
-    ;; org-mode 用に、折りたたみコマンドを M-SPC m 接頭辞（ローカルリーダー）配下に置く。
+  ;; org-mode 用に、折りたたみコマンドを M-SPC m 接頭辞（ローカルリーダー）配下に置く。
     ;; キーは、モード用に予約された標準の C-c バインドと衝突しないよう選んでいる。
     (keymap-set org-mode-map "M-SPC m f" #'my/org-fold-subtree)
     (keymap-set org-mode-map "M-SPC m e" #'my/org-unfold-subtree)
@@ -9629,16 +9931,18 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
           ((fboundp 'eglot-guess-contact) (ignore-errors (eglot-guess-contact)))
           (t nil)))
 
+  ;;;###autoload
+  (defun dev-lsp-eglot--maybe-ensure ()
+    "Enable eglot in the current buffer when the project is guessable."
+    (when (my/eglot-guessable-p) (eglot-ensure)))
+
+  ;; defun は leaf より前に置く（vcs-core.el の smerge と同じ理由。:hook に関数名を
+  ;; 書くと leaf が autoload と declare-function を出し、後ろだと二重定義の警告になる）。
   (leaf eglot
     :straight t
     :commands (eglot eglot-ensure)
     :custom ((eglot-autoreconnect . t))
     :hook ((prog-mode . dev-lsp-eglot--maybe-ensure)))
-
-  ;;;###autoload
-  (defun dev-lsp-eglot--maybe-ensure ()
-    "Enable eglot in the current buffer when the project is guessable."
-    (when (my/eglot-guessable-p) (eglot-ensure)))
 
   ;;;###autoload
   (defun my/lsp-enable-eglot ()
@@ -9777,64 +10081,58 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
     (defvar dev-ai--api-key-configured nil
       "Non-nil once `dev-ai--setup-api-key' has run in this session.")
 
-    (leaf aidermacs
-      :straight t
-      :custom
-      ((aidermacs-retry-attempts . 3)
-       (aidermacs-retry-delay   . 2.0))
-      :config
-      ;; API キーの参照は `aidermacs-run' への :before advice で行う。after-init-hook
-      ;; では *ない*。
-      ;;
-      ;; 落とし穴その1（実機で踏んだ）: `add-hook' は APPEND 引数を渡さない限り新しい
-      ;; 関数をフックリストの *先頭* に追加する（同じ DEPTH 内では後から登録した関数
-      ;; ほど先に走る）。当初 after-init-hook DEPTH 10 で登録していたが、これは
-      ;; auth-core（epa-file-enable）／auth-gpg（~/.authinfo.gpg を auth-sources へ
-      ;; 追加）の既定 DEPTH（0）より後に走ることは保証できても、それ以外の問題までは
-      ;; 解決しなかった（落とし穴その2参照）。
-      ;;
-      ;; 落とし穴その2（実機で踏んだ）: after-init-hook で毎起動時に無条件でキーを
-      ;; 検索する設計そのものが問題だった。 =auth-source-backends= （auth-source.el
-      ;; 組み込みマクロ）はキャッシュを持たず、呼ばれるたびに =auth-sources= の
-      ;; 全エントリを再パースする——=~/.authinfo.gpg= も呼ばれるたびに epa-file 経由で
-      ;; 再復号される。旧実装は openrouter.ai と api.openai.com を別々に2回
-      ;; =auth-source-search= していたため、Emacs 起動直後に GPG 復号（macOS では
-      ;; Touch ID 生体認証）が短時間に2回連続で走ってしまい、2回目が
-      ;; "No secret key" で失敗する（LAContext の生体評価は極端に短い間隔で連続実行
-      ;; できないため）という、毎起動ごとに再現する形で表面化した。
-      ;;
-      ;; 対処（この2つを両方やって初めて解決する）:
-      ;;   1. 検索を1回の =auth-source-search= にまとめる（:host にリストを渡し、
-      ;;      結果を host で振り分ける）。無条件の2回検索を1回に減らす。
-      ;;   2. after-init-hook を完全にやめ、`aidermacs-run' への :before advice に
-      ;;      変更する。これにより GPG/Touch ID 認証は「実際に aidermacs を使う
-      ;;      瞬間」だけに発生し、通常の Emacs 起動では一切発生しない。
-      ;;      `dev-ai--api-key-configured' で 1 セッション 1 回だけに絞り、
-      ;;      `aidermacs-run' を呼ぶたびに再認証が走らないようにする。
-      ;;
-      ;; ~/.authinfo.gpg のエントリ形式:
-      ;;   machine openrouter.ai login ac1965  password sk-or-...
-      ;;   machine api.openai.com login org-ai password sk-proj-...
-      ;;
-      ;; :user の値は ~/.authinfo.gpg の `login' フィールドと厳密に一致させること。
-      (defun dev-ai--ensure-authinfo-in-sources ()
-        "Ensure the GPG credential store is in `auth-sources' before searching.
+    ;; API キーの参照は `aidermacs-run' への :before advice で行う。after-init-hook
+    ;; では *ない*。
+    ;;
+    ;; 落とし穴その1（実機で踏んだ）: `add-hook' は APPEND 引数を渡さない限り新しい
+    ;; 関数をフックリストの *先頭* に追加する（同じ DEPTH 内では後から登録した関数
+    ;; ほど先に走る）。当初 after-init-hook DEPTH 10 で登録していたが、これは
+    ;; auth-core（epa-file-enable）／auth-gpg（~/.authinfo.gpg を auth-sources へ
+    ;; 追加）の既定 DEPTH（0）より後に走ることは保証できても、それ以外の問題までは
+    ;; 解決しなかった（落とし穴その2参照）。
+    ;;
+    ;; 落とし穴その2（実機で踏んだ）: after-init-hook で毎起動時に無条件でキーを
+    ;; 検索する設計そのものが問題だった。 =auth-source-backends= （auth-source.el
+    ;; 組み込みマクロ）はキャッシュを持たず、呼ばれるたびに =auth-sources= の
+    ;; 全エントリを再パースする——=~/.authinfo.gpg= も呼ばれるたびに epa-file 経由で
+    ;; 再復号される。旧実装は openrouter.ai と api.openai.com を別々に2回
+    ;; =auth-source-search= していたため、Emacs 起動直後に GPG 復号（macOS では
+    ;; Touch ID 生体認証）が短時間に2回連続で走ってしまい、2回目が
+    ;; "No secret key" で失敗する（LAContext の生体評価は極端に短い間隔で連続実行
+    ;; できないため）という、毎起動ごとに再現する形で表面化した。
+    ;;
+    ;; 対処（この2つを両方やって初めて解決する）:
+    ;;   1. 検索を1回の =auth-source-search= にまとめる（:host にリストを渡し、
+    ;;      結果を host で振り分ける）。無条件の2回検索を1回に減らす。
+    ;;   2. after-init-hook を完全にやめ、`aidermacs-run' への :before advice に
+    ;;      変更する。これにより GPG/Touch ID 認証は「実際に aidermacs を使う
+    ;;      瞬間」だけに発生し、通常の Emacs 起動では一切発生しない。
+    ;;      `dev-ai--api-key-configured' で 1 セッション 1 回だけに絞り、
+    ;;      `aidermacs-run' を呼ぶたびに再認証が走らないようにする。
+    ;;
+    ;; ~/.authinfo.gpg のエントリ形式:
+    ;;   machine openrouter.ai login ac1965  password sk-or-...
+    ;;   machine api.openai.com login org-ai password sk-proj-...
+    ;;
+    ;; :user の値は ~/.authinfo.gpg の `login' フィールドと厳密に一致させること。
+    (defun dev-ai--ensure-authinfo-in-sources ()
+      "Ensure the GPG credential store is in `auth-sources' before searching.
   Reads `auth-gpg-file' when the auth-gpg module is loaded, falling back to
   ~/.authinfo.gpg.  Adds the file to the front of `auth-sources' if absent and
   clears the auth-source cache so the next search reads the file fresh.
   Called by `dev-ai--setup-api-key'."
-        (require 'auth-source)
-        (let ((gpg-file (expand-file-name
-                         (if (boundp 'auth-gpg-file)
-                             auth-gpg-file
-                           "~/.authinfo.gpg"))))
-          (when (and (file-exists-p gpg-file)
-                     (not (member gpg-file auth-sources)))
-            (setopt auth-sources (cons gpg-file auth-sources))
-            (auth-source-forget-all-cached))))
+      (require 'auth-source)
+      (let ((gpg-file (expand-file-name
+                       (if (boundp 'auth-gpg-file)
+                           auth-gpg-file
+                         "~/.authinfo.gpg"))))
+        (when (and (file-exists-p gpg-file)
+                   (not (member gpg-file auth-sources)))
+          (setopt auth-sources (cons gpg-file auth-sources))
+          (auth-source-forget-all-cached))))
 
-      (defun dev-ai--setup-api-key (&rest _ignore)
-        "Configure OPENAI_API_KEY and OPENAI_API_BASE from auth-source.
+    (defun dev-ai--setup-api-key (&rest _ignore)
+      "Configure OPENAI_API_KEY and OPENAI_API_BASE from auth-source.
   Reads ~/.authinfo.gpg via a *single* `auth-source-search' call for:
     machine openrouter.ai login ac1965  (preferred)
     machine api.openai.com login org-ai (fallback)
@@ -9842,47 +10140,56 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   (including re-decrypting ~/.authinfo.gpg via epa-file) on every call, with
   no cache of its own.  Two back-to-back calls used to trigger two Touch ID
   prompts in immediate succession, and the second reliably failed with
-  \"No secret key\" (see the :config comment above).
+  \"No secret key\" (see the comment above).
   Calls `dev-ai--ensure-authinfo-in-sources' first so the lookup succeeds
   even if `auth-gpg--configure-sources' has not added the file yet.
   Added as `:before' advice on `aidermacs-run' (not `after-init-hook'), so
   this — and the GPG/Touch ID prompt it triggers — only happens when
   aidermacs is actually invoked, never on ordinary Emacs startup.
   Runs at most once per session, guarded by `dev-ai--api-key-configured'."
-        (unless dev-ai--api-key-configured
-          (setq dev-ai--api-key-configured t)
-          (dev-ai--ensure-authinfo-in-sources)
-          (require 'auth-source)
-          (let* ((entries (auth-source-search
-                            :host '("openrouter.ai" "api.openai.com")
-                            :max 2
-                            :require '(:secret)))
-                 (router-entry (seq-find (lambda (e) (equal (plist-get e :host) "openrouter.ai"))
-                                          entries))
-                 (openai-entry (seq-find (lambda (e) (equal (plist-get e :host) "api.openai.com"))
-                                          entries))
-                 (router-key (when router-entry
-                               (let ((s (plist-get router-entry :secret)))
-                                 (if (functionp s) (funcall s) s))))
-                 (openai-key (when openai-entry
-                               (let ((s (plist-get openai-entry :secret)))
-                                 (if (functionp s) (funcall s) s)))))
-            (cond
-  	   (router-key
-              (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-              (setenv "OPENAI_API_KEY"  router-key)
-              (setopt aidermacs-default-model "openrouter/anthropic/claude-sonnet-4-5"))
-          ;;    (openai-key
-          ;;     (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-          ;;     (setenv "OPENAI_API_KEY"  openai-key)
-          ;;     (setopt aidermacs-default-model "gpt-4o-mini"))
-             (t
-              (display-warning
-               'aidermacs
-               (concat "No API key found in auth-source.  "
-                       "Add to ~/.authinfo.gpg:\n"
-                       "  machine openrouter.ai login ac1965 password <key>\n"
-                       "  machine api.openai.com login org-ai password <key>")))))))
+      (unless dev-ai--api-key-configured
+        (setq dev-ai--api-key-configured t)
+        (dev-ai--ensure-authinfo-in-sources)
+        (require 'auth-source)
+        (let* ((entries (auth-source-search
+                          :host '("openrouter.ai" "api.openai.com")
+                          :max 2
+                          :require '(:secret)))
+               (router-entry (seq-find (lambda (e) (equal (plist-get e :host) "openrouter.ai"))
+                                        entries))
+               (openai-entry (seq-find (lambda (e) (equal (plist-get e :host) "api.openai.com"))
+                                        entries))
+               (router-key (when router-entry
+                             (let ((s (plist-get router-entry :secret)))
+                               (if (functionp s) (funcall s) s))))
+               (openai-key (when openai-entry
+                             (let ((s (plist-get openai-entry :secret)))
+                               (if (functionp s) (funcall s) s)))))
+          (cond
+         (router-key
+            (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
+            (setenv "OPENAI_API_KEY"  router-key)
+            (setopt aidermacs-default-model "openrouter/anthropic/claude-sonnet-4-5"))
+        ;;    (openai-key
+        ;;     (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
+        ;;     (setenv "OPENAI_API_KEY"  openai-key)
+        ;;     (setopt aidermacs-default-model "gpt-4o-mini"))
+           (t
+            (display-warning
+             'aidermacs
+             (concat "No API key found in auth-source.  "
+                     "Add to ~/.authinfo.gpg:\n"
+                     "  machine openrouter.ai login ac1965 password <key>\n"
+                     "  machine api.openai.com login org-ai password <key>")))))))
+
+    (leaf aidermacs
+      :straight t
+      :custom
+      ((aidermacs-retry-attempts . 3)
+       (aidermacs-retry-delay   . 2.0))
+      :config
+      ;; API キーの参照（`dev-ai--setup-api-key'）は、:config の外（この leaf の前）で定義している。
+      ;; defun は leaf の中に置かない（コーディング規則 8）。
       (advice-add 'aidermacs-run :before #'dev-ai--setup-api-key)
 
       ;; 順序を確実にするため、ロード後の設定はすべてここに集約している。
@@ -10812,18 +11119,21 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
     (when (fboundp 'vc-auto-revert-mode)
       (vc-auto-revert-mode 1)))
 
-  ;; SMerge は Emacs 31 で `repeat-map' を獲得した。最初の衝突コマンドの後は、
-  ;; 以降のキーを接頭辞なしで繰り返せる。
-  (leaf smerge-mode
-    :straight nil
-    :hook ((find-file-hook . vcs-core--maybe-enable-smerge)))
-
   (defun vcs-core--maybe-enable-smerge ()
     "Enable `smerge-mode' when the visited file contains conflict markers."
     (save-excursion
       (goto-char (point-min))
       (when (re-search-forward "^<<<<<<< " nil t)
         (smerge-mode 1))))
+
+  ;; SMerge は Emacs 31 で `repeat-map' を獲得した。最初の衝突コマンドの後は、
+  ;; 以降のキーを接頭辞なしで繰り返せる。
+  ;; defun は leaf より前に置く。:hook に関数名を書くと leaf は、その関数が未定義なら
+  ;; パッケージ名への autoload と declare-function を出すため、後ろに置くと
+  ;; 「defined multiple times」の警告になり、誤った autoload も一瞬登録される。
+  (leaf smerge-mode
+    :straight nil
+    :hook ((find-file-hook . vcs-core--maybe-enable-smerge)))
 
   (provide 'vcs-core)
   ;;; vcs/vcs-core.el ends here
@@ -12523,293 +12833,21 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
 
   ;; ---------------------------------------------------------------------------
-  ;; nano-modeline
+  ;; nano-modeline 用の IME 表示
   ;; ---------------------------------------------------------------------------
 
   ;;
-  ;; 目的:
-  ;; メジャーモードにかかわらず全バッファで nano-modeline を表示し、
-  ;; 標準のモードラインは完全に隠す。
-  ;;
-  ;; API の事実（rougier/nano-modeline のソースで確認済み）:
-  ;;
-  ;;   nano-modeline-header (left right &optional default)
-  ;;
-  ;;   default=nil → setq-local  header-line-format（現在のバッファのみ）
-  ;;   default=t   → setq-default header-line-format（全バッファ、グローバル）
-  ;;
-  ;; 方針:
-  ;;
-  ;; 1. ac1965--nano-apply-global が nano-modeline-header を default=t で呼び、
-  ;;    現在および将来のすべてのバッファに対し header-line-format を
-  ;;    グローバル設定する。
-  ;;
-  ;; 2. (setq-default mode-line-format nil) が標準のモードラインを
-  ;;    グローバルに隠す。
-  ;;
-  ;; 3. 両ステップは with-eval-after-load 'nano-modeline の内側で走る。
-  ;;    これは ui-nano--setup が (require 'nano-modeline) を呼んだ後に発火する。
-  ;;
-  ;; ui-nano--setup が登録するモード別フック
-  ;; （prog-mode-hook、text-mode-hook）は、上書きされた関数を default=nil
-  ;; で呼ぶが、これは無害である。
-  ;;
-  ;; 設計上の制約（README のコーディング規則を参照）:
-  ;; - with-eval-after-load 'nano-modeline でガードすること。
-  ;; - トップレベルで nano-modeline を require しないこと。
-  ;; - すべての defun に docstring を付けること。
-  ;; - defcustom / defvar を変更しないこと。
+  ;; モードラインの表示内容（表示項目・フェイス・全体への適用・トグル）は
+  ;; ui/ui-nano-modeline.el にある（2026-10-12 に personal/ から移動した。設計は
+  ;; 同ファイルの Commentary を参照）。ここには、このマシン固有の入力である
+  ;; IME の状態だけを残し、`ui-nano-modeline-ime-function' を通して渡す。
   ;;
 
-  (defvar nano-modeline-position)
+  (defun ac1965--sis-indicator-string ()
+    "Return the cached IME indicator (`ac1965--sis-indicator') for the modeline."
+    ac1965--sis-indicator)
 
-  (defun ac1965--nano-time-encoding ()
-    "Return a propertized \"HH:MM  CODING  IME\" string for the
-  nano-modeline right segment.
-
-  Evaluated every frame inside nano-modeline--make's :eval block.
-  Time and coding system are computed directly; IME state is read from
-  the cache `ac1965--sis-indicator', which is updated via `sis-change-hook'
-  to avoid spawning osascript processes on every redisplay.
-  Coding system suffix modifiers (-unix, -dos, -mac, -with-signature) are
-  stripped."
-    (let* ((time-str (format-time-string "%H:%M"))
-           (cs       (or (and (boundp 'buffer-file-coding-system)
-                              buffer-file-coding-system)
-                         'utf-8))
-           (cs-name  (replace-regexp-in-string
-                      "-\\(?:unix\\|dos\\|mac\\|with-signature\\)\\'"
-                      ""
-                      (symbol-name (coding-system-base cs)))))
-      (propertize
-       (concat time-str "  " cs-name ac1965--sis-indicator)
-       'face (when (fboundp 'nano-modeline-face)
-               (nano-modeline-face 'secondary)))))
-
-  (defvar battery-load-low)
-  (defvar battery-load-critical)
-  (defvar battery-update-functions)
-
-  (defvar ac1965--nano-battery-data nil
-    "Last battery status alist reported through `battery-update-functions'.
-Keys are the `battery-status-function' format characters: ?L is the power
-source (\"AC\" or \"Battery\") and ?p is the load percentage.")
-
-  (defun ac1965--nano-battery-update (data)
-    "Remember DATA, the alist `battery-update' just computed, for the nano-modeline.
-Reusing it means the modeline never runs `pmset' itself on redisplay."
-    (setq ac1965--nano-battery-data data))
-
-  (with-eval-after-load 'battery
-    (add-hook 'battery-update-functions #'ac1965--nano-battery-update))
-
-  ;; 低残量は橙色の文字、危険は赤い背景に白い文字。ヘッダー行の背景
-  ;; （dark は nano-subtle #434C5E、light は #ECEFF1）に対する明暗比が、
-  ;; 低残量で約 5:1（dark は #FFB74D）と約 4.7:1（light は #B54708）、
-  ;; 危険で約 5.6:1（白 on #C62828）になるように選んである。
-  (defface ac1965-nano-battery-low
-    '((((background dark)) :foreground "#FFB74D" :weight bold)
-      (t :foreground "#B54708" :weight bold))
-    "Face of the nano-modeline battery text when the load is low (orange)."
-    :group 'ui-theme)
-
-  (defface ac1965-nano-battery-critical
-    '((t :background "#C62828" :foreground "#FFFFFF" :weight bold))
-    "Face of the nano-modeline battery text when the load is critical."
-    :group 'ui-theme)
-
-  (defun ac1965--nano-battery ()
-    "Return \"AC 87%  \" or \"BATT 42%  \" for the nano-modeline right segment.
-
-  The text comes from `ac1965--nano-battery-data' (kept current by
-  `display-battery-mode').  On battery it uses the `ac1965-nano-battery-low'
-  and `ac1965-nano-battery-critical' faces below `battery-load-low' and
-  `battery-load-critical'.  Returns an empty
-  string when there is no battery information, for example before the first
-  update or on a machine without a battery."
-    (let* ((data ac1965--nano-battery-data)
-           (source (cdr (assq ?L data)))
-           (load (cdr (assq ?p data)))
-           (percent (and (stringp load) (string-match-p "\\`[0-9]+\\'" load)
-                         (string-to-number load)))
-           (on-ac (equal source "AC"))
-           (base (when (fboundp 'nano-modeline-face)
-                   (nano-modeline-face 'secondary))))
-      (if (not (and percent (member source '("AC" "Battery"))))
-          ""
-        (propertize
-         ;; モードラインは :eval の結果の % を解釈するため、% を %% に重ねて書く。
-         (format "%s %d%%%%  " (if on-ac "AC" "BATT") percent)
-         'face (cond ((and (not on-ac) (< percent battery-load-critical))
-                      (list 'ac1965-nano-battery-critical base))
-                     ((and (not on-ac) (< percent battery-load-low))
-                      (list 'ac1965-nano-battery-low base))
-                     (t base))))))
-
-  (declare-function nerd-icons-faicon "nerd-icons")
-  (declare-function nano-modeline-buffer-status "nano-modeline")
-  (defvar nano-modeline-padding)
-
-  (defface ac1965-nano-status-icon
-    '((t :background "#FFD180" :foreground "#4E342E"))
-    "Face of the buffer status icon in the nano-modeline (amber)."
-    :group 'ui-theme)
-
-  (defface ac1965-nano-status-icon-modified
-    '((t :inherit ac1965-nano-status-icon :background "#FFAB40" :foreground "#3E2723"))
-    "Face of the status icon for a modified buffer (stronger amber)."
-    :group 'ui-theme)
-
-  (defface ac1965-nano-status-icon-read-only
-    '((t :inherit ac1965-nano-status-icon :background "#FFE9B8"))
-    "Face of the status icon for a read-only buffer (paler amber)."
-    :group 'ui-theme)
-
-  (declare-function nerd-icons-icon-for-buffer "nerd-icons")
-
-  (defun ac1965--nano-type-icon ()
-    "Return the file type icon of the current buffer for the nano-modeline.
-
-  The icon comes from `nerd-icons-icon-for-buffer' (by major mode), so it keeps
-  its own colour and icon font.  Only the background is added, by inheriting
-  `nano-modeline-active', so that it sits on the same band as the rest of the
-  line.  Returns an empty string when there is no icon."
-    (let* ((icon  (nerd-icons-icon-for-buffer))
-           (props (and (stringp icon) (> (length icon) 0)
-                       (get-text-property 0 'face icon))))
-      (if (not (and (consp props) (plist-get props :family)))
-          ""
-        (concat
-         (propertize " " 'face 'nano-modeline-active)
-         (propertize (substring-no-properties icon)
-                     'face (list :family (plist-get props :family)
-                                 :inherit (delq nil (list (plist-get props :inherit)
-                                                          'nano-modeline-active))))))))
-
-  (defun ac1965--nano-buffer-status ()
-    "Return the buffer status segment, shown as an icon when possible.
-
-  Read-only buffers get a lock, modified ones a pencil and the rest a file
-  icon, on amber backgrounds that vary by state (`ac1965-nano-status-icon'
-  and its -modified / -read-only variants).  The
-  vertical padding is `nano-modeline-padding'.  Falls back to
-  `nano-modeline-buffer-status' (the text \"RO\" / \"**\" / \"RW\") on a
-  non-graphical display or when `nerd-icons' is unavailable.
-
-  The whole segment gets one face, so the icon font is set here as a separate
-  face ahead of it, and the padding spaces carry the face too.  The file type
-  icon of the buffer (`ac1965--nano-type-icon') follows the status icon."
-    (if (not (and (display-graphic-p) (require 'nerd-icons nil t)))
-        (nano-modeline-buffer-status)
-      (let* ((name  (cond (buffer-read-only      "nf-fa-lock")
-                          ((buffer-modified-p)   "nf-fa-pencil")
-                          (t                     "nf-fa-file_o")))
-             (glyph (substring-no-properties (nerd-icons-faicon name)))
-             (face  (cond (buffer-read-only      'ac1965-nano-status-icon-read-only)
-                          ((buffer-modified-p)   'ac1965-nano-status-icon-modified)
-                          (t                     'ac1965-nano-status-icon)))
-             (gap   (propertize " " 'display '(space :width 0.4)))
-             (top   (propertize " " 'display `(raise ,(car nano-modeline-padding))))
-             (bot   (propertize " " 'display `(raise ,(- (cdr nano-modeline-padding))))))
-        ;; top / bot（raise を指定しただけの空白）にも face が必要。
-        ;; 付けないと、アイコンの周りだけ地の色が見えて継ぎ目になる。
-        (concat
-         (propertize (concat top gap) 'face face)
-         (propertize glyph 'face (list '(:family "Symbols Nerd Font Mono") face))
-         (propertize (concat gap bot) 'face face)
-         (ac1965--nano-type-icon)))))
-
-  (defun ac1965--nano-prog-mode (&optional default)
-    "Override `nano-modeline-prog-mode' with time+encoding in right segment.
-
-  DEFAULT is passed through to `nano-modeline-header':
-  t means global (setq-default), nil means buffer-local (setq-local)."
-    (funcall nano-modeline-position
-             '((ac1965--nano-buffer-status) " "
-               (nano-modeline-buffer-name) " "
-               (nano-modeline-git-info) " "
-               (nano-modeline-file-size) " "
-               (nano-modeline-buffer-line-count))
-             '((ac1965--nano-battery)
-               (ac1965--nano-time-encoding) " "
-               (nano-modeline-cursor-position)
-               (nano-modeline-window-dedicated))
-             default))
-
-  (defun ac1965--nano-text-mode (&optional default)
-    "Override `nano-modeline-text-mode' with time+encoding in right segment.
-
-  DEFAULT has the same meaning as in `ac1965--nano-prog-mode'."
-    (funcall nano-modeline-position
-             '((ac1965--nano-buffer-status) " "
-               (nano-modeline-buffer-name) " "
-               (nano-modeline-git-info) " "
-               (nano-modeline-file-size) " "
-               (nano-modeline-buffer-line-count))
-             '((ac1965--nano-battery)
-               (ac1965--nano-time-encoding) " "
-               (nano-modeline-cursor-position)
-               (nano-modeline-window-dedicated))
-             default))
-
-  (defvar ac1965--nano-saved-mode-line-format nil
-    "Saved value of `mode-line-format' before nano-modeline suppressed it.
-
-  Restored by `ac1965/nano-modeline-toggle' when toggling off.")
-
-  (defun ac1965--nano-apply-global ()
-    "Set nano-modeline as the global header-line and hide the mode-line.
-
-  Saves the current default `mode-line-format' into
-  `ac1965--nano-saved-mode-line-format' before clearing it, so that
-  `ac1965/nano-modeline-toggle' can restore it later.
-
-  Calls `ac1965--nano-prog-mode' with default=t so that
-  `nano-modeline-header' uses setq-default, covering every buffer
-  including those that never trigger a major-mode hook."
-    (unless ac1965--nano-saved-mode-line-format
-      (setq ac1965--nano-saved-mode-line-format
-            (default-value 'mode-line-format)))
-    (ac1965--nano-prog-mode t)
-    (setq-default mode-line-format nil))
-
-  (with-eval-after-load 'nano-modeline
-    (advice-add 'nano-modeline-prog-mode
-                :override #'ac1965--nano-prog-mode)
-    (advice-add 'nano-modeline-text-mode
-                :override #'ac1965--nano-text-mode)
-    (ac1965--nano-apply-global))
-
-
-  ;; ---------------------------------------------------------------------------
-  ;; nano-modeline のトグル: M-SPC t m
-  ;; ---------------------------------------------------------------------------
-
-  ;;
-  ;; nano-modeline のヘッダーラインとモードラインの表示をグローバルに切り替える。
-  ;;
-  ;; 非表示:
-  ;; header-line-format を設定し、mode-line-format を既定へ復元する。
-  ;;
-  ;; 表示:
-  ;; ac1965--nano-apply-global を呼んで両者を再度有効化する。
-  ;;
-
-  (defun ac1965/nano-modeline-toggle ()
-    "Toggle nano-modeline header-line display globally.
-
-  When header-line-format is set (visible), clears it globally and
-  restores `mode-line-format' from `ac1965--nano-saved-mode-line-format'.
-  When cleared, calls `ac1965--nano-apply-global' to re-enable the
-  header-line globally and suppress the mode-line again."
-    (interactive)
-    (if (default-value 'header-line-format)
-        (progn
-          (setq-default header-line-format nil)
-          (setq-default mode-line-format
-                        (or ac1965--nano-saved-mode-line-format
-                            mode-line-format)))
-      (ac1965--nano-apply-global)))
+  (setopt ui-nano-modeline-ime-function #'ac1965--sis-indicator-string)
 
 
   ;; ---------------------------------------------------------------------------
@@ -12822,7 +12860,7 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
   (depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
   and `ui-leader-o-map' are guaranteed to be live keymaps."
-    (ui-keymap--bind 'ui-leader-t-map "m" #'ac1965/nano-modeline-toggle)
+    (ui-keymap--bind 'ui-leader-t-map "m" #'my/ui-nano-modeline-toggle)
     (ui-keymap--bind 'ui-leader-o-map "g" #'ac1965/org-hugo-set-tags)
     (ui-keymap--bind 'ui-leader-o-map "f" #'ac1965/open-capture-blog-file))
 
@@ -14435,7 +14473,7 @@ prose the snippet happens to mix in."
 	@echo "  # ChangeLog（GNU 形式）と LICENSE は README.org の各節に埋め込み済みで、make tangle で生成される"
 	@echo ""
 	@echo "  # 静的チェック"
-	@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + checkdoc"
+	@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + check-fboundp-guards + checkdoc"
 	@echo "  make check-tangle             # :tangle を継承できていない src block を検出"
 	@echo "  make check-emphasis           # 効かない =verbatim=/~code~/*bold* を検出"
 	@echo "  make check-fboundp-guards     # (fboundp 'X) ガードと #'X 参照の整合性を検査"
@@ -16497,6 +16535,23 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (dev/dev-ai.el): dev-ai--ensure-authinfo-in-sources と dev-ai--setup-api-key を
+	leaf aidermacs の :config の中からトップレベルへ移動（コーディング規則 8）。
+	* README.org (orgx/orgx-fold.el): my/org-fold-subtree、my/org-unfold-subtree、my/org-toggle-fold を
+	with-eval-after-load 'org の中からトップレベルへ移動（規則 8）。Org 側の関数は declare-function で宣言。
+	* README.org (vcs/vcs-core.el, dev/dev-lsp-eglot.el): :hook に関数名を書く leaf より前に defun を置き、
+	「defined multiple times」の警告と誤った autoload を解消。
+	* README.org (ui/ui-nano-modeline.el): personal/ac1965.el にあった nano-modeline の表示項目・
+	フェイス・全体への適用・トグルをここへ移動（ac1965--nano-* を ui-nano--* に、
+	ac1965-nano-* のフェイスを ui-nano-* に、ac1965/nano-modeline-toggle を
+	my/ui-nano-modeline-toggle に改名）。`ui-nano-modeline-ime-function' を追加し、IME の状態は
+	personal/ から渡す。Commentary に設計と実測値（再描画の費用）を記載。
+	* README.org (personal/ac1965.el): 上記の移動に合わせ、IME を渡す ac1965--sis-indicator-string だけを残す。
+	* README.org (core/core-switches.el): my/ui-nano-modeline-toggle の autoload を追加。
+	* README.org (personal/ac1965.el) (ac1965--nano-line): 新規。ac1965--nano-prog-mode と
+	ac1965--nano-text-mode の同一だった本体を共通化し、2 つは薄いラッパーにする。
+	外部シンボルの defvar / declare-function を 1 か所にまとめる。
+	* README.org (Makefile): make help の lint の説明に check-fboundp-guards を追加。
 	* README.org (ui/ui-utils.el): battery-load-low を 30、battery-load-critical を 15 にする。
 	* README.org (personal/ac1965.el): `ac1965-nano-battery-low' / `ac1965-nano-battery-critical' を追加し、
 	低残量は橙色の文字、危険は赤い背景に白い文字で表示する（dark / light の両方で読める配色）。
