@@ -284,6 +284,21 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
 - noweb の既定は `README.org` の `:noweb no-export` を維持する。
   参照が必要な箇所に限り、ブロック単位で指定する。
 - ブロック間の依存は、可能な限り named block / noweb 参照で明示する。
+- **字下げ:** README のコードブロックは 2 文字字下げで書く。tangle のとき、Org は
+  ブロックごとに「空でない行の最小の字下げ」を取り除く（`org-src-preserve-indentation`
+  が `nil` のとき。既定）。そのため、書き出された `.el` は README より 2 文字浅くなる
+  ことが多い。ただし次の点に注意すること（2026-10-12 に最小の例で確認した）。
+  - 取り除く量は **ブロックごとに独立**している。同じファイルに複数のブロックがあれば、
+    それぞれの最小の字下げだけ取り除かれる。
+  - ブロックの途中に **桁 0 の行**（docstring の継続行など）が 1 行でもあると、そのブロック
+    では何も取り除かれず、書き出された `.el` の字下げが、ブロック全体で 2 文字深くなる
+    （コードの意味は変わらない）。README と `.el` の字下げの差が、ブロックによって
+    0 や 2 と違うのは、このため。
+  - したがって、生成された `.el` の字下げを基準に README を編集しない。README 側の
+    行の字下げを実測し、docstring の継続行は、**そのブロックの共通の字下げ**の桁に置く
+    （桁 0 の行を足して、ブロックの字下げを意図せず変えない）。
+  - `Makefile` のブロックだけは、タブを保つため `org-src-preserve-indentation` を `t` で
+    tangle する（`README.org` の `* Makefile` 節を参照）。
 
 ### Coding rules (enforced; verify before submitting a change)
 
