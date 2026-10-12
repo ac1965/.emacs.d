@@ -227,7 +227,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 │   ├── dev/
 │   └── utils/
 ├── personal/    (ユーザー／デバイス固有のオーバーレイ)
-├── scripts/     (lint・リロード・エクスポート用の Python ヘルパー。tangle 生成物)
+├── scripts/     (lint・リロード・エクスポート・デモ撮影用のヘルパー。tangle 生成物)
 ├── svg/         (図のソース .dot/.mmd と、描画済みの .svg)
 ├── .var/        (ランタイム状態)
 ├── .cache/      (一時キャッシュ)
@@ -243,7 +243,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 | =personal/= | ユーザー／デバイスのオーバーレイ（ =modules.el= より前に =init.el= が読み込む） |
 | =.var/=     | ランタイム状態（パッケージが書き出すデータ） |
 | =.cache/=   | 一時キャッシュ（削除しても自動的に再生成される） |
-| =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる） |
+| =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる）と、デモ画像の撮影スクリプト（ =demo-layout.el= 、 =shot.sh= 、 =compose.py= ） |
 | =svg/=      | 図のソース（ =.dot= / =.mmd= ）と描画済みの =.svg= |
 | =.etc/=     | no-littering の設定系ファイル（ =custom.el= 等） |
 
@@ -4887,15 +4887,25 @@ dark へ切り替えるとき、テーマが定義していない（light の固
     "nano-modeline の右側表示用フェイス。dark では前景色を明るくする。"
     :group 'ui-theme)
 
+  ;; git-info / file-size / buffer-line-count は primary フェイスで描かれる。
+  ;; light / dark とも右側（secondary）と同じ色にそろえる。
+  (defface ui-theme-modeline-primary
+    '((t :inherit ui-theme-modeline-secondary))
+    "nano-modeline の左側の補助情報用フェイス。右側と同じ色にする。"
+    :group 'ui-theme)
+
   (with-eval-after-load 'nano-modeline
     ;; 既定値の status-**-active は nano-popout-i が未定義だと nil を含む
     ;; （`face' 型に合わない）。setopt の型検証で警告が出るため nil を除く。
     (setopt nano-modeline-faces
-            (cons '(secondary-active . (ui-theme-modeline-secondary))
-                  (mapcar (lambda (entry)
-                            (cons (car entry) (delq nil (copy-sequence (cdr entry)))))
-                          (assq-delete-all 'secondary-active
-                                           (copy-alist nano-modeline-faces)))))
+            (append '((secondary-active . (ui-theme-modeline-secondary))
+                      (primary-active . (ui-theme-modeline-primary)))
+                    (mapcar (lambda (entry)
+                              (cons (car entry) (delq nil (copy-sequence (cdr entry)))))
+                            (seq-remove (lambda (entry)
+                                          (memq (car entry)
+                                                '(secondary-active primary-active)))
+                                        nano-modeline-faces))))
     (ui-theme--sync-modeline-faces))
 
   (defun ui-theme--apply-faces ()
@@ -12574,13 +12584,86 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
        'face (when (fboundp 'nano-modeline-face)
                (nano-modeline-face 'secondary)))))
 
+  (declare-function nerd-icons-faicon "nerd-icons")
+  (declare-function nano-modeline-buffer-status "nano-modeline")
+  (defvar nano-modeline-padding)
+
+  (defface ac1965-nano-status-icon
+    '((t :background "#FFD180" :foreground "#4E342E"))
+    "Face of the buffer status icon in the nano-modeline (amber)."
+    :group 'ui-theme)
+
+  (defface ac1965-nano-status-icon-modified
+    '((t :inherit ac1965-nano-status-icon :background "#FFAB40" :foreground "#3E2723"))
+    "Face of the status icon for a modified buffer (stronger amber)."
+    :group 'ui-theme)
+
+  (defface ac1965-nano-status-icon-read-only
+    '((t :inherit ac1965-nano-status-icon :background "#FFE9B8"))
+    "Face of the status icon for a read-only buffer (paler amber)."
+    :group 'ui-theme)
+
+  (declare-function nerd-icons-icon-for-buffer "nerd-icons")
+
+  (defun ac1965--nano-type-icon ()
+    "Return the file type icon of the current buffer for the nano-modeline.
+
+  The icon comes from `nerd-icons-icon-for-buffer' (by major mode), so it keeps
+  its own colour and icon font.  Only the background is added, by inheriting
+  `nano-modeline-active', so that it sits on the same band as the rest of the
+  line.  Returns an empty string when there is no icon."
+    (let* ((icon  (nerd-icons-icon-for-buffer))
+           (props (and (stringp icon) (> (length icon) 0)
+                       (get-text-property 0 'face icon))))
+      (if (not (and (consp props) (plist-get props :family)))
+          ""
+        (concat
+         (propertize " " 'face 'nano-modeline-active)
+         (propertize (substring-no-properties icon)
+                     'face (list :family (plist-get props :family)
+                                 :inherit (delq nil (list (plist-get props :inherit)
+                                                          'nano-modeline-active))))))))
+
+  (defun ac1965--nano-buffer-status ()
+    "Return the buffer status segment, shown as an icon when possible.
+
+  Read-only buffers get a lock, modified ones a pencil and the rest a file
+  icon, on amber backgrounds that vary by state (`ac1965-nano-status-icon'
+  and its -modified / -read-only variants).  The
+  vertical padding is `nano-modeline-padding'.  Falls back to
+  `nano-modeline-buffer-status' (the text \"RO\" / \"**\" / \"RW\") on a
+  non-graphical display or when `nerd-icons' is unavailable.
+
+  The whole segment gets one face, so the icon font is set here as a separate
+  face ahead of it, and the padding spaces carry the face too.  The file type
+  icon of the buffer (`ac1965--nano-type-icon') follows the status icon."
+    (if (not (and (display-graphic-p) (require 'nerd-icons nil t)))
+        (nano-modeline-buffer-status)
+      (let* ((name  (cond (buffer-read-only      "nf-fa-lock")
+                          ((buffer-modified-p)   "nf-fa-pencil")
+                          (t                     "nf-fa-file_o")))
+             (glyph (substring-no-properties (nerd-icons-faicon name)))
+             (face  (cond (buffer-read-only      'ac1965-nano-status-icon-read-only)
+                          ((buffer-modified-p)   'ac1965-nano-status-icon-modified)
+                          (t                     'ac1965-nano-status-icon)))
+             (gap   (propertize " " 'display '(space :width 0.4)))
+             (top   (propertize " " 'display `(raise ,(car nano-modeline-padding))))
+             (bot   (propertize " " 'display `(raise ,(- (cdr nano-modeline-padding))))))
+        ;; top / bot（raise を指定しただけの空白）にも face が必要。
+        ;; 付けないと、アイコンの周りだけ地の色が見えて継ぎ目になる。
+        (concat
+         (propertize (concat top gap) 'face face)
+         (propertize glyph 'face (list '(:family "Symbols Nerd Font Mono") face))
+         (propertize (concat gap bot) 'face face)
+         (ac1965--nano-type-icon)))))
+
   (defun ac1965--nano-prog-mode (&optional default)
     "Override `nano-modeline-prog-mode' with time+encoding in right segment.
 
   DEFAULT is passed through to `nano-modeline-header':
   t means global (setq-default), nil means buffer-local (setq-local)."
     (funcall nano-modeline-position
-             '((nano-modeline-buffer-status) " "
+             '((ac1965--nano-buffer-status) " "
                (nano-modeline-buffer-name) " "
                (nano-modeline-git-info) " "
                (nano-modeline-file-size) " "
@@ -12595,7 +12678,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   DEFAULT has the same meaning as in `ac1965--nano-prog-mode'."
     (funcall nano-modeline-position
-             '((nano-modeline-buffer-status) " "
+             '((ac1965--nano-buffer-status) " "
                (nano-modeline-buffer-name) " "
                (nano-modeline-git-info) " "
                (nano-modeline-file-size) " "
@@ -14240,6 +14323,25 @@ prose the snippet happens to mix in."
      done; \
    fi
 
+  # ---- stage : 追跡対象だけを stage する ------------------------------------------
+  # このリポジトリで git が追跡するのは README.org などの少数のファイルだけで、
+  # それ以外（lisp/ personal/ scripts/ Makefile ChangeLog など）は tangle の生成物として
+  # .gitignore されている。`git add .` は .gitignore にまだ書いていない新規ファイルまで
+  # 拾うため、追跡対象を TRACKED に列挙し、そのパスだけを stage する。
+  # ステージ済みのファイルに TRACKED の外のものが混ざっていれば、コミット前に中止する
+  # （`:(exclude)` の pathspec を TRACKED から組み立てるので、許可リストは TRACKED の 1 か所）。
+  # 追跡するファイルが増えたら TRACKED に足す。
+  TRACKED := README.org AGENTS.md demo.png puppeteer-config.json .gitignore svg
+
+  .PHONY: stage
+  stage:
+	@git add -A -- $(TRACKED)
+	@bad=$$(git diff --cached --name-only -- . $(foreach f,$(TRACKED),':(exclude)$(f)')); \
+  	if [ -n "$$bad" ]; then \
+  	  echo "[stage] TRACKED の外のファイルがステージされています:"; echo "$$bad"; exit 1; \
+  	fi
+	@git status --short
+
   # ---- help : 主要ターゲットの実行例を一覧表示する -----------------------------------
   help:
 	@echo "使い方の例（ROOT はこの Makefile があるディレクトリ）:"
@@ -14276,6 +14378,9 @@ prose the snippet happens to mix in."
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
 	@echo "  make checkdoc                 # 公開 defun の docstring を検証"
 	@echo "  make package-lint             # MELPA 形式のパッケージヘッダ検証（要 package-lint）"
+	@echo ""
+	@echo "  # コミット"
+	@echo "  make stage                    # 追跡対象（TRACKED）だけを stage。それ以外が混ざれば中止"
 	@echo ""
 	@echo "  # その他"
 	@echo "  make show-files               # lisp/ と personal/ 配下の .el 一覧"
@@ -15471,6 +15576,344 @@ python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
       sys.exit(main())
 #+end_src
 
+* Appendix: demo.png — デモ画像の撮影スクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-demo-screenshot
+:END:
+
+=demo.png= （README 冒頭のスクリーンショット）を、同じ手順で撮り直すための 3 つのスクリプトです。
+いずれも =scripts/= へ tangle されます。
+
+| ファイル | 役割 |
+|----------+------|
+| =scripts/demo-layout.el= | Emacs の中で 3 分割のデモ画面を組む（ =-l= で読み込む） |
+| =scripts/shot.sh=        | Emacs を起動して画面を組み、ウィンドウを 1 枚撮る |
+| =scripts/compose.py=     | dark と light の 2 枚と構成図を、1 枚の =demo.png= に合成する |
+
+** 使い方
+
+#+begin_example
+# dark と light をそれぞれ撮る
+scripts/shot.sh dark  /tmp/dark.png
+scripts/shot.sh light /tmp/light.png
+
+# 合成して demo.png に置き換える
+python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
+#+end_example
+
+*撮影される画面*
+
+- 左: =README.org= の =ui/ui-theme.el= ブロック。右上: そこから生成された =lisp/ui/ui-theme.el= （読み取り専用）。
+- 右下: =make lint= の実行結果。エコーエリアには起動時間が出る。
+- 合成画像の右側には、light 版と =svg/emacs_config_layer_architecture.svg= を並べる。
+
+*設計上の注記*
+
+- レイアウトは =window-setup-hook= の中で同期的に組む。この設定では、 =-l= で読み込んだファイルの中で作った
+  タイマーが動かなかったため（原因は調べていない）、タイマーには頼らない。 =make lint= の完了も
+  =accept-process-output= で待つ。
+- 非表示や別 Space のウィンドウは =screencapture= で撮れない。 =shot.sh= は、ウィンドウが見つからないとき
+  ディスプレイを起こし、Emacs を前面に出す（画面が一瞬切り替わる）。
+- nano の variant は =.var/nano-variant= に保存される。 =shot.sh= は撮影後に元の値へ戻す。
+- 後片付けでは、コマンドラインに =demo-layout.el= を含む Emacs だけを終了させる。普段使いの Emacs は巻き込まない。
+- 撮影のたびに Emacs を起動するため、 =desktop-save-mode= は撮影中だけ無効にする。
+- =shot.sh= は初回に、前面のウィンドウ ID を返す小さな Swift ヘルパーを =DEMO_DIR= （既定は =/tmp/emacs-demo= ）へ
+  コンパイルする。 =swiftc= と macOS が必要。 =compose.py= は Pillow と =rsvg-convert= を使い、 =pngquant= があれば
+  画像を小さくする。
+
+** demo-layout.el
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle scripts/demo-layout.el :mkdirp yes
+:END:
+
+#+NAME: demo-layout-el
+#+begin_src emacs-lisp
+  ;;; demo-layout.el --- README デモ画面のレイアウト -*- lexical-binding: t; -*-
+
+  ;; scripts/shot.sh が `-l' で読み込む。起動の最後（`window-setup-hook'）に、
+  ;; 左に README.org、右上に生成された lisp/ui/ui-theme.el、右下に `make lint' の
+  ;; 結果を並べる。環境変数:
+  ;;   DEMO_VARIANT  nano の variant（dark または light。既定は dark）
+  ;;   DEMO_DIR      ログと完了マーカーを書くディレクトリ（既定は /tmp/emacs-demo）
+  ;; 完了すると DEMO_DIR/ready、失敗すると DEMO_DIR/error を書く。
+
+  ;;; Code:
+
+  (defvar demo-dir (file-name-as-directory (or (getenv "DEMO_DIR") "/tmp/emacs-demo"))
+    "ログと完了マーカーを書くディレクトリ。")
+
+  (defvar demo-variant (intern (or (getenv "DEMO_VARIANT") "dark"))
+    "撮影に使う nano の variant（`dark' または `light'）。")
+
+  (defun demo--log (message)
+    "MESSAGE を `demo-dir' のログへ追記する。"
+    (write-region (format "%s %s\n" (format-time-string "%T") message)
+                  nil (expand-file-name "log" demo-dir) t 'silent))
+
+  (defun demo--goto (buffer needle)
+    "BUFFER の NEEDLE がある行頭へ移動する。"
+    (with-current-buffer buffer
+      (widen)
+      (goto-char (point-min))
+      (search-forward needle)
+      (beginning-of-line)))
+
+  (defun demo--wait-compile ()
+    "`*compilation*' のプロセスが終わるまで待ち、末尾を表示する。"
+    (let* ((buffer (get-buffer "*compilation*"))
+           (proc (and buffer (get-buffer-process buffer)))
+           (count 0))
+      (while (and proc (process-live-p proc) (< count 240))
+        (accept-process-output proc 0.5)
+        (setq count (1+ count)))
+      (when buffer
+        (with-current-buffer buffer
+          (goto-char (point-max))))))
+
+  (defun demo-layout ()
+    "デモ用の 3 分割レイアウトを組む。"
+    (condition-case err
+        (let ((root user-emacs-directory))
+          (make-directory demo-dir t)
+          (demo--log "layout start")
+          (when (fboundp 'desktop-save-mode) (desktop-save-mode -1))
+          (blink-cursor-mode -1)
+          (my/ui-theme-nano-switch demo-variant)
+          (set-frame-size nil 1440 880 t)
+          (set-frame-position nil 30 30)
+          (delete-other-windows)
+          (let* ((readme (find-file-noselect (expand-file-name "README.org" root)))
+                 (el (find-file-noselect (expand-file-name "lisp/ui/ui-theme.el" root)))
+                 (left (selected-window))
+                 (right (split-window-right))
+                 (bottom (with-selected-window right
+                           (split-window-below
+                            (round (* 0.50 (window-total-height right)))))))
+            (with-current-buffer readme (org-show-all))
+            (with-current-buffer el (setq buffer-read-only t))
+            (set-window-buffer left readme)
+            (set-window-buffer right el)
+            (dolist (spec (list (cons left readme) (cons right el)))
+              (demo--goto (cdr spec) "(defun ui-theme--sync-modeline-faces")
+              (set-window-point (car spec) (with-current-buffer (cdr spec) (point)))
+              (set-window-start (car spec)
+                                (with-current-buffer (cdr spec)
+                                  (save-excursion (forward-line -8) (point)))))
+            (select-window bottom)
+            (let ((default-directory root)
+                  (display-buffer-overriding-action '(display-buffer-same-window)))
+              (compile "make lint"))
+            (demo--wait-compile)
+            (set-window-point bottom (with-current-buffer "*compilation*" (point-max)))
+            (with-selected-window bottom (recenter -1))
+            (select-window left)
+            (message "Emacs ready in %.2f seconds with %d GCs."
+                     (float-time (time-subtract after-init-time before-init-time))
+                     gcs-done)
+            (sit-for 2)
+            (redisplay t)
+            (with-temp-file (expand-file-name "ready" demo-dir) (insert "ok"))
+            (demo--log "ready")))
+      (error
+       (demo--log (format "ERROR %S" err))
+       (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
+
+  (add-hook 'window-setup-hook #'demo-layout 90)
+
+  (provide 'demo-layout)
+  ;;; demo-layout.el ends here
+#+end_src
+
+** shot.sh
+:PROPERTIES:
+:header-args:zsh: :tangle scripts/shot.sh :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+#+NAME: shot-sh
+#+begin_src zsh
+  #!/bin/zsh
+  # README のデモ画像用に、Emacs を起動して 1 枚撮る。
+  #   scripts/shot.sh <dark|light> <出力.png>
+  # 環境変数: DEMO_DIR（作業ディレクトリ）、EMACS_APP（既定 /Applications/Emacs.app）
+  set -u
+  ROOT=${0:A:h:h}
+  VARIANT=${1:?usage: shot.sh <dark|light> <out.png>}
+  OUTPNG=${2:?usage: shot.sh <dark|light> <out.png>}
+  export DEMO_DIR=${DEMO_DIR:-/tmp/emacs-demo}
+  EMACS_APP=${EMACS_APP:-/Applications/Emacs.app}
+  VARIANT_FILE=$ROOT/.var/nano-variant
+  PATTERN="MacOS/Emacs.*demo-layout.el"
+  mkdir -p $DEMO_DIR
+  rm -f $DEMO_DIR/ready $DEMO_DIR/error $DEMO_DIR/log
+
+  # nano の variant は .var/nano-variant に保存されるので、撮影後に元へ戻す。
+  BACKUP=$(cat $VARIANT_FILE 2>/dev/null)
+  cleanup() {
+    pkill -9 -f "$PATTERN" 2>/dev/null
+    [[ -n $BACKUP ]] && print -r -- $BACKUP > $VARIANT_FILE
+  }
+  trap cleanup EXIT
+
+  # 前面のウィンドウ ID を返す小さな Swift ヘルパー（初回だけコンパイルする）。
+  if [[ ! -x $DEMO_DIR/wid ]]; then
+    cat > $DEMO_DIR/wid.swift <<'SWIFT'
+  import Foundation
+  import CoreGraphics
+  let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+  var best = 0
+  var area = 0
+  for w in list {
+    guard let owner = w[kCGWindowOwnerName as String] as? String, owner == "Emacs",
+          (w[kCGWindowLayer as String] as? Int) == 0 else { continue }
+    let b = w[kCGWindowBounds as String] as! [String: Any]
+    let a = (b["Width"] as! NSNumber).intValue * (b["Height"] as! NSNumber).intValue
+    if a > area { area = a; best = (w[kCGWindowNumber as String] as! NSNumber).intValue }
+  }
+  print(best)
+  SWIFT
+    swiftc -O $DEMO_DIR/wid.swift -o $DEMO_DIR/wid || exit 1
+  fi
+
+  open -n -a $EMACS_APP --env DEMO_VARIANT=$VARIANT --env DEMO_DIR=$DEMO_DIR \
+    --args --init-directory $ROOT -l $ROOT/scripts/demo-layout.el
+
+  for i in {1..100}; do [[ -f $DEMO_DIR/ready || -f $DEMO_DIR/error ]] && break; sleep 1; done
+  [[ -f $DEMO_DIR/error ]] && { cat $DEMO_DIR/error; exit 1; }
+  [[ -f $DEMO_DIR/ready ]] || { print "timeout: see $DEMO_DIR/log"; exit 1; }
+
+  # ウィンドウが別の Space や非表示にあると撮れない。見つからなければ前面に出す。
+  WID=0
+  for i in {1..5}; do WID=$($DEMO_DIR/wid); [[ $WID != 0 ]] && break; sleep 1; done
+  if [[ $WID == 0 ]]; then
+    caffeinate -u -t 2
+    osascript -e 'tell application "Emacs" to activate'
+    for i in {1..15}; do WID=$($DEMO_DIR/wid); [[ $WID != 0 ]] && break; sleep 1; done
+  fi
+  [[ $WID == 0 ]] && { print "Emacs window not found on screen"; exit 1; }
+  screencapture -o -l$WID $OUTPNG && print "saved $OUTPNG (window $WID)"
+#+end_src
+
+** compose.py
+:PROPERTIES:
+:header-args:python: :tangle scripts/compose.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+#+NAME: compose-py
+#+begin_src python
+  #!/usr/bin/env python3
+  """Compose demo.png from two Emacs screenshots and the layer architecture diagram.
+
+      python3 scripts/compose.py dark.png light.png demo.png
+
+  Layout: the dark capture on the left, the light capture and the rendered
+  svg/emacs_config_layer_architecture.svg stacked on the right.  Needs Pillow and
+  rsvg-convert; pngquant is used when available to shrink the result.
+  """
+
+  from __future__ import annotations
+
+  import argparse
+  import shutil
+  import subprocess
+  import sys
+  import tempfile
+  from pathlib import Path
+
+  from PIL import Image, ImageChops, ImageDraw, ImageFont
+
+  ROOT = Path(__file__).resolve().parent.parent
+  ARCH_SVG = ROOT / "svg" / "emacs_config_layer_architecture.svg"
+  FONTS = [
+      "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+      "/System/Library/Fonts/Hiragino Sans GB.ttc",
+      "/Library/Fonts/Arial Unicode.ttf",
+  ]
+  CROP_TOP = 100          # title bar and tool bar of the NS frame (retina pixels)
+  BG = (22, 27, 34, 255)        # GitHub dark panel colour; also fine on the light theme
+  INK = (230, 237, 243, 255)    # label text
+  EDGE = (48, 54, 61, 255)      # thin outline so dark tiles stay visible on BG
+  MARGIN, GAP, LABEL_H, LEFT_W = 48, 40, 74, 2300
+
+
+  def load_font(size: int) -> ImageFont.ImageFont:
+      for path in FONTS:
+          if Path(path).exists():
+              return ImageFont.truetype(path, size)
+      return ImageFont.load_default()
+
+
+  def render_arch(width: int) -> Image.Image:
+      if not shutil.which("rsvg-convert"):
+          sys.exit("compose.py: rsvg-convert not found (brew install librsvg)")
+      with tempfile.TemporaryDirectory() as tmp:
+          out = Path(tmp) / "arch.png"
+          subprocess.run(["rsvg-convert", "-w", str(width), "-b", "white",
+                          str(ARCH_SVG), "-o", str(out)], check=True)
+          return Image.open(out).convert("RGBA")
+
+
+  def load_capture(path: Path) -> Image.Image:
+      image = Image.open(path).convert("RGBA")
+      return image.crop((0, CROP_TOP, image.width, image.height))
+
+
+  def rounded(image: Image.Image, radius: int = 26) -> Image.Image:
+      mask = Image.new("L", image.size, 0)
+      ImageDraw.Draw(mask).rounded_rectangle(
+          (0, 0, image.width - 1, image.height - 1), radius, fill=255)
+      out = image.copy()
+      out.putalpha(ImageChops.multiply(mask, image.getchannel("A")))
+      return out
+
+
+  def main() -> int:
+      parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+      parser.add_argument("dark", type=Path)
+      parser.add_argument("light", type=Path)
+      parser.add_argument("output", type=Path)
+      args = parser.parse_args()
+
+      dark, light = load_capture(args.dark), load_capture(args.light)
+      left_h = round(LEFT_W * dark.height / dark.width)
+      arch_ratio = render_arch(1600).height / 1600
+      light_ratio = light.height / light.width
+      right_w = round((left_h - LABEL_H - GAP) / (light_ratio + arch_ratio))
+      arch = render_arch(right_w)
+      light_h = round(right_w * light_ratio)
+      arch_y = MARGIN + LABEL_H + light_h + GAP
+      height = max(MARGIN + LABEL_H + left_h, arch_y + LABEL_H + arch.height) + MARGIN
+      right_x = MARGIN + LEFT_W + GAP
+      canvas = Image.new("RGBA", (right_x + right_w + MARGIN, height), BG)
+      font = load_font(38)
+      draw = ImageDraw.Draw(canvas)
+
+      def place(image: Image.Image, width: int, x: int, y: int) -> None:
+          h = round(width * image.height / image.width)
+          image = rounded(image.resize((width, h), Image.LANCZOS))
+          canvas.alpha_composite(image, (x, y))
+          draw.rounded_rectangle((x, y, x + width - 1, y + h - 1), 26,
+                                 outline=EDGE, width=3)
+
+      draw.text((MARGIN + 6, MARGIN + 8),
+                "nano dark  ·  README.org → lisp/*.el → make lint", font=font, fill=INK)
+      place(dark, LEFT_W, MARGIN, MARGIN + LABEL_H)
+      draw.text((right_x + 6, MARGIN + 8), "nano light", font=font, fill=INK)
+      place(light, right_w, right_x, MARGIN + LABEL_H)
+      draw.text((right_x + 6, arch_y + 8), "10-layer architecture", font=font, fill=INK)
+      place(arch, right_w, right_x, arch_y + LABEL_H)
+
+      canvas.convert("RGB").save(args.output, optimize=True)
+      if shutil.which("pngquant"):
+          subprocess.run(["pngquant", "--quality=85-98", "--speed", "1", "--force",
+                          "--output", str(args.output), str(args.output)], check=False)
+      print(f"saved {args.output} ({args.output.stat().st_size // 1024} KB)")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main())
+#+end_src
+
 * Appendix: tangle-flow.mmd — tangle フローの図解ソース（Mermaid）
 :PROPERTIES:
 :CUSTOM_ID: appendix-tangle-flow-mmd
@@ -15990,6 +16433,17 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Makefile): `stage' ターゲットを追加。追跡対象（TRACKED）だけを stage し、
+	それ以外がステージ済みなら中止する。`git add .' による無関係なファイルの混入を防ぐ。
+	* README.org (Appendix: demo.png): demo.png の撮影スクリプト scripts/demo-layout.el、
+	scripts/shot.sh、scripts/compose.py を追加。
+	* README.org (personal/ac1965.el) (ac1965--nano-buffer-status): 新規。nano-modeline の
+	バッファ状態（RO / ** / RW）を nerd-icons のアイコン（鍵 / 鉛筆 / ファイル）で、
+	アンバー色の背景（`ac1965-nano-status-icon'、状態ごとに濃淡を変える）に表示し、
+	続けてメジャーモードのファイル種別アイコン（`ac1965--nano-type-icon'）を表示する。
+	グラフィカルでない場合や nerd-icons が無い場合は従来の文字表示に戻す。
+	* README.org (ui/ui-theme.el): `ui-theme-modeline-primary' を追加し、nano-modeline の左側の補助情報
+	（git-info / file-size / buffer-line-count）を light / dark とも右側と同じ色にする。
 	* README.org (ui/ui-theme.el): `nano-modeline-faces' の差し替え時に各項目の nil を除き、
 	setopt の型検証の警告を解消。
 	* README.org (ui/ui-theme.el): `ui-theme--sync-modeline-faces' で `nano-modeline--empty-face' の

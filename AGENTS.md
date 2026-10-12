@@ -9,8 +9,9 @@
 Org 文書とソースコードを一体として管理する literate program であり、
 `README.org` を設計・仕様・実装の正本（Source of Truth）とする。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-98 個の `.el` ターゲット（`lisp/` 配下 89 個〔`lisp/modules.el` を含む〕、
-`personal/` 配下 7 個、ルートの `early-init.el` と `init.el`）が生成される。
+99 個の `.el` ターゲット（`lisp/` 配下 89 個〔`lisp/modules.el` を含む〕、
+`personal/` 配下 7 個、ルートの `early-init.el` と `init.el`、
+`scripts/demo-layout.el`）が生成される。
 
 ```
 README.org (正本)
@@ -54,8 +55,10 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 - `ChangeLog`（GNU 標準形式。README.org の Changelog 節にある
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`,
-  `reload.py`, `claude_org_roam_export.py`）: README.org の Python
-  ブロックから tangle
+  `reload.py`, `claude_org_roam_export.py`, `compose.py`）、
+  `scripts/shot.sh`、`scripts/demo-layout.el`: README.org の Python / zsh /
+  emacs-lisp ブロックから tangle（後ろの 3 つは `demo.png` の撮影用で、
+  README.org の `Appendix: demo.png` 節にある）
 - `svg/*.dot` / `svg/*.mmd`: tangle される図ソース（git 管理外の中間
   ファイル。`make dot-tangle` / `make mmd-tangle`）
 - `svg/*.svg`: 上記から描画してコミットするもの
@@ -110,6 +113,8 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 `scripts/reload.py`, `scripts/claude_org_roam_export.py`）は、各節の
 `:header-args:python:` で現在も `:comments link` を使っている。これは
 意図された設定であり、emacs-lisp の禁止を理由に変更しないこと。
+ただし `Appendix: demo.png` 節の `compose.py` と `shot.sh` は `:comments no`
+である（`shot.sh` は 1 行目のシェバンを保つため）。
 
 ### Directory layout
 
@@ -130,10 +135,10 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── dev/        (15)
 │   └── utils/      (10)
 ├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
-├── scripts/        (4) — tangle された Python ヘルパー (lint, reload, export)
+├── scripts/        (7) — tangle されたヘルパー (lint, reload, export, demo 撮影)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
-├── demo.png        README.org から参照するスクリーンショット
+├── demo.png        README.org から参照するスクリーンショット（手で管理。scripts/shot.sh と scripts/compose.py で撮り直す）
 ├── .var/           実行時の状態 — 削除禁止
 └── .etc/           外部リソース
 ```
@@ -382,6 +387,7 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 | `make check-fboundp-guards` | `(fboundp 'X)` でガードされた呼び出しを、実際には解決できないシンボルの `#'X` 参照と照合（Python 製。事前の tangle が必要） |
 | `make checkdoc` | Elisp の docstring/スタイルチェック |
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |
+| `make stage` | `TRACKED`（`README.org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
 
 `make help` の echo 文は古い（確認済み）: `make lint` の説明行に
 `check-fboundp-guards` が含まれていない。実際の `lint` の依存は上の表の
