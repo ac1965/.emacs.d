@@ -9,9 +9,9 @@
 Org 文書とソースコードを一体として管理する literate program であり、
 `README.org` を設計・仕様・実装の正本（Source of Truth）とする。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-99 個の `.el` ターゲット（`lisp/` 配下 89 個〔`lisp/modules.el` を含む〕、
+100 個の `.el` ターゲット（`lisp/` 配下 89 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 7 個、ルートの `early-init.el` と `init.el`、
-`scripts/demo-layout.el`）が生成される。
+`scripts/demo-layout.el`、`scripts/check-bytecomp.el`）が生成される。
 
 ```
 README.org (正本)
@@ -56,9 +56,11 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`,
   `reload.py`, `claude_org_roam_export.py`, `compose.py`）、
-  `scripts/shot.sh`、`scripts/demo-layout.el`: README.org の Python / zsh /
-  emacs-lisp ブロックから tangle（後ろの 3 つは `demo.png` の撮影用で、
-  README.org の `Appendix: demo.png` 節にある）
+  `scripts/shot.sh`、`scripts/demo-layout.el`、`scripts/check-bytecomp.el`:
+  README.org の Python / zsh / emacs-lisp ブロックから tangle（`compose.py`、
+  `shot.sh`、`demo-layout.el` は `demo.png` の撮影用で `Appendix: demo.png` 節に、
+  `check-bytecomp.el` は `make check-bytecomp` 用で `Appendix: check-bytecomp.el`
+  節にある）
 - `svg/*.dot` / `svg/*.mmd`: tangle される図ソース（git 管理外の中間
   ファイル。`make dot-tangle` / `make mmd-tangle`）
 - `svg/*.svg`: 上記から描画してコミットするもの
@@ -135,7 +137,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── dev/        (15)
 │   └── utils/      (10)
 ├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
-├── scripts/        (7) — tangle されたヘルパー (lint, reload, export, demo 撮影)
+├── scripts/        (8) — tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
 ├── demo.png        README.org から参照するスクリーンショット（手で管理。scripts/shot.sh と scripts/compose.py で撮り直す）
@@ -416,6 +418,7 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 | `make check-fboundp-guards` | `(fboundp 'X)` でガードされた呼び出しを、実際には解決できないシンボルの `#'X` 参照と照合（Python 製。事前の tangle が必要） |
 | `make checkdoc` | Elisp の docstring/スタイルチェック |
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |
+| `make check-bytecomp` | `early-init.el` と `init.el` を読み込んだ Emacs で、`lisp/`・`personal/`・`early-init.el`・`init.el` をすべてバイトコンパイルし、警告があれば一覧して終了コード 1 で終わる（出力は一時ディレクトリで `.elc` は作らない。約 40 秒かかるため `lint` には含めない。本体は `scripts/check-bytecomp.el`） |
 | `make stage` | `TRACKED`（`README.org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
 
 `make help` の `make lint` の説明行は、`check-fboundp-guards` を含む形に直した

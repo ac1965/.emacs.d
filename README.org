@@ -14659,6 +14659,7 @@ prose the snippet happens to mix in."
 	@echo "  make check-fboundp-guards     # (fboundp 'X) ガードと #'X 参照の整合性を検査"
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
 	@echo "  make checkdoc                 # 公開 defun の docstring を検証"
+	@echo "  make check-bytecomp           # init を読み込んでバイトコンパイルし警告を一覧（約 40 秒、lint には含めない）"
 	@echo "  make package-lint             # MELPA 形式のパッケージヘッダ検証（要 package-lint）"
 	@echo ""
 	@echo "  # コミット"
@@ -14857,6 +14858,17 @@ prose the snippet happens to mix in."
   .PHONY: check-fboundp-guards
   check-fboundp-guards:
 	@python3 scripts/check_fboundp_guards.py "$(LISPDIR)" "$(PERSONALDIR)" "$(EARLY)" "$(INIT)"
+
+  # ---- check-bytecomp : バイトコンパイル警告の集計 ------------------------------
+  # init を読み込んだ Emacs で lisp/ personal/ early-init.el init.el をすべてバイト
+  # コンパイルし（出力は一時ディレクトリで、lisp/ には .elc を作らない）、警告があれば
+  # 一覧して終了コード 1 で終わる。パッケージが読み込まれた状態でコンパイルするため、
+  # 読み込み前の警告（未宣言の変数・関数）は出ない。約 40 秒かかるので lint には含めない。
+  # 本体は scripts/check-bytecomp.el（Appendix: check-bytecomp.el を参照）。
+  .PHONY: check-bytecomp
+  check-bytecomp:
+	@echo "[check-bytecomp] byte-compiling (init を読み込むため約 40 秒かかる) ..."
+	@ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/check-bytecomp.el" 2>/dev/null
 
   # ---- lint : check-tangle + check-emphasis + check-cookies + check-fboundp-guards +
   # checkdoc をまとめて実行 -----------------------------------------------------------
@@ -15858,6 +15870,104 @@ python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
       sys.exit(main())
 #+end_src
 
+* Appendix: check-bytecomp.el — バイトコンパイル警告の集計
+:PROPERTIES:
+:CUSTOM_ID: appendix-check-bytecomp-el
+:header-args:emacs-lisp: :tangle scripts/check-bytecomp.el :mkdirp yes
+:END:
+
+=make check-bytecomp= が呼び出す、バイトコンパイル警告の集計スクリプトです。
+
+*なぜ lint に含めないのか*
+
+- *init を読み込む必要がある* — パッケージが読み込まれていない状態でコンパイルすると、
+  ほとんどの警告は「未宣言の変数」「未定義の関数」という、読み込み前の警告になります。
+  実際の警告だけを見るため、 =early-init.el= と =init.el= を読み込んだ Emacs でコンパイルします。
+- *時間がかかる* — 約 40 秒（環境による）かかるため、 =make lint= には含めません。
+- *出力先* — コンパイル結果は一時ディレクトリへ出し、 =lisp/= には =.elc= を作りません。
+
+*使い方*
+
+#+begin_example
+make check-bytecomp
+# 特定のファイルだけ:
+CHECK_BYTECOMP_FILES="lisp/ui/ui-theme.el personal/ac1965.el" make check-bytecomp
+#+end_example
+
+警告が 1 件でもあれば、 =ファイル:行:桁: Warning: ...= の一覧を出し、終了コード 1 で終わります。
+
+#+NAME: check-bytecomp-el
+#+begin_src emacs-lisp
+  ;;; check-bytecomp.el --- バイトコンパイル警告の集計 -*- lexical-binding: t; -*-
+
+  ;; `make check-bytecomp' が、init を読み込んだ Emacs に `-l' で読み込ませる。
+  ;; 環境変数:
+  ;;   ROOT                  リポジトリのルート（既定は `default-directory'）
+  ;;   CHECK_BYTECOMP_FILES  コンパイル対象のファイル（空白区切り）。省略時は
+  ;;                         lisp/ と personal/ の全 .el、early-init.el、init.el
+  ;; 警告が 1 件でもあれば、一覧を標準出力へ出して終了コード 1 で終わる。
+  ;; 標準エラーには init のメッセージが出るので、Makefile 側で捨てている。
+
+  ;;; Code:
+
+  (defvar check-bytecomp--root
+    (file-name-as-directory
+     (expand-file-name (or (getenv "ROOT") default-directory)))
+    "Repository root.")
+
+  (defun check-bytecomp--files ()
+    "Return the list of files to byte-compile."
+    (let ((env (getenv "CHECK_BYTECOMP_FILES")))
+      (if (and env (not (string-empty-p env)))
+          (mapcar (lambda (f) (expand-file-name f check-bytecomp--root))
+                  (split-string env))
+        (sort (append
+               (directory-files-recursively
+                (expand-file-name "lisp" check-bytecomp--root) "\\.el\\'")
+               (directory-files
+                (expand-file-name "personal" check-bytecomp--root) t "\\.el\\'")
+               (mapcar (lambda (f) (expand-file-name f check-bytecomp--root))
+                       '("early-init.el" "init.el")))
+              #'string<))))
+
+  (defun check-bytecomp--compile (file)
+    "Byte-compile FILE and return its warnings as a list of strings."
+    (with-current-buffer (get-buffer-create "*Compile-Log*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)))
+    (ignore-errors (byte-compile-file file))
+    (with-current-buffer "*Compile-Log*"
+      (goto-char (point-min))
+      (let (result)
+        (while (re-search-forward
+                "^.+?:[0-9]+:[0-9]+: \\(?:Warning\\|Error\\): .*$" nil t)
+          (push (match-string 0) result))
+        (nreverse result))))
+
+  (defun check-bytecomp-run ()
+    "Byte-compile every target file and exit with status 1 if a warning appeared.
+  The compiled output goes to a temporary directory, so no .elc file is created
+  next to the sources."
+    (let* ((tmp (make-temp-file "check-bytecomp" t))
+           (byte-compile-dest-file-function
+            (lambda (f)
+              (expand-file-name (concat (file-name-nondirectory f) "c") tmp)))
+           (total 0))
+      (unwind-protect
+          (dolist (file (check-bytecomp--files))
+            (dolist (warning (check-bytecomp--compile file))
+              (setq total (1+ total))
+              (princ (format "  %s\n"
+                             (string-remove-prefix check-bytecomp--root warning)))))
+        (delete-directory tmp t))
+      (princ (format "[check-bytecomp] %s (%d warning%s)\n"
+                     (if (zerop total) "ok" "FAILED")
+                     total (if (= total 1) "" "s")))
+      (kill-emacs (if (zerop total) 0 1))))
+
+  (check-bytecomp-run)
+#+end_src
+
 * Appendix: demo.png — デモ画像の撮影スクリプト
 :PROPERTIES:
 :CUSTOM_ID: appendix-demo-screenshot
@@ -16715,6 +16825,9 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Makefile): `check-bytecomp' ターゲットを追加。init を読み込んだ Emacs で全 .el を
+	バイトコンパイルし、警告があれば一覧して終了コード 1 で終わる（lint には含めない）。
+	* README.org (Appendix: check-bytecomp.el): 集計の本体 scripts/check-bytecomp.el を追加。
 	* README.org (ui/ui-window.el): desktop-load-locked-desktop を nil から check-pid に変更。
 	古いロックファイル（持ち主の PID が死んでいる）が残っていても desktop を読み込み、
 	終了時に保存できるようにする。別の Emacs が使用中の間は従来どおり読み込まない。
