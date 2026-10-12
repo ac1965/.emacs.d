@@ -149,6 +149,12 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 `my:d:cache` が決める。値は環境変数で変わり、`$XDG_CACHE_HOME` があれば
 `$XDG_CACHE_HOME/emacs/`、なければ `$HOME/.cache/emacs/` である（固定の
 パスではない。パスを仮定せず `my:d:cache` を参照すること）。
+`.emacs.d/eln-cache/`（`my:d:cache` 側ではなく `.emacs.d` 直下）にも、
+`subr--trampoline-*.eln` だけが作られることがある。これは Emacs の既定の保存先
+（`native-comp-eln-load-path` の 2 番目に残している）に、この設定が効く前、
+または設定を読み込まない Emacs が書いたもので、削除してよい（`advice` を付けた
+時点で自動的に作り直される）。設定のモジュールの eln は `my:d:cache` 側にある。
+詳細は `README.org` の `early-init.el` の「7) ネイティブコンパイル」節を参照。
 ディレクトリ作成の標準ヘルパーは
 `early-init.el` の `my/ensure-directory-exists` である。
 
