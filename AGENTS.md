@@ -41,6 +41,10 @@ Copyright/Author/License ヘッダー、docstring、コード上のシンボル�
 - Changelog セクション
 - Appendix の図ソース（Graphviz `.dot` / Mermaid `.mmd`）
 
+ただし Installation 節のビルド情報の表は、`# build-info:begin` と `# build-info:end`
+の間を `scripts/update_build_info.py` が書き換える（Emacs の再ビルド後に実行する）。
+この 2 行の間は手で編集しない。
+
 Emacs 設定に手を入れる前に、`README.org` 内の該当する
 `#+begin_src emacs-lisp ... #+end_src` ブロックを特定して読むこと。
 ブロックを「動かない説明文」として扱ってはならない。
@@ -55,12 +59,13 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 - `ChangeLog`（GNU 標準形式。README.org の Changelog 節にある
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`,
-  `reload.py`, `claude_org_roam_export.py`, `compose.py`）、
+  `reload.py`, `claude_org_roam_export.py`, `compose.py`, `update_build_info.py`）、
   `scripts/shot.sh`、`scripts/demo-layout.el`、`scripts/check-bytecomp.el`:
   README.org の Python / zsh / emacs-lisp ブロックから tangle（`compose.py`、
   `shot.sh`、`demo-layout.el` は `demo.png` の撮影用で `Appendix: demo.png` 節に、
   `check-bytecomp.el` は `make check-bytecomp` 用で `Appendix: check-bytecomp.el`
-  節にある）
+  節に、`update_build_info.py` は Installation 節のビルド情報の表を更新する用で
+  `Appendix: update_build_info.py` 節にある）
 - `svg/*.dot` / `svg/*.mmd`: tangle される図ソース（git 管理外の中間
   ファイル。`make dot-tangle` / `make mmd-tangle`）
 - `svg/*.svg`: 上記から描画してコミットするもの
@@ -115,8 +120,8 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 `scripts/reload.py`, `scripts/claude_org_roam_export.py`）は、各節の
 `:header-args:python:` で現在も `:comments link` を使っている。これは
 意図された設定であり、emacs-lisp の禁止を理由に変更しないこと。
-ただし `Appendix: demo.png` 節の `compose.py` と `shot.sh` は `:comments no`
-である（`shot.sh` は 1 行目のシェバンを保つため）。
+ただし `Appendix: demo.png` 節の `compose.py` と `shot.sh`、`Appendix: update_build_info.py`
+節の `update_build_info.py` は `:comments no` である（1 行目のシェバンを保つため）。
 
 ### Directory layout
 
@@ -137,7 +142,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── dev/        (15)
 │   └── utils/      (10)
 ├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
-├── scripts/        (8) — tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp)
+├── scripts/        (9) — tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
 ├── demo.png        README.org から参照するスクリーンショット（手で管理。scripts/shot.sh と scripts/compose.py で撮り直す）

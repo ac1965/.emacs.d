@@ -780,17 +780,37 @@ https://www.gnu.org/licenses/gpl-3.0.txt
 ことはありません。削除安全性という考え方を、モジュールだけでなく Emacs のバージョンにも
 適用している、と考えてください。
 
+# build-info:begin（scripts/update_build_info.py が、この 2 行の間を書き換える。手で編集しない）
 - GNU Emacs *32.0.50*
 
 |Property|Value|
 |--------|-----|
-|Commit|f0430371c8d5b1e172670cdbc59f4d298be64a29|
+|Commit|ecbeb91e803b6a63724296e880b377b5c859a9d2|
 |Branch|master|
-|System|aarch64-apple-darwin25.6.0|
-|Date|2026-09-13 21:01:00 (JST)|
+|System|aarch64-apple-darwin27.0.0|
+|Date|2026-10-11 22:58:46 (JST)|
 |Patch|N/A ns-inline.patch|
 |Features|ACL DBUS GIF GLIB GMP GNUTLS JPEG LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TIFF TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM ZLIB|
-|Options|CC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang CXX=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ AR=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar RANLIB=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib NM=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm --with-ns --with-native-compilation=aot --with-tree-sitter --with-json --with-gnutls --without-imagemagick --with-modules --prefix=/Users/ac1965/.local 'CFLAGS=-O3 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' 'CPPFLAGS=-I/opt/homebrew/opt/libgccjit/include -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/opt/homebrew/include' 'LDFLAGS=-L/opt/homebrew/opt/libgccjit/lib -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -L/opt/homebrew/lib -framework AppKit'|
+|Options|CC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang CXX=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ AR=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar RANLIB=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib NM=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm --with-ns --with-native-compilation=aot --with-tree-sitter --with-gnutls --without-imagemagick --with-modules --prefix=/Users/ac1965/.local 'CFLAGS=-O3 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' 'CPPFLAGS=-I/opt/homebrew/opt/libgccjit/include -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/opt/homebrew/include' 'LDFLAGS=-L/opt/homebrew/opt/libgccjit/lib -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -L/opt/homebrew/lib -framework AppKit'|
+# build-info:end
+
+*ビルド情報の更新*
+
+上の表は、 =my/print-build-info= （ =lisp/dev/dev-tools.el= ）の出力です。Emacs を再ビルドしたら、
+貼り付け直さずに、ビルドスクリプトの後でスクリプトを 1 つ実行すれば反映できます。
+
+#+begin_example
+# dotfiles の build-emacs-macos.sh で Emacs をビルド・インストールした後に実行する
+python3 scripts/update_build_info.py
+git diff README.org   # 差分を確認してコミットする
+#+end_example
+
+- 再ビルドした Emacs（既定は =/Applications/Emacs.app/Contents/MacOS/Emacs= ）で =my/print-build-info=
+  を実行し、 =# build-info:begin= と =# build-info:end= の間だけを置き換えます。
+- =lisp/dev/dev-tools.el= を読み込むため、 =make tangle= （または =make reload= ）の後に実行します。
+- 書き換えずに確かめるには =--dry-run= 、最新かどうかだけを調べるには =--check= を付けます。
+  詳細は Appendix: update_build_info.py を参照してください。
+
 
 * Configuration
 :PROPERTIES:
@@ -15870,6 +15890,149 @@ python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
       sys.exit(main())
 #+end_src
 
+* Appendix: update_build_info.py — ビルド情報を README へ反映するスクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-update-build-info-py
+:header-args:python: :tangle scripts/update_build_info.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+Installation 節のビルド情報の表（ =my/print-build-info= の出力）を、再ビルドした Emacs の実際の値で
+書き換えるスクリプトです。dotfiles の =build-emacs-macos.sh= の後に実行します。
+
+*仕組み*
+
+- 再ビルドした Emacs をバッチで起動し、 =lisp/dev/dev-tools.el= を読み込んで =my/print-build-info=
+  を呼び、 =*Build Info*= バッファの文字列を取り出します。表の書式は、その関数の 1 か所だけで定義されます。
+- README.org の =# build-info:begin= と =# build-info:end= の間（Org のコメント行なので、表示には出ません）を、
+  その文字列で置き換えます。目印が無い、または複数ある場合は、何も書き換えずに止まります。
+- 使う Emacs は、 =--emacs= 、環境変数 =EMACS= 、 =/Applications/Emacs.app/Contents/MacOS/Emacs= の順に探します。
+- 標準ライブラリだけで動きます。
+
+*使い方*
+
+#+begin_example
+python3 scripts/update_build_info.py            # README.org を書き換える
+python3 scripts/update_build_info.py --dry-run  # 差分だけ表示する
+python3 scripts/update_build_info.py --check    # 古ければ差分を出して終了コード 1
+#+end_example
+
+=--check= は、再ビルドの後で README の更新を忘れていないかを確かめるのに使えます。実行すると、
+=README.org= が変わるので、 =git diff README.org= で確認してからコミットします。
+
+*注意*
+
+- =lisp/dev/dev-tools.el= は =README.org= から tangle される生成物です。 =make tangle= （または =make reload= ）の後に実行します。
+- 日付（ =Date= ）は =emacs-build-time= 、コミット（ =Commit= ）は =emacs-repository-get-version= の値です。
+  ビルドスクリプトがソースのコミットを変えずに再ビルドしただけなら、日付だけが変わります。
+
+#+NAME: update-build-info-py
+#+begin_src python
+  #!/usr/bin/env python3
+  """Update the Emacs build information table in README.org.
+
+  Run it after build-emacs-macos.sh (dotfiles) has built and installed Emacs:
+
+      python3 scripts/update_build_info.py            # rewrite README.org
+      python3 scripts/update_build_info.py --dry-run  # show the diff only
+      python3 scripts/update_build_info.py --check    # exit 1 when out of date
+
+  It runs `my/print-build-info' (lisp/dev/dev-tools.el) in the freshly built Emacs
+  and replaces the text between the `# build-info:begin' and `# build-info:end'
+  comment lines of README.org.  The format therefore stays defined in one place.
+  Standard library only.
+  """
+
+  from __future__ import annotations
+
+  import argparse
+  import difflib
+  import os
+  import re
+  import subprocess
+  import sys
+  from pathlib import Path
+
+  ROOT = Path(__file__).resolve().parent.parent
+  BEGIN = "# build-info:begin"
+  END = "# build-info:end"
+  DEFAULT_EMACS = "/Applications/Emacs.app/Contents/MacOS/Emacs"
+  EXPR = ('(progn (my/print-build-info) '
+          '(princ (with-current-buffer "*Build Info*" (buffer-string))))')
+
+
+  def die(message: str) -> "None":
+      print(f"update_build_info: {message}", file=sys.stderr)
+      sys.exit(1)
+
+
+  def find_emacs(explicit: str | None) -> str:
+      """Return the Emacs binary: --emacs, then $EMACS, then the app bundle."""
+      if explicit and not os.access(explicit, os.X_OK):
+          die(f"--emacs {explicit} is not executable")
+      for candidate in (explicit, os.environ.get("EMACS"), DEFAULT_EMACS):
+          if candidate and os.access(candidate, os.X_OK):
+              return candidate
+      die("Emacs not found (give --emacs or set $EMACS)")
+
+
+  def build_info(emacs: str) -> str:
+      """Run `my/print-build-info' in EMACS and return its text."""
+      dev_tools = ROOT / "lisp" / "dev" / "dev-tools.el"
+      if not dev_tools.exists():
+          die(f"{dev_tools} not found; run `make tangle' first")
+      result = subprocess.run(
+          [emacs, "--batch", "-Q", "-l", str(dev_tools), "--eval", EXPR],
+          capture_output=True, text=True, check=False)
+      text = result.stdout.strip("\n")
+      if result.returncode != 0 or not text.startswith("- GNU Emacs *"):
+          die(f"my/print-build-info failed (exit {result.returncode}):\n"
+              f"{result.stderr.strip() or text}")
+      if "|Property|Value|" not in text:
+          die("unexpected output: the property table is missing")
+      return text + "\n"
+
+
+  def replace_block(readme: str, info: str) -> str:
+      """Return README with the build-info block replaced by INFO."""
+      pattern = re.compile(
+          rf"({re.escape(BEGIN)}[^\n]*\n)(.*?)(^{re.escape(END)}\b)",
+          re.S | re.M)
+      if len(pattern.findall(readme)) != 1:
+          die(f"need exactly one `{BEGIN}' ... `{END}' block in README.org")
+      return pattern.sub(lambda m: m.group(1) + info + m.group(3), readme, count=1)
+
+
+  def main() -> int:
+      parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+      parser.add_argument("--readme", type=Path, default=ROOT / "README.org")
+      parser.add_argument("--emacs", help="Emacs binary (default: $EMACS or the app bundle)")
+      mode = parser.add_mutually_exclusive_group()
+      mode.add_argument("--dry-run", action="store_true", help="show the diff, do not write")
+      mode.add_argument("--check", action="store_true", help="exit 1 when README is out of date")
+      args = parser.parse_args()
+
+      old = args.readme.read_text(encoding="utf-8")
+      new = replace_block(old, build_info(find_emacs(args.emacs)))
+      if new == old:
+          print(f"update_build_info: {args.readme.name} is up to date")
+          return 0
+
+      diff = "".join(difflib.unified_diff(
+          old.splitlines(True), new.splitlines(True),
+          f"a/{args.readme.name}", f"b/{args.readme.name}", n=0))
+      if args.check or args.dry_run:
+          print(diff, end="")
+          return 1 if args.check else 0
+      args.readme.write_text(new, encoding="utf-8")
+      print(f"update_build_info: updated {args.readme.name}")
+      print(diff, end="")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main())
+#+end_src
+
 * Appendix: check-bytecomp.el — バイトコンパイル警告の集計
 :PROPERTIES:
 :CUSTOM_ID: appendix-check-bytecomp-el
@@ -16825,6 +16988,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Installation): ビルド情報の表を `# build-info:begin' / `# build-info:end' で囲み、
+	再ビルド後に scripts/update_build_info.py で更新する手順を追記。
+	* README.org (Appendix: update_build_info.py): scripts/update_build_info.py を追加。再ビルドした Emacs の
+	my/print-build-info の出力で、README.org のビルド情報の表を書き換える（--dry-run / --check あり）。
 	* README.org (Makefile): `check-bytecomp' ターゲットを追加。init を読み込んだ Emacs で全 .el を
 	バイトコンパイルし、警告があれば一覧して終了コード 1 で終わる（lint には含めない）。
 	* README.org (Appendix: check-bytecomp.el): 集計の本体 scripts/check-bytecomp.el を追加。
