@@ -4858,9 +4858,44 @@ dark へ切り替えるとき、テーマが定義していない（light の固
                             :inherit 'nano-subtle
                             :foreground 'unspecified
                             :background 'unspecified
-                            :box nil))))
+                            :box nil)))
+    ;; `nano-modeline--empty-face' は header-line の土台（face-remap 先）で、
+    ;; defface のロード時の default 前景色（light では Black）を焼き込む。
+    ;; 前景色を明示しない項目（git-info / file-size / buffer-line-count など）は
+    ;; この色を引き継ぐため、dark では背景に黒文字が載って読めなくなる。
+    ;; 現在の default の前景色へ追従させる。
+    (when (facep 'nano-modeline--empty-face)
+      (set-face-attribute 'nano-modeline--empty-face nil
+                          :inherit nil
+                          :foreground (face-attribute 'default :foreground nil t)))
+    (when (facep 'ui-theme-modeline-secondary)
+      (if (eq frame-background-mode 'dark)
+          (set-face-attribute 'ui-theme-modeline-secondary nil
+                              :inherit nil
+                              :foreground (ui-theme--color 'nano-dark-foreground
+                                                           "#ECEFF4"))
+        (set-face-attribute 'ui-theme-modeline-secondary nil
+                            :inherit 'nano-faded
+                            :foreground 'unspecified))))
+
+  ;; 右側（時刻・エンコーディング・行列位置）は nano-modeline の secondary フェイスで
+  ;; 描かれ、既定では `nano-faded' を継承する。dark では nano-faded (#677691) が
+  ;; ヘッダー背景 nano-subtle (#434C5E) に近く、明暗比が約 1.9:1 しかなく読みにくい。
+  ;; nano-faded は本文の注釈にも使うため変更せず、モードライン専用のフェイスを挟む。
+  (defface ui-theme-modeline-secondary
+    '((t :inherit nano-faded))
+    "nano-modeline の右側表示用フェイス。dark では前景色を明るくする。"
+    :group 'ui-theme)
 
   (with-eval-after-load 'nano-modeline
+    ;; 既定値の status-**-active は nano-popout-i が未定義だと nil を含む
+    ;; （`face' 型に合わない）。setopt の型検証で警告が出るため nil を除く。
+    (setopt nano-modeline-faces
+            (cons '(secondary-active . (ui-theme-modeline-secondary))
+                  (mapcar (lambda (entry)
+                            (cons (car entry) (delq nil (copy-sequence (cdr entry)))))
+                          (assq-delete-all 'secondary-active
+                                           (copy-alist nano-modeline-faces)))))
     (ui-theme--sync-modeline-faces))
 
   (defun ui-theme--apply-faces ()
@@ -12547,7 +12582,9 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
     (funcall nano-modeline-position
              '((nano-modeline-buffer-status) " "
                (nano-modeline-buffer-name) " "
-               (nano-modeline-git-info))
+               (nano-modeline-git-info) " "
+               (nano-modeline-file-size) " "
+               (nano-modeline-buffer-line-count))
              '((ac1965--nano-time-encoding) " "
                (nano-modeline-cursor-position)
                (nano-modeline-window-dedicated))
@@ -12560,7 +12597,9 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
     (funcall nano-modeline-position
              '((nano-modeline-buffer-status) " "
                (nano-modeline-buffer-name) " "
-               (nano-modeline-git-info))
+               (nano-modeline-git-info) " "
+               (nano-modeline-file-size) " "
+               (nano-modeline-buffer-line-count))
              '((ac1965--nano-time-encoding) " "
                (nano-modeline-cursor-position)
                (nano-modeline-window-dedicated))
@@ -15951,6 +15990,14 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (ui/ui-theme.el): `nano-modeline-faces' の差し替え時に各項目の nil を除き、
+	setopt の型検証の警告を解消。
+	* README.org (ui/ui-theme.el): `ui-theme--sync-modeline-faces' で `nano-modeline--empty-face' の
+	前景色を default に追従させ、前景色を指定しない項目が dark で黒文字になる問題を修正。
+	* README.org (personal/ac1965.el): `ac1965--nano-prog-mode' / `ac1965--nano-text-mode' の
+	左側にファイルサイズ（`nano-modeline-file-size'）と総行数（`nano-modeline-buffer-line-count'）を追加。
+	* README.org (ui/ui-theme.el): `ui-theme-modeline-secondary' を追加し、nano-modeline の
+	右側表示（時刻・エンコーディング・行列位置）が dark で背景に埋もれる問題を修正。
 	* README.org (ui/ui-nano-palette.el): `my/nano-apply-faces' の dark 分岐で default の
 	背景・前景を dark 色へ明示的に戻す。通常起動で dark 復元時に背景が light のまま崩れる問題を修正。
 
