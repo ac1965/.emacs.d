@@ -243,7 +243,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 | =personal/= | ユーザー／デバイスのオーバーレイ（ =modules.el= より前に =init.el= が読み込む） |
 | =.var/=     | ランタイム状態（パッケージが書き出すデータ） |
 | キャッシュ（ =my:d:cache= ） | 一時キャッシュ。リポジトリの外の =$XDG_CACHE_HOME/emacs/= （なければ =~/.cache/emacs/= ）にあり、削除しても自動的に再生成される |
-| =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる）と、デモ画像の撮影スクリプト（ =demo-layout.el= 、 =shot.sh= 、 =compose.py= ） |
+| =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる）、デモ画像の撮影スクリプト（ =demo-layout.el= 、 =shot.sh= 、 =compose.py= ）、キーバインド一覧 SVG の生成（ =cheatsheet.el= ） |
 | =svg/=      | 図のソース（ =.dot= / =.mmd= ）と描画済みの =.svg= |
 | =.etc/=     | no-littering の設定系ファイル（ =custom.el= 等） |
 
@@ -14826,6 +14826,8 @@ prose the snippet happens to mix in."
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
 	@echo "  make checkdoc                 # 公開 defun の docstring を検証"
 	@echo "  make check-bytecomp           # init を読み込んでバイトコンパイルし警告を一覧（約 40 秒、lint には含めない）"
+	@echo "  make cheatsheet               # キーバインド一覧 SVG を実際のキーマップから作り直す（約 40 秒）"
+	@echo "  make check-cheatsheet         # コミット済みの一覧 SVG が今のキーマップと同じかを調べる（約 40 秒、lint には含めない）"
 	@echo "  make package-lint             # MELPA 形式のパッケージヘッダ検証（要 package-lint）"
 	@echo ""
 	@echo "  # コミット"
@@ -15035,6 +15037,17 @@ prose the snippet happens to mix in."
   check-bytecomp:
 	@echo "[check-bytecomp] byte-compiling (init を読み込むため約 40 秒かかる) ..."
 	@ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/check-bytecomp.el" 2>/dev/null
+
+  # ---- cheatsheet : キーバインド一覧の SVG を、実際のキーマップから作る ---------------
+  # init を読み込んだ Emacs でキーマップを読み、svg/emacs_keybindings_cheatsheet.svg を
+  # 書き直す。check-cheatsheet は書き出さずに、コミット済みの SVG と同じかを調べる
+  # （違えば終了コード 1）。約 40 秒かかるので lint には含めない。
+  # 本体は scripts/cheatsheet.el（Appendix: cheatsheet.el を参照）。
+  .PHONY: cheatsheet check-cheatsheet
+  cheatsheet:
+	@ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/cheatsheet.el" 2>/dev/null
+  check-cheatsheet:
+	@ROOT="$(ROOT)" CHEATSHEET_CHECK=1 $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/cheatsheet.el" 2>/dev/null
 
   # ---- lint : check-tangle + check-emphasis + check-cookies + check-fboundp-guards +
   # checkdoc をまとめて実行 -----------------------------------------------------------
@@ -16756,18 +16769,297 @@ Graphviz で近い内容を再現したソースをここに置く。ただし�
   }
 #+end_src
 
+* Appendix: cheatsheet.el — キーバインド一覧の SVG を実際のキーマップから作る
+:PROPERTIES:
+:CUSTOM_ID: appendix-cheatsheet-el
+:header-args:emacs-lisp: :tangle scripts/cheatsheet.el :mkdirp yes
+:END:
+
+=svg/emacs_keybindings_cheatsheet.svg= を作るスクリプトです。 =make cheatsheet= が呼び出します。
+
+以前のこの SVG は、Python の ReportLab で作った手動管理のアセットで、文字がパスになっていました。
+生成元がリポジトリになく、設定を変えても追従しないため、実際の割り当てとずれていました
+（存在しない =M-SPC q r= を載せていた、 =M-SPC O= や =M-SPC t n= が無い、など）。このスクリプトは、
+*起動した Emacs のキーマップそのもの* を読んで SVG を書き出します。手で書いたコマンド名はありません。
+
+*何を読むか*
+
+| 欄 | 取り出し方 |
+|----+-----------|
+| Global Single Chord | 空のグローバルキーマップに =ui-global-keys--startup-init= を実行させ、入った割り当てだけを取り出す。 =key-translation-map= の =C-h= → =DEL= も載せる |
+| Leader Level と各サブマップ | =ui-leader-map= を再帰的に読む。サブマップの見出しは =cheatsheet--submaps= の表で与える |
+| m（Org Local） | =org-mode-map= の =M-SPC m ...= を読む（ =orgx-fold= と =ui-keymap= の割り当て） |
+| Embark | =s-/= 、 =s-;= 、 =C-<f2>= の現在の割り当てを読む |
+
+見出しの表に無いサブマップが増えたときは、エラーで止まります（見出しを足すまで生成できない）。
+個人設定（ =ac1965--bind-leader-keys= ）の割り当ては載せますが、デバイス固有（ =device-*.el= ）は載せません。
+
+*使い方*
+
+#+begin_example
+make cheatsheet          # svg/emacs_keybindings_cheatsheet.svg を書き直す
+make check-cheatsheet    # 書き出さずに、コミット済みの SVG が今のキーマップと同じかを調べる（違えば終了コード 1）
+#+end_example
+
+出力は決まった順序で作るので、割り当てを変えていなければ、何度作っても同じ内容になります。
+文字は SVG のテキスト要素なので、差分も読めます。 =make check-cheatsheet= は約 40 秒かかるため
+=make lint= には含めません（ =make check-bytecomp= と同じ扱い）。
+
+#+NAME: cheatsheet-el
+#+begin_src emacs-lisp
+  ;;; cheatsheet.el --- 実際のキーマップからキーバインド一覧の SVG を作る -*- lexical-binding: t; -*-
+
+  ;; `make cheatsheet' が、init を読み込んだ Emacs に `-l' で読み込ませる。
+  ;; 環境変数:
+  ;;   ROOT              リポジトリのルート（既定は `default-directory'）
+  ;;   CHEATSHEET_OUT    出力先（既定は ROOT/svg/emacs_keybindings_cheatsheet.svg）
+  ;;   CHEATSHEET_CHECK  空でなければ、書き出さずに、出力先のファイルと内容が同じかを調べる。
+  ;;                     違えば差分があることを標準出力へ出して終了コード 1 で終わる。
+
+  ;;; Code:
+
+  (require 'cl-lib)
+  (require 'seq)
+  (require 'subr-x)
+
+  ;; バイトコンパイル時の警告を避けるための宣言（org は `cheatsheet--install' で読み込む）。
+  (defvar org-mode-map)
+
+  (defvar cheatsheet--root
+    (file-name-as-directory
+     (expand-file-name (or (getenv "ROOT") default-directory)))
+    "Repository root.")
+
+  (defconst cheatsheet--submaps
+    '(("b" "Buffers"       "#3fb950")
+      ("w" "Windows"       "#d29922")
+      ("p" "Project"       "#a371f7")
+      ("s" "Search"        "#f85149")
+      ("g" "Git"           "#ff7b72")
+      ("c" "Code / LSP"    "#2ea043")
+      ("e" "Errors"        "#e3b341")
+      ("t" "Toggles"       "#58a6ff")
+      ("o" "Org / Roam"    "#f0883e")
+      ("m" "Org Local (org-mode only)" "#f0883e")
+      ("a" "Apps"          "#db61a2")
+      ("q" "Session"       "#bc8cff")
+      ("h" "Help"          "#79c0ff"))
+    "リーダーのサブマップ（キー、見出し、色）。
+  ここに無いキーのサブマップが見つかったら、見出しを足すまでエラーにする。")
+
+  (defun cheatsheet--keymap-command-p (binding)
+    "BINDING が、キーマップではなくコマンドとして扱うものなら非 nil を返す。
+  `help-command' のように、関数セルにキーマップを持つシンボルはコマンドとして扱う。"
+    (or (not (keymapp binding))
+        (and (symbolp binding) (fboundp binding))))
+
+  (defun cheatsheet--walk (map events)
+    "MAP の割り当てを、(キー列の文字列 コマンド イベント列) の一覧にして返す。
+  EVENTS は MAP の手前までのイベント列（ベクタ）。`key-description' にイベント列ごと渡すので、
+  `ESC x' は `M-x' と表示される。"
+    (let (rows)
+      (map-keymap
+       (lambda (event binding)
+         (let ((evs (vconcat events (vector event))))
+           (cond
+            ((and (keymapp binding) (not (cheatsheet--keymap-command-p binding)))
+             (setq rows (append (cheatsheet--walk binding evs) rows)))
+            ((and (symbolp binding) binding)
+             (push (list (key-description evs) binding evs) rows)))))
+       map)
+      rows))
+
+  (defun cheatsheet--sort-rows (rows)
+    "ROWS をキー列で並べる（大文字小文字を区別せず、同じなら小文字を先に。出力を安定させる）。"
+    (sort (copy-sequence rows)
+          (lambda (a b)
+            (let ((x (downcase (car a))) (y (downcase (car b))))
+              (if (string= x y) (string> (car a) (car b)) (string< x y))))))
+
+  (defun cheatsheet--install ()
+    "キーの割り当てを入れる関数を、起動後のフックを待たずに呼ぶ。"
+    (dolist (fn '(ui-keymap--startup-init ac1965--bind-leader-keys))
+      (when (fboundp fn) (funcall fn)))
+    ;; org-mode-map の `M-SPC m ...' は org の読み込み後に入る。
+    (require 'org)
+    (require 'orgx-fold nil t))
+
+  (defun cheatsheet--global-keys ()
+    "`ui-global-keys' が設定するキーを、空のキーマップに入れて取り出す。"
+    (let ((old (current-global-map)) rows)
+      (unwind-protect
+          (progn
+            (use-global-map (make-sparse-keymap))
+            (ui-global-keys--startup-init)
+            (setq rows (cheatsheet--walk (current-global-map) [])))
+        (use-global-map old))
+      (let ((tr (keymap-lookup key-translation-map "C-h")))
+        (when tr
+          (push (list "C-h" (format "→ %s (translation)"
+                                    (key-description (if (or (stringp tr) (vectorp tr)) tr (vector tr))))
+                      [8])
+                rows)))
+      (cheatsheet--sort-rows rows)))
+
+  (defun cheatsheet--leader-sections ()
+    "リーダーキーの割り当てを、(見出し 色 行の一覧) の一覧にして返す。"
+    (let* ((lead (kbd ui-leader-key))
+           (all (cheatsheet--walk ui-leader-map lead))
+           (level (cl-remove-if (lambda (r) (> (length (nth 2 r)) (1+ (length lead)))) all))
+           sections)
+      (push (list "Leader Level (3 keys)" "#58a6ff" (cheatsheet--sort-rows level)) sections)
+      (dolist (sm cheatsheet--submaps)
+        (let* ((letter (nth 0 sm))
+               (rows (if (equal letter "m")
+                         (cheatsheet--org-local lead)
+                       (cl-remove-if-not
+                        (lambda (r)
+                          (let ((evs (nth 2 r)))
+                            (and (> (length evs) (1+ (length lead)))
+                                 (equal (char-to-string (aref evs (length lead))) letter))))
+                        all))))
+          (when rows
+            (push (list (format "%s  %s" letter (nth 1 sm)) (nth 2 sm)
+                        (cheatsheet--sort-rows rows))
+                  sections))))
+      ;; 見出しの無いサブマップが増えていないか
+      (dolist (r all)
+        (let ((evs (nth 2 r)))
+          (when (> (length evs) (1+ (length lead)))
+            (let ((letter (char-to-string (aref evs (length lead)))))
+              (unless (assoc letter cheatsheet--submaps)
+                (error "cheatsheet: no title for the submap %s (add it to `cheatsheet--submaps')"
+                       letter))))))
+      (nreverse sections)))
+
+  (defun cheatsheet--org-local (lead)
+    "`org-mode-map' にある `LEAD m ...' の割り当てを返す。"
+    (let* ((evs (vconcat lead [?m]))
+           (m (keymap-lookup org-mode-map (key-description evs))))
+      (when (keymapp m)
+        (cheatsheet--walk m evs))))
+
+  (defun cheatsheet--embark-keys ()
+    "Embark のグローバルキーを返す。割り当てが無いものは含めない。"
+    (let (rows)
+      (dolist (k '("s-/" "s-;" "C-<f2>"))
+        (let ((b (keymap-lookup (current-global-map) k)))
+          (when (and b (symbolp b))
+            (push (list (key-description (kbd k)) b (kbd k)) rows))))
+      (nreverse rows)))
+
+  ;;;; SVG
+
+  (defconst cheatsheet--col-width 330 "Width of a column.")
+  (defconst cheatsheet--gap 14 "Gap between columns and sections.")
+  (defconst cheatsheet--margin 28 "Page margin.")
+  (defconst cheatsheet--row-h 19 "Height of a row.")
+  (defconst cheatsheet--head-h 28 "Height of a section heading.")
+  (defconst cheatsheet--key-w 112 "Width of the key cap.")
+
+  (defun cheatsheet--esc (s)
+    "XML エスケープした S を返す。"
+    (replace-regexp-in-string
+     "[&<>\"]" (lambda (c) (pcase c ("&" "&amp;") ("<" "&lt;") (">" "&gt;") (_ "&quot;"))) s))
+
+  (defun cheatsheet--section-height (rows)
+    (+ cheatsheet--head-h (* (length rows) cheatsheet--row-h) 8))
+
+  (defun cheatsheet--section-svg (x y title color rows)
+    "1 つの見出しとその行の SVG を文字列で返す。"
+    (let ((h (cheatsheet--section-height rows)) (out nil))
+      (push (format "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" rx=\"6\" fill=\"#161b22\"/>"
+                    x y cheatsheet--col-width h) out)
+      (push (format "<rect x=\"%d\" y=\"%d\" width=\"4\" height=\"%d\" rx=\"2\" fill=\"%s\"/>"
+                    x y cheatsheet--head-h color) out)
+      (push (format "<text x=\"%d\" y=\"%d\" class=\"head\">%s</text>"
+                    (+ x 14) (+ y 19) (cheatsheet--esc title)) out)
+      (let ((ry (+ y cheatsheet--head-h)))
+        (dolist (r rows)
+          (push (format "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" rx=\"4\" fill=\"#0d1117\" stroke=\"%s\" stroke-opacity=\"0.7\"/>"
+                        (+ x 8) (+ ry 2) cheatsheet--key-w (- cheatsheet--row-h 4) color) out)
+          (push (format "<text x=\"%d\" y=\"%d\" class=\"key\" fill=\"%s\" text-anchor=\"middle\">%s</text>"
+                        (+ x 8 (/ cheatsheet--key-w 2)) (+ ry 14) color (cheatsheet--esc (nth 0 r))) out)
+          (push (format "<text x=\"%d\" y=\"%d\" class=\"cmd\">%s</text>"
+                        (+ x 8 cheatsheet--key-w 8) (+ ry 14)
+                        (cheatsheet--esc (format "%s" (nth 1 r)))) out)
+          (setq ry (+ ry cheatsheet--row-h))))
+      (string-join (nreverse out) "\n")))
+
+  (defun cheatsheet--build ()
+    "SVG の全文を文字列で返す。"
+    (cheatsheet--install)
+    (let* ((global (cheatsheet--global-keys))
+           (leader (cheatsheet--leader-sections))
+           (embark (cheatsheet--embark-keys))
+           (sections (append (list (list "Global Single Chord" "#58a6ff" global))
+                             leader
+                             (when embark (list (list "Embark" "#bc8cff" embark)))))
+           (ncol 3)
+           (heights (make-vector ncol cheatsheet--margin))
+           (top 78)
+           (parts nil))
+      (dotimes (i ncol) (aset heights i top))
+      (dolist (s sections)
+        (let* ((col (seq-position heights (seq-min heights)))
+               (x (+ cheatsheet--margin (* col (+ cheatsheet--col-width cheatsheet--gap))))
+               (y (aref heights col)))
+          (push (cheatsheet--section-svg x y (nth 0 s) (nth 1 s) (nth 2 s)) parts)
+          (aset heights col (+ y (cheatsheet--section-height (nth 2 s)) cheatsheet--gap))))
+      (let* ((width (+ (* 2 cheatsheet--margin) (* ncol cheatsheet--col-width) (* (1- ncol) cheatsheet--gap)))
+             (height (+ (seq-max heights) 34)))
+        (concat
+         (format "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">\n" width height width height)
+         "<style>\n"
+         "  .title{font:700 22px 'Helvetica Neue',Arial,sans-serif;fill:#f0f6fc}\n"
+         "  .sub{font:12px 'Helvetica Neue',Arial,sans-serif;fill:#8b949e}\n"
+         "  .head{font:700 13px 'Helvetica Neue',Arial,sans-serif;fill:#f0f6fc}\n"
+         "  .key{font:600 11px 'SF Mono',Menlo,Consolas,monospace}\n"
+         "  .cmd{font:11px 'SF Mono',Menlo,Consolas,monospace;fill:#c9d1d9}\n"
+         "</style>\n"
+         (format "<rect width=\"%d\" height=\"%d\" fill=\"#0d1117\"/>\n" width height)
+         (format "<text x=\"%d\" y=\"40\" class=\"title\">Emacs Keybinding Cheatsheet</text>\n" cheatsheet--margin)
+         (format "<text x=\"%d\" y=\"60\" class=\"sub\">Leader: %s  ·  generated from the live keymaps by scripts/cheatsheet.el (make cheatsheet)</text>\n"
+                 cheatsheet--margin (cheatsheet--esc (key-description (kbd ui-leader-key))))
+         (string-join (nreverse parts) "\n")
+         (format "\n<text x=\"%d\" y=\"%d\" class=\"sub\">M-SPC m = local leader (org-mode only)  ·  C-h is translated to DEL  ·  s-keys need the macOS Super key</text>\n"
+                 cheatsheet--margin (- height 14))
+         "</svg>\n"))))
+
+  (defun cheatsheet-run ()
+    "SVG を書き出す。CHEATSHEET_CHECK が空でなければ、書き出さずに差分を調べる。"
+    (let* ((out (or (let ((e (getenv "CHEATSHEET_OUT"))) (and e (not (string-empty-p e)) e))
+                    (expand-file-name "svg/emacs_keybindings_cheatsheet.svg" cheatsheet--root)))
+           (svg (cheatsheet--build))
+           (check (let ((c (getenv "CHEATSHEET_CHECK"))) (and c (not (string-empty-p c))))))
+      (if check
+          (let ((cur (and (file-exists-p out)
+                          (with-temp-buffer (insert-file-contents out) (buffer-string)))))
+            (if (equal cur svg)
+                (progn (princ "[check-cheatsheet] ok (the SVG matches the live keymaps)\n")
+                       (kill-emacs 0))
+              (princ "[check-cheatsheet] FAILED: the SVG differs from the live keymaps; run `make cheatsheet'\n")
+              (kill-emacs 1)))
+        (with-temp-file out (insert svg))
+        (princ (format "[cheatsheet] wrote %s\n" (file-relative-name out cheatsheet--root)))
+        (kill-emacs 0))))
+
+  (cheatsheet-run)
+
+  ;;; cheatsheet.el ends here
+#+end_src
+
 * Appendix: emacs_keybindings_cheatsheet_concept.dot — キーバインド概念図
 :PROPERTIES:
 :CUSTOM_ID: appendix-emacs-keybindings-cheatsheet-concept-dot
 :header-args:dot: :tangle svg/emacs_keybindings_cheatsheet_concept.dot :file svg/emacs_keybindings_cheatsheet_concept.svg :cmdline -Tsvg
 :END:
 
-ui 節が参照する [[file:svg/emacs_keybindings_cheatsheet.svg]] は、フォントをアウトライン化して
-ベクター化した文書（テキスト要素を持たない、キーバインド一覧の全ページ）であり、Graphviz や
-Mermaid で再現できる種類の図ではない。この Appendix はその代替ソースではなく、
+ui 節が参照する [[file:svg/emacs_keybindings_cheatsheet.svg]] は、実際のキーマップから
+=scripts/cheatsheet.el= （ =make cheatsheet= 。 Appendix: cheatsheet.el を参照）が作る一覧であり、
+Graphviz で書ける図ではない。この Appendix はその代替ソースではなく、
 =ui-leader.el= の =M-SPC= リーダー構成（13 サブマップ）とグローバル単発和音、Embark を
-簡略化した概念図として別ファイルに書き出すためのものである。 =emacs_keybindings_cheatsheet.svg=
-そのものは今後も手動管理のアセットのままとする。
+簡略化した概念図として別ファイルに書き出すためのものである。
 
 #+begin_src dot
   digraph keybindings_concept {
@@ -16788,7 +17080,7 @@ Mermaid で再現できる種類の図ではない。この Appendix はその�
     root -> embark;
 
     la [label="a apps" fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
-    lb [label="b buffer"]; lc [label="c code"]; le [label="e embark/eval"];
+    lb [label="b buffer"]; lc [label="c code"]; le [label="e errors (flymake)"];
     lg [label="g git"]; lh [label="h help"]; lm [label="m major-mode"];
     lo [label="o org"]; lp [label="p project"]; lq [label="q quit"];
     ls [label="s search"]; lt [label="t toggle"]; lw [label="w window/frame"];
@@ -16828,7 +17120,7 @@ digraph boot_flow {
 
   p1 [label="Phase 1\nearly-init.el\npackage.el 無効化 / GC 一時緩和"];
   p2 [label="Phase 2\ninit.el\nstraight + leaf ブートストラップ"];
-  p3 [label="Phase 3\nmodules.el\n74 モジュールを順番にロード" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  p3 [label="Phase 3\nmodules.el\nmy:modules を順番にロード" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
 
   p1 -> p2 -> p3;
 }
@@ -17145,6 +17437,12 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Appendix: cheatsheet.el) (cheatsheet-run): キーバインド一覧 svg/emacs_keybindings_cheatsheet.svg を、
+	実際のキーマップから作る scripts/cheatsheet.el を新設。手動管理で、存在しない M-SPC q r を載せるなど設定とずれていた。
+	make cheatsheet で書き直し、make check-cheatsheet でコミット済みの SVG と今のキーマップが同じかを調べる。
+	* README.org (Makefile): cheatsheet と check-cheatsheet のターゲットを追加。
+	* README.org (Appendix: 01_boot_flow.dot, emacs_keybindings_cheatsheet_concept.dot): 古い記述を修正。モジュール数
+	（74 は実際は 77）を数えない書き方にし、e サブマップを「embark/eval」から flymake のエラー移動に直した。
 	* README.org (Layer Definitions, Directory Layout, Optional Modules): コードとの不一致を修正。orgx 層のモジュール数
 	（12→13、正規 8→9）、orgx-hugo の責務の追加、orgx-export と orgx-core の記述から Hugo を除去、キャッシュの置き場所
 	（リポジトリ内の .cache/ ではなく my:d:cache）、遅延ロードの表（ui-nano-palette の条件、ui-nano-modeline-items）、
