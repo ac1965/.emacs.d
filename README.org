@@ -270,7 +270,8 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 - ネイティブコンパイルの診断と =eln-cache= 設定（ =core-native= ）
 - Tree-sitter 文法の管理（ =core-treesit= ）
 - セッション永続化、履歴、バックアップ、自動保存ポリシー
-  （ =core-history= 、 =core-persistence= 、 =core-editing= ）
+  （ =core-history= 、 =core-persistence= 、 =core-autosave= 、 =core-editing= ）
+- dired の dirvish への置き換え（ =core-dired= ）
 - 永続的な =*scratch*= バッファの補助（ =core-buffers= ）
 - GC チューニングと起動性能（ =core-gc= 、 =core-runtime= ）
 - custom-file の管理（ =core-custom= ）と LSP/UI バックエンドの選択（ =core-switches= ）
@@ -1958,6 +1959,8 @@ see the frame.  Runs once only (removes itself from
       core-treesit
       core-history
       core-editing
+      core-autosave
+      core-dired
       core-switches
       core-custom
       core-native
@@ -3017,430 +3020,513 @@ established before the persistence files are loaded."
 :header-args:emacs-lisp: :tangle lisp/core/core-editing.el
 :END:
 
-自動保存サブシステム（3 機構の合流）の詳細は以下のコードの Commentary を参照してください。
+編集まわりの設定をまとめたモジュールです。構造的編集（paredit・puni）、undo、ウィンドウ切替、
+Emacs 31 で強化された組み込み機能の設定を持ちます。
 
-[[file:svg/05_autosave_flow.svg]]
+以前は自動保存（ =core-autosave= ）と dired の dirvish 置き換え（ =core-dired= ）も同じファイルに
+入っていました。419 行に責務の異なる 3 つの話題が同居して読みにくかったため、2026-10-13 に分割して
+います。分割にあたって公開仕様（ =core-autosave-*= のカスタマイズ変数）と処理内容は変えていません。
 
+#+NAME: core-editing-el
 #+begin_src emacs-lisp
-    ;;; core/core-editing.el --- 編集補助と UX 支援 -*- lexical-binding: t; -*-
-    ;;
-    ;; Copyright (c) 2021-2026
-    ;; License: GNU GPL v3 or later
-    ;;
-    ;; Category: core
-    ;;
-    ;;; Commentary:
-    ;;
-    ;; 編集補助: 構造的編集、undo、ウィンドウ切替、Dired。
-    ;;
-    ;; 本ファイルの責務:
-    ;; - TRAMP を永続化パスとともに設定し、既定メソッドを `scp' にする
-    ;; - 自動保存サブシステムを実装する（auto-save-visited-mode + focus-out フック
-    ;;   + no-littering-var-directory/backup/ 配下の世代付きバックアップ）
-    ;; - paredit（競合回避のため electric-pair を無効化）と puni を設定する
-    ;; - show-paren、undo-fu/vundo、ace-window、visual-line-mode を設定する
-    ;; - dired を dirvish に置き換える（dirvish-override-dired-mode）。
-    ;;   起動時間短縮のため、有効化自体は `dired-noselect' への自己解除型
-    ;;   :around advice で、最初に dired が呼ばれた瞬間まで遅延させる
-    ;; - dirvish の属性を設定する（subtree-state、vc-state、git-msg、file-size）
-    ;; - 意味単位のテキスト選択のため expand-region を導入する
-    ;;; Code:
+  ;;; core/core-editing.el --- 編集補助と UX 支援 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 編集補助: 構造的編集、undo、ウィンドウ切替、Emacs 31 の編集系組み込み機能。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - TRAMP を永続化パスとともに設定し、既定メソッドを `scp' にする
+  ;; - paredit（競合回避のため electric-pair を無効化）と puni を設定する
+  ;; - show-paren、undo-fu/vundo、ace-window、visual-line-mode を設定する
+  ;; - 意味単位のテキスト選択のため expand-region を導入する
+  ;; - autorevert、transient、hl-line、hideshow、eldoc を設定する
+  ;;
+  ;; 分割済み（2026-10-13）:
+  ;; - 自動保存とバックアップのポリシーは core-autosave.el へ
+  ;; - dired の dirvish への置き換えは core-dired.el へ
+  ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
   (defvar hs-minor-mode-map)
   (declare-function hs-cycle "hideshow")
   (declare-function hs-toggle-all "hideshow")
 
-    (leaf tramp
-      :straight nil
-      :pre-setq
-      `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
-        (tramp-auto-save-directory   . ,(concat no-littering-var-directory "tramp-autosave")))
-      :custom
-      '((tramp-default-method . "scp")
-        (tramp-verbose        . 3)))
+  (leaf tramp
+    :straight nil
+    :pre-setq
+    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+      (tramp-auto-save-directory   . ,(concat no-littering-var-directory "tramp-autosave")))
+    :custom
+    '((tramp-default-method . "scp")
+      (tramp-verbose        . 3)))
 
-    ;; ---------------------------------------------------------------------------
-    ;; 自動保存とバックアップのポリシー
-    ;; ---------------------------------------------------------------------------
-    ;;
-    ;; 相互に補完する 3 つの機構:
-    ;;
-    ;; 1. auto-save-visited-mode — アイドル時間が `auto-save-visited-interval' 秒に
-    ;;    達するたびに、訪問中のファイル自体を書き出す（Emacs 26.1 以降）。
-    ;;    従来の #file# スクラッチファイル方式を置き換える（early-init で
-    ;;    auto-save-default nil に設定済み）。
-    ;;
-    ;; 2. core-editing--save-all-on-focus-out — Emacs がフォーカスを失ったとき
-    ;;    （after-focus-change-function）、または選択ウィンドウが変わったとき
-    ;;    （window-selection-change-functions）に、変更済みのファイルバッファをすべて
-    ;;    保存する。アイドルタイマーがまだ発火していない隙間を埋める。
-    ;;
-    ;; 3. 世代付きバックアップ — early-init で有効化する。backup-directory-alist は
-    ;;    （no-littering-var-directory が利用可能になった後の）ここで設定し、
-    ;;    すべてのバックアップを var/backup/ 配下に集約する。
+  (defun core-editing--paredit-setup ()
+    "Enable paredit and disable electric-pair locally (they conflict)."
+    (enable-paredit-mode)
+    (electric-pair-local-mode -1))
 
-    (defgroup core-autosave nil
-      "Auto-save and backup policy."
-      :group 'convenience
-      :prefix "core-autosave-")
+  (leaf paredit
+    ;; straight の既定レシピは :repo に https://paredit.org/paredit.git を指定して
+    ;; いる。作者個人の git サーバーで、GitHub 等より不安定・到達不能になりやすく、
+    ;; 実際に `git clone` が失敗する事例があったため、GitHub 上のミラー
+    ;; （emacsmirror）を明示的に指定して回避する。
+    :straight (paredit :type git :host github :repo "emacsmirror/paredit")
+    :hook (emacs-lisp-mode . core-editing--paredit-setup))
 
-    (defcustom core-autosave-interval 5
-      "Idle seconds before auto-save-visited-mode writes modified buffers to disk.
+  (leaf paren :straight nil
+    :custom ((show-paren-delay . 0)
+             (show-paren-style . 'expression)
+             (show-paren-highlight-openparen . t))
+    :global-minor-mode show-paren-mode)
+
+  (defun core-editing--puni-minibuffer-off ()
+    "Disable puni-global-mode inside the minibuffer."
+    (puni-global-mode -1))
+
+  (leaf puni :straight t
+    :global-minor-mode puni-global-mode
+    :hook ((minibuffer-setup . core-editing--puni-minibuffer-off)))
+
+  (leaf undo-fu :straight t
+    :custom ((undo-fu-allow-undo-in-region . t)))
+
+  (leaf vundo :straight t)
+
+  (leaf ace-window :straight t
+    :custom ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
+             (aw-scope . 'frame)
+             (aw-background . t))
+    :config (ace-window-display-mode 1))
+
+  (leaf visual-line-mode :straight nil
+    :hook (text-mode . visual-line-mode))
+
+  (leaf expand-region :straight t :after treesit)
+  (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
+  (leaf delsel :straight nil :global-minor-mode delete-selection-mode)
+
+  (leaf autorevert :straight nil
+    :custom ((auto-revert-interval . 2)
+             (auto-revert-verbose . nil))
+    :global-minor-mode global-auto-revert-mode)
+
+  ;; transient-history-file、transient-levels-file、transient-values-file は
+  ;; defcustom（transient.el）である。setopt を用いる。
+  (leaf transient
+    :straight t
+    :config
+    (setopt transient-history-file (concat no-littering-var-directory "transient/history.el")
+            transient-levels-file  (concat no-littering-var-directory "transient/levels.el")
+            transient-values-file  (concat no-littering-var-directory "transient/values.el"))
+    (my/ensure-directory-exists (concat no-littering-var-directory "transient/")))
+
+  ;; 現在行のハイライト。global-hl-line-sticky-flag（下の Emacs 31 ブロック内）
+  ;; はこのモードの「複数ウィンドウでの追従挙動」を調整するだけの設定であり、
+  ;; モード自体を有効化するものではない。以前は sticky-flag だけが設定され、
+  ;; global-hl-line-mode 自体を有効化する行が無かったため、通常の編集バッファで
+  ;; 現在行がハイライトされていなかった。hl-line-mode は Emacs 31 より前から
+  ;; 存在するため、Emacs 31 限定ブロックには含めない。
+  (leaf hl-line
+    :straight nil
+    :global-minor-mode global-hl-line-mode)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: 編集系の組み込み機能
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; Emacs 31 で hideshow はサードパーティの折りたたみパッケージと同等になった。
+  ;; `hs-cycle'（親 → 入れ子 → 全体）、`hs-toggle-all'、マージン／フリンジの
+  ;; インジケータ、省略記号の隣に隠れ行数を表示する機能が加わった。tree-sitter 系の
+  ;; モードも同リリースで `hs-minor-mode' に正式対応したため、*-ts-mode バッファでも
+  ;; 追加設定なしに折りたたみが機能する。
+  ;;
+  ;; 注意: `hs-special-modes-alist' は Emacs 31 で廃止された。また折りたたみコマンドは
+  ;; ポイントを含む最内ブロックに作用するようになった（31 以前の挙動に戻すには
+  ;; `hs-hide-block-behavior' を `after-cursor' に設定する）。
+  (leaf hideshow
+    :straight nil
+    :custom
+    ((hs-show-indicators               . t)
+     (hs-display-lines-hidden          . t)
+     (hs-indicator-maximum-buffer-size . 500000))
+    :hook ((prog-mode-hook . hs-minor-mode))
+    :config
+    (keymap-set hs-minor-mode-map "<backtab>" #'hs-cycle)
+    (keymap-set hs-minor-mode-map "C-c @ a"   #'hs-toggle-all))
+
+  ;; ElDoc: Emacs 31 はポイント位置の `help-echo' テキストプロパティを提示でき、また
+  ;; 引数を入力している最中に、呼び出し先関数の docstring の第 1 文を表示できる —
+  ;; バッファを離れずにドキュメントを参照できる。
+  (leaf eldoc
+    :straight nil
+    :custom
+    ((eldoc-help-at-pt                          . t)
+     (eldoc-echo-area-use-multiline-p           . nil)
+     (elisp-eldoc-funcall-with-docstring-length . 'short))
+    :config
+    (add-hook 'emacs-lisp-mode-hook #'core-editing--elisp-eldoc-setup))
+
+  (defun core-editing--elisp-eldoc-setup ()
+    "Use the Emacs 31 docstring-aware ElDoc function in Emacs Lisp buffers."
+    (when (fboundp 'elisp-eldoc-funcall-with-docstring)
+      (add-hook 'eldoc-documentation-functions
+                #'elisp-eldoc-funcall-with-docstring nil t)))
+
+  ;; Emacs 31 で導入されたスカラー値の編集オプション。Emacs 30 でもモジュールが
+  ;; ロード可能なままとなるようガードしている（削除安全性はバージョンにも適用される）。
+  (when (>= emacs-major-version 31)
+    ;; アクティブなリージョンが無い場合、C-w はエラーではなく直前の単語を kill する。
+    (setopt kill-region-dwim 'emacs-word)
+    ;; `delete-pair' が削除位置にマークを残す。
+    (setopt delete-pair-push-mark t)
+    ;; C-x C-x でリージョンを再ハイライトしない（マークは位置であって UI ではない）。
+    (setopt exchange-point-and-mark-highlight-region nil)
+    ;; show-paren はコメント／文字列内では、対応が取れない括弧だけを非強調にする
+    ;; （'all にすると常に非強調、nil で常に強調）。値はクォートしたシンボルであること。
+    (setopt show-paren-not-in-comments-or-strings 'on-mismatch)
+    ;; hl-line はバッファではなくウィンドウに追従する
+    ;; （global-hl-line-mode 自体の有効化は上の leaf hl-line を参照）。
+    (setopt global-hl-line-sticky-flag 'window)
+    ;; ウィンドウ: help / compilation バッファを quit すると kill され、バッファを kill
+    ;; すると `quit-restore-window' が直前のレイアウトを復元する。
+    (setopt quit-window-kill-buffer '(help-mode compilation-mode messages-buffer-mode))
+    (setopt kill-buffer-quit-windows t)
+    ;; `C-h l' は表示中も内容を更新する。
+    (setopt view-lossage-auto-refresh t)
+    ;; Emacs 31 は `find-function-setup-keys' を本物のマイナーモードに置き換えた。
+    (find-function-mode 1))
+
+  (provide 'core-editing)
+  ;;; core/core-editing.el ends here
+#+end_src
+
+*** core/core-autosave.el
+:PROPERTIES:
+:CUSTOM_ID: core-autosave
+:header-args:emacs-lisp: :tangle lisp/core/core-autosave.el
+:END:
+
+自動保存サブシステム（3 機構の合流）の詳細は以下のコードの Commentary を参照してください。
+
+[[file:svg/05_autosave_flow.svg]]
+
+=core-editing.el= から分離したモジュールです。 =core-autosave-*= のカスタマイズ変数と、
+フォーカス喪失時の保存・世代付きバックアップの設定を持ちます。内部関数は =core-autosave--= の
+接頭辞に改名しました（旧 =core-editing--save-on-focus-out= など）。カスタマイズ変数の名前は
+変えていないので、 =personal/user.el= の設定はそのまま有効です。
+
+#+NAME: core-autosave-el
+#+begin_src emacs-lisp
+  ;;; core/core-autosave.el --- 自動保存とバックアップのポリシー -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 自動保存サブシステム。core-editing.el から分離した（2026-10-13）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - auto-save-visited-mode + focus-out フック + no-littering-var-directory/backup/
+  ;;   配下の世代付きバックアップを実装する
+  ;; - 除外ルール（拡張子・ファイル名パターン・メジャーモード・述語）を
+  ;;   `core-autosave-exclude-*' で設定可能にする
+  ;;; Code:
+
+  ;; ---------------------------------------------------------------------------
+  ;; 自動保存とバックアップのポリシー
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; 相互に補完する 3 つの機構:
+  ;;
+  ;; 1. auto-save-visited-mode — アイドル時間が `auto-save-visited-interval' 秒に
+  ;;    達するたびに、訪問中のファイル自体を書き出す（Emacs 26.1 以降）。
+  ;;    従来の #file# スクラッチファイル方式を置き換える（early-init で
+  ;;    auto-save-default nil に設定済み）。
+  ;;
+  ;; 2. core-autosave--save-on-focus-out — Emacs がフォーカスを失ったとき
+  ;;    （after-focus-change-function）、または選択ウィンドウが変わったとき
+  ;;    （window-selection-change-functions）に、変更済みのファイルバッファをすべて
+  ;;    保存する。アイドルタイマーがまだ発火していない隙間を埋める。
+  ;;
+  ;; 3. 世代付きバックアップ — early-init で有効化する。backup-directory-alist は
+  ;;    （no-littering-var-directory が利用可能になった後の）ここで設定し、
+  ;;    すべてのバックアップを var/backup/ 配下に集約する。
+
+  (defgroup core-autosave nil
+    "Auto-save and backup policy."
+    :group 'convenience
+    :prefix "core-autosave-")
+
+  (defcustom core-autosave-interval 5
+    "Idle seconds before auto-save-visited-mode writes modified buffers to disk.
   Lower values reduce data loss but increase I/O during editing.
   Recommended range: 5–30 seconds."
-      :type 'natnum
-      :group 'core-autosave)
+    :type 'natnum
+    :group 'core-autosave)
 
-    (defcustom core-autosave-save-on-focus-out t
-      "When non-nil, save all modified file-backed buffers when Emacs loses focus."
-      :type 'boolean
-      :group 'core-autosave)
+  (defcustom core-autosave-save-on-focus-out t
+    "When non-nil, save all modified file-backed buffers when Emacs loses focus."
+    :type 'boolean
+    :group 'core-autosave)
 
-    (defcustom core-autosave-exclude-extensions
-      '("gpg" "age" "enc" "pem" "p12" "pfx")
-      "File extensions that are never auto-saved.
+  (defcustom core-autosave-exclude-extensions
+    '("gpg" "age" "enc" "pem" "p12" "pfx")
+    "File extensions that are never auto-saved.
   Each element is a string without a leading dot (e.g. \"gpg\", not \".gpg\").
   Encrypted and certificate files are excluded by default because writing them
   automatically could silently overwrite an encrypted file with plaintext or
   corrupt a partially-modified binary.
   Customise in personal/user.el with setopt."
-      :type '(repeat string)
-      :group 'core-autosave)
+    :type '(repeat string)
+    :group 'core-autosave)
 
-    (defcustom core-autosave-exclude-name-patterns nil
-      "List of regular expressions matched against buffer file names.
+  (defcustom core-autosave-exclude-name-patterns nil
+    "List of regular expressions matched against buffer file names.
   Buffers whose file name matches any pattern are excluded from auto-save.
   Patterns are matched with `string-match-p' against the full file path.
   Example: (setopt core-autosave-exclude-name-patterns
-                   \='(\"\\.authinfo\" \"secret\" \"/tmp/\"))
+                 \='(\"\\.authinfo\" \"secret\" \"/tmp/\"))
   Customise in personal/user.el with setopt."
-      :type '(repeat regexp)
-      :group 'core-autosave)
+    :type '(repeat regexp)
+    :group 'core-autosave)
 
-    (defcustom core-autosave-exclude-modes nil
-      "List of major-mode symbols whose buffers are never auto-saved.
+  (defcustom core-autosave-exclude-modes nil
+    "List of major-mode symbols whose buffers are never auto-saved.
   Example: (setopt core-autosave-exclude-modes
-                   \='(erc-mode circe-mode term-mode vterm-mode))
+                 \='(erc-mode circe-mode term-mode vterm-mode))
   Customise in personal/user.el with setopt."
-      :type '(repeat symbol)
-      :group 'core-autosave)
+    :type '(repeat symbol)
+    :group 'core-autosave)
 
-    (defcustom core-autosave-exclude-predicates nil
-      "List of single-argument functions called with the buffer as argument.
+  (defcustom core-autosave-exclude-predicates nil
+    "List of single-argument functions called with the buffer as argument.
   If any predicate returns non-nil the buffer is excluded from auto-save.
   Each function must be side-effect-free and accept one argument (a buffer).
   Example: (setopt core-autosave-exclude-predicates
-                   \='(my/tramp-buffer-p))
+                 \='(my/tramp-buffer-p))
   Customise in personal/user.el with setopt."
-      :type '(repeat function)
-      :group 'core-autosave)
+    :type '(repeat function)
+    :group 'core-autosave)
 
-    ;; ---------------------------------------------------------------------------
-    ;; 内部述語
-    ;; ---------------------------------------------------------------------------
+  ;; ---------------------------------------------------------------------------
+  ;; 内部述語
+  ;; ---------------------------------------------------------------------------
 
-    (defun core-autosave--extension-excluded-p (ext)
-      "Return non-nil when EXT (downcased) is in `core-autosave-exclude-extensions'."
-      (and ext (member (downcase ext) core-autosave-exclude-extensions)))
+  (defun core-autosave--extension-excluded-p (ext)
+    "Return non-nil when EXT (downcased) is in `core-autosave-exclude-extensions'."
+    (and ext (member (downcase ext) core-autosave-exclude-extensions)))
 
-    (defun core-autosave--name-pattern-excluded-p (fname)
-      "Return non-nil when FNAME matches an autosave exclusion pattern.
-See `core-autosave-exclude-name-patterns'."
-      (cl-some (lambda (pat) (string-match-p pat fname))
-               core-autosave-exclude-name-patterns))
+  (defun core-autosave--name-pattern-excluded-p (fname)
+    "Return non-nil when FNAME matches an autosave exclusion pattern.
+  See `core-autosave-exclude-name-patterns'."
+    (cl-some (lambda (pat) (string-match-p pat fname))
+             core-autosave-exclude-name-patterns))
 
-    (defun core-autosave--predicate-excluded-p (buf)
-      "Return non-nil when BUF matches an autosave exclusion predicate.
-See `core-autosave-exclude-predicates'."
-      (cl-some (lambda (fn) (funcall fn buf))
-               core-autosave-exclude-predicates))
+  (defun core-autosave--predicate-excluded-p (buf)
+    "Return non-nil when BUF matches an autosave exclusion predicate.
+  See `core-autosave-exclude-predicates'."
+    (cl-some (lambda (fn) (funcall fn buf))
+             core-autosave-exclude-predicates))
 
-    (defun core-autosave--save-buffer-p ()
-      "Return non-nil when the current buffer should be auto-saved.
+  (defun core-autosave--save-buffer-p ()
+    "Return non-nil when the current buffer should be auto-saved.
   Called by `save-some-buffers' with no arguments; the buffer under
   test is `current-buffer'.
   A buffer is eligible when ALL of the following hold:
-    1. It is backed by a file (`buffer-file-name').
-    2. Its file extension is not in `core-autosave-exclude-extensions'.
-    3. Its file name does not match any pattern in
-       `core-autosave-exclude-name-patterns'.
-    4. Its major mode is not in `core-autosave-exclude-modes'.
-    5. No predicate in `core-autosave-exclude-predicates' returns non-nil."
-      (when-let* ((fname (buffer-file-name)))
-        (let* ((ext  (file-name-extension fname))
-               (mode major-mode))
-          (and
-           ;; 1. 拡張子が除外対象でない
-           (not (core-autosave--extension-excluded-p ext))
-           ;; 2. ファイル名パターンが除外対象でない
-           (not (core-autosave--name-pattern-excluded-p fname))
-           ;; 3. メジャーモードが除外対象でない
-           (not (memq mode core-autosave-exclude-modes))
-           ;; 4. ユーザー定義の述語
-           (not (core-autosave--predicate-excluded-p (current-buffer)))))))
+  1. It is backed by a file (`buffer-file-name').
+  2. Its file extension is not in `core-autosave-exclude-extensions'.
+  3. Its file name does not match any pattern in
+     `core-autosave-exclude-name-patterns'.
+  4. Its major mode is not in `core-autosave-exclude-modes'.
+  5. No predicate in `core-autosave-exclude-predicates' returns non-nil."
+    (when-let* ((fname (buffer-file-name)))
+      (let* ((ext  (file-name-extension fname))
+             (mode major-mode))
+        (and
+         ;; 1. 拡張子が除外対象でない
+         (not (core-autosave--extension-excluded-p ext))
+         ;; 2. ファイル名パターンが除外対象でない
+         (not (core-autosave--name-pattern-excluded-p fname))
+         ;; 3. メジャーモードが除外対象でない
+         (not (memq mode core-autosave-exclude-modes))
+         ;; 4. ユーザー定義の述語
+         (not (core-autosave--predicate-excluded-p (current-buffer)))))))
 
-    (defun core-editing--save-all-buffers ()
-      "Save all modified file-backed buffers that pass the auto-save exclusion rules.
+  (defun core-autosave--save-all-buffers ()
+    "Save all modified file-backed buffers that pass the auto-save exclusion rules.
   Exclusion is controlled by `core-autosave-exclude-extensions',
   `core-autosave-exclude-name-patterns', `core-autosave-exclude-modes', and
   `core-autosave-exclude-predicates'.  All four are customisable in
   personal/user.el via setopt."
-      (save-some-buffers t #'core-autosave--save-buffer-p))
+    (save-some-buffers t #'core-autosave--save-buffer-p))
 
-    (defun core-editing--save-on-focus-out ()
-      "Save all file-backed buffers when Emacs loses focus.
+  (defun core-autosave--save-on-focus-out ()
+    "Save all file-backed buffers when Emacs loses focus.
   Called from `after-focus-change-function', which uses a zero-argument calling
   convention and fires for both focus-in and focus-out.  `frame-focus-state'
   returns nil when the frame has lost focus, so saving is restricted to that
   case."
-      (when (and core-autosave-save-on-focus-out
-                 (not (frame-focus-state)))
-        (core-editing--save-all-buffers)))
+    (when (and core-autosave-save-on-focus-out
+               (not (frame-focus-state)))
+      (core-autosave--save-all-buffers)))
 
-    (defun core-editing--autosave-init ()
-      "Configure and activate the auto-save subsystem.
+  (defun core-autosave--init ()
+    "Configure and activate the auto-save subsystem.
   Idempotent: repeated calls do not register duplicate hooks because
   `add-hook' and `add-function' check for existing entries."
-      ;; 1. バックアップディレクトリ — no-littering-var-directory が利用可能なここで設定する。
-      (setopt backup-directory-alist
-              `(("." . ,(expand-file-name "backup/" no-littering-var-directory))))
-      ;; 2. auto-save-visited-mode: スクラッチファイルではなく実ファイルに書き出す。
-      (setopt auto-save-visited-interval core-autosave-interval
-              auto-save-default          nil)
-      (auto-save-visited-mode 1)
-      ;; 3. after-focus-change-function — フォーカス変化時の唯一の登録先。
-      ;;    以前は focus-out-hook にも登録していたが、focus-out-hook は Emacs 27.1 で
-      ;;    廃止されている。しかも両方に登録していたため、フォーカスを失うたびに保存が
-      ;;    二重に走っていた（handle-focus-out は focus-out-hook を実行したうえで
-      ;;    after-focus-change-function も呼ぶ）。
-      ;;
-      ;;    after-focus-change-function はフォーカスの取得時にも呼ばれる。
-      ;;    core-editing--save-on-focus-out は frame-focus-state で「失った」ことを
-      ;;    確認してから保存する（以前はこの判定が無く、フォーカス取得時にも保存が走っていた）。
-      ;;
-      ;;    これは「フック」ではなく単一の関数を保持する変数なので add-function を用いる。
-      ;;    重複登録を防ぐため、追加前に古い登録を除去する。
-      (remove-function after-focus-change-function
-                       #'core-editing--save-on-focus-out)
-      (add-function :after after-focus-change-function
-                    #'core-editing--save-on-focus-out))
-
-    (add-hook 'emacs-startup-hook #'core-editing--autosave-init)
-
-    (defun core-editing--paredit-setup ()
-      "Enable paredit and disable electric-pair locally (they conflict)."
-      (enable-paredit-mode)
-      (electric-pair-local-mode -1))
-
-    (leaf paredit
-      ;; straight の既定レシピは :repo に https://paredit.org/paredit.git を指定して
-      ;; いる。作者個人の git サーバーで、GitHub 等より不安定・到達不能になりやすく、
-      ;; 実際に `git clone` が失敗する事例があったため、GitHub 上のミラー
-      ;; （emacsmirror）を明示的に指定して回避する。
-      :straight (paredit :type git :host github :repo "emacsmirror/paredit")
-      :hook (emacs-lisp-mode . core-editing--paredit-setup))
-
-    (leaf paren :straight nil
-      :custom ((show-paren-delay . 0)
-               (show-paren-style . 'expression)
-               (show-paren-highlight-openparen . t))
-      :global-minor-mode show-paren-mode)
-
-    (defun core-editing--puni-minibuffer-off ()
-      "Disable puni-global-mode inside the minibuffer."
-      (puni-global-mode -1))
-
-    (leaf puni :straight t
-      :global-minor-mode puni-global-mode
-      :hook ((minibuffer-setup . core-editing--puni-minibuffer-off)))
-
-    (leaf undo-fu :straight t
-      :custom ((undo-fu-allow-undo-in-region . t)))
-
-    (leaf vundo :straight t)
-
-    (leaf ace-window :straight t
-      :custom ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
-               (aw-scope . 'frame)
-               (aw-background . t))
-      :config (ace-window-display-mode 1))
-
-    (leaf visual-line-mode :straight nil
-      :hook (text-mode . visual-line-mode))
-
-    (leaf dirvish
-      :straight t
-      :require nil)
-
-    ;; dirvish は leaf の :global-minor-mode が :require t を伴うため、
-    ;; core-editing のロード時に即時 require されていた（起動プロファイル
-    ;; 計測で core-editing 全体の 25〜30ms の主要因の一つ）。
+    ;; 1. バックアップディレクトリ — no-littering-var-directory が利用可能なここで設定する。
+    (setopt backup-directory-alist
+            `(("." . ,(expand-file-name "backup/" no-littering-var-directory))))
+    ;; 2. auto-save-visited-mode: スクラッチファイルではなく実ファイルに書き出す。
+    (setopt auto-save-visited-interval core-autosave-interval
+            auto-save-default          nil)
+    (auto-save-visited-mode 1)
+    ;; 3. after-focus-change-function — フォーカス変化時の唯一の登録先。
+    ;;    以前は focus-out-hook にも登録していたが、focus-out-hook は Emacs 27.1 で
+    ;;    廃止されている。しかも両方に登録していたため、フォーカスを失うたびに保存が
+    ;;    二重に走っていた（handle-focus-out は focus-out-hook を実行したうえで
+    ;;    after-focus-change-function も呼ぶ）。
     ;;
-    ;; pulsar/apheleia/project.el と違い、dirvish は単純な emacs-startup-hook +
-    ;; アイドルタイマーでは遅延できない。`dirvish-override-dired-mode' は
-    ;; 「dired を呼んだら代わりに dirvish を開く」という置き換えそのものなので、
-    ;; ユーザーが最初に dired を開く *前* に有効化されていなければならない。
-    ;; 固定秒数のアイドルタイマーでは、起動直後に dired を呼ばれた場合に
-    ;; 間に合わない。
+    ;;    after-focus-change-function はフォーカスの取得時にも呼ばれる。
+    ;;    core-autosave--save-on-focus-out は frame-focus-state で「失った」ことを
+    ;;    確認してから保存する（以前はこの判定が無く、フォーカス取得時にも保存が走っていた）。
     ;;
-    ;; そこで `dired-noselect' に自己解除型の :around advice を仕込む。
-    ;; `dired'、`dired-jump'、`project-dired'、`find-file' のディレクトリ分岐など、
-    ;; dired を呼ぶほぼ全ての経路は最終的に `dired-noselect' を通るため、
-    ;; ここ一箇所へのアドバイスで束ねられる。
-    (defun core-editing--activate-dirvish ()
-      "dirvish を require し、override モードと表示設定を適用する。
-`core-editing--ensure-dirvish' から一度だけ呼ばれる。"
-      (require 'dirvish)
-      ;; leaf :custom は暗黙に require するため、dirvish-attributes 等は
-      ;; require 後にここで setopt する。
-      (setopt
-       dirvish-attributes '(subtree-state vc-state git-msg file-size)
-       ;; dirvish は自前の mode-line パイプラインを持ち、編集バッファの
-       ;; nano-modeline（M-SPC 経由ではなく起動時にグローバル適用される方）を
-       ;; 経由しない。そのため IME（sis）状態がウィンドウ最大化時に判別できなくなる
-       ;; 問題があった。:right に `ime' セグメントを追加することで、dirvish 自身の
-       ;; mode-line 上に IME 表示を出す。セグメント本体（`ime'）の定義は
-       ;; personal/ac1965.el 側（sis-change-hook のキャッシュ `ac1965--sis-indicator'
-       ;; の定義箇所）に置く — `dirvish-mode-line-format' はセグメント名のリストに
-       ;; すぎず、実際に mode-line が描画されるタイミング（dirvish バッファを開いた
-       ;; とき、= init 完了よりずっと後）までにセグメント関数が登録されていれば
-       ;; よいため、この setopt の位置とセグメント定義の位置の前後関係は問わない。
-       dirvish-mode-line-format '(:left (sort symlink) :right (omit yank index ime)))
-      (dirvish-override-dired-mode 1)
-      (setopt dirvish-cache-dir
-              (expand-file-name "dirvish/" my:d:cache))
-      ;; プレビューペインを有効化（リモートバッファでの I/O を避けるため既定では無効）。
-      (dirvish-peek-mode 1)
-      ;; ls のスイッチ設定 — 旧 leaf dired ブロックから統合したもの。
-      ;; macOS には BSD 版 ls が同梱される。利用できる場合は GNU coreutils の gls を使う。
-      ;; insert-directory-program、dired-use-ls-dired、dired-listing-switches は
-      ;; いずれも defcustom（dired.el）である。setopt を用いる。
-      (if (and (eq system-type 'darwin) (executable-find "gls"))
-          (progn
-            (setopt insert-directory-program "gls")
-            (setopt dired-use-ls-dired t)
-            (setopt dired-listing-switches "-aBhl --group-directories-first"))
-        (setopt dired-use-ls-dired nil)
-        (setopt dired-listing-switches "-alh")))
+    ;;    これは「フック」ではなく単一の関数を保持する変数なので add-function を用いる。
+    ;;    重複登録を防ぐため、追加前に古い登録を除去する。
+    (remove-function after-focus-change-function
+                     #'core-autosave--save-on-focus-out)
+    (add-function :after after-focus-change-function
+                  #'core-autosave--save-on-focus-out))
 
-    (defun core-editing--ensure-dirvish (_orig-fn &rest args)
-      "`dired-noselect' の初回呼び出し時に dirvish を有効化してから呼び直す。
+  (add-hook 'emacs-startup-hook #'core-autosave--init)
 
-`:around' アドバイスとして一度だけ動作する自己解除型のブートストラップである。
-_ORIG-FN（このアドバイスを追加した時点の `dired-noselect'）を直接呼ぶのではなく、
-自分自身のアドバイスを除去したうえで `core-editing--activate-dirvish' を実行し、
-シンボル `dired-noselect' を改めて `apply' で呼び直している。
+  (provide 'core-autosave)
+  ;;; core/core-autosave.el ends here
+#+end_src
 
-理由: `dirvish-override-dired-mode' 自身も `dired-noselect' に advice を
-追加する。_ORIG-FN はこのアドバイスを追加した時点のスナップショットであり、
-それをそのまま呼ぶと、今まさに処理している最初の呼び出しだけ dirvish の
-advice を素通りしてしまう（2 回目以降の呼び出しからしか dirvish の UI に
-ならない）。シンボル経由で呼び直せば、その時点の最新の advice チェーンを
-確実に通る。"
-      (advice-remove 'dired-noselect #'core-editing--ensure-dirvish)
-      (core-editing--activate-dirvish)
-      (apply #'dired-noselect args))
+*** core/core-dired.el
+:PROPERTIES:
+:CUSTOM_ID: core-dired
+:header-args:emacs-lisp: :tangle lisp/core/core-dired.el
+:END:
 
-    (advice-add 'dired-noselect :around #'core-editing--ensure-dirvish)
+dired を dirvish に置き換えるモジュールです。 =core-editing.el= から分離しました。
 
-    (leaf expand-region :straight t :after treesit)
-    (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
-    (leaf delsel :straight nil :global-minor-mode delete-selection-mode)
+dirvish の有効化は、起動時間を縮めるため、最初に dired が呼ばれる瞬間まで遅延させています。その仕組み
+（ =dired-noselect= への自己解除型 =:around= アドバイス）は以下のコードのコメントを参照してください。
+内部関数は =core-dired--activate= 、 =core-dired--ensure= に改名しました（旧
+=core-editing--activate-dirvish= 、 =core-editing--ensure-dirvish= ）。
 
-    (leaf autorevert :straight nil
-      :custom ((auto-revert-interval . 2)
-               (auto-revert-verbose . nil))
-      :global-minor-mode global-auto-revert-mode)
+#+NAME: core-dired-el
+#+begin_src emacs-lisp
+  ;;; core/core-dired.el --- dired の dirvish への置き換え -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; dired を dirvish に置き換える。core-editing.el から分離した（2026-10-13）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - dired を dirvish に置き換える（dirvish-override-dired-mode）。
+  ;;   起動時間短縮のため、有効化自体は `dired-noselect' への自己解除型
+  ;;   :around advice で、最初に dired が呼ばれた瞬間まで遅延させる
+  ;; - dirvish の属性を設定する（subtree-state、vc-state、git-msg、file-size）
+  ;; - macOS では GNU coreutils の gls が使えれば dired の ls に用いる
+  ;;; Code:
 
-    ;; transient-history-file、transient-levels-file、transient-values-file は
-    ;; defcustom（transient.el）である。setopt を用いる。
-    (leaf transient
-      :straight t
-      :config
-      (setopt transient-history-file (concat no-littering-var-directory "transient/history.el")
-              transient-levels-file  (concat no-littering-var-directory "transient/levels.el")
-              transient-values-file  (concat no-littering-var-directory "transient/values.el"))
-      (my/ensure-directory-exists (concat no-littering-var-directory "transient/")))
+  (leaf dirvish
+    :straight t
+    :require nil)
 
-    ;; 現在行のハイライト。global-hl-line-sticky-flag（下の Emacs 31 ブロック内）
-    ;; はこのモードの「複数ウィンドウでの追従挙動」を調整するだけの設定であり、
-    ;; モード自体を有効化するものではない。以前は sticky-flag だけが設定され、
-    ;; global-hl-line-mode 自体を有効化する行が無かったため、通常の編集バッファで
-    ;; 現在行がハイライトされていなかった。hl-line-mode は Emacs 31 より前から
-    ;; 存在するため、Emacs 31 限定ブロックには含めない。
-    (leaf hl-line
-      :straight nil
-      :global-minor-mode global-hl-line-mode)
+  ;; dirvish は leaf の :global-minor-mode が :require t を伴うため、
+  ;; core-dired のロード時に即時 require されていた（起動プロファイル
+  ;; 計測で core-editing（分割前）全体の 25〜30ms の主要因の一つ）。
+  ;;
+  ;; pulsar/apheleia/project.el と違い、dirvish は単純な emacs-startup-hook +
+  ;; アイドルタイマーでは遅延できない。`dirvish-override-dired-mode' は
+  ;; 「dired を呼んだら代わりに dirvish を開く」という置き換えそのものなので、
+  ;; ユーザーが最初に dired を開く *前* に有効化されていなければならない。
+  ;; 固定秒数のアイドルタイマーでは、起動直後に dired を呼ばれた場合に
+  ;; 間に合わない。
+  ;;
+  ;; そこで `dired-noselect' に自己解除型の :around advice を仕込む。
+  ;; `dired'、`dired-jump'、`project-dired'、`find-file' のディレクトリ分岐など、
+  ;; dired を呼ぶほぼ全ての経路は最終的に `dired-noselect' を通るため、
+  ;; ここ一箇所へのアドバイスで束ねられる。
+  (defun core-dired--activate ()
+    "dirvish を require し、override モードと表示設定を適用する。
+  `core-dired--ensure' から一度だけ呼ばれる。"
+    (require 'dirvish)
+    ;; leaf :custom は暗黙に require するため、dirvish-attributes 等は
+    ;; require 後にここで setopt する。
+    (setopt
+     dirvish-attributes '(subtree-state vc-state git-msg file-size)
+     ;; dirvish は自前の mode-line パイプラインを持ち、編集バッファの
+     ;; nano-modeline（M-SPC 経由ではなく起動時にグローバル適用される方）を
+     ;; 経由しない。そのため IME（sis）状態がウィンドウ最大化時に判別できなくなる
+     ;; 問題があった。:right に `ime' セグメントを追加することで、dirvish 自身の
+     ;; mode-line 上に IME 表示を出す。セグメント本体（`ime'）の定義は
+     ;; personal/ac1965.el 側（sis-change-hook のキャッシュ `ac1965--sis-indicator'
+     ;; の定義箇所）に置く — `dirvish-mode-line-format' はセグメント名のリストに
+     ;; すぎず、実際に mode-line が描画されるタイミング（dirvish バッファを開いた
+     ;; とき、= init 完了よりずっと後）までにセグメント関数が登録されていれば
+     ;; よいため、この setopt の位置とセグメント定義の位置の前後関係は問わない。
+     dirvish-mode-line-format '(:left (sort symlink) :right (omit yank index ime)))
+    (dirvish-override-dired-mode 1)
+    (setopt dirvish-cache-dir
+            (expand-file-name "dirvish/" my:d:cache))
+    ;; プレビューペインを有効化（リモートバッファでの I/O を避けるため既定では無効）。
+    (dirvish-peek-mode 1)
+    ;; ls のスイッチ設定 — 旧 leaf dired ブロックから統合したもの。
+    ;; macOS には BSD 版 ls が同梱される。利用できる場合は GNU coreutils の gls を使う。
+    ;; insert-directory-program、dired-use-ls-dired、dired-listing-switches は
+    ;; いずれも defcustom（dired.el）である。setopt を用いる。
+    (if (and (eq system-type 'darwin) (executable-find "gls"))
+        (progn
+          (setopt insert-directory-program "gls")
+          (setopt dired-use-ls-dired t)
+          (setopt dired-listing-switches "-aBhl --group-directories-first"))
+      (setopt dired-use-ls-dired nil)
+      (setopt dired-listing-switches "-alh")))
 
-    ;; ---------------------------------------------------------------------------
-    ;; Emacs 31: 編集系の組み込み機能
-    ;; ---------------------------------------------------------------------------
-    ;;
-    ;; Emacs 31 で hideshow はサードパーティの折りたたみパッケージと同等になった。
-    ;; `hs-cycle'（親 → 入れ子 → 全体）、`hs-toggle-all'、マージン／フリンジの
-    ;; インジケータ、省略記号の隣に隠れ行数を表示する機能が加わった。tree-sitter 系の
-    ;; モードも同リリースで `hs-minor-mode' に正式対応したため、*-ts-mode バッファでも
-    ;; 追加設定なしに折りたたみが機能する。
-    ;;
-    ;; 注意: `hs-special-modes-alist' は Emacs 31 で廃止された。また折りたたみコマンドは
-    ;; ポイントを含む最内ブロックに作用するようになった（31 以前の挙動に戻すには
-    ;; `hs-hide-block-behavior' を `after-cursor' に設定する）。
-    (leaf hideshow
-      :straight nil
-      :custom
-      ((hs-show-indicators               . t)
-       (hs-display-lines-hidden          . t)
-       (hs-indicator-maximum-buffer-size . 500000))
-      :hook ((prog-mode-hook . hs-minor-mode))
-      :config
-      (keymap-set hs-minor-mode-map "<backtab>" #'hs-cycle)
-      (keymap-set hs-minor-mode-map "C-c @ a"   #'hs-toggle-all))
+  (defun core-dired--ensure (_orig-fn &rest args)
+    "`dired-noselect' の初回呼び出し時に dirvish を有効化してから呼び直す。
 
-    ;; ElDoc: Emacs 31 はポイント位置の `help-echo' テキストプロパティを提示でき、また
-    ;; 引数を入力している最中に、呼び出し先関数の docstring の第 1 文を表示できる —
-    ;; バッファを離れずにドキュメントを参照できる。
-    (leaf eldoc
-      :straight nil
-      :custom
-      ((eldoc-help-at-pt                          . t)
-       (eldoc-echo-area-use-multiline-p           . nil)
-       (elisp-eldoc-funcall-with-docstring-length . 'short))
-      :config
-      (add-hook 'emacs-lisp-mode-hook #'core-editing--elisp-eldoc-setup))
+  `:around' アドバイスとして一度だけ動作する自己解除型のブートストラップである。
+  _ORIG-FN（このアドバイスを追加した時点の `dired-noselect'）を直接呼ぶのではなく、
+  自分自身のアドバイスを除去したうえで `core-dired--activate' を実行し、
+  シンボル `dired-noselect' を改めて `apply' で呼び直している。
 
-    (defun core-editing--elisp-eldoc-setup ()
-      "Use the Emacs 31 docstring-aware ElDoc function in Emacs Lisp buffers."
-      (when (fboundp 'elisp-eldoc-funcall-with-docstring)
-        (add-hook 'eldoc-documentation-functions
-                  #'elisp-eldoc-funcall-with-docstring nil t)))
+  理由: `dirvish-override-dired-mode' 自身も `dired-noselect' に advice を
+  追加する。_ORIG-FN はこのアドバイスを追加した時点のスナップショットであり、
+  それをそのまま呼ぶと、今まさに処理している最初の呼び出しだけ dirvish の
+  advice を素通りしてしまう（2 回目以降の呼び出しからしか dirvish の UI に
+  ならない）。シンボル経由で呼び直せば、その時点の最新の advice チェーンを
+  確実に通る。"
+    (advice-remove 'dired-noselect #'core-dired--ensure)
+    (core-dired--activate)
+    (apply #'dired-noselect args))
 
-    ;; Emacs 31 で導入されたスカラー値の編集オプション。Emacs 30 でもモジュールが
-    ;; ロード可能なままとなるようガードしている（削除安全性はバージョンにも適用される）。
-    (when (>= emacs-major-version 31)
-      ;; アクティブなリージョンが無い場合、C-w はエラーではなく直前の単語を kill する。
-      (setopt kill-region-dwim 'emacs-word)
-      ;; `delete-pair' が削除位置にマークを残す。
-      (setopt delete-pair-push-mark t)
-      ;; C-x C-x でリージョンを再ハイライトしない（マークは位置であって UI ではない）。
-      (setopt exchange-point-and-mark-highlight-region nil)
-      ;; show-paren はコメント／文字列内では、対応が取れない括弧だけを非強調にする
-      ;; （'all にすると常に非強調、nil で常に強調）。値はクォートしたシンボルであること。
-      (setopt show-paren-not-in-comments-or-strings 'on-mismatch)
-      ;; hl-line はバッファではなくウィンドウに追従する
-      ;; （global-hl-line-mode 自体の有効化は上の leaf hl-line を参照）。
-      (setopt global-hl-line-sticky-flag 'window)
-      ;; ウィンドウ: help / compilation バッファを quit すると kill され、バッファを kill
-      ;; すると `quit-restore-window' が直前のレイアウトを復元する。
-      (setopt quit-window-kill-buffer '(help-mode compilation-mode messages-buffer-mode))
-      (setopt kill-buffer-quit-windows t)
-      ;; `C-h l' は表示中も内容を更新する。
-      (setopt view-lossage-auto-refresh t)
-      ;; Emacs 31 は `find-function-setup-keys' を本物のマイナーモードに置き換えた。
-      (find-function-mode 1))
+  (advice-add 'dired-noselect :around #'core-dired--ensure)
 
-    (provide 'core-editing)
-    ;;; core/core-editing.el ends here
+  (provide 'core-dired)
+  ;;; core/core-dired.el ends here
 #+end_src
 
 *** core/core-switches.el
@@ -3644,7 +3730,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; 本ファイルの責務:
   ;; - ロード時に `custom-file' を `my:d:etc/custom.el' に解決する
   ;; - ディレクトリまたは custom.el が無ければ、空の custom.el ごと作成する
-  ;; - custom.el を静かにロードし、エラーは `ignore-errors' で抑制する
+  ;; - custom.el を静かにロードする。エラーは警告として報告し、起動は止めない
   ;; - 対話的にファイルを開く `my/custom-open' を提供する
   ;; - 未保存のカスタマイズを確認する `my/custom-dump-current' を提供する
   ;;; Code:
@@ -3673,7 +3759,10 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   (core-custom--ensure-file)
 
   (when (file-readable-p custom-file)
-    (ignore-errors (load custom-file nil 'nomessage)))
+    (condition-case err
+        (load custom-file nil 'nomessage)
+      (error (warn "[custom] failed to load %s: %s"
+                   custom-file (error-message-string err)))))
 
   ;;;###autoload
   (defun my/custom-open ()
@@ -4240,7 +4329,7 @@ dark へ切り替えるとき、テーマが定義していない（light の固
   (advice-add 'load-theme :after #'my/nano-reapply-after-theme)
 
   ;; dirvish は dired-noselect 初回呼び出し時まで require されない
-  ;; （core/core-editing.el の `core-editing--ensure-dirvish' 参照）。
+  ;; （core/core-dired.el の `core-dired--ensure' 参照）。
   ;; そのため起動時の `my/nano-apply-faces' 呼び出し時点では
   ;; `dirvish-hl-line' 等がまだ defface されておらず、`ui-nano--safe-face'
   ;; の facep チェックに弾かれて黙ってスキップされていた。dirvish は
@@ -7883,8 +7972,10 @@ LSP バックエンド非依存という設計を、補完の側から支える�
                               (project-root (eglot--project server)))))))
                     (when (and server-root
                                (string-prefix-p old-root server-root))
-                      (ignore-errors
-                        (eglot-shutdown server))))))))))))
+                      (condition-case err
+                          (eglot-shutdown server)
+                        (error (message "[completion-lsp] failed to shut down stale server: %s"
+                                        (error-message-string err))))))))))))))
 
   (defun completion-lsp-on-project-switch ()
     "Shutdown obsolete Eglot servers when switching projects."
@@ -12623,8 +12714,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   ;;
   ;; dirvish は編集バッファの nano-modeline パイプラインを通らない独自の
-  ;; mode-line（`dirvish-mode-line-format'、core/core-editing.el の
-  ;; `core-editing--activate-dirvish' で :right に `ime' を追加済み）を持つため、
+  ;; mode-line（`dirvish-mode-line-format'、core/core-dired.el の
+  ;; `core-dired--activate' で :right に `ime' を追加済み）を持つため、
   ;; ウィンドウ最大化時など見た目上の手がかりが少ない状況では dirvish バッファに
   ;; 入った瞬間 IME 状態が分からなくなっていた。
   ;;
@@ -12635,7 +12726,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; プロセス起動コストはゼロで、編集バッファ側と表示内容も常に一致する。
   ;;
   ;; `dirvish-define-mode-line' はマクロであり dirvish がロード済みである必要が
-  ;; あるが、my:modules の起動順は core-editing（dirvish 本体）→ ... →
+  ;; あるが、my:modules の起動順は core-dired（dirvish 本体）→ ... →
   ;; personal（このファイル）なので通常は既にロード済みである。
   ;;
   ;; 順序変更に対して堅牢にするため、念のため `with-eval-after-load' で包む。
@@ -12652,7 +12743,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; トップレベルフォームを即座に展開しようとする。
   ;;
   ;; personal/ac1965.el は init.el ステップ9で、modules.el（ステップ10、
-  ;; core-editing の `(leaf dirvish :straight t :require nil)' が dirvish を
+  ;; core-dired の `(leaf dirvish :straight t :require nil)' が dirvish を
   ;; 実際にインストールする箇所）より前にロードされるため、この時点では
   ;; dirvish はまだ load-path 上に存在しない。
   ;;
@@ -16605,6 +16696,16 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-13  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (core/core-custom.el): custom.el のロード失敗を ignore-errors で黙殺せず、warn で報告する。
+	* README.org (completion/completion-lsp.el) (completion-lsp--shutdown-stale-servers): 古い eglot サーバの
+	停止に失敗したとき、ignore-errors で黙殺せず message で報告する。
+	* README.org (core/core-editing.el): 419 行あった core-editing を 3 つに分割。自動保存を core-autosave.el、
+	dirvish 関連を core-dired.el へ移し、core-editing.el には編集系の設定だけを残す。処理内容は変えていない。
+	* README.org (core/core-autosave.el) (core-autosave--save-all-buffers, core-autosave--save-on-focus-out)
+	(core-autosave--init): 内部関数を core-editing-- から core-autosave-- の接頭辞に改名。
+	* README.org (core/core-dired.el) (core-dired--activate, core-dired--ensure): 内部関数を
+	core-editing--activate-dirvish / core-editing--ensure-dirvish から改名。
+	* README.org (modules.el): my:modules に core-autosave と core-dired を core-editing の直後へ追加。
 	* README.org (core/core-fixes.el): 有効な修正を持たない空のホットフィックス枠を削除し、my:modules から外す。
 	必要になった時点で、バージョン判定でガードして該当モジュールか新規モジュールに書く。
 	* README.org (core/core-session.el, core/core-session-private.el): ジョブ・スケジューラを削除。
