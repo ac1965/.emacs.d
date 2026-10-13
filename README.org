@@ -9378,17 +9378,32 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     "Non-nil while an ox-hugo export triggered by capture finalization is running.
   Prevents re-entrant export calls if ox-hugo causes a secondary finalize event.")
 
+  ;; ブログ記事の capture かどうかの判定は、ここの 1 か所にまとめる（2026-10-14）。
+  ;; 判定の基準は「保存先のバッファが `my:f:capture-blog-file' を訪問しているか」で、
+  ;; テンプレートのキー（"b" など）には依存しない。キーを変えても壊れない。
+  ;; 確定の前（`org-capture-before-finalize-hook'）は `org-capture-get' の :buffer、
+  ;; 確定の後（`org-capture-after-finalize-hook'）は `org-capture-last-stored-marker'
+  ;; から、保存先のバッファを得る。personal/personal-hugo.el も確定前の判定にこれを使う。
+  (defun orgx-auto-hugo-blog-buffer-p (buffer)
+    "Return non-nil when BUFFER visits the blog source file `my:f:capture-blog-file'.
+  An indirect buffer is resolved to its base buffer first."
+    (and (bound-and-true-p my:f:capture-blog-file)
+         (buffer-live-p buffer)
+         (let ((file (buffer-file-name (or (buffer-base-buffer buffer) buffer))))
+           (and file
+                (string= (file-truename file)
+                         (file-truename my:f:capture-blog-file))))))
+
+  (defun orgx-auto-hugo-blog-capture-p ()
+    "Return non-nil while a capture that targets the blog source file is in progress.
+  Call it from `org-capture-before-finalize-hook' or inside the capture buffer."
+    (orgx-auto-hugo-blog-buffer-p (org-capture-get :buffer)))
+
   (defun orgx-auto-hugo--blog-capture-p ()
     "Return non-nil when the just-finalized capture targeted the blog source file.
   Reads `org-capture-last-stored-marker' to determine the destination file."
-    (and (bound-and-true-p my:f:capture-blog-file)
-         (markerp org-capture-last-stored-marker)
-         (marker-buffer org-capture-last-stored-marker)
-         (buffer-file-name (marker-buffer org-capture-last-stored-marker))
-         (string= (file-truename
-                   (buffer-file-name
-                    (marker-buffer org-capture-last-stored-marker)))
-                  (file-truename my:f:capture-blog-file))))
+    (and (markerp org-capture-last-stored-marker)
+         (orgx-auto-hugo-blog-buffer-p (marker-buffer org-capture-last-stored-marker))))
 
   (defun orgx-auto-hugo--on-capture-finalize ()
     "Export all Hugo subtrees after a blog post capture entry is finalized.
@@ -13234,16 +13249,20 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
 
   (declare-function org-capture-get "org-capture"
                     (&optional prop-name local))
+  (declare-function orgx-auto-hugo-blog-capture-p "orgx-auto-hugo")
 
   (defun ac1965--org-capture-set-blog-tags ()
-    "Set tags for Blog capture template \"b\" before finalization.
+    "Set tags for a Blog capture before finalization.
+  A capture is a Blog capture when it targets `my:f:capture-blog-file'
+  (see `orgx-auto-hugo-blog-capture-p').
 
   When `C-g' is pressed during tag selection, catch the resulting
   `quit' locally and skip only the tag-setting operation.
 
   The function then returns normally, allowing `org-capture-finalize'
   and subsequent ox-hugo processing to continue."
-    (when (equal (org-capture-get :key) "b")
+    (when (and (fboundp 'orgx-auto-hugo-blog-capture-p)
+               (orgx-auto-hugo-blog-capture-p))
       (condition-case nil
           (ac1965/org-hugo-set-tags)
         (quit
@@ -17006,6 +17025,11 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (orgx/orgx-auto-hugo.el) (orgx-auto-hugo-blog-buffer-p, orgx-auto-hugo-blog-capture-p): ブログ記事の
+	capture かどうかの判定を 1 か所にまとめた。基準は「保存先のバッファが my:f:capture-blog-file を訪問しているか」。
+	orgx-auto-hugo--blog-capture-p（確定後）はこれを使うように書き換えた。
+	* README.org (personal/personal-hugo.el) (ac1965--org-capture-set-blog-tags): 確定前の判定を、テンプレートのキー "b" の
+	一致から orgx-auto-hugo-blog-capture-p に替えた。テンプレートのキーを変えても壊れない。
 	* README.org (ui/ui-theme.el) (ui-theme-nano-p, ui-theme--init): nano のテーマとパレットを、my:use-ui が
 	nano または doom-nano のときだけ適用するようにした。doom と none では、nano のロード、パレットの require、
 	nano-emacs / nano-theme の導入のいずれも行わず、既定のテーマのままにする。以前は my:use-ui を参照せず、
