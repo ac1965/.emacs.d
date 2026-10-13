@@ -16036,6 +16036,11 @@ CHECK_BYTECOMP_FILES="lisp/ui/ui-theme.el personal/ac1965.el" make check-bytecom
 
   ;;; Code:
 
+  ;; init を読み込まずに（CHECK_BYTECOMP_FILES を指定して単独で）実行しても動くよう、
+  ;; 使う関数と変数を持つライブラリを先に読み込む。
+  (require 'subr-x)
+  (require 'bytecomp)
+
   (defvar check-bytecomp--root
     (file-name-as-directory
      (expand-file-name (or (getenv "ROOT") default-directory)))
@@ -16057,18 +16062,33 @@ CHECK_BYTECOMP_FILES="lisp/ui/ui-theme.el personal/ac1965.el" make check-bytecom
               #'string<))))
 
   (defun check-bytecomp--compile (file)
-    "Byte-compile FILE and return its warnings as a list of strings."
+    "Byte-compile FILE and return its warnings as a list of strings.
+A file that fails to compile (an unbalanced parenthesis, an unreadable form)
+is reported as one more entry.  `byte-compile-file' returns nil in that case,
+and its message has no LINE:COLUMN prefix, so the warning pattern below
+does not match it."
     (with-current-buffer (get-buffer-create "*Compile-Log*")
       (let ((inhibit-read-only t))
         (erase-buffer)))
-    (ignore-errors (byte-compile-file file))
-    (with-current-buffer "*Compile-Log*"
-      (goto-char (point-min))
-      (let (result)
+    (let* ((signaled nil)
+           (ok (condition-case err
+                   (byte-compile-file file)
+                 (error (setq signaled (error-message-string err)) nil)))
+           (result nil))
+      (with-current-buffer "*Compile-Log*"
+        (goto-char (point-min))
         (while (re-search-forward
                 "^.+?:[0-9]+:[0-9]+: \\(?:Warning\\|Error\\): .*$" nil t)
           (push (match-string 0) result))
-        (nreverse result))))
+        (unless ok
+          (goto-char (point-min))
+          (push (format "%s: compile failed: %s" file
+                        (or signaled
+                            (and (re-search-forward "Error: \\(.*\\)$" nil t)
+                                 (match-string 1))
+                            "unknown error"))
+                result)))
+      (nreverse result)))
 
   (defun check-bytecomp-run ()
     "Byte-compile every target file and exit with status 1 if a warning appeared.
@@ -16915,6 +16935,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Appendix: check-bytecomp.el): subr-x と bytecomp を先に require し、init を読み込まずに単独で実行しても動くようにする。
+	* README.org (Appendix: check-bytecomp.el) (check-bytecomp--compile): コンパイルに失敗したファイル（括弧の不一致など、
+	読み込めない形式）を警告として数える。以前は ignore-errors で包み、メッセージにも行:桁の接頭辞が無く、
+	0 件 (ok) と報告していた。
 	* README.org (ui/ui-dirvish-keys.el) (ui-dirvish-keys--startup-init): 閉じ括弧が 1 つ多く、モジュールの読み込みが
 	失敗して dirvish の z / O / o / q が効かなくなっていたのを修正。
 	* README.org (ui/ui-theme.el, dev/dev-term.el): ui-nano-palette のロードに関するコメントを実態に合わせて訂正。
