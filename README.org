@@ -1977,7 +1977,9 @@ see the frame.  Runs once only (removes itself from
       ui-leader
       ui-hydra
       ui-which-key
+      ui-keyboard
       ui-keymap
+      ui-dirvish-keys
       ui-global-keys
 
       ;; -----------------------------------------------------------------------
@@ -5574,11 +5576,13 @@ Emacs 29 以降の API です。
   ;; 配置は意図的に安定かつ削除安全である:
   ;;
   ;; M-SPC  （旧: C-c SPC — 3 打鍵から 2 打鍵に削減）
+  ;; ├─ SPC  execute-extended-command （M-x。3 打鍵）
   ;; ├─ RET  consult-buffer      （最頻出: 合計 3 打鍵）
   ;; ├─ /    consult-line        （3 打鍵）
   ;; ├─ .    other-window        （3 打鍵）
   ;; ├─ f    find-file           （3 打鍵）
   ;; ├─ F    find-file-other-window
+  ;; ├─ O    find-file-other-frame
   ;; ├─ k    smart-kill-buffer   （3 打鍵）
   ;; ├─ u    revert-buffer       （3 打鍵）
   ;; ├─ z    text-scale-hydra
@@ -5903,35 +5907,24 @@ to reduce keystroke overhead for all leader-prefixed commands."
   ;;; ui-which-key.el ends here
 #+end_src
 
-*** ui/ui-keymap.el
+*** ui/ui-keyboard.el
 :PROPERTIES:
-:CUSTOM_ID: ui-keymap
-:header-args:emacs-lisp: :tangle lisp/ui/ui-keymap.el
+:CUSTOM_ID: ui-keyboard
+:header-args:emacs-lisp: :tangle lisp/ui/ui-keyboard.el
 :END:
 
-**** ui-keymap.el — Binding Strategy
+キーボード変換（ =C-h= を =DEL= に読み替える）のモジュールです。 =ui-keymap.el= から分離しました。
 
-キーバインドの設計では、「よく使うものほど短く」を徹底しています。方針は次の 3 つです。
+変数と関数の接頭辞は最初から =ui-keyboard-= でしたが、ファイルが =ui-keymap.el= だったため、
+モジュール名と接頭辞が食い違っていました（コーディング規則 7）。リーダーキーの割り当てとは
+無関係な話題なので、独立したモジュールにしています。処理内容は変えていません。
 
-| 方針 | 例 |
-|----------+-----|
-| リーダーを短縮する | =C-c SPC= → =M-SPC= （−1 打鍵） |
-| 高頻度コマンドを最上位に昇格する | =M-SPC RET= = consult-buffer（5→3 打鍵） |
-| より短い全体キーが存在する場合はバインドを削除する | =next-buffer= は =s-→= （2 打鍵）の方が短い |
+ =my:modules= では =ui-keymap= の直前に置いています。分離前は =ui-keymap= のロード時に
+ =ui-keyboard--apply= が実行されていたので、実行のタイミングを変えないためです。
 
-3 つ目が見落とされがちです。バインドは増やすほど良いわけではありません。既に短い経路がある
-コマンドをリーダー配下にも置くと、覚えることが増えるだけで、実際には使われません。
-
-なぜ =ui-keymap--bind= がシンボルを受け取るのか
-
-=ui-keymap--bind= は =map= をキーマップそのものではなく、シンボルとして受け取ります。そして
-=keymap-set= を呼ぶ前に、 =keymapp= で本当にキーマップかどうかを確認します。
-
-この一手間のおかげで、 =ui-leader.el= がまだロードされていない状況でも、エラーで停止せずに
-安全に動きます。削除安全性の考え方を、キーバインドの層でも守っている形です。
-#+NAME: ui-keymap
+#+NAME: ui-keyboard-el
 #+begin_src emacs-lisp
-  ;;; ui/ui-keymap.el --- リーダーおよびローカルリーダーのバインド -*- lexical-binding: t; -*-
+  ;;; ui/ui-keyboard.el --- キーボード変換（C-h → DEL） -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -5941,31 +5934,10 @@ to reduce keystroke overhead for all leader-prefixed commands."
   ;;
   ;;; Commentary:
   ;;
-  ;; リーダーキーのバインドと、キーボード変換のヘルパー。
-  ;;
-  ;; 本モジュールが定義するもの:
-  ;;
-  ;; - グローバルなリーダーのバインド
-  ;; - メジャーモード向けのローカルリーダーのバインド
-  ;; - 任意のキーボード変換（C-h → DEL）
-  ;;
-  ;; リーダーキーの基盤そのものは `ui-leader.el' で定義される。
-  ;; 本モジュールは、それらのマップにコマンドを割り当てるだけである。
-
+  ;; 任意のキーボード変換。`ui-keyboard-map-c-h-to-del' が非 nil のとき、
+  ;; `key-translation-map' で C-h を DEL に読み替える。オプションを変更すると
+  ;; 変数ウォッチャーが再適用する。ui-keymap.el から分離した（2026-10-13）。
   ;;; Code:
-
-  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
-  (declare-function dired-find-file-other-window "dired")
-  (declare-function dired-get-filename "dired")
-  (declare-function dirvish-quit "dirvish")
-  (declare-function flymake-goto-next-error "flymake")
-  (declare-function flymake-goto-prev-error "flymake")
-  (declare-function org-deadline "org")
-  (declare-function org-schedule "org")
-  (declare-function org-todo "org")
-
-  (eval-when-compile (require 'subr-x))
-  (require 'ui-leader nil t)
 
   (defgroup ui-keyboard nil
     "Keyboard translation helpers."
@@ -6006,6 +5978,75 @@ to reduce keystroke overhead for all leader-prefixed commands."
     (ui-keyboard--apply))
 
   (add-variable-watcher 'ui-keyboard-map-c-h-to-del #'ui-keyboard--watcher)
+
+  (provide 'ui-keyboard)
+  ;;; ui/ui-keyboard.el ends here
+#+end_src
+
+*** ui/ui-keymap.el
+:PROPERTIES:
+:CUSTOM_ID: ui-keymap
+:header-args:emacs-lisp: :tangle lisp/ui/ui-keymap.el
+:END:
+
+**** ui-keymap.el — Binding Strategy
+
+キーバインドの設計では、「よく使うものほど短く」を徹底しています。方針は次の 3 つです。
+
+| 方針 | 例 |
+|----------+-----|
+| リーダーを短縮する | =C-c SPC= → =M-SPC= （−1 打鍵） |
+| 高頻度コマンドを最上位に昇格する | =M-SPC RET= = consult-buffer（5→3 打鍵） |
+| より短い全体キーが存在する場合はバインドを削除する | =next-buffer= は =s-→= （2 打鍵）の方が短い |
+
+3 つ目が見落とされがちです。バインドは増やすほど良いわけではありません。既に短い経路がある
+コマンドをリーダー配下にも置くと、覚えることが増えるだけで、実際には使われません。
+
+なぜ =ui-keymap--bind= がシンボルを受け取るのか
+
+=ui-keymap--bind= は =map= をキーマップそのものではなく、シンボルとして受け取ります。そして
+=keymap-set= を呼ぶ前に、 =keymapp= で本当にキーマップかどうかを確認します。
+
+この一手間のおかげで、 =ui-leader.el= がまだロードされていない状況でも、エラーで停止せずに
+安全に動きます。削除安全性の考え方を、キーバインドの層でも守っている形です。
+#+NAME: ui-keymap
+#+begin_src emacs-lisp
+  ;;; ui/ui-keymap.el --- リーダーおよびローカルリーダーのバインド -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; リーダーキーへのコマンド割り当て。
+  ;;
+  ;; 本モジュールが定義するもの:
+  ;;
+  ;; - グローバルなリーダーのバインド
+  ;; - メジャーモード向けのローカルリーダーのバインド
+  ;;
+  ;; dirvish 専用のキー割り当ては ui-dirvish-keys.el へ分離した（2026-10-13）。
+  ;;
+  ;; キーボード変換（C-h → DEL）は ui-keyboard.el へ分離した（2026-10-13）。
+  ;; 接頭辞が `ui-keyboard-' で、リーダーとは無関係なためである。
+  ;;
+  ;; リーダーキーの基盤そのものは `ui-leader.el' で定義される。
+  ;; 本モジュールは、それらのマップにコマンドを割り当てるだけである。
+
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function flymake-goto-next-error "flymake")
+  (declare-function flymake-goto-prev-error "flymake")
+  (declare-function org-deadline "org")
+  (declare-function org-schedule "org")
+  (declare-function org-todo "org")
+
+  (eval-when-compile (require 'subr-x))
+  (require 'ui-leader nil t)
 
   (defun ui-keymap--bind (map key cmd)
     "Bind KEY to CMD inside MAP when MAP exists."
@@ -6135,7 +6176,76 @@ Redundant paths via global keys are removed."
     ;; ── q: 終了 / セッション ───────────────────────────────────────────────────
     (ui-keymap--bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
 
-  (defun ui-keymap--dirvish-open-read-only ()
+  (defun ui-keymap--local-leader-binds ()
+    "Install local leader bindings for specific major modes.
+Org task commands (todo/schedule/deadline) are now bound in the global
+o-map (M-SPC o t/s/d) and are accessible from any buffer.  The former
+local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
+    (with-eval-after-load 'org
+      (when (boundp 'org-mode-map)
+        ;; ローカルリーダーのエイリアス: <leader> m t/s/d はグローバルの
+        ;; <leader> o t/s/d と同義。ハードコードの "M-SPC" ではなく
+        ;; ui-leader-key を直接参照することで、personal/device-*.el が
+        ;; リーダーキーを変更した環境（例: WSL の C-c SPC）にも追従する。
+        (keymap-set org-mode-map (concat ui-leader-key " m t") #'org-todo)
+        (keymap-set org-mode-map (concat ui-leader-key " m s") #'org-schedule)
+        (keymap-set org-mode-map (concat ui-leader-key " m d") #'org-deadline))))
+
+  (defun ui-keymap--startup-init ()
+    "Initialize UI key bindings at startup."
+    ;; after-init-hook の順序に依存せず、先にマップが定義されていることを保証する。
+    (ui-leader--define-maps)
+    (ui-keymap--leader-binds)
+    (ui-keymap--local-leader-binds))
+
+  (add-hook 'after-init-hook #'ui-keymap--startup-init)
+
+  (provide 'ui-keymap)
+
+  ;;; ui/ui-keymap.el ends here
+#+end_src
+
+*** ui/ui-dirvish-keys.el
+:PROPERTIES:
+:CUSTOM_ID: ui-dirvish-keys
+:header-args:emacs-lisp: :tangle lisp/ui/ui-dirvish-keys.el
+:END:
+
+dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から分離しました。
+
+キーの割り当ては ui 層の仕事なので、dirvish の本体の設定（ =core-dired.el= ）ではなく ui 層に置いています。
+=ui-keymap.el= の約 70 行を占めていた、リーダーキーとは関係のない話題です。 =o= 、 =O= 、 =z= 、 =q= などの
+割り当てと、view-mode バッファを右側のサイドウィンドウに出す設定を持ちます。
+
+関数名は =ui-keymap--dirvish-*= から =ui-dirvish-keys--*= に改名しました。登録のタイミングは変えていません。
+分離前と同じく、 =after-init-hook= で =with-eval-after-load 'dirvish= を登録します。
+
+#+NAME: ui-dirvish-keys-el
+#+begin_src emacs-lisp
+  ;;; ui/ui-dirvish-keys.el --- dirvish バッファのキー割り当て -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; dirvish バッファ内のキー割り当て。ui-keymap.el から分離した（2026-10-13）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `dirvish-mode-map' に TAB、i、o、O、z、q を割り当てる
+  ;; - dirvish 一覧を保ったまま別ウィンドウに RO で開くコマンドを 2 つ定義する
+  ;; - view-mode のバッファを、右側の専用サイドウィンドウに固定する
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function dired-find-file-other-window "dired")
+  (declare-function dired-get-filename "dired")
+  (declare-function dirvish-quit "dirvish")
+
+  (defun ui-dirvish-keys--open-read-only ()
     "Open file-at-point in another window as read-only.
   Combines `dired-find-file-other-window' with `read-only-mode'
   so the dirvish session remains intact for continued browsing."
@@ -6145,7 +6255,7 @@ Redundant paths via global keys are removed."
 
   ;; `z' — dirvish 一覧を保持したまま file-at-point を別ウィンドウに RO 表示する。
   ;;
-  ;; 上の `ui-keymap--dirvish-open-read-only'（"O" にバインド）は
+  ;; 上の `ui-dirvish-keys--open-read-only'（"O" にバインド）は
   ;; `dired-find-file-other-window' + `read-only-mode' の組み合わせだが、これは
   ;; 「編集可能なバッファを開いてから明示的に read-only にする」経路であり、
   ;; view-mode 特有の挙動（"q" で閉じてウィンドウ配置ごと元に戻る、末尾に
@@ -6155,7 +6265,7 @@ Redundant paths via global keys are removed."
   ;; 確認して q で戻る」用途に向いている。dired 標準の "v"（`dired-view-file'）は
   ;; カレントウィンドウを置き換えてしまい、dirvish の一覧が隠れてしまうため、
   ;; その代替として "z" に別ウィンドウ版を割り当てる。
-  (defun ui-keymap--dirvish-view-file-other-window ()
+  (defun ui-dirvish-keys--view-file-other-window ()
     "View file-at-point read-only in another window via `view-file-other-window'.
   Unlike `dired-view-file' (bound to the dired-native \"v\"), this keeps the
   current dirvish listing window intact instead of replacing it, and opens
@@ -6182,45 +6292,24 @@ Redundant paths via global keys are removed."
                  (window-width . 0.5)
                  (dedicated . t)))
 
-  (defun ui-keymap--local-leader-binds ()
-    "Install local leader bindings for specific major modes.
-Org task commands (todo/schedule/deadline) are now bound in the global
-o-map (M-SPC o t/s/d) and are accessible from any buffer.  The former
-local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
+  (defun ui-dirvish-keys--startup-init ()
+    "Register the dirvish key bindings once dirvish is loaded."
     (with-eval-after-load 'dirvish
       (when (boundp 'dirvish-mode-map)
         (keymap-set dirvish-mode-map "TAB" #'dirvish-subtree-toggle)
         (keymap-set dirvish-mode-map "i"   #'dirvish-subtree-toggle)
         (keymap-set dirvish-mode-map "o"   #'dired-find-file-other-window)
-        (keymap-set dirvish-mode-map "O"   #'ui-keymap--dirvish-open-read-only)
+        (keymap-set dirvish-mode-map "O"   #'ui-dirvish-keys--open-read-only)
         ;; "z" は dired 標準では `dired-do-compress'（マークしたファイルの圧縮）に
         ;; 割り当てられている。dirvish セッションでは頻度が低いと判断し、
         ;; view-mode での別ウィンドウ RO 表示に明示的に上書きする。
-        (keymap-set dirvish-mode-map "z"   #'ui-keymap--dirvish-view-file-other-window)
-        (keymap-set dirvish-mode-map "q"   #'dirvish-quit)))
+        (keymap-set dirvish-mode-map "z"   #'ui-dirvish-keys--view-file-other-window)
+        (keymap-set dirvish-mode-map "q"   #'dirvish-quit)))))
 
-    (with-eval-after-load 'org
-      (when (boundp 'org-mode-map)
-        ;; ローカルリーダーのエイリアス: <leader> m t/s/d はグローバルの
-        ;; <leader> o t/s/d と同義。ハードコードの "M-SPC" ではなく
-        ;; ui-leader-key を直接参照することで、personal/device-*.el が
-        ;; リーダーキーを変更した環境（例: WSL の C-c SPC）にも追従する。
-        (keymap-set org-mode-map (concat ui-leader-key " m t") #'org-todo)
-        (keymap-set org-mode-map (concat ui-leader-key " m s") #'org-schedule)
-        (keymap-set org-mode-map (concat ui-leader-key " m d") #'org-deadline))))
+  (add-hook 'after-init-hook #'ui-dirvish-keys--startup-init)
 
-  (defun ui-keymap--startup-init ()
-    "Initialize UI key bindings at startup."
-    ;; after-init-hook の順序に依存せず、先にマップが定義されていることを保証する。
-    (ui-leader--define-maps)
-    (ui-keymap--leader-binds)
-    (ui-keymap--local-leader-binds))
-
-  (add-hook 'after-init-hook #'ui-keymap--startup-init)
-
-  (provide 'ui-keymap)
-
-  ;;; ui/ui-keymap.el ends here
+  (provide 'ui-dirvish-keys)
+  ;;; ui/ui-dirvish-keys.el ends here
 #+end_src
 
 *** ui/ui-global-keys.el
@@ -6252,64 +6341,62 @@ local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
   ;;   s-wheel-up/down）、文字サイズ（C-+/C--）をバインドする
   ;; - すべての登録を `ui-global-keys--startup-init' により
   ;;   `after-init-hook' に遅延する
+  ;;
+  ;; 方針:
+  ;; グローバルキーは意図的に最小限にしている。接頭辞なしの単一和音の恩恵が大きい
+  ;; 高頻度の操作と、ty07.net の備忘録（Emacsのショートカットキー）にある
+  ;; フレーム／ウィンドウ／編集の操作に限る。
+  ;;
+  ;; バインド一覧:
+  ;;   C-s     → consult-line       （バッファ内検索。isearch の代わり）
+  ;;   C-.     → other-window       （ウィンドウ移動。2 打鍵）
+  ;;   s-z     → undo-redo          （macOS 流の undo/redo。C-? の代わり）
+  ;;   M-x     → execute-extended-command
+  ;;   s-←/→   → previous/next-buffer （macOS の Super キー。2 打鍵）
+  ;;   s-↑/↓   → beginning/end-of-buffer
+  ;;   <f1>    → help-command
+  ;;   C-c c   → org-capture        （Org の標準。全バッファで有効）
+  ;;   s-o     → find-file-other-frame
+  ;;   s-m     → make-frame-command
+  ;;   s-w     → delete-frame
+  ;;   s-.     → window-toggle-split-direction （fboundp で防御。Emacs 27 以降）
+  ;;   s-j     → find-file-other-window
+  ;;   C-c o   → find-file          （再導入。単発のファイル操作は M-SPC より直接和音が速い）
+  ;;   C-c v   → find-file-read-only
+  ;;   C-c k   → kill-buffer-and-window （M-SPC k の my/smart-kill-buffer とは別物。
+  ;;                                      あちらは保存確認してバッファだけを kill、
+  ;;                                      こちらはウィンドウも閉じる）
+  ;;   C-c r   → query-replace      （M-SPC s r の consult-ripgrep はプロジェクト横断検索で、
+  ;;                                 こちらはバッファ内の文字列置換。実際には重ならない）
+  ;;   M-g g   → consult-goto-line
+  ;;   C-c ;   → comment-region
+  ;;   C-c :   → uncomment-region
+  ;;   C-c M-a → align-regexp
+  ;;   C-s-↑   → scroll-down-command      （同じウィンドウで上の文章を見る）
+  ;;   C-s-↓   → scroll-up-command        （同じウィンドウで下の文章を見る）
+  ;;   s-<wheel-up>   → scroll-other-window-down
+  ;;   s-<wheel-down> → scroll-other-window
+  ;;   C-+     → text-scale-increase
+  ;;   C--     → text-scale-decrease
+  ;;
+  ;; 経緯:
+  ;; - 以前の C-c b は削除したまま。M-SPC 配下（2〜3 打鍵）から届く。
+  ;; - C-c o/v/k/r は 2026-07 に、ty07.net の備忘録と突き合わせたうえで意図的に再導入した。
+  ;;   o と v は、find-file と find-file-read-only に M-SPC 側の割り当てが元々無く、重複しない。
+  ;;   k は別のコマンド（kill-buffer-and-window）で、リーダーの my/smart-kill-buffer とは違う。
+  ;;   r も別のコマンド（query-replace）で、リーダーの consult-ripgrep とは違う。
+  ;;   いずれも、C-c b が避けた「M-SPC 側と重複する」問題を再び作らない。
+  ;; - C-? の undo-redo を s-z に替えた。macOS 全体の Cmd+Z に合わせ、他のアプリとの
+  ;;   筋肉記憶の衝突を減らすためである。C-z も候補だったが（未割り当て。core の init で
+  ;;   `(keymap-global-unset "C-z")' している）、Emacs 内の統一より、Emacs 以外のアプリとの
+  ;;   一貫性を優先して s-z を選んだ。
+  ;; - s-S-z（redo 専用）は意図的にバインドしない。`undo-redo' は、他のコマンドを一度
+  ;;   実行すると向きが自動で反転するので、2 つ目のバインドは実益なく keymap を増やすだけである。
   ;;; Code:
 
   (defun ui-global-keys--startup-init ()
     "Register global key bindings after all modules are loaded.
-Global keys are intentionally minimal: only the highest-frequency primitives
-that benefit from single-chord access (no prefix), plus a curated set of
-frame/window/editing conveniences documented on the ty07.net cheat-sheet
-post (備忘録: Emacsのショートカットキー).
-  C-s     → consult-line       (search within buffer, replaces isearch)
-  C-.     → other-window       (window navigation, 2 keys)
-  s-z     → undo-redo          (macOS-convention undo/redo; replaced C-?)
-  M-x     → execute-extended-command
-  s-←/→   → previous/next-buffer (macOS Super key, 2 keys)
-  s-↑/↓   → beginning/end-of-buffer
-  <f1>    → help-command
-  C-c c   → org-capture        (Org community standard; global)
-  s-o     → find-file-other-frame
-  s-m     → make-frame-command
-  s-w     → delete-frame
-  s-.     → window-toggle-split-direction (guarded by fboundp; Emacs 27+)
-  s-j     → find-file-other-window
-  C-c o   → find-file          (re-added: direct chord faster than M-SPC for
-                                 the single highest-frequency file action)
-  C-c v   → find-file-read-only
-  C-c k   → kill-buffer-and-window (unlike M-SPC k = my/smart-kill-buffer;
-                                 the latter save-confirms then kills the buffer
-                                 only, this one also closes the window)
-  C-c r   → query-replace      (distinct from M-SPC s r = consult-ripgrep;
-                                 this is in-buffer string replacement, not
-                                 a project search — no overlap in practice)
-  M-g g   → consult-goto-line
-  C-c ;   → comment-region
-  C-c :   → uncomment-region
-  C-c M-a → align-regexp
-  C-s-↑   → scroll-down-command      (reveal text above point, same window)
-  C-s-↓   → scroll-up-command        (reveal text below point, same window)
-  s-<wheel-up>   → scroll-other-window-down
-  s-<wheel-down> → scroll-other-window
-  C-+     → text-scale-increase
-  C--     → text-scale-decrease
-Former C-c b binding remains removed: reachable via M-SPC (2-3 keys).
-C-c o/v/k/r were reintroduced deliberately (2026-07) after cross-checking
-against the ty07.net memo: o/v duplicate no leader binding (find-file and
-find-file-read-only were never given M-SPC equivalents), k is a distinct
-command (kill-buffer-and-window vs. leader's save-confirming
-my/smart-kill-buffer), and r is a genuinely different command
-(query-replace) from the already-leader-bound consult-ripgrep, so none of
-the four re-create the redundancy that C-c b avoided by living under
-M-SPC alone.
-C-? (undo-redo) replaced with s-z: aligns Emacs undo/redo with the
-macOS system-wide Cmd+Z convention shared by every other application on the
-machine, reducing cross-application muscle-memory conflict.  C-z was
-considered as an alternative (already unbound; see core init
-`(keymap-global-unset \"C-z\")') but s-z was selected to prioritize
-consistency with non-Emacs apps over in-Emacs Control-chord uniformity.
-s-S-z (redo-specific) is intentionally not bound: `undo-redo' already
-auto-reverses direction once any other command is issued, so a second
-binding would add keymap surface without practical benefit."
+The binding list and the rationale are in the Commentary of this file."
     ;; 基本ナビゲーション — 単一和音
     ;; global-set-key + kbd → keymap-global-set（Emacs 29 以降の API。規則: keymap-set を優先）
     (keymap-global-set "C-."       #'other-window)
@@ -16817,6 +16904,15 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-13  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (ui/ui-dirvish-keys.el) (ui-dirvish-keys--open-read-only, ui-dirvish-keys--view-file-other-window)
+	(ui-dirvish-keys--startup-init): ui-keymap.el から dirvish 専用のキー割り当て、RO 表示コマンド 2 つ、
+	view-mode のサイドウィンドウ設定を分離。関数名を ui-keymap--dirvish-* から改名。登録のタイミングは変えていない。
+	* README.org (ui/ui-keyboard.el): ui-keymap.el からキーボード変換（C-h → DEL）を分離。接頭辞 ui-keyboard- と
+	モジュール名の食い違いを解消。my:modules では ui-keymap の直前に置く。処理内容は変えていない。
+	* README.org (ui/ui-global-keys.el) (ui-global-keys--startup-init): 約 70 行あった docstring を短くし、
+	バインド一覧と経緯を Commentary に移した。
+	* README.org (ui/ui-leader.el): Commentary の木構造に、実際には割り当て済みの SPC（M-x）と
+	O（find-file-other-frame）を追記。
 	* README.org (personal/personal-ime.el): personal/ac1965.el から IME 表示（sis のキャッシュ、dirvish 用の
 	mode-line セグメント、ui-nano-modeline-ime-function への受け渡し）を分離。名前は据え置き。
 	ac1965.el は元の位置で (require 'personal-ime) する。
