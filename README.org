@@ -8223,8 +8223,8 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;; 下の defvar は何もしない（defvar は既存の束縛を上書きしない）ため、personal の
   ;; パスがセッション全体で保たれる。派生変数（my:d:org-journal など）は orgx-core の
   ;; ロード時に評価される（#41）ため、これらも personal のベースパスを正しく受け取る。
-  ;; ただし personal 側が個別に設定している場合（personal/ac1965.el が journal と roam に
-  ;; 対して行っているように）は、その値が使われる。
+  ;; ただし personal 側が派生変数を個別に設定している場合は、その値が使われる
+  ;; （現在の personal/ac1965.el は my:d:org だけを設定し、journal と roam は導出に任せている）。
   ;; この順序は意図的なものであり、維持しなければならない。
   ;;
   (defvar my:d:org (expand-file-name "org" my:d:var))
@@ -12766,8 +12766,10 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; 本ファイルの責務:
   ;; - このマシンの `user-full-name' と `user-mail-address' を設定する
   ;; - auth・暗号化モジュール向けに `GPG_KEY_ID' を export する
-  ;; - `my:d:org*' のパスを、macOS では /Users/ac1965/Documents/org/ に、
-  ;;   WSL では /home/ac1965/org/ に上書きする（`my:wsl-p' で分岐）
+  ;; - `my:d:org' を、macOS では /Users/ac1965/Documents/org/ に、
+  ;;   WSL では /home/ac1965/org/ に上書きする（`my:wsl-p' で分岐）。journal と roam などの
+  ;;   派生変数は orgx-core.el が `my:d:org' から導く
+  ;; - `my:f:capture-blog-file' を ~/Projects/blog/mysite/all-posts.org に上書きする
   ;; - フォントを設定する: JetBrains Mono（等幅）、Noto Sans JP（可変）、サイズ 18
   ;; - `my:use-ui 'nano' と `my:use-lsp 'eglot' を有効化する
   ;; - Hugo ブログ関連（タグ設定、capture）は personal-hugo.el へ分離した
@@ -12802,8 +12804,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; Org ディレクトリの上書き
   ;; ---------------------------------------------------------------------------
   ;;
-  ;; my:d:org* は orgx-core.el（モジュール #41）で定義される defvar の
-  ;; パス変数である。
+  ;; my:d:org と my:f:capture-blog-file は orgx-core.el（モジュール #41）で定義される
+  ;; defvar のパス変数である。
   ;;
   ;; 本ファイルは init.el のステップ 9 で、modules.el が走るより前に
   ;; ロードされるため、これらの setq が評価される時点では orgx-core は
@@ -12815,35 +12817,28 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; これらは defcustom ではなく defvar なので、setq が正しい。
   ;; 全体の順序については orgx-core.el の「上書きの契約」コメントを参照。
   ;;
-  ;; my:f:capture-blog-file もここで上書きする。
+  ;; 設定するのは my:d:org だけである（2026-10-14）。journal、org-roam、pictures、biblio は
+  ;; orgx-core.el が my:d:org から導く。以前はここで journal と roam を OS ごとに
+  ;; 書いていたが、導出した場所と同じ（末尾のスラッシュの有無だけが違う）ので削除した。
+  ;;
+  ;; マシン（ログイン）単位ではなく OS 単位で値を変える必要があるため、
+  ;; `my:wsl-p'（personal/user.el で定義済み。本ファイルは user.el の後に
+  ;; ロードされるため参照可能）で分岐する。分岐が要るのは my:d:org だけである。
+  ;; WSL 側は macOS の /Users/ac1965/ に対応するホームである /home/ac1965/ を使う。
+  ;;
+  ;; my:f:capture-blog-file も上書きする。
   ;; 既定値（"blog.org"）は存在せず、"* blog" 見出しも含まない。
   ;; 実際の ox-hugo 単一ファイル・ソースは all-posts.org であり、
   ;; (file+olp ... "blog") のキャプチャ・ターゲットが要求する
   ;; "* blog" トップレベル見出しを持っている。
-  ;;
-  ;; マシン（ログイン）単位ではなく OS 単位で値を変える必要があるため、
-  ;; `my:wsl-p'（personal/user.el で定義済み。本ファイルは user.el の後に
-  ;; ロードされるため参照可能）で分岐する。
-  ;;
-  ;; WSL 側は macOS の /Users/ac1965/ に対応するホームである
-  ;; /home/ac1965/ を使い、org ルート配下のサブディレクトリ構成
-  ;; （journal/、org-roam/）は macOS 側とそろえてミラーする。
-  ;;
-  ;; my:f:capture-blog-file も同じ規則でホームパスだけを置き換えているが、
-  ;; WSL 側に blog プロジェクト（~/Projects/blog/mysite/）を未 clone の場合は
-  ;; 個別に上書きするか、orgx-core.el 側の
-  ;; (bound-and-true-p my:f:capture-blog-file) ガードに委ねて
-  ;; 未設定のままにしてよい。
+  ;; パスはどの OS でもホームからの相対（~/Projects/blog/mysite/）なので、OS では分岐しない。
+  ;; WSL 側に blog プロジェクトを未 clone の場合は個別に上書きするか、orgx-core.el 側の
+  ;; (bound-and-true-p my:f:capture-blog-file) ガードに委ねて未設定のままにしてよい。
 
-  (if (my:wsl-p)
-      (setq my:d:org              "/home/ac1965/org/"
-            my:d:org-journal      "/home/ac1965/org/journal/"
-            my:d:org-roam         "/home/ac1965/org/org-roam/"
-            my:f:capture-blog-file "/home/ac1965/Projects/blog/mysite/all-posts.org")
-    (setq my:d:org              "/Users/ac1965/Documents/org/"
-          my:d:org-journal      "/Users/ac1965/Documents/org/journal/"
-          my:d:org-roam         "/Users/ac1965/Documents/org/org-roam/"
-          my:f:capture-blog-file "/Users/ac1965/Projects/blog/mysite/all-posts.org"))
+  (setq my:d:org (if (my:wsl-p)
+                     "/home/ac1965/org/"
+                   "/Users/ac1965/Documents/org/")
+        my:f:capture-blog-file (expand-file-name "Projects/blog/mysite/all-posts.org" "~"))
 
 
   ;; ---------------------------------------------------------------------------
@@ -17048,7 +17043,7 @@ digraph personal_override_contract {
   edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
 
   s1 [label="init.el §9a — personal/user.el\nmy:modules-extraにsetqで追記"];
-  s2 [label="init.el §9b — personal/ac1965.el\n(if (my:wsl-p) ...) でOS分岐しつつ\nmy:d:org*にsetqで先に値を設定"];
+  s2 [label="init.el §9b — personal/ac1965.el\n(if (my:wsl-p) ...) でOS分岐しつつ\nmy:d:org にsetqで先に値を設定\n(journal / roam は導出に任せる)"];
   s3 [label="init.el §10 — (require 'modules)\nmodules.elが全モジュールをロード開始"];
   s4 [label="orgx-core.el: (defvar my:d:org …)\n既に束縛済み→この defvar は無視される" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
   s5 [label="結果\nmy:d:org はac1965.elが設定した値のまま\n(macOS/WSLで異なる値)" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
@@ -17071,6 +17066,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (personal/ac1965.el): Org ディレクトリの上書きを整理。my:d:org-journal と my:d:org-roam の設定を
+	削除（orgx-core.el が my:d:org から導く場所と同じ。末尾のスラッシュの有無だけが違う）。my:f:capture-blog-file は
+	OS で分岐せず、~/Projects/blog/mysite/all-posts.org にした。OS で分岐するのは my:d:org だけ。
+	* README.org (orgx/orgx-core.el, Appendix: 13_personal_override_contract.dot): 上の変更に合わせてコメントと図を更新。
 	* README.org (orgx/orgx-hugo.el): 新設。orgx-export.el から ox-hugo の導入と 2 つのアドバイス
 	（orgx-export--ensure-ox-hugo-before-dispatch、orgx-export--limit-agenda-files-during-hugo-export）を移し、
 	orgx-hugo--ensure-ox-hugo-before-dispatch、orgx-hugo--limit-agenda-files-during-export に改名。
