@@ -579,10 +579,6 @@ autoload との違いは、遅延しない点にあります。ローダは =(ap
 モジュールが =ui/= や =orgx/= の feature をロードリストに注入することは、層の原則に真っ向から
 反します。
 
-なお =core-custom-ui-extras= だけは、どちらのリストにも現れないのに tangle されます。これは
-何もしない互換シムで、以前の tangle で生成された古い =.el= が =void-feature= を起こさない
-ようにするためだけに残されています。削除条件は当該セクションを参照してください。
-
 ** Package Management
 :PROPERTIES:
 :CUSTOM_ID: packages
@@ -2679,7 +2675,7 @@ external modules → core-session (public API)
   ;; - ジョブレジストリのハッシュテーブルを所有する
   ;; - アイドルタイマーと定期タイマーを管理する
   ;; - ジョブのメタデータを正規化する
-  ;; - 登録されたジョブを実行する
+  ;; - 登録されたジョブを実行する（ジョブのエラーは `message' で報告し、他のジョブは止めない）
   ;;
   ;; 注意:
   ;; 本モジュールは core-session.el の内部詳細である。
@@ -2729,13 +2725,20 @@ external modules → core-session (public API)
        core-session--jobs-table)
       (nreverse out)))
 
+  (defun core-session--call-job (meta)
+    "Call the function of job META, reporting any error with `message'.
+The error is not propagated, so one failing job cannot stop the others."
+    (condition-case err
+        (funcall (plist-get meta :fn))
+      (error
+       (message "[core-session] job %s failed: %s"
+                (plist-get meta :name) (error-message-string err)))))
+
   (defun core-session--run-job (name)
     "Execute job NAME."
     (let ((meta (gethash name core-session--jobs-table)))
       (when meta
-        (condition-case _err
-            (funcall (plist-get meta :fn))
-          (error nil)))))
+        (core-session--call-job meta))))
 
   (defun core-session--run-all ()
     "Run all enabled jobs.
@@ -2743,9 +2746,7 @@ Iterates the hash table directly with `maphash' to avoid allocating
 an intermediate list on every timer tick."
     (maphash (lambda (_name meta)
                (when (plist-get meta :enabled)
-                 (condition-case _err
-                     (funcall (plist-get meta :fn))
-                   (error nil))))
+                 (core-session--call-job meta)))
              core-session--jobs-table))
 
   (defun core-session--start ()
@@ -4019,53 +4020,6 @@ Runs via `after-init-hook' so all modules are loaded before activation."
 
   (provide 'core-custom)
   ;;; core/core-custom.el ends here
-#+end_src
-
-*** core/core-custom-ui-extras.el
-:PROPERTIES:
-:CUSTOM_ID: core-custom-ui-extras
-:header-args:emacs-lisp: :tangle lisp/core/core-custom-ui-extras.el
-:END:
-
-*廃止予定（2026-03）:* 本モジュールは何もしない互換シムです。
-
-core モジュールが上位層（ =ui= 、 =orgx= ）のシンボルを =my:modules-extra= に注入することを禁じる
-規則を適用したとき、機能コードはすべて =personal/user.el= へ移しました。
-
-では、なぜファイルが残っているのか。以前の tangle で生成された =.el= の中に
-=(require 'core-custom-ui-extras nil t)= が残っている可能性があり、そのままだと =void-feature=
-エラーになるためです。
-
-=make reload= （この =README.org= から再 tangle する）を実行すれば、生成物からその呼び出しは
-消え、本ファイルは到達不能になります。全ユーザーが =make reload= を済ませた時点で削除する予定
-です。
-
-#+begin_src emacs-lisp
-  ;;; core/core-custom-ui-extras.el --- 廃止予定: personal/user.el へ移行済み -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; 移行メモ（2026-03）:
-  ;; ui-visual-aids、orgx-typography、ui-macos を my:modules-extra に追加する処理は
-  ;; personal/user.el へ移動した。
-  ;;
-  ;; 理由: core/ のモジュールから上位層（ui、orgx）のモジュール名を注入することは、
-  ;; 「core は ui に依存してはならない」という原則に反する。これらは個人の表示上の
-  ;; 選択であり、personal 層が正しい置き場所である。
-  ;;
-  ;; 本ファイルは意図的に空であり、移行期間中、既存の tangle 出力に残る
-  ;; (require 'core-custom-ui-extras) の呼び出しが void-feature エラーを起こさないよう、
-  ;; 何もしないプレースホルダとして保持されている。
-  ;;; Code:
-
-  (provide 'core-custom-ui-extras)
-  ;;; core/core-custom-ui-extras.el ends here
 #+end_src
 
 *** ui/
@@ -16994,6 +16948,13 @@ digraph personal_override_contract {
 
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
+2026-10-13  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* README.org (core/core-custom-ui-extras.el): 空の互換シムを廃止し、節と tangle 対象を削除。
+	どこからも require されていないことを確認済み。
+	* README.org (core/core-session-private.el) (core-session--call-job): ジョブのエラーを握りつぶさず
+	`message' で報告する。core-session--run-job と core-session--run-all の重複した condition-case を集約。
+
 2026-10-12  YAMASHITA Takao  <tjy1965@gmail.com>
 
 	* README.org (dev/dev-tools.el) (my/print-build-info): Commit と Branch を、実行時に git へ問い合わせる
