@@ -9,7 +9,7 @@
 Org 文書とソースコードを一体として管理する literate program であり、
 `README.org` を設計・仕様・実装の正本（Source of Truth）とする。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-104 個の `.el` ターゲット（`lisp/` 配下 91 個〔`lisp/modules.el` を含む〕、
+105 個の `.el` ターゲット（`lisp/` 配下 92 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 9 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`）が生成される。
 
@@ -137,7 +137,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── ui/         (21)
 │   ├── auth/       (3)
 │   ├── completion/ (12)
-│   ├── orgx/       (12; 標準 8 + 任意 4)
+│   ├── orgx/       (13; 標準 9 + 任意 4)
 │   ├── vcs/        (4)
 │   ├── dev/        (15)
 │   └── utils/      (10)

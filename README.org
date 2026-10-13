@@ -2016,6 +2016,7 @@ see the frame.  Runs once only (removes itself from
       orgx-export
       orgx-notes-markdown
       orgx-auto-tangle
+      orgx-hugo
       orgx-auto-hugo
 
       ;; -----------------------------------------------------------------------
@@ -8302,31 +8303,8 @@ LSP バックエンド非依存という設計を、補完の側から支える�
           '((nil :maxlevel . 3)
             (my/org-buffer-files :maxlevel . 1)
             (org-agenda-files :maxlevel . 3)))
-    ;; org-capture-templates: ブログ記事テンプレートを追加した。
-    ;; my:f:capture-blog-file は単一ファイルの ox-hugo ソース（all-posts.org または
-    ;; blog.org）を指す。テンプレートは、ox-hugo のサブツリー単位エクスポートが使う
-    ;; file+olp ターゲットに合わせ、"* blog" の下に挿入する。
-    ;; Page Bundle化済み（2026-07-30〜）のため、EXPORT_FILE_NAME は常に "index" 固定。
-    ;; 記事固有のスラッグは org-id-uuid でUUIDから生成する。
-    ;; （一時 format-time-string に置き換えていたことがあるが、原因は org-id-new
-    ;; ではなく org-hugo-export-wim-to-md が内部で無条件に呼ぶ
-    ;; org-id-update-id-locations が org-agenda-files 全体（org-roam 配下含む数百
-    ;; ファイル）を走査してしまうことだった（詳細は git log を参照）。この経路は
-    ;; orgx-export--limit-agenda-files-during-hugo-export の :around advice で
-    ;; 既に塞いであるため、org-id-uuid を使ってもエクスポート失敗は再発しない。
-    ;; org-id-new ではなく org-id-uuid を使うのは、org-id-method の設定値に
-    ;; 依存せず、org-id-locations に一切触れない純粋なUUID生成のみを行うため。
-    ;; EXPORT_HUGO_COVER という独自プロパティ名は ox-hugo が認識しない（front matter に
-    ;; 変換されない）ため使わない。任意キーをfront matterに追加したい場合、ox-hugo が
-    ;; 唯一受け付ける経路は EXPORT_HUGO_CUSTOM_FRONT_MATTER（plist形式）であるため、
-    ;; ここに :cover "" を空文字のプレースホルダーとして常に挿入しておく。
-    ;; 記事固有のカバー画像を用意した場合は、実ファイルを
-    ;; assets/img/cover/custom/<EXPORT_HUGO_BUNDLE>.jpg に置いた上で、この値を
-    ;; :cover "custom/<EXPORT_HUGO_BUNDLE>.jpg" に書き換える（deploy.sh の Tier1: 明示指定）。
-    ;; 空文字のままなら deploy.sh 側で post_front_matter_cover() が空文字を返し、
-    ;; 従来通り Tier2（タグ）→Tier3（季節）→Tier4（デフォルト）へフォールスルーする
-    ;; ため、既存の自動選択の挙動は変わらない。
-    ;; my:f:capture-blog-file の個人設定による上書き（all-posts.org を指す等）は、
+    ;; ブログ記事のテンプレート "b" は、orgx-hugo.el が org のロード後に追加する。
+    ;; my:f:capture-blog-file（上の defvar）の個人設定による上書きは、
     ;; orgx-core のロード前に personal/<user>.el で行うこと。
     (setq org-capture-templates
           `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
@@ -8336,10 +8314,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
             ("j" "Journal" entry (function org-journal-find-location)
              "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
             ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
-             "* MEETING with %? :meeting:\n  %U\n  %a")
-            ("b" "Blog post" entry
-             (file+olp my:f:capture-blog-file "blog")
-             "* TODO %^{Title}\n:PROPERTIES:\n:EXPORT_HUGO_BUNDLE: %(org-id-uuid)\n:EXPORT_FILE_NAME: index\n:EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n:EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n:EXPORT_HUGO_TAGS: %^{Tags}\n:EXPORT_HUGO_CATEGORIES: %^{Category}\n:EXPORT_HUGO_LASTMOD:\n:END:\n%?"))))
+             "* MEETING with %? :meeting:\n  %U\n  %a"))))
 
   ;; org-emphasis-regexp-components の既定値（PRE/POST）は半角の空白・句読点のみを
   ;; 想定しており、全角の「」『』（）、。・ 等は含まれない。本ドキュメントのような
@@ -8715,11 +8690,11 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;;
     ;;; Commentary:
     ;;
-    ;; Org のエクスポート・バックエンド: Hugo、Markdown、Mermaid、Graphviz（dot）、
+    ;; Org のエクスポート・バックエンド: Markdown、Mermaid、Graphviz（dot）、
     ;; LaTeX/PDF（LuaLaTeX-ja）。
     ;;
     ;; 本ファイルの責務:
-    ;; - Hugo ブログ向けに、TOML フロントマターを用いる ox-hugo を導入する
+    ;; - Hugo 向けの ox-hugo の設定は orgx-hugo.el へ分離した（2026-10-14）
     ;; - markdown-mode、markdown-preview-mode、edit-indirect を導入する
     ;; - ob-mermaid と mmdc CLI により、mermaid を Org Babel の言語として登録する
     ;; - Org Babel で Graphviz 図を描画するため ob-dot を有効化する（任意）
@@ -8808,79 +8783,6 @@ LSP バックエンド非依存という設計を、補完の側から支える�
     ;; （モジュール先頭のトップレベル）で設定するのは、org 未ロードの時点で *.tex を
     ;; 開いても latexenc-find-file-coding-system 自体は独立に発火し再現するため。
     (setq latexenc-dont-use-TeX-master-flag t)
-
-    ;; ox（Org のエクスポート基盤）は、以前ここで (leaf ox :straight nil :require t) と
-    ;; して無条件にロードしていた。ox は org を require するため、これが Org を起動時に
-    ;; 読み込む経路の 1 つになっていた。ox-hugo が自身で ox を require するので、この
-    ;; 宣言は不要である（2026-07 に削除）。
-    ;;
-    ;; ox-hugo も :require t を外した。org-hugo-front-matter-format は defcustom であり、
-    ;; :custom による先行登録は ox-hugo のロード時に反映される。
-    ;;
-    ;; 以前との違い: 過去の記録にはこの :require t 削除が既に完了したと
-    ;; 記載されていたが、実際のコードには反映されていなかった
-    ;; （orgx-auto-hugo.el 側は同じ理由で正しく遅延化されていたのに、こちらだけ
-    ;; 直し忘れていたと見られる）。ox-hugo は ox を、ox は org を require するため、
-    ;; :require t を残したままだと「Org の遅延ロード」の効果がここから漏れて
-    ;; 無に帰していた。
-    ;;
-    ;; 落とし穴（実機で踏んだ）: 上の理由で :require t を外したところ、
-    ;; `M-x org-hugo-export-wim-to-md' のような直接呼び出しは autoload 経由で
-    ;; 問題なく動くのに、`C-c C-e' の対話的ディスパッチメニューに Hugo の項目が
-    ;; 出なくなった（`C-c C-e H A' が選べない）。原因は、`org-export-dispatch' が
-    ;; メニューを組み立てる際に `org-export-registered-backends' を直接見るため。
-    ;; この一覧への登録（`org-export-define-derived-backend'）は ox-hugo.el が
-    ;; 実際にロードされた副作用として起きるのであって、個々のコマンドに付いている
-    ;; autoload cookie では発生しない。つまり「関数呼び出しの autoload」と
-    ;; 「バックエンドのメニュー登録」は別物で、後者は :require t を外すと
-    ;; 起動時だけでなく *ずっと* 登録されないままになる。
-    ;;
-    ;; 対処: `org-export-dispatch' そのものに :before advice を付け、メニューを
-    ;; 開く直前にだけ ox-hugo を require する。通常起動時のコストはそのまま避けつつ、
-    ;; 対話的なディスパッチメニューでも Hugo が正しく選べるようにする。
-    (leaf ox-hugo :straight t :custom ((org-hugo-front-matter-format . "toml")))
-
-    (defun orgx-export--ensure-ox-hugo-before-dispatch (&rest _)
-      "Require `ox-hugo' before `org-export-dispatch' builds its backend menu.
-  `org-export-dispatch' reads `org-export-registered-backends' directly; the
-  Hugo backend is only added there as a side effect of loading ox-hugo.el
-  itself (via `org-export-define-derived-backend'), not by the autoload
-  cookies on its individual interactive commands. Without this advice,
-  `C-c C-e H A' silently omits the Hugo entry even though calling
-  `org-hugo-export-wim-to-md' directly works fine."
-      (require 'ox-hugo))
-
-    (advice-add 'org-export-dispatch :before #'orgx-export--ensure-ox-hugo-before-dispatch)
-
-    ;; org-hugo-export-wim-to-md は内部で org-id-update-id-locations を無条件に
-    ;; 呼び出しており、これが org-agenda-files（my:d:org 配下を再帰スキャンした
-    ;; 数百件、大半が org-roam のノート）とそのアーカイブファイルを一括で開こうと
-    ;; する（org-add-archive-files 経由）。org-roam 配下の一部ファイルへの
-    ;; アクセスが不安定な環境では、この一括アクセスが Read error（Operation
-    ;; timed out / Resource deadlock avoided）を引き起こし、エクスポートそのものが
-    ;; 失敗する。実機のバックトレースで確認した呼び出し連鎖:
-    ;;   org-hugo-export-wim-to-md → org-id-update-id-locations →
-    ;;   org-agenda-files → org-add-archive-files →
-    ;;   org-get-agenda-file-buffer → find-file-noselect
-    ;; エクスポート実行中だけ org-agenda-files をエクスポート対象バッファの
-    ;; ファイル 1 件に絞ることで、この一括スキャンを回避する。ブログ記事内では
-    ;; id: リンクを使っていないため、ID 解決範囲を絞っても実害はない。
-    ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
-    ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、絞り込みが効かない。
-    (defvar org-agenda-files)
-
-    (defun orgx-export--limit-agenda-files-during-hugo-export (orig-fn &rest args)
-      "Narrow `org-agenda-files' to the current buffer's file while ORIG-FN runs.
-  Prevents the internal `org-id-update-id-locations' call inside
-  `org-hugo-export-wim-to-md' from scanning the full `org-agenda-files'
-  list (and its archive files), which can hang or error when some of
-  those files are on an unreliable filesystem path (e.g. org-roam notes
-  under iCloud)."
-      (let ((org-agenda-files (list (buffer-file-name (current-buffer)))))
-        (apply orig-fn args)))
-
-    (advice-add 'org-hugo-export-wim-to-md :around
-                #'orgx-export--limit-agenda-files-during-hugo-export)
 
     (leaf markdown-mode :straight t)
     (leaf markdown-preview-mode :straight t)
@@ -9287,6 +9189,203 @@ LSP バックエンド非依存という設計を、補完の側から支える�
 
   (provide 'orgx-auto-tangle)
   ;;; orgx/orgx-auto-tangle.el ends here
+#+end_src
+
+*** orgx/orgx-hugo.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-hugo
+:header-args:emacs-lisp: :tangle lisp/orgx/orgx-hugo.el
+:END:
+
+Hugo ブログ（ox-hugo）に関わる設定を 1 つにまとめたモジュールです。
+
+以前は、ox-hugo の導入が =orgx-export.el= に、ブログ記事の capture テンプレート "b" が =orgx-core.el= に、
+そのテンプレートの上書きが =personal/personal-hugo.el= に分かれていました。 =orgx-export.el= は
+326 行のうち約 45 行だけが Hugo で、残りは Markdown、Mermaid、dot、LaTeX の話題でした。
+=orgx-core.el= と =personal-hugo.el= では、同じテンプレートの本文を二重に持っていました。
+
+このモジュールが持つのは次の 2 つです。
+
+- ox-hugo の導入と、ディスパッチメニュー・エクスポート時の 2 つのアドバイス（ =orgx-export.el= から移した）
+- ブログ記事の capture テンプレート "b"。タグの入力を行うかは =orgx-hugo-capture-prompt-tags-p= で切り替える
+
+タグを capture の確定前に別のコマンドで設定する運用の個人設定は、このオプションを =nil= にするだけです。
+テンプレートを丸ごと上書きする必要はありません。 =orgx-core.el= の =org= の設定のあとに追加するため、
+=my:modules= では =orgx-core= より後（ =orgx-auto-hugo= の直前）に置いています。
+
+#+NAME: orgx-hugo-el
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-hugo.el --- Hugo ブログ（ox-hugo）の設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Hugo ブログ（ox-hugo）の設定。orgx-export.el と orgx-core.el から分離した（2026-10-14）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - TOML フロントマターを用いる ox-hugo を導入する
+  ;; - `org-export-dispatch' の前に ox-hugo を require し、メニューに Hugo を出す
+  ;; - `org-hugo-export-wim-to-md' の実行中だけ `org-agenda-files' を絞る
+  ;; - ブログ記事の capture テンプレート "b" を、org のロード後に追加する
+  ;;   （タグの入力を行うかは `orgx-hugo-capture-prompt-tags-p' で切り替える）
+  ;;
+  ;; capture 確定時の自動エクスポートは orgx-auto-hugo.el、個人設定（タグ設定、パス）は
+  ;; personal/personal-hugo.el と personal/<user>.el にある。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  ;; ox（Org のエクスポート基盤）は、以前ここで (leaf ox :straight nil :require t) と
+  ;; して無条件にロードしていた。ox は org を require するため、これが Org を起動時に
+  ;; 読み込む経路の 1 つになっていた。ox-hugo が自身で ox を require するので、この
+  ;; 宣言は不要である（2026-07 に削除）。
+  ;;
+  ;; ox-hugo も :require t を外した。org-hugo-front-matter-format は defcustom であり、
+  ;; :custom による先行登録は ox-hugo のロード時に反映される。
+  ;;
+  ;; 以前との違い: 過去の記録にはこの :require t 削除が既に完了したと
+  ;; 記載されていたが、実際のコードには反映されていなかった
+  ;; （orgx-auto-hugo.el 側は同じ理由で正しく遅延化されていたのに、こちらだけ
+  ;; 直し忘れていたと見られる）。ox-hugo は ox を、ox は org を require するため、
+  ;; :require t を残したままだと「Org の遅延ロード」の効果がここから漏れて
+  ;; 無に帰していた。
+  ;;
+  ;; 落とし穴（実機で踏んだ）: 上の理由で :require t を外したところ、
+  ;; `M-x org-hugo-export-wim-to-md' のような直接呼び出しは autoload 経由で
+  ;; 問題なく動くのに、`C-c C-e' の対話的ディスパッチメニューに Hugo の項目が
+  ;; 出なくなった（`C-c C-e H A' が選べない）。原因は、`org-export-dispatch' が
+  ;; メニューを組み立てる際に `org-export-registered-backends' を直接見るため。
+  ;; この一覧への登録（`org-export-define-derived-backend'）は ox-hugo.el が
+  ;; 実際にロードされた副作用として起きるのであって、個々のコマンドに付いている
+  ;; autoload cookie では発生しない。つまり「関数呼び出しの autoload」と
+  ;; 「バックエンドのメニュー登録」は別物で、後者は :require t を外すと
+  ;; 起動時だけでなく *ずっと* 登録されないままになる。
+  ;;
+  ;; 対処: `org-export-dispatch' そのものに :before advice を付け、メニューを
+  ;; 開く直前にだけ ox-hugo を require する。通常起動時のコストはそのまま避けつつ、
+  ;; 対話的なディスパッチメニューでも Hugo が正しく選べるようにする。
+  (leaf ox-hugo :straight t :custom ((org-hugo-front-matter-format . "toml")))
+
+  (defun orgx-hugo--ensure-ox-hugo-before-dispatch (&rest _)
+    "Require `ox-hugo' before `org-export-dispatch' builds its backend menu.
+  `org-export-dispatch' reads `org-export-registered-backends' directly; the
+  Hugo backend is only added there as a side effect of loading ox-hugo.el
+  itself (via `org-export-define-derived-backend'), not by the autoload
+  cookies on its individual interactive commands. Without this advice,
+  `C-c C-e H A' silently omits the Hugo entry even though calling
+  `org-hugo-export-wim-to-md' directly works fine."
+    (require 'ox-hugo))
+
+  (advice-add 'org-export-dispatch :before #'orgx-hugo--ensure-ox-hugo-before-dispatch)
+
+  ;; org-hugo-export-wim-to-md は内部で org-id-update-id-locations を無条件に
+  ;; 呼び出しており、これが org-agenda-files（my:d:org 配下を再帰スキャンした
+  ;; 数百件、大半が org-roam のノート）とそのアーカイブファイルを一括で開こうと
+  ;; する（org-add-archive-files 経由）。org-roam 配下の一部ファイルへの
+  ;; アクセスが不安定な環境では、この一括アクセスが Read error（Operation
+  ;; timed out / Resource deadlock avoided）を引き起こし、エクスポートそのものが
+  ;; 失敗する。実機のバックトレースで確認した呼び出し連鎖:
+  ;;   org-hugo-export-wim-to-md → org-id-update-id-locations →
+  ;;   org-agenda-files → org-add-archive-files →
+  ;;   org-get-agenda-file-buffer → find-file-noselect
+  ;; エクスポート実行中だけ org-agenda-files をエクスポート対象バッファの
+  ;; ファイル 1 件に絞ることで、この一括スキャンを回避する。ブログ記事内では
+  ;; id: リンクを使っていないため、ID 解決範囲を絞っても実害はない。
+  ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
+  ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、絞り込みが効かない。
+  (defvar org-agenda-files)
+
+  (defun orgx-hugo--limit-agenda-files-during-export (orig-fn &rest args)
+    "Narrow `org-agenda-files' to the current buffer's file while ORIG-FN runs.
+  Prevents the internal `org-id-update-id-locations' call inside
+  `org-hugo-export-wim-to-md' from scanning the full `org-agenda-files'
+  list (and its archive files), which can hang or error when some of
+  those files are on an unreliable filesystem path (e.g. org-roam notes
+  under iCloud)."
+    (let ((org-agenda-files (list (buffer-file-name (current-buffer)))))
+      (apply orig-fn args)))
+
+  (advice-add 'org-hugo-export-wim-to-md :around
+              #'orgx-hugo--limit-agenda-files-during-export)
+
+  (defgroup orgx-hugo nil
+    "Hugo blog (ox-hugo) settings."
+    :group 'org)
+
+  (defcustom orgx-hugo-capture-prompt-tags-p t
+    "Non-nil means the Blog capture template prompts for the tags.
+When nil the EXPORT_HUGO_TAGS line is left out of the template.  Set it to nil
+when the tags are assigned another way, for example by a function on
+`org-capture-before-finalize-hook', so that they are not asked for twice."
+    :type 'boolean
+    :group 'orgx-hugo)
+
+  ;; ブログ記事のテンプレート。
+  ;; my:f:capture-blog-file は単一ファイルの ox-hugo ソース（all-posts.org または
+  ;; blog.org）を指す。テンプレートは、ox-hugo のサブツリー単位エクスポートが使う
+  ;; file+olp ターゲットに合わせ、"* blog" の下に挿入する。
+  ;; Page Bundle化済み（2026-07-30〜）のため、EXPORT_FILE_NAME は常に "index" 固定。
+  ;; 記事固有のスラッグは org-id-uuid でUUIDから生成する。
+  ;; （一時 format-time-string に置き換えていたことがあるが、原因は org-id-new
+  ;; ではなく org-hugo-export-wim-to-md が内部で無条件に呼ぶ
+  ;; org-id-update-id-locations が org-agenda-files 全体（org-roam 配下含む数百
+  ;; ファイル）を走査してしまうことだった（詳細は git log を参照）。この経路は
+  ;; orgx-hugo--limit-agenda-files-during-export の :around advice で
+  ;; 既に塞いであるため、org-id-uuid を使ってもエクスポート失敗は再発しない。
+  ;; org-id-new ではなく org-id-uuid を使うのは、org-id-method の設定値に
+  ;; 依存せず、org-id-locations に一切触れない純粋なUUID生成のみを行うため。
+  ;; EXPORT_HUGO_COVER という独自プロパティ名は ox-hugo が認識しない（front matter に
+  ;; 変換されない）ため使わない。任意キーをfront matterに追加したい場合、ox-hugo が
+  ;; 唯一受け付ける経路は EXPORT_HUGO_CUSTOM_FRONT_MATTER（plist形式）であるため、
+  ;; ここに :cover "" を空文字のプレースホルダーとして常に挿入しておく。
+  ;; 記事固有のカバー画像を用意した場合は、実ファイルを
+  ;; assets/img/cover/custom/<EXPORT_HUGO_BUNDLE>.jpg に置いた上で、この値を
+  ;; :cover "custom/<EXPORT_HUGO_BUNDLE>.jpg" に書き換える（deploy.sh の Tier1: 明示指定）。
+  ;; 空文字のままなら deploy.sh 側で post_front_matter_cover() が空文字を返し、
+  ;; 従来通り Tier2（タグ）→Tier3（季節）→Tier4（デフォルト）へフォールスルーする
+  ;; ため、既存の自動選択の挙動は変わらない。
+
+  (defun orgx-hugo-capture-template ()
+    "Return the Blog capture template \"b\" as an `org-capture-templates' entry.
+The target is the \"blog\" heading of `my:f:capture-blog-file', which is
+looked up when the capture runs.  The tags prompt follows
+`orgx-hugo-capture-prompt-tags-p'."
+    (list "b" "Blog post" 'entry
+          '(file+olp my:f:capture-blog-file "blog")
+          (concat "* TODO %^{Title}\n"
+                  ":PROPERTIES:\n"
+                  ":EXPORT_HUGO_BUNDLE: %(org-id-uuid)\n"
+                  ":EXPORT_FILE_NAME: index\n"
+                  ":EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n"
+                  ":EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n"
+                  (if orgx-hugo-capture-prompt-tags-p
+                      ":EXPORT_HUGO_TAGS: %^{Tags}\n"
+                    "")
+                  ":EXPORT_HUGO_CATEGORIES: %^{Category}\n"
+                  ":EXPORT_HUGO_LASTMOD:\n"
+                  ":END:\n"
+                  "%?")))
+
+  (defun orgx-hugo--register-capture-template ()
+    "Put the Blog capture template at the end of `org-capture-templates'.
+Any existing \"b\" entry is replaced, so calling this twice is harmless."
+    (setq org-capture-templates
+          (append (assoc-delete-all "b" org-capture-templates)
+                  (list (orgx-hugo-capture-template)))))
+
+  ;; orgx-core.el の `org-capture-templates' の設定は (leaf org :config ...) にあり、
+  ;; (with-eval-after-load 'org ...) として登録される。本ファイルは my:modules で
+  ;; orgx-core より後にロードされるので、ここで登録する処理はそのあとに走る。
+  (with-eval-after-load 'org
+    (orgx-hugo--register-capture-template))
+
+  (provide 'orgx-hugo)
+  ;;; orgx/orgx-hugo.el ends here
 #+end_src
 
 *** orgx/orgx-auto-hugo.el
@@ -13118,7 +13217,8 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;;   （`ac1965/org-hugo-set-tags'）
   ;; - `my:f:capture-blog-file' を直接開く（`ac1965/open-capture-blog-file'）
   ;; - Blog capture の確定前にタグを設定する。C-g ではタグ設定だけをスキップする
-  ;; - orgx-core.el の "b" テンプレートから EXPORT_HUGO_TAGS のプロンプトを除く
+  ;; - orgx-hugo.el の "b" テンプレートから EXPORT_HUGO_TAGS のプロンプトを除く
+  ;;   （`orgx-hugo-capture-prompt-tags-p' を nil にする）
   ;;
   ;; 関数名は ac1965.el のリーダーキー割り当てが参照するため、旧来の接頭辞のまま。
   ;;; Code:
@@ -13276,70 +13376,16 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;; Blog capture template
   ;; ---------------------------------------------------------------------------
   ;;
-  ;; orgx-core.el の "b" template から EXPORT_HUGO_TAGS の入力プロンプトを
-  ;; 除去する。
+  ;; タグは `ac1965--org-capture-set-blog-tags' が `org-capture-before-finalize-hook' で
+  ;; 設定する。capture template 側で `%^{Tags}' を使うとタグ入力が二重になるため、
+  ;; テンプレートからタグのプロンプトを除く。
   ;;
-  ;; タグは `ac1965--org-capture-set-blog-tags' が
-  ;; `org-capture-before-finalize-hook' で設定するため、capture template 側で
-  ;; `%^{Tags}' を使用するとタグ入力が二重になる。
+  ;; テンプレート本体は orgx-hugo.el が持つ。以前はここで `after-init-hook' の深さ 20 から
+  ;; "b" テンプレートを丸ごと置き換えていたが、本文が二重になっていたため、オプションで
+  ;; 切り替える形に替えた（2026-10-14）。personal は modules.el より前にロードされるので、
+  ;; `orgx-hugo' の defcustom より先に値が入る。defcustom は既存の値を上書きしない。
   ;;
-  ;; したがって Blog capture では、
-  ;;
-  ;;   capture template
-  ;;       ↓
-  ;;   記事本文・タイトル・カテゴリ等を入力
-  ;;       ↓
-  ;;   C-c C-c
-  ;;       ↓
-  ;;   before-finalize
-  ;;       ↓
-  ;;   Org 標準タグ設定
-  ;;       ↓
-  ;;   capture finalize
-  ;;       ↓
-  ;;   ox-hugo
-  ;;
-  ;; という単一経路にする。
-  ;;
-  ;; orgx-core.el の org-capture-templates 設定は
-  ;; (leaf org :config ...) の中にあり、with-eval-after-load 'org として
-  ;; 登録される。
-  ;;
-  ;; この personal ファイルは modules.el より前にロードされるため、
-  ;; ここで単純に with-eval-after-load 'org を登録すると orgx-core 側の設定より
-  ;; 前に実行される可能性がある。
-  ;;
-  ;; そこで after-init-hook から with-eval-after-load 'org を登録し、
-  ;; 全モジュールのロード完了後に本設定を登録する。
-  ;;
-  ;; これにより orgx-core の "b" template 設定後に、本関数が Blog template を
-  ;; 上書きする。
-  ;;
-
-  (defun ac1965--org-capture-templates-override ()
-    "Override Blog capture template \"b\" for the ox-hugo workflow.
-
-  Remove the EXPORT_HUGO_TAGS prompt because tags are assigned by
-  `ac1965--org-capture-set-blog-tags' during
-  `org-capture-before-finalize-hook'."
-    (with-eval-after-load 'org
-      (setf (alist-get "b" org-capture-templates nil nil #'equal)
-            '("Blog post" entry
-              (file+olp my:f:capture-blog-file "blog")
-              "* TODO %^{Title}\n\
-  :PROPERTIES:\n\
-  :EXPORT_HUGO_BUNDLE: %(org-id-uuid)\n\
-  :EXPORT_FILE_NAME: index\n\
-  :EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n\
-  :EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n\
-  :EXPORT_HUGO_CATEGORIES: %^{Category}\n\
-  :EXPORT_HUGO_LASTMOD:\n\
-  :END:\n\
-  %?"))))
-
-  (add-hook 'after-init-hook
-            #'ac1965--org-capture-templates-override
-            20)
+  (setopt orgx-hugo-capture-prompt-tags-p nil)
 
   (provide 'personal-hugo)
   ;;; personal/personal-hugo.el ends here
@@ -17025,6 +17071,16 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (orgx/orgx-hugo.el): 新設。orgx-export.el から ox-hugo の導入と 2 つのアドバイス
+	（orgx-export--ensure-ox-hugo-before-dispatch、orgx-export--limit-agenda-files-during-hugo-export）を移し、
+	orgx-hugo--ensure-ox-hugo-before-dispatch、orgx-hugo--limit-agenda-files-during-export に改名。
+	orgx-export.el の Commentary から Hugo の記述を除いた。
+	* README.org (orgx/orgx-hugo.el) (orgx-hugo-capture-template, orgx-hugo-capture-prompt-tags-p): ブログ記事の
+	capture テンプレート "b" を orgx-core.el から移し、1 か所の定義にした。タグ入力の有無は defcustom で切り替える。
+	orgx-core.el の org-capture-templates から "b" を除いた。
+	* README.org (personal/personal-hugo.el): "b" テンプレートの丸ごとの上書き（ac1965--org-capture-templates-override と
+	after-init-hook の登録）を廃止し、orgx-hugo-capture-prompt-tags-p を nil にするだけにした。
+	* README.org (modules.el): my:modules に orgx-hugo を orgx-auto-hugo の直前へ追加。
 	* README.org (orgx/orgx-auto-hugo.el) (orgx-auto-hugo-blog-buffer-p, orgx-auto-hugo-blog-capture-p): ブログ記事の
 	capture かどうかの判定を 1 か所にまとめた。基準は「保存先のバッファが my:f:capture-blog-file を訪問しているか」。
 	orgx-auto-hugo--blog-capture-p（確定後）はこれを使うように書き換えた。
