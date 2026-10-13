@@ -12270,6 +12270,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 |------+---------|
 | =personal/user.el= | 全マシン共通の個人設定、`my:wsl-p'、デバイスファイルのロード |
 | =personal/<login>.el= | 識別情報、フォント、UI、LSP スイッチ |
+| =personal/personal-hugo.el= | Hugo ブログ（ =all-posts.org= ）のタグ設定と capture |
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Apple Music 操作 |
 | =personal/device-wsl.el= | WSL のクリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
 | =personal/personal-messages.el= | macOS Messages.app のアーカイバ |
@@ -12485,6 +12486,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;;   WSL では /home/ac1965/org/ に上書きする（`my:wsl-p' で分岐）
   ;; - フォントを設定する: JetBrains Mono（等幅）、Noto Sans JP（可変）、サイズ 18
   ;; - `my:use-ui 'nano' と `my:use-lsp 'eglot' を有効化する
+  ;; - Hugo ブログ関連（タグ設定、capture）は personal-hugo.el へ分離した
   ;; - .ps1 → powershell-mode、.bas → visual-basic-mode を登録する
   ;;   （いずれも prog-mode 派生であり、prog-mode-hook は自動的に発火する）
   ;;
@@ -12492,9 +12494,6 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
   (declare-function browse-url-default-browser "browse-url")
-  (declare-function org-get-tags "org")
-  (declare-function org-map-entries "org")
-  (declare-function org-set-tags-command "org")
 
 
   ;; ---------------------------------------------------------------------------
@@ -12821,6 +12820,69 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   (setopt auth-keychain-enable t)
 
+;; ---------------------------------------------------------------------------
+;; Hugo ブログ（all-posts.org）
+;; ---------------------------------------------------------------------------
+
+;;
+;; タグ設定、all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの
+;; 上書きは personal-hugo.el に分離した（2026-10-13）。
+;; 上のリーダーキーの割り当て（g、f）が参照する関数もそこで定義される。
+;; フックはいずれも after-init-hook の深さで順序が決まるため、require の位置は問わない。
+;;
+
+(require 'personal-hugo)
+
+
+  (provide 'ac1965)
+  ;;; personal/ac1965.el ends here
+#+end_src
+
+*** personal/personal-hugo.el
+:PROPERTIES:
+:CUSTOM_ID: personal-hugo
+:header-args:emacs-lisp: :tangle personal/personal-hugo.el
+:END:
+
+Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =personal/ac1965.el= から分離しました。
+
+分けたのは、ブログ関連が約 210 行あり、識別情報やフォントなどのログイン固有の設定と話題が違うからです。
+この中のコードはすべて =my:f:capture-blog-file= を起点にしていて、 =ac1965.el= の他の部分とは
+依存がありません。関数名は =ac1965/= と =ac1965--= の接頭辞のまま据え置いています。リーダーキーの
+割り当て（ =ac1965.el= ）がこの名前を指しているためです。
+
+=ac1965.el= は =(require 'personal-hugo)= で読み込みます。 =personal/= は =load-path= に入っているので、
+追加の設定は要りません。
+
+#+NAME: personal-hugo-el
+#+begin_src emacs-lisp
+  ;;; personal/personal-hugo.el --- Hugo ブログの執筆支援 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; all-posts.org（ox-hugo の単一ファイル・ソース）の執筆支援。personal/ac1965.el から
+  ;; 分離した（2026-10-13）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 既存のインラインタグを補完候補にして Org のタグを設定する
+  ;;   （`ac1965/org-hugo-set-tags'）
+  ;; - `my:f:capture-blog-file' を直接開く（`ac1965/open-capture-blog-file'）
+  ;; - Blog capture の確定前にタグを設定する。C-g ではタグ設定だけをスキップする
+  ;; - orgx-core.el の "b" テンプレートから EXPORT_HUGO_TAGS のプロンプトを除く
+  ;;
+  ;; 関数名は ac1965.el のリーダーキー割り当てが参照するため、旧来の接頭辞のまま。
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function org-get-tags "org")
+  (declare-function org-map-entries "org")
+  (declare-function org-set-tags-command "org")
 
   ;; ---------------------------------------------------------------------------
   ;; all-posts.org（Hugo ブログ）の既存タグ補完付きタグ設定
@@ -13031,9 +13093,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
             #'ac1965--org-capture-templates-override
             20)
 
-
-  (provide 'ac1965)
-  ;;; personal/ac1965.el ends here
+  (provide 'personal-hugo)
+  ;;; personal/personal-hugo.el ends here
 #+end_src
 
 *** personal/device-darwin.el
@@ -16696,6 +16757,9 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-13  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (personal/personal-hugo.el): personal/ac1965.el から Hugo ブログ関連（タグ設定、
+	all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの上書き）を分離。
+	関数名は据え置き。ac1965.el は (require 'personal-hugo) で読み込む。
 	* README.org (core/core-custom.el): custom.el のロード失敗を ignore-errors で黙殺せず、warn で報告する。
 	* README.org (completion/completion-lsp.el) (completion-lsp--shutdown-stale-servers): 古い eglot サーバの
 	停止に失敗したとき、ignore-errors で黙殺せず message で報告する。
