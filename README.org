@@ -4913,8 +4913,8 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   ;;
   ;; 責務:
   ;;
-  ;; - Nano テーマをロードする（利用可能な場合）
-  ;; - ui-nano-palette 経由で Nano のフェイスを設定する（ロード済みの場合）
+  ;; - Nano テーマをロードする（`my:use-ui' が 'nano / 'doom-nano で、利用可能な場合）
+  ;; - ui-nano-palette 経由で Nano のフェイスを設定する（同上）
   ;; - パレットの上書きを適用する
   ;; - 括弧対応のハイライト用フェイスを設定する
   ;;
@@ -4930,29 +4930,27 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   ;; - テーマ再読込に対する安全性
   ;; - Emacs 30 / 31 への前方互換性
   ;;
-  ;; `my:use-ui' との関係（2026-10-14 に実態に合わせて書き直した）:
+  ;; `my:use-ui' との関係（2026-10-14 に設計どおりに直した）:
   ;;
-  ;;   本モジュールは `my:use-ui' を参照しない。nano のテーマとパレットは、
-  ;;   `my:use-ui' が何であっても（'nano、'doom-nano、'doom、'none）適用される。
-  ;;   `my:use-ui' が切り替えるのはモードラインのバンドル（core-switches 経由で
-  ;;   ロードする ui-nano-modeline / ui-doom-modeline など）だけである。
-  ;;   無条件に行うのは次の 3 つ:
-  ;;   - `(require 'ui-nano-palette nil t)'（ファイルが無くても失敗しないだけで、
-  ;;     my:use-ui による分岐ではない）
-  ;;   - `nano' テーマの `load-theme'（利用可能な場合）
-  ;;   - nano-emacs / nano-theme の straight による導入
+  ;;   nano のテーマとパレットを適用するのは、`my:use-ui' が 'nano または 'doom-nano の
+  ;;   ときだけである（`ui-theme-nano-p'）。'doom と 'none では、nano のテーマ、パレット、
+  ;;   nano-emacs / nano-theme の導入のいずれも行わず、Emacs の既定のテーマのままにする。
+  ;;   その場合 `ui-theme--init' は何もしない。
+  ;;   `my:use-ui' はロード時に決まっている（personal/ の設定は modules.el より前に走り、
+  ;;   core-switches は本モジュールより前にロードされる）ので、判定はロード時と
+  ;;   `ui-theme--init' の実行時に行う。
   ;;
-  ;;   以前のコメントには「my:use-ui が 'doom や 'none ならパレットのロードは
-  ;;   強制されない」とあったが、これは誤りだった（`require' は無条件に実行される）。
-  ;;   'doom / 'none で nano を適用しない設計にするなら、それは動作の変更になる。
+  ;;   以前は `my:use-ui' を参照せず、どの値でも nano を適用していた。コメントは「'doom や
+  ;;   'none ではパレットのロードは強制されない」としていたが、実際のコードは無条件に
+  ;;   ロードしていた。コードをコメントの設計に合わせた。
   ;;
   ;;   `ui-theme--apply-faces' が `ui-nano-palette-apply-faces' を fboundp で守るのは、
   ;;   パレットのファイルが無い場合に備えるためである。
   ;;
   ;;   ui-nano-palette の正式なロード経路:
   ;;   ui-nano-palette の初回ロードを起動する責任を持つのは ui-theme.el のみである。
-  ;;   ui-theme は常に my:modules に含まれるため、下記の
-  ;;   `(require 'ui-nano-palette nil t)' は起動時に無条件で実行される。
+  ;;   ui-theme は常に my:modules に含まれるが、下記の
+  ;;   `(require 'ui-nano-palette nil t)' は nano 系のときだけ実行される。
   ;;   ui-nano-modeline.el と dev-term.el は `with-eval-after-load' で反応するのみで、
   ;;   ui-nano-palette を直接 require してはならない。
   ;;
@@ -4965,15 +4963,21 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   (eval-when-compile
     (require 'leaf))
 
-  ;; NOERROR 形式（第 3 引数 t）なのは、ファイルが見つからなくても起動を止めないため。
-  ;; これは my:use-ui による分岐ではなく、ロードは常に行われる（冒頭の Commentary を参照）。
-  (require 'ui-nano-palette nil t)
+  (defun ui-theme-nano-p ()
+    "Return non-nil when `my:use-ui' selects a bundle that uses the nano theme.
+That is `nano' or `doom-nano'.  With `doom' or `none' the default theme is kept."
+    (and (memq (bound-and-true-p my:use-ui) '(nano doom-nano)) t))
 
-  ;; パレットのロード直後に、実際のパレット色をテーマへ反映させるためフェイスを再適用する。
-  ;; すでにロード済みならここで即座に実行され、未ロードならロードされた時点で実行される。
-  (with-eval-after-load 'ui-nano-palette
-    (when (fboundp 'ui-theme--apply-faces)
-      (ui-theme--apply-faces)))
+  ;; NOERROR 形式（第 3 引数 t）なのは、ファイルが見つからなくても起動を止めないため。
+  ;; nano 系の UI のときだけロードする（冒頭の Commentary を参照）。
+  (when (ui-theme-nano-p)
+    (require 'ui-nano-palette nil t)
+
+    ;; パレットのロード直後に、実際のパレット色をテーマへ反映させるためフェイスを再適用する。
+    ;; すでにロード済みならここで即座に実行され、未ロードならロードされた時点で実行される。
+    (with-eval-after-load 'ui-nano-palette
+      (when (fboundp 'ui-theme--apply-faces)
+        (ui-theme--apply-faces))))
 
   (defgroup ui-theme nil
     "UI theme configuration."
@@ -5041,8 +5045,9 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
     (ui-theme--apply-faces))
 
   (defun ui-theme--init ()
-    "Initialize UI theme configuration."
-    (when ui-theme-enable-p
+    "Initialize UI theme configuration.
+Does nothing unless `my:use-ui' selects a nano bundle (`ui-theme-nano-p')."
+    (when (and ui-theme-enable-p (ui-theme-nano-p))
 
       (require 'nano-layout nil t)
       (require 'nano-faces nil t)
@@ -5066,12 +5071,14 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
         (ui-theme-variant-restore))))
 
   (leaf nano-emacs
+    :when (ui-theme-nano-p)
     :straight (nano-emacs
                :type git
                :host github
                :repo "rougier/nano-emacs"))
 
   (leaf nano-theme
+    :when (ui-theme-nano-p)
     :straight (nano-theme
                :type git
                :host github
@@ -5127,6 +5134,7 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;;
   ;; 本ファイルの責務:
   ;; - `my/ui-theme-nano-switch' で nano-light / nano-dark を切り替え、選択を保存する
+  ;;   （`my:use-ui' が nano 系でなければ user-error）
   ;; - 前回の選択を `ui-theme-variant-restore' で復元する（ui-theme.el の初期化の最後に呼ばれる）
   ;;; Code:
 
@@ -5160,6 +5168,8 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   `default-frame-alist' も更新する。`load-theme' で nano-light 等を重ねない。"
     (interactive
      (list (intern (completing-read "nano variant: " '("light" "dark") nil t))))
+    (when (and (fboundp 'ui-theme-nano-p) (not (ui-theme-nano-p)))
+      (user-error "nano theme is not enabled (see `my:use-ui')"))
     (require 'nano-theme-support)
     (if (eq variant 'dark) (nano-dark) (nano-light))
     (ui-theme-variant--save variant))
@@ -10292,8 +10302,8 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   ;;
   ;;   `ui-nano-palette' がロードされた場合、`with-eval-after-load' により
   ;;   `dev-term-apply-palette' が再適用され、ターミナルのフェイスが自動的に Nano の配色を
-  ;;   採用する。ui-theme.el が `my:use-ui' に関係なく無条件にロードするため、
-  ;;   実際には nano の UI バンドルが有効でない場合にも採用される。
+  ;;   採用する。ui-theme.el がパレットをロードするのは `my:use-ui' が 'nano / 'doom-nano
+  ;;   のときだけなので、'doom / 'none ではフォールバック値のままになる。
 
   ;;; Code:
 
@@ -10370,7 +10380,7 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
     (dev-term-apply-palette)
 
     ;; ui-nano-palette がロードされたとき、実際のパレットで再適用する。
-    ;; ui-theme.el は my:use-ui に関係なくパレットをロードするので、これは常に発火する。
+    ;; ui-theme.el は my:use-ui が 'nano / 'doom-nano のときだけパレットをロードする。
     ;; ロード時の強い依存は作らない。
     (with-eval-after-load 'ui-nano-palette
       (dev-term-apply-palette))
@@ -16996,6 +17006,12 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (ui/ui-theme.el) (ui-theme-nano-p, ui-theme--init): nano のテーマとパレットを、my:use-ui が
+	nano または doom-nano のときだけ適用するようにした。doom と none では、nano のロード、パレットの require、
+	nano-emacs / nano-theme の導入のいずれも行わず、既定のテーマのままにする。以前は my:use-ui を参照せず、
+	どの値でも適用していた（コメントの記述とコードが食い違っていた）。動作の変更。
+	* README.org (ui/ui-theme-variant.el) (my/ui-theme-nano-switch): my:use-ui が nano 系でないときは user-error にする。
+	* README.org (dev/dev-term.el): パレットのロード条件に関するコメントを更新。
 	* README.org (ui/ui-nano-modeline-items.el): ui-nano-modeline.el から表示項目（状態アイコン、電源、時刻、IME、
 	ヘッダー行の配置）とそのフェイスを分離。ui-nano-modeline.el には組み込み（初期化、トグル、エントリポイント）が残る。
 	* README.org (ui/ui-nano-modeline-items.el) (ui-nano-modeline-sync-faces): ui-theme.el の
