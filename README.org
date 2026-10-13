@@ -4868,13 +4868,24 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   ;; - テーマ再読込に対する安全性
   ;; - Emacs 30 / 31 への前方互換性
   ;;
-  ;; ui-nano-palette への依存:
+  ;; `my:use-ui' との関係（2026-10-14 に実態に合わせて書き直した）:
   ;;
-  ;;   ui-theme は ui-nano-palette の有無にかかわらず安全にロードされる。
-  ;;   `ui-theme--apply-faces' は fboundp のときのみ `my/nano-apply-faces' を呼ぶため、
-  ;;   my:use-ui が 'doom や 'none の場合に nano パレットのロードが強制されることはない。
-  ;;   ui-nano-palette がロードされた場合（nano バンドル有効時）は、
-  ;;   `with-eval-after-load' により自動的にフェイスが再適用される。
+  ;;   本モジュールは `my:use-ui' を参照しない。nano のテーマとパレットは、
+  ;;   `my:use-ui' が何であっても（'nano、'doom-nano、'doom、'none）適用される。
+  ;;   `my:use-ui' が切り替えるのはモードラインのバンドル（core-switches 経由で
+  ;;   ロードする ui-nano-modeline / ui-doom-modeline など）だけである。
+  ;;   無条件に行うのは次の 3 つ:
+  ;;   - `(require 'ui-nano-palette nil t)'（ファイルが無くても失敗しないだけで、
+  ;;     my:use-ui による分岐ではない）
+  ;;   - `nano' テーマの `load-theme'（利用可能な場合）
+  ;;   - nano-emacs / nano-theme の straight による導入
+  ;;
+  ;;   以前のコメントには「my:use-ui が 'doom や 'none ならパレットのロードは
+  ;;   強制されない」とあったが、これは誤りだった（`require' は無条件に実行される）。
+  ;;   'doom / 'none で nano を適用しない設計にするなら、それは動作の変更になる。
+  ;;
+  ;;   `ui-theme--apply-faces' が `my/nano-apply-faces' を fboundp で守るのは、
+  ;;   パレットのファイルが無い場合に備えるためである。
   ;;
   ;;   ui-nano-palette の正式なロード経路:
   ;;   ui-nano-palette の初回ロードを起動する責任を持つのは ui-theme.el のみである。
@@ -4893,17 +4904,12 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   (eval-when-compile
     (require 'leaf))
 
-  ;; 強制的な (require 'ui-nano-palette) をオプション形式に変更した。
-  ;; 理由: ui-theme は（modules.el の ui セクションで）無条件にロードされるが、
-  ;; ui-nano-palette は my:use-ui が 'nano のときにしか意味を持たない。
-  ;; 強制 require は my:use-ui='doom や 'none の場合にも nano パレットの初期化を
-  ;; 強いてしまい、UI 交換可能という設計保証に反していた。
-  ;; ui-theme--apply-faces は既に fboundp で呼び出しをガードしているため、強制 require を
-  ;; 外しても nano 経路の機能に影響はない。
+  ;; NOERROR 形式（第 3 引数 t）なのは、ファイルが見つからなくても起動を止めないため。
+  ;; これは my:use-ui による分岐ではなく、ロードは常に行われる（冒頭の Commentary を参照）。
   (require 'ui-nano-palette nil t)
 
-  ;; nano パレットが後からロードされたとき（core-switches が after-init-hook で発火）、
-  ;; 実際のパレット色をテーマに反映させるためフェイスを再適用する。
+  ;; パレットのロード直後に、実際のパレット色をテーマへ反映させるためフェイスを再適用する。
+  ;; すでにロード済みならここで即座に実行され、未ロードならロードされた時点で実行される。
   (with-eval-after-load 'ui-nano-palette
     (when (fboundp 'ui-theme--apply-faces)
       (ui-theme--apply-faces)))
@@ -10223,9 +10229,10 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   ;;   これにより層の独立性が保たれる: dev 層が ui 層のモジュールを強制ロードすることは
   ;;   決してあってはならない。
   ;;
-  ;;   `ui-nano-palette' がロードされた場合（すなわち nano の UI バンドルが有効な場合）、
-  ;;   `with-eval-after-load' により `dev-term-apply-palette' が登録され、ターミナルの
-  ;;   フェイスが自動的に Nano の配色を採用する。
+  ;;   `ui-nano-palette' がロードされた場合、`with-eval-after-load' により
+  ;;   `dev-term-apply-palette' が再適用され、ターミナルのフェイスが自動的に Nano の配色を
+  ;;   採用する。ui-theme.el が `my:use-ui' に関係なく無条件にロードするため、
+  ;;   実際には nano の UI バンドルが有効でない場合にも採用される。
 
   ;;; Code:
 
@@ -10301,9 +10308,9 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
     ;; パレットを即座に適用する（nano が無効な場合はフォールバック色を使う）。
     (dev-term-apply-palette)
 
-    ;; nano の UI バンドルが後からロードされたとき、実際のパレットで再適用する。
-    ;; これは my:use-ui で nano が選ばれた場合にも、他の理由で ui-nano-palette が
-    ;; ロードされた場合にも発火する — ロード時の強い依存を作ることなく。
+    ;; ui-nano-palette がロードされたとき、実際のパレットで再適用する。
+    ;; ui-theme.el は my:use-ui に関係なくパレットをロードするので、これは常に発火する。
+    ;; ロード時の強い依存は作らない。
     (with-eval-after-load 'ui-nano-palette
       (dev-term-apply-palette))
 
@@ -16908,6 +16915,9 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (ui/ui-theme.el, dev/dev-term.el): ui-nano-palette のロードに関するコメントを実態に合わせて訂正。
+	ui-theme.el は my:use-ui を参照せず、パレットのロードも nano テーマの適用も無条件に行う。「'doom や 'none では
+	ロードされない」とした以前の記述は誤りだった。コードは変えていない。
 	* README.org (ui/ui-theme.el) (ui-theme--color, ui-theme--apply-faces): nano-color-* の fallback として
 	ui-nano-palette の既定値（#e5e7eb、#111827、#dc2626）を重ねて持っていたのをやめ、パレット変数が
 	無いときは該当フェイスを設定しない。色の既定値の正本を ui-nano-palette の defcustom だけにする。
