@@ -272,7 +272,6 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 - Tree-sitter 文法の管理（ =core-treesit= ）
 - セッション永続化、履歴、バックアップ、自動保存ポリシー
   （ =core-history= 、 =core-persistence= 、 =core-editing= ）
-- バックグラウンドジョブ・スケジューラのファサード（ =core-session= / =core-session-private= ）
 - 永続的な =*scratch*= バッファの補助（ =core-buffers= ）
 - GC チューニングと起動性能（ =core-gc= 、 =core-runtime= ）
 - custom-file の管理（ =core-custom= ）と LSP/UI バックエンドの選択（ =core-switches= ）
@@ -1954,8 +1953,6 @@ see the frame.  Runs once only (removes itself from
       ;; -----------------------------------------------------------------------
       core-fixes
       core-policy
-      core-session
-      core-session-private
       core-gc
       core-persistence
       core-buffers
@@ -2519,266 +2516,6 @@ Runs via `after-init-hook' once all modules are loaded."
   ;;; core/core-native.el ends here
 #+end_src
 
-*** core/core-session.el
-:PROPERTIES:
-:CUSTOM_ID: core-session
-:header-args:emacs-lisp: :tangle lisp/core/core-session.el
-:END:
-
-**** core-session.el — Facade Pattern
-
-外部モジュールに見せるのは公開 API だけにして、実装の詳細は =core-session-private.el= に
-隠しています。
-
-#+begin_example
-external modules → core-session (public API)
-                         ↓ require
-                 core-session-private (implementation details)
-#+end_example
-
-[[file:svg/03_session_facade.svg]]
-
-#+begin_quote
-*既知の問題:* =core-session-register-job= を実際に呼び出している箇所は、本設定全体のどこにも現状ありません。したがって =core-session--jobs-table= は常に空で、定期・アイドル
-両方のタイマーは空のハッシュテーブルを律儀に走査し続けているだけの状態です。実害はありま
-せんが、将来のジョブ登録用の拡張ポイントとして温存するか、スケジューラ自体を削除するかは
-未決です。
-#+end_quote
-
-*なぜ 2 枚に分けるのか*
-
-実装を隠すことで、ジョブレジストリの持ち方やタイマーの張り方を後から変えても、呼び出し側に
-影響が出ないようにするためです。そのために、外部の呼び出し側が
-=(require 'core-session-private)= を直接発行することは禁止しています。
-
-*タイマーの 2 チャネル設計*
-
-- 定期ジョブ — =run-at-time= （600 秒ごと）
-- アイドル契機の処理 — =run-with-idle-timer= （120 秒間の無操作後）
-
-「必ず定期的に走らせたいもの」と「暇なときだけ走らせたいもの」を、別のレーンに分けている、
-という理解で十分です。
-#+begin_src emacs-lisp
-  ;;; core/core-session.el --- セッション制御（公開ファサード） -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; セッション制御: バックグラウンドジョブ・スケジューリングの公開ファサード。
-  ;;
-  ;; 本ファイル（公開 API）の責務:
-  ;; - ライフサイクル・コマンド `core-session-start' / `core-session-stop' を公開する
-  ;; - アイドル系・定期系のバックグラウンドタスクを登録するための
-  ;;   `core-session-register-job' / `core-session-unregister-job' を提供する
-  ;; - 実装はすべて `core-session-private' に委譲する
-  ;;
-  ;; 注意: 外部モジュールは本ファイルのみを require すること。
-  ;; `core-session-private' を直接ロードしてはならない。
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'subr-x)
-    (require 'seq))
-
-  (require 'core-session-private)
-
-  (defgroup core-session nil
-    "Session orchestration and background hygiene."
-    :group 'core)
-
-  (defcustom core-session-enable-p t
-    "Master switch for core-session jobs."
-    :type 'boolean
-    :group 'core-session)
-
-  (defcustom core-session-idle-delay 120
-    "Seconds of idle time before idle-lane jobs may run."
-    :type 'integer
-    :group 'core-session)
-
-  (defcustom core-session-periodic-interval 600
-    "Seconds between periodic-lane job runs."
-    :type 'integer
-    :group 'core-session)
-
-  (defvar core-session--started-p nil
-    "Non-nil when session scheduler has started.")
-
-  (defun core-session--ensure-started ()
-    "Ensure the scheduler is running."
-    (when (and core-session-enable-p (not core-session--started-p))
-      (core-session--start)
-      (setq core-session--started-p t)))
-
-  (defun core-session-start ()
-    "Start the core-session scheduler."
-    (interactive)
-    (core-session--ensure-started)
-    (message "core-session: started"))
-
-  (defun core-session-stop ()
-    "Stop the core-session scheduler."
-    (interactive)
-    (core-session--stop)
-    (setq core-session--started-p nil)
-    (message "core-session: stopped"))
-
-  (defun core-session-register-job (name fn &rest plist)
-    "Register background job NAME with function FN.
-
-  PLIST may contain additional metadata such as :enabled."
-    (let ((meta (core-session--normalize-job-meta name fn plist)))
-      (core-session--register meta)
-      (core-session--ensure-started)
-      name))
-
-  (defun core-session-unregister-job (name)
-    "Unregister background job NAME."
-    (core-session--unregister name)
-    name)
-
-  (defun core-session-run-job (name)
-    "Run job NAME immediately."
-    (core-session--run-job name))
-
-  (provide 'core-session)
-
-  ;;; core/core-session.el ends here
-#+end_src
-
-*** core/core-session-private.el
-:PROPERTIES:
-:CUSTOM_ID: core-session-private
-:header-args:emacs-lisp: :tangle lisp/core/core-session-private.el
-:END:
-
-#+begin_src emacs-lisp
-  ;;; core/core-session-private.el --- セッション制御（内部実装） -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; セッション・ジョブスケジューラの内部実装。
-  ;;
-  ;; 本ファイルの責務:
-  ;; - ジョブレジストリのハッシュテーブルを所有する
-  ;; - アイドルタイマーと定期タイマーを管理する
-  ;; - ジョブのメタデータを正規化する
-  ;; - 登録されたジョブを実行する（ジョブのエラーは `message' で報告し、他のジョブは止めない）
-  ;;
-  ;; 注意:
-  ;; 本モジュールは core-session.el の内部詳細である。
-  ;; 外部モジュールがこれに依存してはならない。
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'subr-x)
-    (require 'seq))
-
-  ;; バイトコンパイラ対策の前方宣言。
-  (defvar core-session-idle-delay)
-  (defvar core-session-periodic-interval)
-
-  (defvar core-session--jobs-table (make-hash-table :test 'eq)
-    "Hash table storing registered jobs.")
-
-  (defvar core-session--periodic-timer nil
-    "Periodic scheduler timer.")
-
-  (defvar core-session--idle-timer nil
-    "Idle scheduler timer.")
-
-  (defun core-session--normalize-job-meta (name fn plist)
-    "Return normalized job metadata."
-    (unless (symbolp name)
-      (error "Job name must be a symbol"))
-    (unless (functionp fn)
-      (error "Job function must be callable"))
-    (append (list :name name :fn fn :enabled t) plist))
-
-  (defun core-session--register (meta)
-    "Register META job entry."
-    (puthash (plist-get meta :name) meta core-session--jobs-table))
-
-  (defun core-session--unregister (name)
-    "Remove job NAME."
-    (remhash name core-session--jobs-table))
-
-  (defun core-session--jobs ()
-    "Return all registered jobs."
-    (let (out)
-      (maphash
-       (lambda (_k v)
-         (push v out))
-       core-session--jobs-table)
-      (nreverse out)))
-
-  (defun core-session--call-job (meta)
-    "Call the function of job META, reporting any error with `message'.
-The error is not propagated, so one failing job cannot stop the others."
-    (condition-case err
-        (funcall (plist-get meta :fn))
-      (error
-       (message "[core-session] job %s failed: %s"
-                (plist-get meta :name) (error-message-string err)))))
-
-  (defun core-session--run-job (name)
-    "Execute job NAME."
-    (let ((meta (gethash name core-session--jobs-table)))
-      (when meta
-        (core-session--call-job meta))))
-
-  (defun core-session--run-all ()
-    "Run all enabled jobs.
-Iterates the hash table directly with `maphash' to avoid allocating
-an intermediate list on every timer tick."
-    (maphash (lambda (_name meta)
-               (when (plist-get meta :enabled)
-                 (core-session--call-job meta)))
-             core-session--jobs-table))
-
-  (defun core-session--start ()
-    "Start timers for background jobs."
-    (setq core-session--periodic-timer
-          (run-at-time
-           core-session-periodic-interval
-           core-session-periodic-interval
-           #'core-session--run-all))
-
-    (setq core-session--idle-timer
-          (run-with-idle-timer
-           core-session-idle-delay
-           t
-           #'core-session--run-all)))
-
-  (defun core-session--stop ()
-    "Stop scheduler timers."
-    (when (timerp core-session--periodic-timer)
-      (cancel-timer core-session--periodic-timer))
-
-    (when (timerp core-session--idle-timer)
-      (cancel-timer core-session--idle-timer))
-
-    (setq core-session--periodic-timer nil
-          core-session--idle-timer nil))
-
-  (provide 'core-session-private)
-
-  ;;; core/core-session-private.el ends here
-#+end_src
-
 *** core/core-gc.el
 :PROPERTIES:
 :CUSTOM_ID: core-gc
@@ -3297,7 +3034,7 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
   ;; （マルチプロセス安全性: GUI + デーモン + CLI の Emacs が 1 つの履歴ファイルを共有）。
   ;; このマージは `savehist-additional-variables' が nil のときのみ有効なので、
   ;; `my:desktop-ask-on-restore' はここでは意図的に永続化しない。これは `custom-file' /
-  ;; core-session-private.el の担当である。
+  ;; core-custom.el の担当である。
   (leaf savehist
     :straight nil
     :pre-setq
@@ -16576,7 +16313,7 @@ Org バッファ内で =C-c C-c= すれば =:file= 指定に従って同じ場�
 ラベルが =dot= のデフォルトフォントで文字化け・box からのはみ出しを起こす環境では、
 =fontname= を ="Noto Sans CJK JP"= 等の CJK 対応フォントに差し替えること（以下の図は
 すべてこのフォントで生成済み）。それぞれの図は [[#modular-loader-and-core-suite][Modular
-Loader & Core Suite]] 内の対応するモジュール節（起動フロー・=core-session.el= ・
+Loader & Core Suite]] 内の対応するモジュール節（起動フロー・
 =core-gc.el= ・自動保存・auth-gpg.el・completion-capf-org-src.el・dev-lsp-bridge.el・
 utils-claude.el・orgx-auto-tangle.el・ui-leader.el・dev-ai.el・personal Overview）から
 インライン画像として参照されている。
@@ -16628,42 +16365,6 @@ digraph condition_case {
   cc -> quit [label="quit"];
   cc -> next [label="成功"];
   err -> next;
-}
-#+end_src
-
-* Appendix: 03_session_facade.dot — core-session の Facade パターン
-:PROPERTIES:
-:CUSTOM_ID: appendix-03-session-facade-dot
-:header-args:dot: :tangle svg/03_session_facade.dot :file svg/03_session_facade.svg :cmdline -Tsvg
-:END:
-
-#+begin_src dot
-digraph session_facade {
-  rankdir=LR;
-  bgcolor="white";
-  fontname="Noto Sans CJK JP";
-  node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11 fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
-  edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
-
-  ext [label="外部モジュール"];
-  pub [label="core-session.el\n公開 API (Facade)"];
-
-  subgraph cluster_impl {
-    label="core-session-private.el（非公開）";
-    style=dashed;
-    color="#888780";
-    fontname="Noto Sans CJK JP";
-    fontsize=10;
-    fontcolor="#5F5E5A";
-    table [label="jobs-table\n(make-hash-table :test 'eq)" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-    periodic [label="定期タイマー\n600秒ごと" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-    idle [label="アイドルタイマー\n120秒アイドル後" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-  }
-
-  ext -> pub;
-  pub -> table;
-  periodic -> table [label="maphash"];
-  idle -> table [label="maphash"];
 }
 #+end_src
 
@@ -16950,6 +16651,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-13  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (core/core-session.el, core/core-session-private.el): ジョブ・スケジューラを削除。
+	core-session-register-job の呼び出し元が設定全体に無く、ジョブ表は常に空だった。my:modules から外し、
+	Appendix: 03_session_facade.dot と svg/03_session_facade.svg も削除（図番号 03 は欠番）。
+	* README.org (core/core-history.el): savehist のコメントが指す担当ファイルを core-custom.el に訂正。
 	* README.org (core/core-custom-ui-extras.el): 空の互換シムを廃止し、節と tangle 対象を削除。
 	どこからも require されていないことを確認済み。
 	* README.org (core/core-session-private.el) (core-session--call-job): ジョブのエラーを握りつぶさず
