@@ -4915,6 +4915,7 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   ;; 責務:
   ;;
   ;; - Nano テーマをロードする（`my:use-ui' が 'nano / 'doom-nano で、利用可能な場合）
+  ;; - `my:use-ui' が 'doom のときは、doom-themes のテーマ（`ui-theme-doom-theme'）をロードする
   ;; - ui-nano-palette 経由で Nano のフェイスを設定する（同上）
   ;; - パレットの上書きを適用する
   ;; - 括弧対応のハイライト用フェイスを設定する
@@ -4933,10 +4934,11 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   ;;
   ;; `my:use-ui' との関係（2026-10-14 に設計どおりに直した）:
   ;;
-  ;;   nano のテーマとパレットを適用するのは、`my:use-ui' が 'nano または 'doom-nano の
-  ;;   ときだけである（`ui-theme-nano-p'）。'doom と 'none では、nano のテーマ、パレット、
-  ;;   nano-emacs / nano-theme の導入のいずれも行わず、Emacs の既定のテーマのままにする。
-  ;;   その場合 `ui-theme--init' は何もしない。
+  ;;   `ui-theme--init' は `my:use-ui' で分岐する。
+  ;;   - 'nano / 'doom-nano（`ui-theme-nano-p'）: nano のテーマ、パレット、フェイスの調整を適用する。
+  ;;   - 'doom（`ui-theme-doom-p'）: doom-themes のテーマ `ui-theme-doom-theme' を `load-theme' する。
+  ;;     nano のテーマ、パレット、nano-emacs / nano-theme の導入のいずれも行わない。
+  ;;   - 'none: 何もしない（Emacs の既定のテーマのまま）。
   ;;   `my:use-ui' はロード時に決まっている（personal/ の設定は modules.el より前に走り、
   ;;   core-switches は本モジュールより前にロードされる）ので、判定はロード時と
   ;;   `ui-theme--init' の実行時に行う。
@@ -4966,8 +4968,13 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
 
   (defun ui-theme-nano-p ()
     "Return non-nil when `my:use-ui' selects a bundle that uses the nano theme.
-That is `nano' or `doom-nano'.  With `doom' or `none' the default theme is kept."
+That is `nano' or `doom-nano'."
     (and (memq (bound-and-true-p my:use-ui) '(nano doom-nano)) t))
+
+  (defun ui-theme-doom-p ()
+    "Return non-nil when `my:use-ui' is `doom', which uses a doom-themes theme.
+With `none' the default theme is kept."
+    (eq (bound-and-true-p my:use-ui) 'doom))
 
   ;; NOERROR 形式（第 3 引数 t）なのは、ファイルが見つからなくても起動を止めないため。
   ;; nano 系の UI のときだけロードする（冒頭の Commentary を参照）。
@@ -4987,6 +4994,13 @@ That is `nano' or `doom-nano'.  With `doom' or `none' the default theme is kept.
   (defcustom ui-theme-enable-p t
     "Enable UI theme configuration."
     :type 'boolean
+    :group 'ui-theme)
+
+  (defcustom ui-theme-doom-theme 'doom-one
+    "The doom-themes theme to load when `my:use-ui' is `doom'.
+Any theme that doom-themes provides, for example `doom-one',
+`doom-one-light' or `doom-nord'."
+    :type 'symbol
     :group 'ui-theme)
 
   (defun ui-theme--color (symbol &optional fallback)
@@ -5045,10 +5059,21 @@ That is `nano' or `doom-nano'.  With `doom' or `none' the default theme is kept.
     "Reapply UI policy after theme changes."
     (ui-theme--apply-faces))
 
-  (defun ui-theme--init ()
-    "Initialize UI theme configuration.
-Does nothing unless `my:use-ui' selects a nano bundle (`ui-theme-nano-p')."
-    (when (and ui-theme-enable-p (ui-theme-nano-p))
+  (defun ui-theme--init-doom ()
+    "Load the doom-themes theme `ui-theme-doom-theme'.
+A missing doom-themes or an unknown theme only prints a message, so that
+startup goes on."
+    (if (not (require 'doom-themes nil t))
+        (message "[ui-theme] doom-themes is not available; keeping the default theme.")
+      (condition-case err
+          (load-theme ui-theme-doom-theme t)
+        (error
+         (message "[ui-theme] failed to load %s: %s"
+                  ui-theme-doom-theme (error-message-string err))))))
+
+  (defun ui-theme--init-nano ()
+    "Apply the nano theme, the palette and the face adjustments."
+    (progn
 
       (require 'nano-layout nil t)
       (require 'nano-faces nil t)
@@ -5070,6 +5095,19 @@ Does nothing unless `my:use-ui' selects a nano bundle (`ui-theme-nano-p')."
       ;; 前回終了時に選んだ variant を復元する（フックの登録後に行う）。
       (when (fboundp 'ui-theme-variant-restore)
         (ui-theme-variant-restore))))
+
+  (defun ui-theme--init ()
+    "Initialize UI theme configuration according to `my:use-ui'.
+`nano' and `doom-nano' get the nano theme (`ui-theme-nano-p'), `doom' gets
+`ui-theme-doom-theme' (`ui-theme-doom-p'), and `none' keeps the default theme."
+    (when ui-theme-enable-p
+      (cond ((ui-theme-nano-p) (ui-theme--init-nano))
+            ((ui-theme-doom-p) (ui-theme--init-doom)))))
+
+  (leaf doom-themes
+    :when (ui-theme-doom-p)
+    :straight t
+    :require nil)
 
   (leaf nano-emacs
     :when (ui-theme-nano-p)
@@ -17066,6 +17104,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (ui/ui-theme.el) (ui-theme-doom-p, ui-theme-doom-theme, ui-theme--init-doom, ui-theme--init-nano,
+	ui-theme--init): my:use-ui が doom のとき、doom-themes のテーマ（ui-theme-doom-theme。既定は doom-one）を
+	load-theme するようにした。nano 側の処理は ui-theme--init-nano に切り出しただけで変えていない。doom-themes は
+	doom のときだけ導入する。none は従来どおり既定のテーマ。動作の追加。
 	* README.org (personal/ac1965.el): Org ディレクトリの上書きを整理。my:d:org-journal と my:d:org-roam の設定を
 	削除（orgx-core.el が my:d:org から導く場所と同じ。末尾のスラッシュの有無だけが違う）。my:f:capture-blog-file は
 	OS で分岐せず、~/Projects/blog/mysite/all-posts.org にした。OS で分岐するのは my:d:org だけ。
