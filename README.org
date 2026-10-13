@@ -3482,7 +3482,7 @@ dirvish の有効化は、起動時間を縮めるため、最初に dired が�
      ;; 経由しない。そのため IME（sis）状態がウィンドウ最大化時に判別できなくなる
      ;; 問題があった。:right に `ime' セグメントを追加することで、dirvish 自身の
      ;; mode-line 上に IME 表示を出す。セグメント本体（`ime'）の定義は
-     ;; personal/ac1965.el 側（sis-change-hook のキャッシュ `ac1965--sis-indicator'
+     ;; personal/personal-ime.el 側（sis-change-hook のキャッシュ `ac1965--sis-indicator'
      ;; の定義箇所）に置く — `dirvish-mode-line-format' はセグメント名のリストに
      ;; すぎず、実際に mode-line が描画されるタイミング（dirvish バッファを開いた
      ;; とき、= init 完了よりずっと後）までにセグメント関数が登録されていれば
@@ -12270,6 +12270,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 |------+---------|
 | =personal/user.el= | 全マシン共通の個人設定、`my:wsl-p'、デバイスファイルのロード |
 | =personal/<login>.el= | 識別情報、フォント、UI、LSP スイッチ |
+| =personal/personal-ime.el= | IME（sis）状態の nano-modeline・dirvish への表示 |
 | =personal/personal-hugo.el= | Hugo ブログ（ =all-posts.org= ）のタグ設定と capture |
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Apple Music 操作 |
 | =personal/device-wsl.el= | WSL のクリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
@@ -12487,6 +12488,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; - フォントを設定する: JetBrains Mono（等幅）、Noto Sans JP（可変）、サイズ 18
   ;; - `my:use-ui 'nano' と `my:use-lsp 'eglot' を有効化する
   ;; - Hugo ブログ関連（タグ設定、capture）は personal-hugo.el へ分離した
+  ;; - IME 表示（sis のキャッシュ、dirvish と nano-modeline への受け渡し）は
+  ;;   personal-ime.el へ分離した
   ;; - .ps1 → powershell-mode、.bas → visual-basic-mode を登録する
   ;;   （いずれも prog-mode 派生であり、prog-mode-hook は自動的に発火する）
   ;;
@@ -12669,6 +12672,112 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
            ("\\.frm\\'" . visual-basic-mode)))
 
 
+
+;; ---------------------------------------------------------------------------
+;; IME 表示（sis）
+;; ---------------------------------------------------------------------------
+
+;;
+;; sis のキャッシュ、dirvish 用の mode-line セグメント、nano-modeline への受け渡しは
+;; personal-ime.el に分離した（2026-10-13）。
+;; 読み込みの位置は元の位置のまま（下のリーダーキーの割り当てより前）。
+;;
+
+(require 'personal-ime)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; Leader key
+  ;; ---------------------------------------------------------------------------
+
+  (defun ac1965--bind-leader-keys ()
+    "Bind ac1965-specific keys into the leader keymap after startup.
+
+  Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+  (depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
+  and `ui-leader-o-map' are guaranteed to be live keymaps."
+    (ui-keymap--bind 'ui-leader-t-map "m" #'my/ui-nano-modeline-toggle)
+    (ui-keymap--bind 'ui-leader-o-map "g" #'ac1965/org-hugo-set-tags)
+    (ui-keymap--bind 'ui-leader-o-map "f" #'ac1965/open-capture-blog-file))
+
+  (add-hook 'after-init-hook #'ac1965--bind-leader-keys 10)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; macOS Keychain の auth-source バックエンド — ログイン単位の制御
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; personal/device-darwin.el は、すべての macOS セッションで
+  ;; auth-keychain-enable を t に設定する。
+  ;;
+  ;; この式はログインアカウントに最終決定権を与える。
+  ;; このアカウントに限り Keychain 参照を無効にするには nil に変更する。
+  ;;
+  ;; 規則 6:
+  ;; auth-keychain-enable は defcustom である。setopt を用いる。
+  ;;
+
+  (setopt auth-keychain-enable t)
+
+;; ---------------------------------------------------------------------------
+;; Hugo ブログ（all-posts.org）
+;; ---------------------------------------------------------------------------
+
+;;
+;; タグ設定、all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの
+;; 上書きは personal-hugo.el に分離した（2026-10-13）。
+;; 上のリーダーキーの割り当て（g、f）が参照する関数もそこで定義される。
+;; フックはいずれも after-init-hook の深さで順序が決まるため、require の位置は問わない。
+;;
+
+(require 'personal-hugo)
+
+
+  (provide 'ac1965)
+  ;;; personal/ac1965.el ends here
+#+end_src
+
+*** personal/personal-ime.el
+:PROPERTIES:
+:CUSTOM_ID: personal-ime
+:header-args:emacs-lisp: :tangle personal/personal-ime.el
+:END:
+
+IME（sis）の状態を、nano-modeline と dirvish の mode-line に表示するための設定です。
+=personal/ac1965.el= から分離しました。
+
+内容は 3 つです。sis-change-hook が更新するキャッシュ変数、dirvish 用の mode-line セグメント、
+ =ui-nano-modeline-ime-function= への受け渡しです。いずれも =ac1965--sis-indicator= を共有します。
+関数と変数の名前は =ac1965--= の接頭辞のまま据え置いています。
+
+=ac1965.el= は =(require 'personal-ime)= で読み込みます。読み込む位置は、分離前にこのコードが
+あった位置のままです。読み込み順に敏感な箇所（ =dirvish= の =NOERROR= の =require= など）の理由は、
+以下のコードのコメントを参照してください。
+
+#+NAME: personal-ime-el
+#+begin_src emacs-lisp
+  ;;; personal/personal-ime.el --- IME 状態のモードライン表示 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; IME（sis）の状態を、nano-modeline と dirvish の mode-line に表示する。
+  ;; personal/ac1965.el から分離した（2026-10-13）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `sis-change-hook' で更新するグローバルなキャッシュ `ac1965--sis-indicator' を持つ
+  ;; - dirvish の mode-line に `ime' セグメントを登録する
+  ;; - `ui-nano-modeline-ime-function' に、キャッシュを返す関数を渡す
+  ;;
+  ;; 名前は旧来の ac1965-- の接頭辞のまま（core-dired.el や README の記述が参照するため）。
+  ;;; Code:
+
   ;; ---------------------------------------------------------------------------
   ;; nano-modeline の IME インジケータ
   ;; ---------------------------------------------------------------------------
@@ -12741,7 +12850,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; `load' すると、Emacs のロード時 eager macro-expansion がこの
   ;; トップレベルフォームを即座に展開しようとする。
   ;;
-  ;; personal/ac1965.el は init.el ステップ9で、modules.el（ステップ10、
+  ;; personal/personal-ime.el（ac1965.el から require される）は init.el ステップ9で、modules.el（ステップ10、
   ;; core-dired の `(leaf dirvish :straight t :require nil)' が dirvish を
   ;; 実際にインストールする箇所）より前にロードされるため、この時点では
   ;; dirvish はまだ load-path 上に存在しない。
@@ -12785,57 +12894,8 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   (setopt ui-nano-modeline-ime-function #'ac1965--sis-indicator-string)
 
-
-  ;; ---------------------------------------------------------------------------
-  ;; Leader key
-  ;; ---------------------------------------------------------------------------
-
-  (defun ac1965--bind-leader-keys ()
-    "Bind ac1965-specific keys into the leader keymap after startup.
-
-  Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
-  (depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
-  and `ui-leader-o-map' are guaranteed to be live keymaps."
-    (ui-keymap--bind 'ui-leader-t-map "m" #'my/ui-nano-modeline-toggle)
-    (ui-keymap--bind 'ui-leader-o-map "g" #'ac1965/org-hugo-set-tags)
-    (ui-keymap--bind 'ui-leader-o-map "f" #'ac1965/open-capture-blog-file))
-
-  (add-hook 'after-init-hook #'ac1965--bind-leader-keys 10)
-
-
-  ;; ---------------------------------------------------------------------------
-  ;; macOS Keychain の auth-source バックエンド — ログイン単位の制御
-  ;; ---------------------------------------------------------------------------
-
-  ;;
-  ;; personal/device-darwin.el は、すべての macOS セッションで
-  ;; auth-keychain-enable を t に設定する。
-  ;;
-  ;; この式はログインアカウントに最終決定権を与える。
-  ;; このアカウントに限り Keychain 参照を無効にするには nil に変更する。
-  ;;
-  ;; 規則 6:
-  ;; auth-keychain-enable は defcustom である。setopt を用いる。
-  ;;
-
-  (setopt auth-keychain-enable t)
-
-;; ---------------------------------------------------------------------------
-;; Hugo ブログ（all-posts.org）
-;; ---------------------------------------------------------------------------
-
-;;
-;; タグ設定、all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの
-;; 上書きは personal-hugo.el に分離した（2026-10-13）。
-;; 上のリーダーキーの割り当て（g、f）が参照する関数もそこで定義される。
-;; フックはいずれも after-init-hook の深さで順序が決まるため、require の位置は問わない。
-;;
-
-(require 'personal-hugo)
-
-
-  (provide 'ac1965)
-  ;;; personal/ac1965.el ends here
+  (provide 'personal-ime)
+  ;;; personal/personal-ime.el ends here
 #+end_src
 
 *** personal/personal-hugo.el
@@ -16757,6 +16817,9 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-13  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (personal/personal-ime.el): personal/ac1965.el から IME 表示（sis のキャッシュ、dirvish 用の
+	mode-line セグメント、ui-nano-modeline-ime-function への受け渡し）を分離。名前は据え置き。
+	ac1965.el は元の位置で (require 'personal-ime) する。
 	* README.org (personal/personal-hugo.el): personal/ac1965.el から Hugo ブログ関連（タグ設定、
 	all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの上書き）を分離。
 	関数名は据え置き。ac1965.el は (require 'personal-hugo) で読み込む。

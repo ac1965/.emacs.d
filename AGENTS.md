@@ -9,8 +9,8 @@
 Org 文書とソースコードを一体として管理する literate program であり、
 `README.org` を設計・仕様・実装の正本（Source of Truth）とする。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-99 個の `.el` ターゲット（`lisp/` 配下 87 個〔`lisp/modules.el` を含む〕、
-`personal/` 配下 8 個、ルートの `early-init.el` と `init.el`、
+100 個の `.el` ターゲット（`lisp/` 配下 87 個〔`lisp/modules.el` を含む〕、
+`personal/` 配下 9 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`）が生成される。
 
 ```
@@ -141,7 +141,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── vcs/        (4)
 │   ├── dev/        (15)
 │   └── utils/      (10)
-├── personal/       (8) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
+├── personal/       (9) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
 ├── scripts/        (9) — tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
