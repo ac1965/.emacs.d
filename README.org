@@ -16201,6 +16201,7 @@ CHECK_BYTECOMP_FILES="lisp/ui/ui-theme.el personal/ac1965.el" make check-bytecom
   ;;   CHECK_BYTECOMP_FILES  コンパイル対象のファイル（空白区切り）。省略時は
   ;;                         lisp/ と personal/ の全 .el、early-init.el、init.el
   ;; 警告が 1 件でもあれば、一覧を標準出力へ出して終了コード 1 で終わる。
+  ;; init の後でロードされていないモジュール（`my:modules' / `my:modules-extra'）も警告に数える。
   ;; 標準エラーには init のメッセージが出るので、Makefile 側で捨てている。
 
   ;;; Code:
@@ -16259,8 +16260,27 @@ does not match it."
                 result)))
       (nreverse result)))
 
+  (defun check-bytecomp--unloaded-modules ()
+    "Return the modules that were meant to load but are not loaded.
+The modules are those of `my:modules' and `my:modules-extra', minus the ones
+in `my:modules-skip'.  Returns nil when the module lists are not defined, as
+when this script runs without init, and when specific files were requested
+through CHECK_BYTECOMP_FILES (a partial run does not judge the whole startup).
+A module that failed to load makes `my/modules-load' only print a message, so
+nothing else notices it."
+    (let ((env (getenv "CHECK_BYTECOMP_FILES")))
+      (when (and (boundp 'my:modules)
+                 (not (and env (not (string-empty-p env)))))
+        (seq-remove
+         (lambda (module)
+           (or (featurep module)
+               (and (fboundp 'modules--should-load-p)
+                    (not (modules--should-load-p module)))))
+         (append my:modules (and (boundp 'my:modules-extra) my:modules-extra))))))
+
   (defun check-bytecomp-run ()
     "Byte-compile every target file and exit with status 1 if a warning appeared.
+  A module that is not loaded after init also counts as a warning.
   The compiled output goes to a temporary directory, so no .elc file is created
   next to the sources."
     (let* ((tmp (make-temp-file "check-bytecomp" t))
@@ -16275,6 +16295,10 @@ does not match it."
               (princ (format "  %s\n"
                              (string-remove-prefix check-bytecomp--root warning)))))
         (delete-directory tmp t))
+      (dolist (module (check-bytecomp--unloaded-modules))
+        (setq total (1+ total))
+        (princ (format "  module not loaded: %s (see the `[modules] Failed to load' message)\n"
+                       module)))
       (princ (format "[check-bytecomp] %s (%d warning%s)\n"
                      (if (zerop total) "ok" "FAILED")
                      total (if (= total 1) "" "s")))
@@ -17104,6 +17128,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Appendix: check-bytecomp.el) (check-bytecomp--unloaded-modules): init の後でロードされていない
+	モジュール（my:modules と my:modules-extra のうち、my:modules-skip に無いもの）を警告として数える。モジュールの
+	ロードに失敗すると my/modules-load はメッセージを出すだけで、他では検出できなかった。CHECK_BYTECOMP_FILES を
+	指定した部分実行では判定しない。
 	* README.org (ui/ui-theme.el) (ui-theme-doom-p, ui-theme-doom-theme, ui-theme--init-doom, ui-theme--init-nano,
 	ui-theme--init): my:use-ui が doom のとき、doom-themes のテーマ（ui-theme-doom-theme。既定は doom-one）を
 	load-theme するようにした。nano 側の処理は ui-theme--init-nano に切り出しただけで変えていない。doom-themes は
