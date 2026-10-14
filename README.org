@@ -6471,6 +6471,7 @@ dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から�
   ;;
   ;; 本ファイルの責務:
   ;; - 高頻度の単一和音ナビゲーション用に C-s、C-.、s-z、M-x をバインドする
+  ;; - C-g を `my/keyboard-quit-dwim' にバインドする（ミニバッファ等を状況に応じて閉じる）
   ;; - macOS 風のバッファ移動をバインドする（s-left/right/up/down）
   ;; - <f1> を `help-command' にバインドする
   ;; - macOS 風のフレーム／ウィンドウ操作をバインドする（s-o/s-m/s-w/s-./s-j）
@@ -6487,6 +6488,9 @@ dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から�
   ;;
   ;; バインド一覧:
   ;;   C-s     → consult-line       （バッファ内検索。isearch の代わり）
+  ;;   C-g     → my/keyboard-quit-dwim （region 解除／*Completions* を閉じる／
+  ;;                                      フォーカス外のミニバッファを閉じる。
+  ;;                                      それ以外は keyboard-quit と同じ）
   ;;   C-.     → other-window       （ウィンドウ移動。2 打鍵）
   ;;   s-z     → undo-redo          （macOS 流の undo/redo。C-? の代わり）
   ;;   M-x     → execute-extended-command
@@ -6532,11 +6536,33 @@ dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から�
   ;;   実行すると向きが自動で反転するので、2 つ目のバインドは実益なく keymap を増やすだけである。
   ;;; Code:
 
+  (defun my/keyboard-quit-dwim ()
+    "Do-What-I-Mean behaviour for `keyboard-quit'.
+
+  The generic `keyboard-quit' does not close the minibuffer when point is
+  in another window.  This command handles, in order:
+
+  - an active region: deactivate it (via `keyboard-quit');
+  - the *Completions* buffer being selected: close its window;
+  - a minibuffer open but not focused: abort it;
+  - otherwise: behave as `keyboard-quit'."
+    (interactive)
+    (cond
+     ((region-active-p)
+      (keyboard-quit))
+     ((derived-mode-p 'completion-list-mode)
+      (delete-completion-window))
+     ((> (minibuffer-depth) 0)
+      (abort-recursive-edit))
+     (t
+      (keyboard-quit))))
+
   (defun ui-global-keys--startup-init ()
     "Register global key bindings after all modules are loaded.
 The binding list and the rationale are in the Commentary of this file."
     ;; 基本ナビゲーション — 単一和音
     ;; global-set-key + kbd → keymap-global-set（Emacs 29 以降の API。規則: keymap-set を優先）
+    (keymap-global-set "C-g"       #'my/keyboard-quit-dwim)
     (keymap-global-set "C-."       #'other-window)
     (keymap-global-set "C-s"       #'consult-line)
     (keymap-global-set "M-x"       #'execute-extended-command)
@@ -17445,6 +17471,8 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-14  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (ui/ui-global-keys.el) (my/keyboard-quit-dwim): C-g を状況対応のコマンドに替えた。フォーカスの外れたミニバッファや
+	*Completions* を C-g で閉じられるようにする（Protesilaos Stavrou の prot/keyboard-quit-dwim を参考）。
 	* README.org (personal/personal-hugo.el) (ac1965/org-hugo-set-tags): Org 以外のバッファで SPC o g を押すと org-element-at-point が
 	非 Org バッファで走り、警告と rx ‘**’ range error を出していた。org-mode 派生でなければ user-error で止めるよう修正。
 	* README.org (core/core-policy.el) (core-policy--trusted-dir): ~/.emacs.d がシンボリックリンクの場合に trusted-content が一致せず、
