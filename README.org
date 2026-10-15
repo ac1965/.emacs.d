@@ -128,7 +128,7 @@ Emacs のバージョンは =メジャー.マイナー.リビジョン= の形�
 
 | 表記             | 意味                                                         |
 |------------------+--------------------------------------------------------------|
-| =30.1= 、 =30.2= | 安定版のリリース。2 要素で、マイナーが 1 以上になる          |
+| =30.1= 、 =31.1= | 安定版のリリース。2 要素で、マイナーが 1 以上になる          |
 | =31.0.50=        | 開発版（ =master= ）。次の 31 リリースに向けた開発中の状態   |
 | =31.0.90=        | プレテスト版。リリース直前の試験版で、 =.91= 、 =.92= と続く |
 | =32.0.50=        | 31 の枝を切ったあとの =master= 。次の次の開発版              |
@@ -764,8 +764,8 @@ https://www.gnu.org/licenses/gpl-3.0.txt
 *必須*
 
 - Emacs 31（ =emacs-31= ブランチ / =master= ）。ネイティブコンパイルを有効にしてビルドして
-  ください。2026-07 時点で Emacs 31 の最新タグは =emacs-31.0.90= （プレテスト）で、安定版の
-  系列は 30.x です。
+  ください。2026-10 時点の最新の安定版は Emacs 31.1 です（ ftp.gnu.org の配布ファイルは
+  2026-08-24 付け）。直前の系列は 30.x（最新は 30.2）です。
 - Git
 - GNU Make
 - GCC 10 以上（ =libgccjit= ）
@@ -16400,9 +16400,9 @@ nothing else notices it."
 
 | ファイル | 役割 |
 |----------+------|
-| =scripts/demo-layout.el= | Emacs の中で 3 分割のデモ画面を組む（ =-l= で読み込む） |
-| =scripts/shot.sh=        | Emacs を起動して画面を組み、ウィンドウを 1 枚撮る |
-| =scripts/compose.py=     | dark と light の 2 枚と構成図を、1 枚の =demo.png= に合成する |
+| =scripts/demo-layout.el= | Emacs の中でデモ画面（3 分割、Corfu、Vertico の 3 場面）を組む（ =-l= で読み込む） |
+| =scripts/shot.sh=        | Emacs を起動して =DEMO_SCENE= の場面を組み、ウィンドウを 1 枚撮る |
+| =scripts/compose.py=     | dark と light の 2 枚、さらに補完の 2 枚（任意）を、1 枚の =demo.png= に合成する |
 
 ** 使い方
 
@@ -16411,28 +16411,42 @@ nothing else notices it."
 scripts/shot.sh dark  /tmp/dark.png
 scripts/shot.sh light /tmp/light.png
 
-# 合成して demo.png に置き換える
-python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
+# 補完の 2 場面（Corfu / Vertico）を撮る
+DEMO_SCENE=complete scripts/shot.sh dark /tmp/complete-dark.png
+DEMO_SCENE=vertico  scripts/shot.sh dark /tmp/vertico-dark.png
+
+# 合成して demo.png に置き換える（--complete と --vertico は省略できる）
+python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
+    --complete /tmp/complete-dark.png --vertico /tmp/vertico-dark.png
 #+end_example
 
 *撮影される画面*
 
-- 左: =README.org= の =ui/ui-nano-modeline-items.el= ブロック。右上: そこから生成された =lisp/ui/ui-nano-modeline-items.el= （読み取り専用）。
-- 右下: =make lint= の実行結果。エコーエリアには起動時間が出る。
-- 合成画像の右側には、light 版と =svg/emacs_config_layer_architecture.svg= を並べる。
+場面は環境変数 =DEMO_SCENE= で選ぶ（既定は =layout= ）。
+
+- =layout= — 左: =README.org= の =ui/ui-nano-modeline-items.el= ブロック。右上: そこから生成された =lisp/ui/ui-nano-modeline-items.el= （読み取り専用）。
+  右下: =make lint= の実行結果。エコーエリアには起動時間が出る。
+- =complete= — elisp バッファで =completion-pre= まで入力し、Corfu のポップアップとゴーストテキストを出す。
+- =vertico= — README.org の =leaf orderless= の節を背景に、 =M-x describe-= の縦型候補を出す。
+- 合成画像は dark と light を横に並べる。補完の 2 枚を渡すと、その下に横並びの 1 段として加わる（左が Corfu、右が Vertico）。
 
 *設計上の注記*
 
-- レイアウトは =window-setup-hook= の中で同期的に組む。この設定では、 =-l= で読み込んだファイルの中で作った
+- =layout= は =window-setup-hook= の中で同期的に組む。この設定では、 =-l= で読み込んだファイルの中で作った
   タイマーが動かなかったため（原因は調べていない）、タイマーには頼らない。 =make lint= の完了も
   =accept-process-output= で待つ。
+- =complete= と =vertico= は入力待ちの状態を撮るため、完了マーカーだけをタイマー（ =demo--ready-after= ）で書く。
+  =vertico= は =execute-extended-command= がミニバッファで待つ間もタイマーが動く。 =complete= は最後の 1 文字を
+  =unread-command-events= へ流し、 =corfu-auto= を実際に起動させる。
+- 起動完了の「Emacs ready in …」は場面の準備より後に出るので、 =demo--ready-after= の中で =(message nil)= で消す。
+- Corfu と Vertico は同じ画面に出せない（ =M-x= を開くとポップアップが消える）ため、別の場面として撮る。
 - 非表示や別 Space のウィンドウは =screencapture= で撮れない。 =shot.sh= は、ウィンドウが見つからないとき
   ディスプレイを起こし、Emacs を前面に出す（画面が一瞬切り替わる）。
 - nano の variant は =.var/nano-variant= に保存される。 =shot.sh= は撮影後に元の値へ戻す。
 - 後片付けでは、コマンドラインに =demo-layout.el= を含む Emacs だけを終了させる。普段使いの Emacs は巻き込まない。
 - 撮影のたびに Emacs を起動するため、 =desktop-save-mode= は撮影中だけ無効にする。
 - =shot.sh= は初回に、前面のウィンドウ ID を返す小さな Swift ヘルパーを =DEMO_DIR= （既定は =/tmp/emacs-demo= ）へ
-  コンパイルする。 =swiftc= と macOS が必要。 =compose.py= は Pillow と =rsvg-convert= を使い、 =pngquant= があれば
+  コンパイルする。 =swiftc= と macOS が必要。 =compose.py= は Pillow を使い、 =pngquant= があれば
   画像を小さくする。
 
 ** demo-layout.el
@@ -16449,6 +16463,8 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
   ;; 結果を並べる。環境変数:
   ;;   DEMO_VARIANT  nano の variant（dark または light。既定は dark）
   ;;   DEMO_DIR      ログと完了マーカーを書くディレクトリ（既定は /tmp/emacs-demo）
+  ;;   DEMO_SCENE    layout（既定。README・生成 .el・make lint の 3 分割）、
+  ;;                 complete（Corfu のポップアップ）、vertico（M-x の縦型候補）
   ;; 完了すると DEMO_DIR/ready、失敗すると DEMO_DIR/error を書く。
 
   ;;; Code:
@@ -16463,6 +16479,9 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
     "MESSAGE を `demo-dir' のログへ追記する。"
     (write-region (format "%s %s\n" (format-time-string "%T") message)
                   nil (expand-file-name "log" demo-dir) t 'silent))
+
+  (defvar demo-scene (intern (or (getenv "DEMO_SCENE") "layout"))
+    "撮影する場面（`layout'、`complete'、`vertico' のいずれか）。")
 
   (defun demo--goto (buffer needle)
     "BUFFER の NEEDLE がある行頭へ移動する。"
@@ -16532,7 +16551,75 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
        (demo--log (format "ERROR %S" err))
        (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
 
-  (add-hook 'window-setup-hook #'demo-layout 90)
+  (defun demo--scene-frame ()
+    "場面用にフレームを整え、README.org の見出し付近を単独ウィンドウに出す。"
+    (when (fboundp 'desktop-save-mode) (desktop-save-mode -1))
+    (blink-cursor-mode -1)
+    (my/ui-theme-nano-switch demo-variant)
+    (set-frame-size nil 1440 880 t)
+    (set-frame-position nil 30 30)
+    (delete-other-windows))
+
+  (defun demo--ready-after (seconds)
+    "SECONDS 秒後に完了マーカーを書く。入力待ちの間も動くようタイマーで行う。"
+    (run-with-timer seconds nil
+                    (lambda ()
+                      ;; 起動完了の「Emacs ready in …」は、この場面の準備より後に出るのでここで消す。
+                      (message nil)
+                      (with-temp-file (expand-file-name "ready" demo-dir) (insert "ok"))
+                      (demo--log "ready"))))
+
+  (defun demo-scene-complete ()
+    "Corfu の補完ポップアップが出た状態を作る。"
+    (condition-case err
+        (progn
+          (make-directory demo-dir t)
+          (demo--log "complete start")
+          (demo--scene-frame)
+          (switch-to-buffer (get-buffer-create "*demo-complete*"))
+          (emacs-lisp-mode)
+          (display-line-numbers-mode -1)
+          (erase-buffer)
+          (insert ";; Corfu: 入力に応じて候補がポップアップする\n\n"
+                  "(setopt completion-styles '(orderless basic)\n"
+                  "        completion-eager-display nil)\n\n"
+                  "(setopt completion-pre")
+          ;; 最後の 1 文字を入力イベントとして流し、corfu-auto を実際に起動させる。
+          (setq unread-command-events (listify-key-sequence "v"))
+          (message nil)
+          (demo--ready-after 3))
+      (error
+       (demo--log (format "ERROR %S" err))
+       (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
+
+  (defun demo-scene-vertico ()
+    "M-x に Vertico の候補が並んだ状態を作る。"
+    (condition-case err
+        (progn
+          (make-directory demo-dir t)
+          (demo--log "vertico start")
+          (demo--scene-frame)
+          (find-file (expand-file-name "README.org" user-emacs-directory))
+          (with-current-buffer (current-buffer) (org-show-all))
+          ;; 背景は補完まわりの節（orderless の設定）に合わせる。
+          (demo--goto (current-buffer) "(leaf orderless")
+          (set-window-start nil (save-excursion (forward-line -6) (point)))
+          (message nil)
+          (demo--ready-after 3)
+          (minibuffer-with-setup-hook
+              (lambda () (insert "describe-"))
+            (execute-extended-command nil)))
+      (quit nil)
+      (error
+       (demo--log (format "ERROR %S" err))
+       (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
+
+  (add-hook 'window-setup-hook
+            (pcase demo-scene
+              ('complete #'demo-scene-complete)
+              ('vertico  #'demo-scene-vertico)
+              (_         #'demo-layout))
+            90)
 
   (provide 'demo-layout)
   ;;; demo-layout.el ends here
@@ -16548,7 +16635,8 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
   #!/bin/zsh
   # README のデモ画像用に、Emacs を起動して 1 枚撮る。
   #   scripts/shot.sh <dark|light> <出力.png>
-  # 環境変数: DEMO_DIR（作業ディレクトリ）、EMACS_APP（既定 /Applications/Emacs.app）
+  # 環境変数: DEMO_DIR（作業ディレクトリ）、EMACS_APP（既定 /Applications/Emacs.app）、
+  #           DEMO_SCENE（layout|complete|vertico。既定 layout）
   set -u
   ROOT=${0:A:h:h}
   VARIANT=${1:?usage: shot.sh <dark|light> <out.png>}
@@ -16588,7 +16676,7 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
     swiftc -O $DEMO_DIR/wid.swift -o $DEMO_DIR/wid || exit 1
   fi
 
-  open -n -a $EMACS_APP --env DEMO_VARIANT=$VARIANT --env DEMO_DIR=$DEMO_DIR \
+  open -n -a $EMACS_APP --env DEMO_VARIANT=$VARIANT --env DEMO_DIR=$DEMO_DIR --env DEMO_SCENE=${DEMO_SCENE:-layout} \
     --args --init-directory $ROOT -l $ROOT/scripts/demo-layout.el
 
   for i in {1..100}; do [[ -f $DEMO_DIR/ready || -f $DEMO_DIR/error ]] && break; sleep 1; done
@@ -16615,13 +16703,14 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
 #+NAME: compose-py
 #+begin_src python
   #!/usr/bin/env python3
-  """Compose demo.png from two Emacs screenshots and the layer architecture diagram.
+  """Compose demo.png from Emacs screenshots.
 
-      python3 scripts/compose.py dark.png light.png demo.png
+      python3 scripts/compose.py dark.png light.png demo.png \\
+          [--complete complete.png] [--vertico vertico.png]
 
-  Layout: the dark capture on the left, the light capture and the rendered
-  svg/emacs_config_layer_architecture.svg stacked on the right.  Needs Pillow and
-  rsvg-convert; pngquant is used when available to shrink the result.
+  Layout: the dark and light captures side by side; the optional completion
+  captures (DEMO_SCENE=complete / vertico) go in a second row.  Needs Pillow;
+  pngquant is used when available to shrink the result.
   """
 
   from __future__ import annotations
@@ -16630,13 +16719,10 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
   import shutil
   import subprocess
   import sys
-  import tempfile
   from pathlib import Path
 
   from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-  ROOT = Path(__file__).resolve().parent.parent
-  ARCH_SVG = ROOT / "svg" / "emacs_config_layer_architecture.svg"
   FONTS = [
       "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
       "/System/Library/Fonts/Hiragino Sans GB.ttc",
@@ -16646,7 +16732,7 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
   BG = (22, 27, 34, 255)        # GitHub dark panel colour; also fine on the light theme
   INK = (230, 237, 243, 255)    # label text
   EDGE = (48, 54, 61, 255)      # thin outline so dark tiles stay visible on BG
-  MARGIN, GAP, LABEL_H, LEFT_W = 48, 40, 74, 2300
+  MARGIN, GAP, LABEL_H, TILE_W = 48, 40, 74, 1700
 
 
   def load_font(size: int) -> ImageFont.ImageFont:
@@ -16654,16 +16740,6 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
           if Path(path).exists():
               return ImageFont.truetype(path, size)
       return ImageFont.load_default()
-
-
-  def render_arch(width: int) -> Image.Image:
-      if not shutil.which("rsvg-convert"):
-          sys.exit("compose.py: rsvg-convert not found (brew install librsvg)")
-      with tempfile.TemporaryDirectory() as tmp:
-          out = Path(tmp) / "arch.png"
-          subprocess.run(["rsvg-convert", "-w", str(width), "-b", "white",
-                          str(ARCH_SVG), "-o", str(out)], check=True)
-          return Image.open(out).convert("RGBA")
 
 
   def load_capture(path: Path) -> Image.Image:
@@ -16685,36 +16761,38 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png
       parser.add_argument("dark", type=Path)
       parser.add_argument("light", type=Path)
       parser.add_argument("output", type=Path)
+      parser.add_argument("--complete", type=Path, help="Corfu capture (DEMO_SCENE=complete)")
+      parser.add_argument("--vertico", type=Path, help="Vertico capture (DEMO_SCENE=vertico)")
       args = parser.parse_args()
 
-      dark, light = load_capture(args.dark), load_capture(args.light)
-      left_h = round(LEFT_W * dark.height / dark.width)
-      arch_ratio = render_arch(1600).height / 1600
-      light_ratio = light.height / light.width
-      right_w = round((left_h - LABEL_H - GAP) / (light_ratio + arch_ratio))
-      arch = render_arch(right_w)
-      light_h = round(right_w * light_ratio)
-      arch_y = MARGIN + LABEL_H + light_h + GAP
-      height = max(MARGIN + LABEL_H + left_h, arch_y + LABEL_H + arch.height) + MARGIN
-      right_x = MARGIN + LEFT_W + GAP
-      canvas = Image.new("RGBA", (right_x + right_w + MARGIN, height), BG)
+      rows = [[("nano dark  ·  README.org → lisp/*.el → make lint", args.dark),
+               ("nano light", args.light)]]
+      extras = [("Corfu  ·  inline completion", args.complete),
+                ("Vertico  ·  M-x", args.vertico)]
+      extras = [(label, path) for label, path in extras if path]
+      if extras:
+          rows.append(extras)
+      rows = [[(label, load_capture(path)) for label, path in row] for row in rows]
+
+      row_heights = [LABEL_H + max(round(TILE_W * image.height / image.width)
+                                   for _, image in row) for row in rows]
+      width = 2 * MARGIN + 2 * TILE_W + GAP
+      height = 2 * MARGIN + sum(row_heights) + GAP * (len(rows) - 1)
+      canvas = Image.new("RGBA", (width, height), BG)
       font = load_font(38)
       draw = ImageDraw.Draw(canvas)
 
-      def place(image: Image.Image, width: int, x: int, y: int) -> None:
-          h = round(width * image.height / image.width)
-          image = rounded(image.resize((width, h), Image.LANCZOS))
-          canvas.alpha_composite(image, (x, y))
-          draw.rounded_rectangle((x, y, x + width - 1, y + h - 1), 26,
-                                 outline=EDGE, width=3)
-
-      draw.text((MARGIN + 6, MARGIN + 8),
-                "nano dark  ·  README.org → lisp/*.el → make lint", font=font, fill=INK)
-      place(dark, LEFT_W, MARGIN, MARGIN + LABEL_H)
-      draw.text((right_x + 6, MARGIN + 8), "nano light", font=font, fill=INK)
-      place(light, right_w, right_x, MARGIN + LABEL_H)
-      draw.text((right_x + 6, arch_y + 8), "10-layer architecture", font=font, fill=INK)
-      place(arch, right_w, right_x, arch_y + LABEL_H)
+      y = MARGIN
+      for row, row_h in zip(rows, row_heights):
+          for i, (label, image) in enumerate(row):
+              x = MARGIN + i * (TILE_W + GAP)
+              h = round(TILE_W * image.height / image.width)
+              draw.text((x + 6, y + 8), label, font=font, fill=INK)
+              tile = rounded(image.resize((TILE_W, h), Image.LANCZOS))
+              canvas.alpha_composite(tile, (x, y + LABEL_H))
+              draw.rounded_rectangle((x, y + LABEL_H, x + TILE_W - 1, y + LABEL_H + h - 1),
+                                     26, outline=EDGE, width=3)
+          y += row_h + GAP
 
       canvas.convert("RGB").save(args.output, optimize=True)
       if shutil.which("pngquant"):
@@ -17489,6 +17567,27 @@ digraph personal_override_contract {
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-15  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* README.org (Prerequisites): Emacs の最新の安定版を 31.1（2026-08-24）に改めた。
+	旧記述は 31.0.90 のプレテストと 30.x を安定版としていた。ftp.gnu.org と公式 NEWS 一覧で確認。
+
+	* README.org (Appendix: demo.png): 表、撮影される画面、設計上の注記を DEMO_SCENE の 3 場面に合わせて更新した。
+	「タイマーに頼らない」は layout だけの記述に改めた。
+
+	* README.org (scripts/compose.py) (main): 合成から 10 層構成図を外し、dark と light を横に並べる配置に改めた。
+	rsvg-convert は不要になった。
+
+	* README.org (scripts/compose.py) (main): --complete と --vertico を追加し、補完の 2 場面を下段に並べて
+	demo.png に合成できるようにした。省略すれば従来どおり。
+
+	* README.org (scripts/demo-layout.el) (demo--ready-after): エコーエリアを消す処理を完了マーカーの直前に移した。
+	起動完了のメッセージが撮影前に再表示されていたため。
+
+	* README.org (scripts/demo-layout.el) (demo-scene-complete, demo-scene-vertico): 撮影前にエコーエリアを消し、
+	complete は行番号を切り、vertico は背景を補完の節（leaf orderless）に合わせた。
+
+	* README.org (scripts/demo-layout.el, scripts/shot.sh): 環境変数 DEMO_SCENE で撮影場面を選べるようにした。
+	complete は Corfu のポップアップ、vertico は M-x の縦型候補。既定の layout は従来どおり。
 
 	* README.org (scripts/demo-layout.el): 撮影対象を ui-theme.el の ui-theme--sync-modeline-faces から、
 	移動後の ui-nano-modeline-items.el の ui-nano-modeline-sync-faces に改めた（search-failed の修正）。
