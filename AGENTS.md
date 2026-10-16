@@ -212,7 +212,8 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
 - LSP バックエンド（`eglot` / `lsp-mode` / `lsp-bridge`）は
   `core-switches` で選択する。コードはバックエンド非依存を保つこと
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
-  このリポジトリには存在しない。存在すると仮定しないこと
+  このリポジトリには存在しない。存在すると仮定しないこと。
+  ただし mu4e だけは `personal/ac1965.el` の leaf で設定している（モジュールではない）
 
 ---
 
