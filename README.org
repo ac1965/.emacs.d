@@ -5194,7 +5194,24 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;; - `my/ui-theme-nano-switch' で nano-light / nano-dark を切り替え、選択を保存する
   ;;   （`my:use-ui' が nano 系でなければ user-error）
   ;; - 前回の選択を `ui-theme-variant-restore' で復元する（ui-theme.el の初期化の最後に呼ばれる）
+  ;; - `ui-theme-variant-follow-system' が非 nil なら、macOS の外観（ライト／ダーク）に追従する。
+  ;;   起動時と `ns-system-appearance-change-functions' で `my/ui-theme-nano-switch' を呼ぶ。
+  ;;   この場合、保存した選択より OS の外観を優先する。手動の切替は次に外観が変わるまでの上書きになる。
+  ;;   デーモンでは `ns-system-appearance' が最初のフレームができるまで決まらないため、
+  ;;   `after-make-frame-functions' から 1 tick 遅らせて合わせる（AGENTS.md の Daemon-mode pattern）
   ;;; Code:
+
+  (defgroup ui-theme-variant nil
+    "nano の light / dark の切替と保存。"
+    :group 'faces)
+
+  (defcustom ui-theme-variant-follow-system t
+    "非 nil なら、macOS の外観（ライト／ダーク）に nano の variant を合わせる。"
+    :type 'boolean
+    :group 'ui-theme-variant)
+
+  (defvar ns-system-appearance)
+  (defvar ns-system-appearance-change-functions)
 
   (declare-function nano-dark "nano-theme-support")
   (declare-function nano-light "nano-theme-support")
@@ -5217,7 +5234,30 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
                       (insert-file-contents ui-theme-variant--file)
                       (buffer-string)))
                    "dark")
-        (my/ui-theme-nano-switch 'dark))))
+        (my/ui-theme-nano-switch 'dark)))
+    (ui-theme-variant--follow-setup))
+
+  (defun ui-theme-variant--apply-system (&optional appearance)
+    "APPEARANCE（`light' / `dark'。省略時は `ns-system-appearance'）に variant を合わせる。
+`ui-theme-variant-follow-system' が nil、nano が無効、APPEARANCE が不明のときは何もしない。"
+    (let ((app (or appearance (bound-and-true-p ns-system-appearance))))
+      (when (and ui-theme-variant-follow-system
+                 (memq app '(light dark))
+                 (fboundp 'ui-theme-nano-p)
+                 (ui-theme-nano-p))
+        (my/ui-theme-nano-switch app))))
+
+  (defun ui-theme-variant--follow-setup ()
+    "OS の外観への追従を設定する。外観の変化時と、現在の外観での初期化を登録する。
+デーモンでは最初のフレームができてから、1 tick 遅らせて合わせる。"
+    (when ui-theme-variant-follow-system
+      (add-hook 'ns-system-appearance-change-functions
+                #'ui-theme-variant--apply-system)
+      (if (daemonp)
+          (add-hook 'after-make-frame-functions
+                    (lambda (_frame)
+                      (run-with-timer 0 nil #'ui-theme-variant--apply-system)))
+        (ui-theme-variant--apply-system))))
 
   ;;;###autoload
   (defun my/ui-theme-nano-switch (variant)
@@ -17699,6 +17739,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-17  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (ui/ui-theme-variant.el) (ui-theme-variant-follow-system, ui-theme-variant--apply-system,
+	ui-theme-variant--follow-setup): 新規。macOS の外観（ライト／ダーク）に nano の variant を自動で合わせる。
+	起動時と ns-system-appearance-change-functions で my/ui-theme-nano-switch を呼ぶ。デーモンでは
+	after-make-frame-functions から 1 tick 遅らせる。defgroup ui-theme-variant を追加。動作の追加。
 	* README.org (personal/ac1965.el): mu4e の leaf を追加。Homebrew の mu が置く site-lisp を load-path に足し、
 	取得コマンド（mbsync -a）と /work 配下の Sent / Drafts / Trash を設定する。ディレクトリが無いホストでは何もしない。
 
