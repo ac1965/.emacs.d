@@ -457,6 +457,7 @@ vcs は dev 層に依存してはいけません。
 - ビルド・Docker・SQL・REST・インフラ系ファイルのモード・プロジェクト基盤・検索／ナビゲーション
   の補助（ =dev-build= 、 =dev-docker= 、 =dev-sql= 、 =dev-rest= 、 =dev-infra-modes= 、
   =dev-web-core= 、 =dev-navigation= 、 =dev-tools= ）
+- radare2 によるバイナリ解析（ =dev-radare2= ）
 - EMMS による音楽プレイヤー統合（ =dev-music= ）
 
 なお、Org Babel と Claude API を組み合わせたワークフローは =personal/personal-ai.el= にあり、
@@ -784,27 +785,30 @@ https://www.gnu.org/licenses/gpl-3.0.txt
 ことはありません。削除安全性という考え方を、モジュールだけでなく Emacs のバージョンにも
 適用している、と考えてください。
 
+*ビルド情報*
+
 # build-info:begin（scripts/update_build_info.py が、この 2 行の間を書き換える。手で編集しない）
 - GNU Emacs *32.0.50*
 
 |Property|Value|
 |--------|-----|
-|Commit|73e530ce886fc23076bd82c08624fb8734a25fd7|
+|Commit|10c3b7611738e3a4510833bd7dc3d26b96951a1a|
 |Branch|master|
 |System|aarch64-apple-darwin27.0.0|
-|Date|2026-10-13 23:09:49 (JST)|
+|Date|2026-10-16 23:18:22 (JST)|
 |Patch|N/A ns-inline.patch|
 |Features|ACL DBUS GIF GLIB GMP GNUTLS JPEG LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TIFF TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM ZLIB|
 |Options|CC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang CXX=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ AR=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar RANLIB=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib NM=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm --with-ns --with-native-compilation=aot --with-tree-sitter --with-gnutls --without-imagemagick --with-modules --prefix=/Users/ac1965/.local 'CFLAGS=-O3 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' 'CPPFLAGS=-I/opt/homebrew/opt/libgccjit/include -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/opt/homebrew/include' 'LDFLAGS=-L/opt/homebrew/opt/libgccjit/lib -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -L/opt/homebrew/lib -framework AppKit'|
 # build-info:end
 
-*ビルド情報の更新*
-
 上の表は、 =my/print-build-info= （ =lisp/dev/dev-tools.el= ）の出力です。Emacs を再ビルドしたら、
 貼り付け直さずに、ビルドスクリプトの後でスクリプトを 1 つ実行すれば反映できます。
 
+#+begin_[[https://github.com/ac1965/dotfiles][dotfiles]] の
+[[https://github.com/ac1965/dotfiles/blob/master/.local/bin/build-emacs-macos.sh][build-emacs-macos.sh]]
+で Emacs をビルド・インストールした後に、次を実行します。
+
 #+begin_example
-# dotfiles の build-emacs-macos.sh で Emacs をビルド・インストールした後に実行する
 python3 scripts/update_build_info.py
 git diff README.org   # 差分を確認してコミットする
 #+end_example
@@ -2055,6 +2059,7 @@ see the frame.  Runs once only (removes itself from
       dev-music
       dev-sql
       dev-rest
+      dev-radare2
       dev-navigation
       dev-tools
 
@@ -8755,7 +8760,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
           (org-fold-show-subtree)
         (org-fold-subtree t))))
 
-  
+
 
   (with-eval-after-load 'org
     (require 'org-fold)
@@ -11159,6 +11164,104 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
 
   (provide 'dev-rest)
   ;;; dev/dev-rest.el ends here
+#+end_src
+
+*** dev/dev-radare2.el
+:PROPERTIES:
+:CUSTOM_ID: dev-radare2
+:header-args:emacs-lisp: :tangle lisp/dev/dev-radare2.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; dev/dev-radare2.el --- radare2 を Emacs から使う -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; radare2 (r2) をバイナリ解析のために Emacs から呼び出す。外部パッケージには
+  ;; 依存せず、`comint' と `call-process' だけで実装する。r2 が無い環境でも
+  ;; ロードは失敗せず、コマンドを呼んだときにだけエラーにする。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/r2': 対象ファイルを r2 の対話セッション (comint) で開く
+  ;; - `my/r2-command': 対象ファイルに r2 コマンドを 1 つ実行し結果を表示する
+  ;;   （標準エラーの進捗表示は捨てる）
+  ;; - `my/r2-disassemble': 対象ファイルの関数 (既定 main) を逆アセンブルする
+  ;; - `my/r2-info': 対象ファイルの情報 (iI) を表示する
+  ;; 対象ファイルは、dired ならポイント上のファイル、それ以外は現在のバッファの
+  ;; ファイル、無ければ minibuffer で尋ねる。
+  ;;; Code:
+
+  (require 'comint)
+
+  (declare-function dired-get-filename "dired")
+
+  (defgroup dev-radare2 nil
+    "radare2 integration."
+    :group 'tools
+    :prefix "dev-radare2-")
+
+  (defcustom dev-radare2-program "r2"
+    "radare2 の実行ファイル名。"
+    :type 'string
+    :group 'dev-radare2)
+
+  (defcustom dev-radare2-analysis-command "aa"
+    "非対話の実行で、コマンドの前に実行する解析コマンド。"
+    :type 'string
+    :group 'dev-radare2)
+
+  (defun dev-radare2--program ()
+    "Return the radare2 executable path, or signal a `user-error'."
+    (or (executable-find dev-radare2-program)
+        (user-error "%s が見つかりません (brew install radare2)" dev-radare2-program)))
+
+  (defun dev-radare2--target ()
+    "Return the binary file to analyze."
+    (expand-file-name
+     (or (and (derived-mode-p 'dired-mode) (dired-get-filename nil t))
+         buffer-file-name
+         (read-file-name "r2 target: " nil nil t))))
+
+  (defun my/r2 (file)
+    "Open FILE in an interactive radare2 session."
+    (interactive (list (dev-radare2--target)))
+    (let ((buf (make-comint (format "r2 %s" (file-name-nondirectory file))
+                            (dev-radare2--program) nil "-e" "scr.color=0" file)))
+      (pop-to-buffer buf)))
+
+  (defun my/r2-command (file cmd)
+    "Run radare2 command CMD on FILE and show the output."
+    (interactive (list (dev-radare2--target) (read-string "r2 command: " "afl")))
+    (let ((buf (get-buffer-create (format "*r2: %s*" (file-name-nondirectory file)))))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (call-process (dev-radare2--program) nil (list t nil) nil
+                        "-q" "-e" "scr.color=0"
+                        "-c" (concat dev-radare2-analysis-command ";" cmd) file)
+          (goto-char (point-min)))
+        (special-mode))
+      (pop-to-buffer buf)))
+
+  (defun my/r2-disassemble (file symbol)
+    "Disassemble SYMBOL (default main) of FILE with radare2."
+    (interactive (list (dev-radare2--target) (read-string "Symbol: " "main")))
+    (my/r2-command file (format "pdf @ %s" symbol)))
+
+  (defun my/r2-info (file)
+    "Show radare2 binary information (iI) for FILE."
+    (interactive (list (dev-radare2--target)))
+    (my/r2-command file "iI"))
+
+  (provide 'dev-radare2)
+  ;;; dev/dev-radare2.el ends here
 #+end_src
 
 *** dev/dev-navigation.el
@@ -17566,7 +17669,19 @@ digraph personal_override_contract {
 
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
+2026-10-16  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* README.org (dev/dev-radare2.el): `dired-get-filename' の `declare-function' を追加した。
+	`make check-bytecomp' の「関数が未定義」警告を解消。
+
 2026-10-15  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* README.org (dev/dev-radare2.el): radare2 を Emacs から使うモジュールを追加した。
+	`my/r2' （対話）、`my/r2-command'、`my/r2-disassemble'、`my/r2-info' を提供する。
+	`dev-radare2' を `my:modules' の dev-rest の後に追加。
+
+	* README.org (dev/dev-radare2.el) (my/r2-command): r2 の標準エラー（INFO の進捗表示）が結果バッファに混ざらないよう、
+	`call-process' の出力先を `(list t nil)' にして捨てるようにした。r2 6.2.4 と /bin/ls で確認。
 
 	* README.org (Prerequisites): Emacs の最新の安定版を 31.1（2026-08-24）に改めた。
 	旧記述は 31.0.90 のプレテストと 30.x を安定版としていた。ftp.gnu.org と公式 NEWS 一覧で確認。
