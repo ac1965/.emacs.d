@@ -10260,10 +10260,20 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
   ;; - `eglot-ensure' を呼ぶ前に、現在のバッファに対して eglot がサーバを見つけられるか
   ;;   を判定する `my/eglot-guessable-p' を定義する
   ;; - `dev-lsp-eglot--maybe-ensure' を `prog-mode-hook' にフックする
+  ;; - C/C++ は clangd（--background-index --clang-tidy）、Python は pyright を
+  ;;   `eglot-server-programs' に登録する（clangd は Homebrew の llvm を優先）
+  ;; - 最後のバッファを閉じたらサーバを止める（`eglot-autoshutdown'）
   ;; - core-switches 向けのエントリポイント `my/lsp-enable-eglot' を提供する
+  ;;
+  ;; rename / code-actions は `dev-lsp-rename'、`dev-lsp-code-actions'（ui-keymap の
+  ;; leader-c-map）で呼ぶ。`C-c r' は query-replace に使っているため eglot-mode-map には
+  ;; 割り当てない。
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は eglot 側にある）。
+  (defvar eglot-server-programs)
 
   (defun my/eglot-guessable-p ()
     "Return non-nil if Eglot can guess a server for the current buffer."
@@ -10281,8 +10291,18 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
   (leaf eglot
     :straight t
     :commands (eglot eglot-ensure)
-    :custom ((eglot-autoreconnect . t))
-    :hook ((prog-mode . dev-lsp-eglot--maybe-ensure)))
+    :custom ((eglot-autoreconnect . t)
+             (eglot-autoshutdown . t))
+    :hook ((prog-mode . dev-lsp-eglot--maybe-ensure))
+    :config
+    (add-to-list 'eglot-server-programs
+                 `((c-mode c-ts-mode c++-mode c++-ts-mode)
+                   . (,(let ((brew "/opt/homebrew/opt/llvm/bin/clangd"))
+                         (if (file-executable-p brew) brew "clangd"))
+                      "--background-index" "--clang-tidy")))
+    (add-to-list 'eglot-server-programs
+                 '((python-mode python-ts-mode)
+                   . ("pyright-langserver" "--stdio"))))
 
   ;;;###autoload
   (defun my/lsp-enable-eglot ()
@@ -17781,6 +17801,9 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-17  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (dev/dev-lsp-eglot.el): eglot-server-programs に clangd
+	（--background-index --clang-tidy。Homebrew の llvm を優先）と pyright を登録し、
+	eglot-autoshutdown を有効化。C-c r は query-replace と衝突するため割り当てない。
 	* README.org (core/core-policy.el): trusted-content を上書きせず、先にロードされる personal/ac1965.el の追加分と合流させる。
 	* README.org (personal/ac1965.el): trusted-content に ~/.local/bin/、~/Projects/scripts/、~/Projects/dotfiles/ を追加した。
 	シェルと Python の flymake バックエンドが untrusted content で無効化される警告を防ぐ。マシン固有のパスなので core-policy.el ではなく personal に置く。
