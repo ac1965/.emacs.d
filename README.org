@@ -272,8 +272,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 - セッション永続化、履歴、バックアップ、自動保存ポリシー
   （ =core-history= 、 =core-persistence= 、 =core-autosave= 、 =core-editing= ）
 - dired の dirvish への置き換え（ =core-dired= ）
-- 永続的な =*scratch*= バッファの補助（ =core-buffers= ）
-- GC チューニングと起動性能（ =core-gc= 、 =core-runtime= ）
+- 明示的な契機での GC（ =core-gc= ）と OS ごとの修飾キー変数・初回フレーム用ヘルパー（ =core-runtime= ）
 - custom-file の管理（ =core-custom= ）と LSP/UI バックエンドの選択（ =core-switches= ）
 
 *core に入れないもの*
@@ -342,8 +341,9 @@ auth も ui 層に依存してはいけません。
 
 *Keychain バックエンドの扱い*
 
-macOS では Keychain バックエンド（ =auth-keychain= ）が既定で有効です。無効にしたい場合は、
-モジュールのロード前に personal 層で =auth-keychain-enable= を上書きしてください。
+macOS では Keychain バックエンド（ =auth-keychain= ）を、 =personal/device-darwin.el= が有効化します
+（=auth-keychain-enable= 自体の既定値は =nil= ）。無効にしたい場合は、モジュールのロード前に personal 層で
+=auth-keychain-enable= を上書きしてください。
 
 *** orgx
 
@@ -545,11 +545,11 @@ tangle 対象でありながら、意図的に =my:modules= に載せていな�
 
 | モジュール          | 宣言元          | 起動条件                                |
 |---------------------+-----------------+-----------------------------------------|
-| =dev-lsp-eglot=     | =core-switches= | after-init 時に =(my:use-lsp 'eglot)=   |
-| =dev-lsp-mode=      | =core-switches= | after-init 時に =(my:use-lsp 'lsp)=     |
-| =ui-doom-modeline=  | =core-switches= | after-init 時に =(my:use-ui 'doom)=     |
-| =ui-nano-modeline=  | =core-switches= | after-init 時に =(my:use-ui 'nano)=     |
-| =ui-doom-nano-modeline= | =core-switches= | after-init 時に =(my:use-ui 'doom-nano)= |
+| =dev-lsp-eglot=     | =core-switches= | after-init 時、 =my:use-lsp= が =eglot= のとき |
+| =dev-lsp-mode=      | =core-switches= | after-init 時、 =my:use-lsp= が =lsp= のとき |
+| =ui-doom-modeline=  | =core-switches= | after-init 時、 =my:use-ui= が =doom= のとき |
+| =ui-nano-modeline=  | =core-switches= | after-init 時、 =my:use-ui= が =nano= のとき |
+| =ui-doom-nano-modeline= | =core-switches= | after-init 時、 =my:use-ui= が =doom-nano= のとき |
 | =ui-nano-palette=   | =ui-theme=      | =my:use-ui= が =nano= / =doom-nano= のとき =(require 'ui-nano-palette nil t)= |
 | =ui-nano-modeline-items= | =ui-nano-modeline= | =ui-nano-modeline= のロード時に =(require 'ui-nano-modeline-items)= |
 
@@ -902,18 +902,21 @@ git diff README.org   # 差分を確認してコミットする
 起動時に何がどの順で走るかは、次のとおりです。
 
 1. =early-init.el=
-   - ディレクトリの確立
+   - GC／ファイルハンドラの緩和（最初）
    - =package.el= の無効化
-   - GC／ファイルハンドラの緩和
+   - ディレクトリの確立
+   - *straight.el* のベース設定、macOS ツールチェーンの準備（該当時）
+   - ネイティブコンパイル、no-littering 互換、バックアップ設定
    - UI 初期値の適用
-   - macOS ツールチェーンの準備（該当時）
 
 2. =init.el=
    - URL 状態の設定
    - *straight.el* のブートストラップ
-   - macOS のログイン環境変数の取り込み（GUI／デーモン）
    - *leaf* の初期化
-   - ランタイム性能パラメータの適用
+   - no-littering と Org（組み込み）の扱い
+   - macOS のログイン環境変数の取り込み（GUI／デーモン）
+   - ランタイム性能パラメータの適用（gcmh を含む）
+   - コア組み込み機能のポリシー
    - =my:modules-extra= の宣言（personal オーバーレイのロード前）
    - personal オーバーレイのロード（personal/user.el が =my:modules-extra= に追記する）
    - =modules.el= の require
@@ -932,7 +935,7 @@ git diff README.org   # 差分を確認してコミットする
 - =package-enable-at-startup= :: =nil=
 - =straight-base-dir= :: =my:d:cache= 配下（ =$XDG_CACHE_HOME/emacs/= 、なければ =~/.cache/emacs/= ）
 - =native-comp-eln-load-path= :: =my:d:eln-cache= （ =my:d:cache= の =eln-cache/= ）
-- =read-process-output-max= :: 4 MiB（一時的）
+- =read-process-output-max= :: 4 MiB
 - =gcmh-high-cons-threshold= :: 128 MiB
 
 *** Usage Guidelines
@@ -1008,7 +1011,7 @@ straight のパッケージ群が見つからず再ブートストラップが�
 =core--orig-file-name-handler-alist= から必ず復元してください。忘れると TRAMP が動かなく
 なります。
 
-なお GC 管理には第 2 段階があり、アイドル時のガベージコレクションは =core-runtime.el= の
+なお GC 管理には第 2 段階があり、アイドル時のガベージコレクションは =init.el= §7 の
 gcmh が担当します。
 
 *no-littering との互換性*
@@ -1043,7 +1046,12 @@ gcmh が担当します。
   ;; - package.el と quickstart を無効化する
   ;; - 起動を最適化する（GC、file-name-handlers）
   ;; - 基本の設定ディレクトリを定義する（.var / .etc / .cache / lisp）
-  ;; - ネイティブコンパイルと Tree-sitter のパスを設定する
+  ;; - ネイティブコンパイルのパスと警告の扱いを設定する
+  ;; - Tree-sitter の文法置き場 `my:d:treesit' を定義する（`treesit-extra-load-path' は
+  ;;   core-treesit.el が設定する）
+  ;; - straight.el のベースディレクトリ・ビルドディレクトリ・組み込み扱いの org を設定する
+  ;; - 世代付きバックアップを有効にし、旧式の自動保存を無効にする
+  ;; - フルスクリーン化（daemon では `after-make-frame-functions'）を仕込む
   ;; - macOS の Homebrew ツールチェーン環境を準備する
   ;; - 早期 UI の既定値とフレームパラメータを確立する
   ;;
@@ -1193,7 +1201,7 @@ gcmh が担当します。
           (format "build-%d.%d" emacs-major-version emacs-minor-version)
           straight-profiles '((nil . "default.el")))
 
-  ;; Org は Emacs 同梱である（Emacs 32.0.50: Org 9.8.7）。しかし straight はそれを知らない。
+  ;; Org は Emacs 同梱である（Emacs 32.0.50: Org 9.8.10）。しかし straight はそれを知らない。
   ;; org-modern / org-roam / ox-hugo / org-journal などは Package-Requires に
   ;; (org "9.x") を宣言しているため、straight はその依存を解決しようとして org の
   ;; レシピを探し、git から clone しはじめる:
@@ -1283,7 +1291,7 @@ gcmh が担当します。
   ;; 9) バックアップ / 自動保存
   ;; ---------------------------------------------------------------------------
 
-  ;; バックアップは var/backup/ 配下に保存する（no-littering のパスは core-editing で設定）。
+  ;; バックアップは var/backup/ 配下に保存する（backup-directory-alist は core-autosave.el で設定）。
   ;; early-init では世代付きバックアップを有効化する。パスは no-littering のロード後に上書きされる。
   (setopt make-backup-files     t
           version-control       t        ; keep numbered backups
@@ -1415,7 +1423,7 @@ macOS の GUI アプリケーションはシェルのプロファイルを読み
 
 判断の根拠は 3 つです。
 
-まず、必要がありません。Emacs 32.0.50 は Org 9.8.7 を同梱しており、本設定が使う Org 関連
+まず、必要がありません。Emacs 32.0.50 は Org 9.8.10 を同梱しており、本設定が使う Org 関連
 パッケージ（ox-hugo、org-roam、org-modern、org-journal、org-appear、valign、ob-mermaid、
 org-fold）は、どれも組み込み Org で動きます。bleeding-edge な Org を要求するものは一つも
 ありません。
@@ -1456,14 +1464,17 @@ native-comp が走ります。
   ;; Emacs 30 以降を対象とする主要な初期化シーケンス。
   ;;
   ;; 本ファイルの責務:
-  ;;   1. straight.el と leaf のブートストラップ（Org は組み込みを使う）
-  ;;   2. URL 状態ディレクトリの構成（`url' のロードより前に行うこと）
-  ;;   3. GUI／デーモンのセッションで macOS のログイン環境を取り込む
-  ;;   4. 起動時に限りプロセス I/O と GC の閾値を一時的に拡大する
-  ;;   5. コア組み込み機能をポリシーレベルで設定する
-  ;;   6. personal オーバーレイを安全にロードする
-  ;;   7. 機能の有効化を modules.el に委譲する
-  ;;   8. 起動メトリクスを報告する
+  ;;   1. URL 状態ディレクトリの構成（`url' のロードより前に行うこと）
+  ;;   2. straight.el のブートストラップ
+  ;;   3. leaf のブートストラップ
+  ;;   4. no-littering のロード
+  ;;   5. Org の扱い（組み込みを使う）
+  ;;   6. GUI／デーモンのセッションで macOS のログイン環境を取り込む
+  ;;   7. サブプロセス I/O の読み取りサイズを拡大し、アイドル時の GC を gcmh に任せる
+  ;;   8. コア組み込み機能をポリシーレベルで設定する
+  ;;   9. personal オーバーレイを安全にロードする
+  ;;  10. 機能の有効化を modules.el に委譲する
+  ;;  11. 起動メトリクスを報告する
   ;;
   ;; 内部ヘルパーには `utils--' ではなく `bootstrap--' の接頭辞を付ける。utils 層が
   ;; 存在するより前に定義されるためである。`bootstrap--safe-load-file' は他層の
@@ -1484,7 +1495,8 @@ native-comp が走ります。
   ;;; -------------------------------------------------------------------------
 
   (defun bootstrap--safe-load-file (file &optional noerror)
-    "Safely load FILE.  Report but do not raise errors by default."
+    "Safely load FILE.  Signal `user-error' on failure unless NOERROR is non-nil.
+When NOERROR is non-nil, only report the failure with `message'."
     (when (and (stringp file) (file-exists-p file))
       (condition-case err
           (load file nil 'nomessage)
@@ -1598,7 +1610,7 @@ native-comp が走ります。
   ;; 2026-07 に削除した。
   ;;
   ;; 理由:
-  ;; - Emacs 32.0.50 は Org 9.8.7 を同梱する。本設定が使う Org 関連パッケージ
+  ;; - Emacs 32.0.50 は Org 9.8.10 を同梱する。本設定が使う Org 関連パッケージ
   ;;   （ox-hugo、org-roam、org-modern、org-journal、org-appear、valign、
   ;;   ob-mermaid、org-fold）は、いずれも組み込み Org で動作する。
   ;;   bleeding-edge Org を要求するものは 1 つも無い。
@@ -1730,11 +1742,10 @@ native-comp が走ります。
 
   ;; run-with-idle-timer をここで直接呼ぶと、init.el の実行中（emacs-startup-hook が
   ;; 発火する *前*）にアイドルタイマーキューへ即座に登録されてしまう。一方、
-  ;; ui-font.el / ui-nano-modeline.el / ui-visual-aids.el（pulsar）等の遅延ロード
-  ;; モジュールは emacs-startup-hook から自分自身のアイドルタイマー
-  ;; （run-with-idle-timer 0 nil #'<module>--activate-*）を登録する。同じ遅延0秒の
-  ;; アイドルタイマーは登録順に発火するため、ここで直接登録すると「Emacs ready...」が
-  ;; Fonts applied: や [ui] nano-modeline initialized. より *先* に出てしまう
+  ;; ui-visual-aids.el（pulsar）等の遅延ロードモジュールは emacs-startup-hook から
+  ;; 自分自身のアイドルタイマー（run-with-idle-timer 0 nil #'<module>--activate-*）を
+  ;; 登録する。同じ遅延0秒のアイドルタイマーは登録順に発火するため、ここで直接
+  ;; 登録すると「Emacs ready...」がそれらの有効化処理より *先* に出てしまう
   ;; （起動完了サマリのつもりが、実際には最初に出力される）。
   ;;
   ;; 対策として、タイマーの登録自体を emacs-startup-hook の末尾（depth 100）へ回す。
@@ -1745,8 +1756,8 @@ native-comp が走ります。
   (defun core--schedule-announce-startup ()
     "Schedule `core--announce-startup' after other emacs-startup-hook timers.
 Registering the idle timer directly at init.el load time would queue it
-before the deferred-loading modules (ui-font, ui-nano-modeline,
-ui-visual-aids, etc.) register their own zero-delay idle timers from
+before the deferred-loading modules (ui-visual-aids, etc.) register
+their own zero-delay idle timers from
 `emacs-startup-hook', causing the ready message to print first instead
 of last.  Deferring the registration itself to the tail of
 `emacs-startup-hook' (depth 100) ensures those modules queue their
@@ -1889,8 +1900,8 @@ see the frame.  Runs once only (removes itself from
 =personal/user.el= は =my:modules-extra= を =setopt= ではなく =setq= で代入しています。
 「 =defcustom= には =setopt= 」というコーディング規則の例外に見えますが、これは正しい実装です。
 
-理由はロード順にあります。personal オーバーレイは =init.el= のセクション 8 で読み込まれ、
-これは =modules.el= を require するセクション 9 より *前* です。つまりオーバーレイが走る
+理由はロード順にあります。personal オーバーレイは =init.el= のセクション 9 で読み込まれ、
+これは =modules.el= を require するセクション 10 より *前* です。つまりオーバーレイが走る
 時点では、上記の =defcustom= はまだ評価されていません。有効な束縛は =init.el= 内の素の
 =(defvar my:modules-extra nil)= だけ、という状態です。
 
@@ -1962,7 +1973,6 @@ see the frame.  Runs once only (removes itself from
       core-policy
       core-gc
       core-persistence
-      core-buffers
       core-runtime
       core-treesit
       core-history
@@ -2088,8 +2098,8 @@ see the frame.  Runs once only (removes itself from
 
   ;; my:modules--format-seconds → modules--format-seconds に改名した。
   ;; 理由: `my:' 接頭辞はディレクトリ／パス変数（my:d、my:d:var 等）に予約されている。
-  ;; 関数はすべて `my/' 接頭辞を用いる。命名を一貫させることで、どちらの規約で grep しても
-  ;; 混乱しなくなる。
+  ;; 公開コマンドは `my/'、非公開関数は `モジュール名--' の接頭辞を用いる。命名を一貫させる
+  ;; ことで、どちらの規約で grep しても混乱しなくなる。
   (defun modules--format-seconds (sec)
     "Format SEC in a compact human-readable form."
     (cond
@@ -2165,6 +2175,8 @@ see the frame.  Runs once only (removes itself from
   ;; - `core-policy' カスタマイズグループを定義する
   ;; - `find-file-hook' で、`no-littering-var-directory' 配下の Emacs Lisp ファイルに
   ;;   `;;; -*- lexical-binding: t; -*-' ヘッダを自動挿入する
+  ;; - `trusted-content' に lisp/、personal/、early-init.el を宣言し、flymake の
+  ;;   バイトコンパイル・バックエンドが無効化されないようにする
   ;;; Code:
 
   (defgroup core-policy nil
@@ -2525,7 +2537,7 @@ GC を走らせるタイミングは 2 つです。Emacs からフォーカス�
 GC の管理は 2 段構えになっています。
 
 - =core-gc.el= — 明示的な契機での GC（ =after-focus-change-function= と =minibuffer-exit-hook= ）
-- =gcmh= （ =core-runtime.el= ）— アイドルタイマーによる自動 GC 管理
+- =gcmh= （ =init.el= §7）— アイドルタイマーによる自動 GC 管理
 
 前者が「切れ目を狙う」担当、後者が「暇なときに片づける」担当だと考えると分かりやすいです。
 実際には 3 層構成です。起動直後は =early-init.el §1= の GC ガードが閾値を一時的に
@@ -2640,73 +2652,6 @@ GC の管理は 2 段構えになっています。
   ;;; core/core-persistence.el ends here
 #+end_src
 
-*** core/core-buffers.el
-:PROPERTIES:
-:CUSTOM_ID: core-buffers
-:header-args:emacs-lisp: :tangle lisp/core/core-buffers.el
-:END:
-
-#+begin_src emacs-lisp
-  ;;; core/core-buffers.el --- 永続的な *scratch* バッファ補助 -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: core
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; 永続的な *scratch* バッファ: kill された場合に自動的に再生成する。
-  ;;
-  ;; 本ファイルの責務:
-  ;; - `kill-buffer-hook' を監視して *scratch* の kill を検出する
-  ;; - `run-with-idle-timer 0' で再生成を予約し、新しいバッファを作る前に
-  ;;   kill が完全に終わるようにする
-  ;; - 代替バッファを `lisp-interaction-mode' で初期化する
-  ;;
-  ;; 設計上の注記:
-  ;; - `defun' はトップレベルに置き、`leaf' ブロック内には置かない。
-  ;;   leaf は宣言用のマクロであり、その中に関数定義を埋め込むのは意味的に紛らわしく、
-  ;;   バイトコンパイラの解析も阻害する。
-  ;; - フック関数は無名ではなく名前付き（core-buffers--maybe-recreate-scratch）とし、
-  ;;   デバッグ可能かつ安全に除去できるようにしている。
-  ;;; Code:
-
-  (defun my/create-scratch-buffer ()
-    "Create a fresh `*scratch*' buffer, or return the existing one unchanged.
-Only populates the buffer when it is newly created (empty and still in
-`fundamental-mode').  Avoids erasing content the user may have typed in a
-pre-existing *scratch* buffer, or content restored by `desktop-save'."
-    (let* ((buf   (get-buffer-create "*scratch*"))
-           (fresh (with-current-buffer buf
-                    (and (eq major-mode 'fundamental-mode)
-                         (= (buffer-size) 0)))))
-      (when fresh
-        (with-current-buffer buf
-          (lisp-interaction-mode)
-          (insert ";; This is a new *scratch* buffer\n\n")))
-      buf))
-
-  (defun my/kill-scratch-buffer-advice (buf)
-    "If BUF is *scratch*, recreate it shortly after kill."
-    (when (string= (buffer-name buf) "*scratch*")
-      ;; idle-timer により、kill が完全に完了してから再生成されることを保証する。
-      (run-with-idle-timer 0 nil #'my/create-scratch-buffer)))
-
-  ;; 無名 lambda を名前付き defun に抽出した。
-  ;; 理由: 名前付きフックはデバッグ可能（M-x describe-function）で、
-  ;; 安全に除去でき（remove-hook が機能する）、重複登録も防げる。
-  (defun core-buffers--maybe-recreate-scratch ()
-    "Recreate *scratch* if it was just killed."
-    (my/kill-scratch-buffer-advice (current-buffer)))
-
-  (add-hook 'kill-buffer-hook #'core-buffers--maybe-recreate-scratch)
-
-  (provide 'core-buffers)
-  ;;; core/core-buffers.el ends here
-#+end_src
-
 *** core/core-runtime.el
 :PROPERTIES:
 :CUSTOM_ID: core-runtime
@@ -2744,8 +2689,8 @@ pre-existing *scratch* buffer, or content restored by `desktop-save'."
   ;; 本ファイルの責務:
   ;; - OS ごと（macOS、Windows、その他）に修飾キーの変数を設定する。
   ;;   キーバインドは一切登録しない — UX は ui/ 層の責務である
-  ;; - `emacs-startup-hook' から呼ばれる `core-runtime--startup-init' を定義する
-  ;; - 性能関連の変数（GC 閾値、サブプロセスの読み取りチャンクサイズ）を設定する
+  ;; - `after-init-hook' から呼ばれる `core-runtime--startup-init' を定義する
+  ;; - 一度だけ実行するフック用ヘルパーと、初回のグラフィカルフレーム向けヘルパーを提供する
   ;;
   ;; 注意: 本モジュールはユーザーから見える副作用を導入してはならない。
   ;;; Code:
@@ -2811,7 +2756,7 @@ FUNCTION にはそのフレームを渡す。daemon 用の共通の窓口。
 
   (defun core-runtime--startup-init ()
     "Apply runtime configuration that must run after all modules are loaded.
-Configures modifier key bindings via `core-runtime--configure-modifiers'.
+Configures modifier key variables via `core-runtime--configure-modifiers'.
 Runs via `after-init-hook'."
     (core-runtime--configure-modifiers))
 
@@ -3282,7 +3227,7 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
   ;; 自動保存サブシステム。core-editing.el から分離した（2026-10-13）。
   ;;
   ;; 本ファイルの責務:
-  ;; - auto-save-visited-mode + focus-out フック + no-littering-var-directory/backup/
+  ;; - auto-save-visited-mode + フォーカス喪失時の保存 + no-littering-var-directory/backup/
   ;;   配下の世代付きバックアップを実装する
   ;; - 除外ルール（拡張子・ファイル名パターン・メジャーモード・述語）を
   ;;   `core-autosave-exclude-*' で設定可能にする
@@ -3300,8 +3245,7 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
   ;;    auto-save-default nil に設定済み）。
   ;;
   ;; 2. core-autosave--save-on-focus-out — Emacs がフォーカスを失ったとき
-  ;;    （after-focus-change-function）、または選択ウィンドウが変わったとき
-  ;;    （window-selection-change-functions）に、変更済みのファイルバッファをすべて
+  ;;    （after-focus-change-function）に、変更済みのファイルバッファをすべて
   ;;    保存する。アイドルタイマーがまだ発火していない隙間を埋める。
   ;;
   ;; 3. 世代付きバックアップ — early-init で有効化する。backup-directory-alist は
@@ -3536,7 +3480,7 @@ dirvish の有効化は、起動時間を縮めるため、最初に dired が�
     (dirvish-override-dired-mode 1)
     (setopt dirvish-cache-dir
             (expand-file-name "dirvish/" my:d:cache))
-    ;; プレビューペインを有効化（リモートバッファでの I/O を避けるため既定では無効）。
+    ;; ミニバッファで候補を絞り込む間、ファイルのプレビューを表示する。
     (dirvish-peek-mode 1)
     ;; ls のスイッチ設定 — 旧 leaf dired ブロックから統合したもの。
     ;; macOS には BSD 版 ls が同梱される。利用できる場合は GNU coreutils の gls を使う。
@@ -3777,7 +3721,7 @@ Runs via `after-init-hook' so all modules are loaded before activation."
   ;; - ディレクトリまたは custom.el が無ければ、空の custom.el ごと作成する
   ;; - custom.el を静かにロードする。エラーは警告として報告し、起動は止めない
   ;; - 対話的にファイルを開く `my/custom-open' を提供する
-  ;; - 未保存のカスタマイズを確認する `my/custom-dump-current' を提供する
+  ;; - 主要な設定値とフェイスのスナップショットを custom-file へ書き出す `my/custom-dump-current' を提供する
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
@@ -4035,8 +3979,8 @@ FRAME は省略可能にし、その場合は `selected-frame' を見る。"
   ;;
   ;; - 意味づけされたパレット変数
   ;; - 安全なフェイス適用
-  ;; - パレット上書き API
-  ;; - デーモン／フレームに対して安全な再適用
+  ;; - パレットの色の上書き（`ui-nano-palette-color-*' の defcustom）
+  ;; - 再適用（`load-theme' の後と、dirvish のロード後）
   ;; - テーマ再読込に対する堅牢性
   ;;
   ;; 設計目標:
@@ -4958,7 +4902,7 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   ;; - Nano テーマをロードする（`my:use-ui' が 'nano / 'doom-nano で、利用可能な場合）
   ;; - `my:use-ui' が 'doom のときは、doom-themes のテーマ（`ui-theme-doom-theme'）をロードする
   ;; - ui-nano-palette 経由で Nano のフェイスを設定する（同上）
-  ;; - パレットの上書きを適用する
+  ;; - パレットの色（個人設定で上書きされた値を含む）を読み出して適用する
   ;; - 括弧対応のハイライト用フェイスを設定する
   ;;
   ;; 分離済み（2026-10-14）:
@@ -5570,8 +5514,7 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 *eglot が無い環境でも壊さない*
 
 =featurep= と =fboundp= の二重チェックで、eglot が存在しない環境でのエラーを防いでいます。
-さらに =ignore-errors= により、eglot はあるが現在のバッファに接続が無い、というケースも
-吸収します。
+eglot が読み込まれていて接続が無いときは、管理下のバッファが 0 個なので =LSP:0= と表示されます。
 
 *軽さが正義*
 
@@ -5750,8 +5693,8 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 
 *実装の要点*
 
-=make-sparse-keymap= で空のキーマップを作っています。バインド数が少ないうちは、疎キーマップの
-方がメモリ効率に優れます。
+=define-prefix-command= で、プレフィックス用のキーマップを変数として作っています。すでに
+キーマップがあれば作り直さずに再利用するので、何度呼んでも安全です。
 
 キーの割り当ては =keymap-set= を使います。 =define-key= + =kbd= の組み合わせを置き換える、
 Emacs 29 以降の API です。
@@ -6814,6 +6757,8 @@ The binding list and the rationale are in the Commentary of this file."
   ;; 本ファイルの責務:
   ;; - macOS で透過タイトルバー（`ns-transparent-titlebar'）を有効化する
   ;; - ネイティブな macOS タイトルバー描画のため `use-title-bar' を設定する
+  ;; - Emacs 31 の `system-taskbar-mode'（Dock）を有効化する
+  ;; - コンパイル中のアイドルスリープを抑止し、スリープ前に TRAMP の接続を切る
   ;; - すべての設定を `(eq system-type 'darwin)' でガードする
   ;;
   ;; ロード経路:
@@ -6986,7 +6931,7 @@ Pre-sleep handlers get only a few seconds and must not signal, hence the
    バックエンドを設定する
 2. =my/auth-gpg-verify= を提供する — どのキーが存在し、どれが欠けているかを検査し、復号した
    シークレットの先頭 4 文字だけを表示する診断コマンド
-3. =my/auth-gpg-init-template= を提供する — =~/.authinfo= の雛形を書き出し、現在の GPG キーで
+3. =my/auth-gpg-init-template= を提供する — =~/.authinfo.gpg= の雛形を書き出し、 =GPG_KEY_ID= の鍵で
    暗号化するコマンド
 
 ロード順は =auth-core= （ =epa-file= を有効化する）の後です。 =auth= より上位のいかなる層にも
@@ -7060,7 +7005,7 @@ machine api.openai.com login org-ai password sk-proj-<your-openai-key>
     :group 'auth-gpg)
 
   (defcustom auth-gpg-fallback-file (expand-file-name "~/.authinfo")
-    "Path to the plain-text netrc fallback (consulted when GPG file is absent).
+    "Path to the plain-text netrc fallback (consulted after the encrypted store).
   Never store real secrets in this file; use it only for local/dev credentials."
     :type 'file
     :group 'auth-gpg)
@@ -7183,7 +7128,8 @@ one Touch ID prompt (on macOS) is needed, not one per service."
       (pop-to-buffer buf)))
 
   (defun my/auth-gpg-init-template ()
-    "Write a starter netrc template to a temp file and encrypt it as `auth-gpg-file'.
+    "Write a starter netrc template to `auth-gpg-file', encrypted by EasyPG.
+The recipient is the key in the GPG_KEY_ID environment variable when it is set.
 Aborts without overwriting when `auth-gpg-file' already exists.
 Opens the encrypted file for editing after creation so you can fill in secrets."
     (interactive)
@@ -7200,19 +7146,22 @@ Opens the encrypted file for editing after creation so you can fill in secrets."
                        (plist-get svc :note)))
              auth-gpg-services
              "
-"))
-           (tmp (make-temp-file "authinfo-template-" nil ".authinfo")))
-      (with-temp-file tmp
+")))
+      ;; 平文の一時ファイルは作らない。ファイル名が .gpg で終わり epa-file が有効なため、
+      ;; `with-temp-file' の書き込み（write-region）で EasyPG が暗号化する。
+      ;; copy-file は epa-file を通らないので、平文のままコピーされてしまう。
+      ;; 宛先の鍵は、書き込むバッファのローカル値として `epa-file-encrypt-to' に与える。
+      ;; epa-file は、この変数がバッファローカルでないと宛先の選択画面を開く
+      ;; （let による束縛では足りない）。GPG_KEY_ID が無いときは、その選択画面に任せる。
+      (with-temp-file auth-gpg-file
+        (when-let* ((id (getenv "GPG_KEY_ID")))
+          (setq-local epa-file-encrypt-to (list id)))
         (insert "## ~/.authinfo.gpg — generated by my/auth-gpg-init-template
 ")
         (insert "## Replace placeholder values with real secrets before saving.
 
 ")
         (insert template))
-      ;; 目的のパスへコピーする。ファイル名が .gpg で終わり epa-file が有効なため、
-      ;; EasyPG が保存時に暗号化する。
-      (copy-file tmp auth-gpg-file)
-      (delete-file tmp)
       (find-file auth-gpg-file)
       (message "Template written to %s — fill in secrets and save (C-x C-s)."
                auth-gpg-file)))
@@ -7780,6 +7729,8 @@ Keychain へフォールスルーします。
   ;; - `global-corfu-mode' を有効化し、`tab-always-indent' を 'complete に設定する
   ;; - cape-elisp-symbol、cape-file、cape-dabbrev を CAPF として登録する
   ;; - 補完アイコンのため kind-icon をマージン整形関数として設置する
+  ;; - Emacs 31 以降は、prog-mode と org-mode で `completion-preview-mode' を有効化し、
+  ;;   ランキングを Corfu に合わせる（ターミナル系のバッファでは抑止する）
   ;;
   ;; 注意: `remove-hook' の対象は `window-setup-hook' であって、
   ;; `completion-at-point-functions' ではない。
@@ -7937,8 +7888,10 @@ and prepends Cape sources (elisp-symbol, file, dabbrev) to the global CAPF list.
   ;;; Code:
 
   (defun completion--set-capfs (capfs)
-    "Set `completion-at-point-functions' buffer-locally to CAPFS."
-    (setq-local completion-at-point-functions capfs))
+    "Set `completion-at-point-functions' buffer-locally to CAPFS.
+Duplicates are dropped (the first occurrence wins), so stacks built by
+appending to the existing list stay idempotent when several hooks run."
+    (setq-local completion-at-point-functions (delete-dups (copy-sequence capfs))))
 
   (defun completion--elisp-capfs ()
     "Install Emacs Lisp CAPF stack: symbol, file, and dabbrev sources."
@@ -8002,15 +7955,15 @@ Org のソースブロックの中でも、その言語に応じた補完がほ�
 
 *どうやって言語を判定しているか*
 
-=org-in-src-block-p= がカーソル位置を判定し、 =org-element-property= がブロックの言語を
-取得します。これにより、Python ブロックには Python の補完が、Elisp ブロックには Elisp の
-補完が適用されます。
+=org-edit-special= で開く編集バッファは、その言語自身のメジャーモード（ =python-mode= など）を持ちます。
+=org-src-mode-hook= で =derived-mode-p= によってそのモードを判定し、Python ブロックには Python の補完が、
+Elisp ブロックには Elisp の補完が適用されます。
 
 *4 つのファイルの分担*
 
 一枚にまとめず、責務ごとに分けています。
 
-- =completion-capf-org-src.el= — ブロックの検出とディスパッチ
+- =completion-capf-org-src.el= — 編集バッファのモード判定と CAPF スタックの選択
 - =completion-capf-org-src-lang.el= — 言語ごとの CAPF 選択
 - =completion-corfu-org-src.el= — corfu との統合
 - =completion-orderless-org-src.el= — orderless フィルタの適用
@@ -8072,6 +8025,11 @@ for other prog modes, and `completion--text-capfs' as a fallback."
   ;; - Org SRC 編集バッファ内の shell、SQL、Python モードに対して、きめ細かい
   ;;   スタックを提供する
   ;; - `org-src-mode-hook' で `completion--org-src-lang-capfs' によりディスパッチする
+  ;;
+  ;; 注意: `add-hook' は既定で先頭に追加するため、`org-src-mode-hook' では本ファイルの関数が
+  ;; completion-capf-org-src.el の関数より *先に* 走り、言語別のスタックを設定した後に汎用の
+  ;; スタック（`completion--org-src-capfs'）も続けて走る。`completion--set-capfs' が重複を
+  ;; 除くので、言語別スタックの並びは保たれ、`cape-file' と `cape-dabbrev' は重複しない。
   ;;; Code:
 
   (defun completion--org-src-shell-capfs ()
@@ -8215,18 +8173,16 @@ variant; see Commentary for the rationale."
 :header-args:emacs-lisp: :tangle lisp/completion/completion-lsp.el
 :END:
 
-**** completion-lsp.el — Backend-Agnostic CAPF
+**** completion-lsp.el — Eglot Lifecycle Cleanup
 
-LSP バックエンド非依存という設計を、補完の側から支えるモジュールです。
+プロジェクトを切り替えたときに、不要になった Eglot サーバを止めるモジュールです。
 
-=core-switches= で選ばれたバックエンドに応じて、適切な CAPF 関数を
-=completion-at-point-functions= に追加します。
+=find-file-hook= と =project-switch-project-hook= で現在のプロジェクトのルートを調べ、前回と変わっていれば、
+前のルート配下で動いている Eglot サーバを停止します。Eglot の公開 API（ =eglot-managed-buffers= 、
+=eglot-current-server= 、 =eglot-shutdown= ）だけを使い、 =eglot--project= は =fboundp= で守っています。
 
-- eglot → =eglot-completion-at-point=
-- lsp-mode → =lsp-completion-at-point=
-
-補完 UI（corfu）は、どちらのバックエンドが動いているかを知りません。知る必要もありません。
-その差を吸収するのがこの一枚です。
+補完用の CAPF 関数（ =eglot-completion-at-point= など）はここでは追加しません。それらは Eglot 自身が
+接続したバッファで登録します。lsp-mode には対応しません。
 #+begin_src emacs-lisp
   ;;; completion/completion-lsp.el --- LSP ライフサイクルの後始末 -*- lexical-binding: t; -*-
   ;;
@@ -8378,7 +8334,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;; 前にロードされる。その時点で personal 側が (setq my:d:org ...) を呼んでいれば、
   ;; 下の defvar は何もしない（defvar は既存の束縛を上書きしない）ため、personal の
   ;; パスがセッション全体で保たれる。派生変数（my:d:org-journal など）は orgx-core の
-  ;; ロード時に評価される（#41）ため、これらも personal のベースパスを正しく受け取る。
+  ;; ロード時に評価されるため、これらも personal のベースパスを正しく受け取る。
   ;; ただし personal 側が派生変数を個別に設定している場合は、その値が使われる
   ;; （現在の personal/ac1965.el は my:d:org だけを設定し、journal と roam は導出に任せている）。
   ;; この順序は意図的なものであり、維持しなければならない。
@@ -8421,7 +8377,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   (setq org-agenda-files
         (list (expand-file-name "inbox.org" my:d:org)))
 
-  ;; Org は Emacs 組み込みを使う（Emacs 32.0.50 同梱: Org 9.8.7）。
+  ;; Org は Emacs 組み込みを使う（Emacs 32.0.50 同梱: Org 9.8.10）。
   ;; したがって :straight nil はコーディング規則 3 のとおり「組み込み」の宣言であり、
   ;; 実態と一致する。init.el が straight 版 Org を導入していた頃は、この宣言が
   ;; 実態と食い違っていた（実際には straight 版がロードされていた）。
@@ -8789,7 +8745,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;; 本ファイルの責務:
   ;; - `my/org-fold-subtree'、`my/org-unfold-subtree'、`my/org-toggle-fold' を
   ;;   対話コマンドとして提供する
-  ;; - `org-mode-map' で C-c f、C-c e、C-c t にバインドする
+  ;; - `org-mode-map' で <leader> m f / m e / m F（`ui-leader-key' に追従）と C-c f / C-c F にバインドする
   ;; - `org-fold-folded-p' を `fboundp' でガードし、Emacs 29 未満では
   ;;   `outline-invisible-p' にフォールバックする
   ;;; Code:
@@ -8830,17 +8786,20 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   (with-eval-after-load 'org
     (require 'org-fold)
 
-  ;; org-mode 用に、折りたたみコマンドを M-SPC m 接頭辞（ローカルリーダー）配下に置く。
+  ;; org-mode 用に、折りたたみコマンドをローカルリーダー（<leader> m）配下に置く。
     ;; キーは、モード用に予約された標準の C-c バインドと衝突しないよう選んでいる。
-    (keymap-set org-mode-map "M-SPC m f" #'my/org-fold-subtree)
-    (keymap-set org-mode-map "M-SPC m e" #'my/org-unfold-subtree)
-    (keymap-set org-mode-map "M-SPC m F" #'my/org-toggle-fold)
+    ;; "M-SPC" を直書きせず `ui-leader-key' を参照する（ui-keymap.el と同じ）。
+    ;; personal/device-*.el がリーダーを変えた環境（例: WSL の C-c SPC）にも追従する。
+    (let ((leader (if (boundp 'ui-leader-key) ui-leader-key "M-SPC")))
+      (keymap-set org-mode-map (concat leader " m f") #'my/org-fold-subtree)
+      (keymap-set org-mode-map (concat leader " m e") #'my/org-unfold-subtree)
+      (keymap-set org-mode-map (concat leader " m F") #'my/org-toggle-fold))
     ;; 挿入状態から片手で使えるよう、短い C-c エイリアスも残している
     (keymap-set org-mode-map "C-c f"     #'my/org-fold-subtree)
     (keymap-set org-mode-map "C-c F"     #'my/org-toggle-fold))
 
   (provide 'orgx-fold)
-  ;;; org/orgx-fold.el ends here
+  ;;; orgx/orgx-fold.el ends here
 #+end_src
 
 *** orgx/orgx-export.el
@@ -9231,8 +9190,8 @@ LSP バックエンド非依存という設計を、補完の側から支える�
 
   (leaf markdown-mode
     :straight t
-    :mode (("\.md\'" . gfm-mode)
-           ("README\.md\'" . gfm-mode))
+    :mode (("\\.md\\'" . gfm-mode)
+           ("README\\.md\\'" . gfm-mode))
     :custom ((markdown-command . "pandoc")
              (markdown-fontify-code-blocks-natively . t))
     :hook ((markdown-mode . visual-line-mode)
@@ -9350,7 +9309,7 @@ LSP バックエンド非依存という設計を、補完の側から支える�
   ;; ---------------------------------------------------------------------------
   ;; Emacs 31: timeout.el によるスロットリング
   ;; ---------------------------------------------------------------------------
-  ;; README.org は約 14,000 行あり、約 90 ファイルを tangle する。保存が連続すると
+  ;; README.org は約 18,000 行あり、約 106 ファイルを tangle する。保存が連続すると
   ;; （auto-save-visited-mode に加えて明示的な C-x C-s）、全 tangle が 2 回走っていた。
   ;; `timeout-throttle' は advice を設置し、一定間隔内の繰り返し呼び出しを 1 回に
   ;; まとめる。上記の実行中フラグは維持する。スロットリングは頻度を制限するだけで、
@@ -9813,6 +9772,7 @@ Any existing \"b\" entry is replaced, so calling this twice is harmless."
   ;; - ピクセル精度のテーブル整列のため、Org バッファごとに valign-mode を有効化する
   ;; - カーソルが入ったときに強調マーカーを自動表示する org-appear-mode を有効化する
   ;; - 強調・リンク・上下付きのマーカーに対して org-appear を設定する
+  ;; - 30 万文字を超える巨大バッファでは valign-mode を無効にする
   ;;
   ;; ロード経路:
   ;;
@@ -9925,8 +9885,8 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
   ;; - simple-httpd には明示的な :local-repo を与え、web-server との local-repo 名の
   ;;   衝突を防ぐ（下記の注記を参照）
   ;; - setopt による設定は with-eval-after-load 'org-roam に遅延する
-  ;; - org-roam の autosync（orgx-extensions、5 秒タイマー）が落ち着いた後、
-  ;;   一度きりのアイドルタイマー（8 秒）で UI を開く
+  ;; - org-roam がロードされた後、一度きりのアイドルタイマー（8 秒）で UI を開く
+  ;;   （orgx-extensions は autosync を自動起動しないので、DB の同期は待たない）
   ;; - セッション中に org-roam が強制再読込された場合の重複タイマー登録を防ぐため、
   ;;   defvar のガードを用いる
   ;;
@@ -9991,9 +9951,9 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
   force-reloaded during the same session.")
 
   (defun orgx-roam-ui--open-deferred ()
-    "Open org-roam-ui after org-roam autosync has settled.
-  Scheduled via an 8-second idle timer so that the org-roam database
-  autosync (5-second timer in orgx-extensions) has completed first.
+    "Open org-roam-ui once, after org-roam has loaded.
+  Scheduled via an 8-second idle timer.  Note that orgx-extensions no
+  longer starts the org-roam autosync by itself.
   `org-roam-ui-open' is autoloaded, so org-roam-ui is loaded here on demand."
     (condition-case err
         (when (fboundp 'org-roam-ui-open)
@@ -10039,7 +9999,8 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
   ;; 本ファイルの責務:
   ;; - org-brain-path を my:d:org-roam に設定し、両ツールが重複なく同じノート
   ;;   ディレクトリを共有できるようにする
-  ;; - `my/brain-visualize' を個人用のキー接頭辞配下にバインドする
+  ;; - `my/brain-visualize' を提供する（キーは割り当てない。M-x で呼ぶ）
+  ;; - 視覚化バッファで j / k を `forward-button' / `backward-button' にする
   ;;
   ;; ロード経路: personal/user.el が `my:modules-extra' に追加する。
   ;; 本モジュールは正規の `my:modules' リストに現れてはならない。
@@ -10403,8 +10364,10 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
     ;; - CLI 引数を重複なく拡張するための `dev-ai--append-unique-args' を提供する
     ;;
     ;; - ターミナル・バックエンドを選択する: vterm が使えればそれを、無ければ comint
-    ;; - `OPENROUTER_API_KEY' が設定されていれば OpenRouter のエンドポイントを設定し、
-    ;;   無ければ `OPENAI_API_KEY' による OpenAI 直接アクセスにフォールバックする
+    ;; - `aidermacs-run' の直前（:before advice）に一度だけ、~/.authinfo.gpg の
+    ;;   openrouter.ai のエントリを auth-source から取り、見つかれば OpenRouter の
+    ;;   エンドポイントと `OPENAI_API_KEY' を設定する。見つからなければ警告を出す
+    ;;   （OpenAI 直接アクセスへのフォールバックは、コメントアウトしてあり無効）
     ;;; Code:
 
     (eval-when-compile (require 'leaf) (require 'subr-x))
@@ -11648,6 +11611,7 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;; - `magit-display-buffer-fullframe-status-v1' により、ステータスを全画面表示する
   ;;
   ;; - magit バッファを bury するとき、直前のウィンドウ構成を復元する
+  ;; - Ediff の制御パネルを別フレームにせず、同一フレームで開く
   ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
@@ -11903,7 +11867,7 @@ ASCII（英字）へ切り替える。
   ディスパッチ用途のため、復帰処理は行わない。
 - *対象メジャーモード進入／離脱時* — =utils-ime-target-modes= （既定:
   =dired-mode= =magit-status-mode= =vterm-mode= =eshell-mode= =term-mode=
-  =comint-mode= ）に該当するバッファがカレントになった瞬間に ASCII へ切り替え、
+  =comint-mode= =prog-mode= 。 =prog-mode= は次の項目で説明する）に該当するバッファがカレントになった瞬間に ASCII へ切り替え、
   そのモードから離れて対象外のバッファへ戻った瞬間に、入る直前の入力ソースへ
   自動復帰する。 =buffer-list-update-hook= でカレントバッファの遷移を監視し、
   対象／非対象の境界をまたいだときだけ切替・復帰を行う。 =wdired-mode= は
@@ -11922,6 +11886,8 @@ ASCII（英字）へ切り替える。
 - *ミニバッファ使用時* — =M-x= や =find-file= などでミニバッファに入った瞬間に
   ASCII へ切り替え、抜けた瞬間に入る直前の入力ソースへ復帰する
   （ =minibuffer-setup-hook= / =minibuffer-exit-hook= ）。
+- *範囲選択中* — リージョンが有効になった瞬間に、日本語入力なら ASCII へ切り替え、解除したら
+  元の入力ソースへ戻す（ =activate-mark-hook= / =deactivate-mark-hook= 。 =utils-ime-enable-region-p= ）。
 
 =macism= が見つからない環境（非 macOS ／未インストール）では全て no-op になる。
 ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
@@ -11967,6 +11933,9 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
   ;; - `utils-ime--minibuffer-setup' / `utils-ime--minibuffer-exit':
   ;;   `minibuffer-setup-hook' / `minibuffer-exit-hook' でミニバッファの
   ;;   ASCII 化／復帰を行う。
+  ;; - `utils-ime--region-activate' / `utils-ime--region-deactivate':
+  ;;   `activate-mark-hook' / `deactivate-mark-hook' で、範囲選択中だけ ASCII にし、
+  ;;   選択を解除したら元の入力ソースへ戻す。
   ;;
   ;; 設計上の注意:
   ;; - macism は同期呼び出し（`call-process' の DESTINATION を nil とし待機）とする。
@@ -12247,7 +12216,7 @@ Nil when the source was already ASCII or the region is inactive.")
   ;; Category: utils
   ;;
   ;;; Commentary:
-  ;; org-directory を一度だけ走査し、その結果をキャッシュする `utils-org-agenda-build'
+  ;; `my:d:org' 配下を走査し、その結果を TTL 付きでキャッシュする `utils-org-agenda-build'
   ;; を提供する。ロード時に utils 層への依存が org 層に漏れないよう、`orgx-core' から
   ;; after-init-hook 経由で呼び出される。
   ;;
@@ -12356,6 +12325,8 @@ Nil when the source was already ASCII or the region is inactive.")
   ;; - ファイルを訪問している `prog-mode' バッファで flymake を有効化する
   ;;   （*scratch* 等の非ファイルバッファは除外する。理由は下記）
   ;; - 診断メッセージを行末に表示するよう設定する
+  ;; - Python では、eglot が管理するバッファなら python-flymake を外し、外部チェッカー
+  ;;   （pyflakes / flake8 / ruff / pylint）が無ければ `python-flymake-command' を nil にする
   ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
@@ -12524,6 +12495,10 @@ When eglot is absent and no external checker is on PATH, sets
 
 =*scratch*= バッファのライフサイクルを管理し、追加の scratch バッファを作るコマンドを提供します。
 
+以前は =*scratch*= の再生成が 2 か所にありました。 =core/core-buffers.el= は =kill-buffer-hook= とアイドルタイマーで、
+本モジュールは =buffer-list-update-hook= で、同じことをしていました。どちらも冪等で害はありませんでしたが、
+仕事が重複していたため、2026-10-18 に本モジュールへ統合し、 =core-buffers= を廃止しました。
+
 機能は 2 つです。
 
 1. *自動再生成* — =scratch--ensure-exists= を =buffer-list-update-hook= に登録しています。
@@ -12545,9 +12520,9 @@ When eglot is absent and no external checker is on PATH, sets
 *コーディング規則との対応*
 
 - フック関数 =scratch--ensure-exists= はトップレベルの名前付き =defun= です
-  （フックに無名 lambda を渡さない — 規則 4）
+  （トップレベルの名前付き defun にする — 規則 8）
 - =scratch-initial-message= は =defcustom= で、その =defgroup= は本モジュールが宣言しています
-  （規則 7）
+  （規則 9）
 - =defcustom= への代入は =setopt= 、 =defvar= への代入は =setq= です（規則 6）
 
 #+begin_src emacs-lisp
@@ -12558,7 +12533,7 @@ When eglot is absent and no external checker is on PATH, sets
 
   ;;; Commentary:
 
-  ;; 提供する機能は 2 つ:
+  ;; 提供する機能は 2 つ（*scratch* の再生成は、core/core-buffers.el から 2026-10-18 に統合した）:
   ;;
   ;; 1. 自動再生成: `scratch--ensure-exists' を `buffer-list-update-hook' に登録する。
   ;;    *scratch* が kill されると、後続のコマンドに制御が戻る前に
@@ -12659,9 +12634,10 @@ Claude API（=api.anthropic.com/v1/messages=）への同期・非同期 HTTP ク
   ;; 既定の max-tokens は `utils-claude-max-tokens' で変更できる。
   ;;
   ;; エラー処理:
-  ;;   同期・非同期のいずれも、HTTP レベルの失敗（200 以外のステータス）および
-  ;;   JSON のパースエラーで `utils-claude-error' をシグナルする。
-  ;;   呼び出し側は `condition-case' で包むこと。
+  ;;   同期版は、HTTP レベルの失敗（200 以外のステータス）、JSON のパースエラー、
+  ;;   API キーの欠落で `utils-claude-error' をシグナルする。呼び出し側は
+  ;;   `condition-case' で包むこと。非同期版はシグナルせず、同じ失敗を
+  ;;   "ERROR:" で始まる文字列としてコールバックへ渡す。
   ;;
   ;;; Code:
 
@@ -12828,7 +12804,9 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
 - *バージョン管理から除外される* （あるいは共有コミットには含めない）
 - *編集して安全* — 変更しても他のユーザーには影響しません
-- *モジュールの後にロードされる* — だからローカルな上書きが効きます
+- *モジュールの前にロードされる* — =init.el= のステップ 9 で読み込まれ、 =modules.el= を require するステップ 10 より先に走ります。
+  パス変数などの上書きは、後から評価される =defvar= や =defcustom= が既存の値を上書きしないことで効きます。
+  リーダーキーの割り当てのように、モジュールが整ってから実行したいものは =after-init-hook= の depth 10 に回します
 
 *なぜ分けるのか*
 
@@ -12847,7 +12825,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Apple Music 操作 |
 | =personal/device-wsl.el= | WSL のクリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
 | =personal/personal-messages.el= | macOS Messages.app のアーカイバ |
-| =personal/personal-ai.el= | Org Babel と Claude API の統合 |
+| =personal/personal-ai.el= | Org Babel と Claude API の統合（どこからも自動では読み込まれない。使うときは =(require 'personal-ai)= する） |
 | =personal/personal-llm.el= | ローカル LLM ルーター（=~/.local/bin/localllm=）との統合（=my/llm-run=） |
 
 [[file:svg/13_personal_override_contract.svg]]
@@ -13011,14 +12989,14 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 
   ;; 追加のファイル名パターンを除外（フルパスに対して照合）:
   (setopt core-autosave-exclude-name-patterns
-          '("\.authinfo"          ; credential files (plain or encrypted)
-            "\.netrc"             ; legacy netrc
+          '("\\.authinfo"         ; credential files (plain or encrypted)
+            "\\.netrc"            ; legacy netrc
             "/tmp/"                ; temp files — let OS manage them
-            "\.bak\'"            ; already-a-backup files
-            "COMMIT_EDITMSG\'"    ; git commit message buffers
-            "MERGE_MSG\'"
+            "\\.bak\\'"           ; already-a-backup files
+            "COMMIT_EDITMSG\\'"   ; git commit message buffers
+            "MERGE_MSG\\'"
             "rebase-merge/"
-            "\.log\'"))          ; log files — append-only, save noise
+            "\\.log\\'"))         ; log files — append-only, save noise
 
   ;; メジャーモードによる除外:
   (setopt core-autosave-exclude-modes
@@ -13095,7 +13073,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; Org ディレクトリの上書き
   ;; ---------------------------------------------------------------------------
   ;;
-  ;; my:d:org と my:f:capture-blog-file は orgx-core.el（モジュール #41）で定義される
+  ;; my:d:org と my:f:capture-blog-file は orgx-core.el で定義される
   ;; defvar のパス変数である。
   ;;
   ;; 本ファイルは init.el のステップ 9 で、modules.el が走るより前に
@@ -13123,7 +13101,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; (file+olp ... "blog") のキャプチャ・ターゲットが要求する
   ;; "* blog" トップレベル見出しを持っている。
   ;; パスはどの OS でもホームからの相対（~/Projects/blog/mysite/）なので、OS では分岐しない。
-  ;; WSL 側に blog プロジェクトを未 clone の場合は個別に上書きするか、orgx-core.el 側の
+  ;; WSL 側に blog プロジェクトを未 clone の場合は個別に上書きするか、orgx-auto-hugo.el 側の
   ;; (bound-and-true-p my:f:capture-blog-file) ガードに委ねて未設定のままにしてよい。
 
   (setq my:d:org (if (my:wsl-p)
@@ -13325,8 +13303,11 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; ここではこのマシン固有の自作スクリプトの置き場だけを追加する。
   ;; ~/Projects 全体は他人のクローンを含むため挙げない。末尾は "/"、値は
   ;; abbreviate-file-name 形式で、実体パスに解決して与える（core-policy.el を参照）。
+  ;; narou_dl は自作だが、直下の .venv-*/ に他人のパッケージが入るため、
+  ;; リポジトリ直下ではなく自作のパッケージ narou_dl/ だけを挙げる。
   (when (boundp 'trusted-content)
-    (dolist (dir '("~/.local/bin/" "~/Projects/scripts/" "~/Projects/dotfiles/"))
+    (dolist (dir '("~/.local/bin/" "~/Projects/scripts/" "~/Projects/dotfiles/"
+                   "~/Projects/narou_dl/narou_dl/"))
       (add-to-list 'trusted-content
                    (abbreviate-file-name (file-name-as-directory (file-truename dir)))
                    t)))
@@ -13445,11 +13426,10 @@ IME（sis）の状態を、nano-modeline と dirvish の mode-line に表示す�
   ;;
   ;; プロセス起動コストはゼロで、編集バッファ側と表示内容も常に一致する。
   ;;
-  ;; `dirvish-define-mode-line' はマクロであり dirvish がロード済みである必要が
-  ;; あるが、my:modules の起動順は core-dired（dirvish 本体）→ ... →
-  ;; personal（このファイル）なので通常は既にロード済みである。
-  ;;
-  ;; 順序変更に対して堅牢にするため、念のため `with-eval-after-load' で包む。
+  ;; `dirvish-define-mode-line' はマクロであり dirvish がロード済みである必要がある。
+  ;; 本ファイルは modules.el より前（init.el のステップ 9）にロードされ、dirvish 本体は
+  ;; その後に core-dired が読み込むため、ここを評価する時点では dirvish は未ロードである。
+  ;; そこで `with-eval-after-load' で包み、dirvish のロード後に定義する。
   ;;
   ;; マクロ定義そのものはコンパイル時に展開されるため、バイトコンパイラが
   ;; `dirvish-define-mode-line' を普通の関数呼び出しと誤解しないよう、
@@ -13561,7 +13541,7 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;; all-posts.org（Hugo ブログ）の既存タグ補完付きタグ設定
   ;; ---------------------------------------------------------------------------
   ;;
-  ;; my:f:capture-blog-file（本ファイル上部で all-posts.org に上書き済み）を
+  ;; my:f:capture-blog-file（personal/ac1965.el で all-posts.org に上書き済み）を
   ;; 走査し、過去に使ったインラインタグを補完候補にした状態で
   ;; org-set-tags-command を呼ぶ。
   ;;
@@ -14101,7 +14081,7 @@ Windows クリップボードとの橋渡しに使う。
   ;;   高頻度クラスタ（undo/redo、バッファ間移動、他ウィンドウのスクロール）
   ;;     → C-M-（Control+Alt 同時押し）、または C-z（core init で既に unset
   ;;       済みのため衝突なく再利用できる。lisp/ui/ui-global-keys.el の
-  ;;       "s-z was selected..." のコメントを参照）
+  ;;       s-z を選んだ理由のコメントを参照）
   ;;   低頻度クラスタ（フレーム／ウィンドウ管理）
   ;;     → 既存の `ui-leader-w-map'（WSL では C-c SPC w）に統合
   ;;
@@ -14251,11 +14231,13 @@ hydra is not installed."
 
   (defun personal-messages--query ()
     (when (personal-messages--db-available-p)
-      (let* ((since (or personal-messages-last-archived 0))
+      (let* (;; last-archived は Unix 秒。chat.db の message.date は 2001-01-01 起点の
+             ;; ナノ秒なので、978307200（2001-01-01 の Unix 時刻）を引いてから換算する。
+             (since (or personal-messages-last-archived 0))
              (cmd (format
                    "sqlite3 -readonly %s \"SELECT handle.id, message.text, message.date FROM message JOIN handle ON message.handle_id = handle.rowid WHERE message.date > %d AND message.is_from_me = 0 ORDER BY message.date DESC LIMIT 50;\""
                    (shell-quote-argument personal-messages-db-path)
-                   (round (* since 1e9)))))
+                   (round (* (max 0 (- since 978307200)) 1e9)))))
         (let ((output (shell-command-to-string cmd)))
           (when (and output (not (string-empty-p (string-trim output))))
             (split-string output "\n" t))))))
@@ -14299,8 +14281,8 @@ hydra is not installed."
                   (cl-incf count)
                   (when (> ts (or personal-messages-last-archived 0))
                     ;; personal-messages-last-archived はセッションをまたいで
-                    ;; 永続化する必要がある defcustom である。customize-save-variable は
-                    ;; （setopt と同様に）値を設定すると同時に custom-file へ書き出すため、
+                    ;; 永続化する必要がある defcustom である。setopt は値を設定するだけだが、
+                    ;; customize-save-variable は設定と同時に custom-file へ書き出すため、
                     ;; Emacs を再起動しても値が保たれる。
                     (customize-save-variable
                      'personal-messages-last-archived ts)))))
@@ -15865,7 +15847,7 @@ X の解決可否は、次のいずれかを満たすかで判定する。
 *設計上の注記*
 
 - tangle は =make= と同じく =emacs -Q --batch= を呼びます。組み込み Org（Emacs 32.0.50 は
-  Org 9.8.7 同梱）で tangle が完結するため、外部パッケージは不要です。
+  Org 9.8.10 同梱）で tangle が完結するため、外部パッケージは不要です。
 - =EMACS= 環境変数で Emacs バイナリを差し替えられます。macOS の self-contained NS ビルドでは
   =~/.local/bin/emacs= がバンドル外では動かないため、既定値を
   =/Applications/Emacs.app/Contents/MacOS/Emacs= とし、存在すればそれを優先します。
@@ -15962,7 +15944,7 @@ python3 scripts/reload.py --only check-cookies
   def tangle(emacs: str, org: Path) -> None:
       """Tangle ORG with `emacs -Q --batch`, matching the Makefile tangle target.
 
-      Uses the built-in Org (Emacs 32.0.50 ships Org 9.8.7), so no third-party
+      Uses the built-in Org (Emacs 32.0.50 ships Org 9.8.10), so no third-party
       packages are required.  Exits the process on failure.
       """
       if not org.is_file():
@@ -17534,7 +17516,7 @@ digraph gc_strategy {
 
   guard [label="起動ガード\nearly-init.el §1\n512MiBまで一時緩和"];
   trigger [label="明示トリガー\ncore-gc.el\nフォーカス変更 / ミニバッファ終了"];
-  idle [label="アイドル管理\ngcmh (core-runtime.el)\nアイドル5秒後 128MiB"];
+  idle [label="アイドル管理\ngcmh (init.el §7)\nアイドル5秒後 128MiB"];
 
   guard -> trigger [label="after-init-hookで128MiBへ復帰"];
   trigger -> idle [style=dashed label="以後は協調して動作"];
@@ -17608,16 +17590,16 @@ digraph capf_dispatch {
   node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11 fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
   edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
 
-  hook [label="org-src-mode-hook"];
-  dispatch [label="completion-capf-org-src\nモード判定でディスパッチ" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-  lang [label="completion-capf-org-src-lang\n言語別CAPFリスト"];
-  corfu [label="completion-corfu-org-src\nedit-indirectでcorfu-mode有効化"];
-  orderless [label="completion-orderless-org-src\nOrg srcのみorderless適用"];
+  hook [label="org-src-mode-hook\n（登録の逆順に実行される）"];
+  orderless [label="completion-orderless-org-src\nバッファローカルに orderless を指定"];
+  corfu [label="completion-corfu-org-src\nバッファローカルに corfu の遅延・接頭辞を指定"];
+  lang [label="completion-capf-org-src-lang\nshell / SQL / Python の CAPF"];
+  dispatch [label="completion-capf-org-src\nモード判定で CAPF スタックを選択" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
 
-  hook -> dispatch;
-  dispatch -> lang;
-  dispatch -> corfu;
-  dispatch -> orderless;
+  hook -> orderless;
+  orderless -> corfu;
+  corfu -> lang;
+  lang -> dispatch;
 }
 #+end_src
 
@@ -17799,8 +17781,59 @@ digraph personal_override_contract {
 
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
+2026-10-18  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* README.org (utils/utils-scratch.el, core/core-buffers.el, lisp/modules.el): *scratch* の再生成が
+	core-buffers（kill-buffer-hook + アイドルタイマー）と utils-scratch（buffer-list-update-hook）の 2 か所で
+	重複していたため、utils-scratch に統合し、core-buffers を廃止した。my:modules から core-buffers を外し、
+	tangle ターゲットを 107 から 106（core/ は 13 から 12）にした。
+	* README.org (auth/auth-gpg.el) (my/auth-gpg-init-template): copy-file は epa-file を通らず、雛形が平文のまま
+	~/.authinfo.gpg に置かれていた。平文の一時ファイルをやめ、with-temp-file で書いて EasyPG に暗号化させる。
+	宛先は GPG_KEY_ID の鍵（epa-file はバッファローカル値でないと宛先の選択画面を開くため、setq-local で与える）。
+	* README.org (orgx/orgx-notes-markdown.el, personal/user.el): 文字列リテラルのバックスラッシュ 1 本の \' と \. は、読み込み時に消えて
+	正規表現にならなかった（.md を gfm-mode にする設定と、自動保存の除外パターン .bak / COMMIT_EDITMSG /
+	MERGE_MSG / .log が効いていなかった）。バックスラッシュ 2 本に直した。
+	* README.org (personal/personal-messages.el) (personal-messages--query): last-archived（Unix 秒）を、
+	2001-01-01 起点のナノ秒である message.date と直接比べていた。978307200 を引いて換算する。
+	* README.org (completion/completion-capf.el) (completion--set-capfs): CAPF の並びから重複を除く。
+	org-src-mode-hook で言語別と汎用のスタックが続けて走っても、並びが重複しない。
+	* README.org (orgx/orgx-fold.el): M-SPC を直書きせず ui-leader-key に追従する（WSL の C-c SPC でも効く）。
+	* README.org (dev, vcs, utils): 各モジュールの散文をコードに合わせた。dev-ai.el の API キーは環境変数ではなく
+	auth-source から取り、OpenAI へのフォールバックは無効。utils-claude.el の非同期版はシグナルせず ERROR: 文字列を返す。
+	utils-org-agenda.el が走査するのは org-directory ではなく my:d:org。utils-ime.el の範囲選択中の ASCII 化、
+	utils-lint.el の python-flymake の扱い、vcs-magit.el の Ediff の設定を Commentary に足した。
+	utils-scratch の説明にあったコーディング規則の番号を AGENTS.md の番号に合わせた。
+	* README.org (completion, orgx): 各モジュールの散文をコードに合わせた。completion-lsp.el は CAPF を追加せず
+	Eglot サーバを停止するだけ、completion-capf-org-src の判定は org-in-src-block-p ではなく derived-mode-p、
+	orgx-fold のキーは C-c t ではなく M-SPC m f / m e / m F、orgx-roam-ui の 5 秒タイマーは廃止済み、
+	orgx-brain は my/brain-visualize にキーを割り当てない。org-src-mode-hook の実行順（lang が汎用より先）と、
+	07_capf_dispatch の図を実際の構造に直した。
+	* README.org (core, ui, auth): 各モジュールの散文をコードに合わせた。core-autosave に無い
+	window-selection-change-functions の記述、core-custom の my/custom-dump-current（確認ではなく書き出し）、
+	core-dired の dirvish-peek-mode の説明、ui-leader の make-sparse-keymap（実際は define-prefix-command）、
+	ui-health-modeline の ignore-errors（存在しない）、ui-nano-palette の上書き API と daemon 対応の記述、
+	auth-keychain が既定で有効という記述を直した。ui-macos と core-policy の Commentary に抜けていた責務を足した。
+	* README.org (personal/*.el): 散文をコードに合わせた。Overview の「モジュールの後にロードされる」は誤りで、
+	init.el のステップ 9 により modules.el より前にロードされる。personal-ime.el のコメントも同じ誤りを
+	含んでいたため直した。orgx-core のモジュール番号（#41）の記述を外し、blog.org のガードの所在を
+	orgx-auto-hugo.el に改め、personal-ai.el が自動では読み込まれない旨を表に加えた。
+	* README.org (modules.el): ロード順の説明が init.el のセクション番号を 8 と 9 としていたのを、実際の 9（personal）と
+	10（modules）に直した。modules--format-seconds の改名理由のコメントも、命名規則（my/ と モジュール名--）に合わせた。
+	* README.org (init.el) (bootstrap--safe-load-file, core--schedule-announce-startup): docstring が
+	「既定ではエラーを送出しない」と書いていたが、NOERROR が nil なら user-error を送出する。実装に合わせた。
+	起動完了メッセージの順序に関する非 daemon 側のコメントから、emacs-startup-hook を使わない ui-font／ui-nano-modeline の記述を外した。
+	* README.org (early-init.el, init.el, core/core-runtime.el): 散文をコードに合わせた。
+	gcmh は init.el §7 にあり core-runtime.el にはない。read-process-output-max は一時的ではない。
+	backup-directory-alist は core-autosave.el で設定する。Tree-sitter のロードパスは core-treesit.el が設定する。
+	同梱 Org のバージョンを 9.8.10 に改めた。Boot Flow を実際の節の順にした。
+	* README.org (init.el): Commentary の責務一覧を、実際の節番号（1〜11）の順と内容に合わせた。
+	* README.org (orgx/orgx-auto-tangle.el): README.org の規模の記述を約 18,000 行、約 107 ファイルに改めた。
+
 2026-10-17  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (personal/ac1965.el): trusted-content に ~/Projects/narou_dl/narou_dl/ を追加し、
+	自作パッケージの config.py で python-flymake が無効化される警告を解消した。
+	.venv-*/ 配下の他人のパッケージ（PIL の report.py など）は信頼しない。
 	* README.org (dev/dev-lsp-eglot.el): eglot-server-programs に clangd
 	（--background-index --clang-tidy。Homebrew の llvm を優先）と pyright を登録し、
 	eglot-autoshutdown を有効化。C-c r は query-replace と衝突するため割り当てない。
