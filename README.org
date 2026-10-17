@@ -1158,11 +1158,6 @@ gcmh が担当します。
                      my:d:eln-cache my:d:treesit my:d:url my:d:eww))
     (core--ensure-directory dir))
 
-  (when (boundp 'treesit-install-dir)
-    (setopt treesit-install-dir my:d:treesit))
-  (when (boundp 'treesit-extra-load-path)
-    (setopt treesit-extra-load-path (list my:d:treesit)))
-
   ;; ---------------------------------------------------------------------------
   ;; 5) straight.el のベース
   ;; ---------------------------------------------------------------------------
@@ -2218,14 +2213,18 @@ see the frame.  Runs once only (removes itself from
     "Return DIR as an abbreviated directory name suitable for `trusted-content'."
     (abbreviate-file-name (file-name-as-directory (file-truename dir))))
 
+  ;; personal/ は modules.el より前にロードされるため、personal/<user>.el が先に
+  ;; `trusted-content' へ追加した要素がここで消えないよう、既存の値を残して合流させる。
   (when (boundp 'trusted-content)
     (setopt trusted-content
-            (list (core-policy--trusted-dir my:d:lisp)
-                  (core-policy--trusted-dir
-                   (expand-file-name "personal" user-emacs-directory))
-                  (abbreviate-file-name
-                   (file-truename
-                    (expand-file-name "early-init.el" user-emacs-directory))))))
+            (delete-dups
+             (append (list (core-policy--trusted-dir my:d:lisp)
+                           (core-policy--trusted-dir
+                            (expand-file-name "personal" user-emacs-directory))
+                           (abbreviate-file-name
+                            (file-truename
+                             (expand-file-name "early-init.el" user-emacs-directory))))
+                     (and (listp trusted-content) trusted-content)))))
 
   (provide 'core-policy)
   ;;; core/core-policy.el ends here
@@ -2345,7 +2344,7 @@ see the frame.  Runs once only (removes itself from
     "Collect native-comp WARNINGS into the internal warning list.
 Respects `core-native-comp-collect-min-interval' to avoid flooding the list.
 WARNINGS may be a single warning entry or a list of entries.
-Called as the `native-comp-async-report-warnings-errors' handler."
+Called from `core-native--display-warning-a'."
     (condition-case _err
         (let* ((now (float-time))
                (min-iv core-native-comp-collect-min-interval))
@@ -2365,11 +2364,21 @@ Called as the `native-comp-async-report-warnings-errors' handler."
             (core-native--maybe-notice-threshold)))
       (error nil)))
 
+  (defun core-native--display-warning-a (orig type message &rest args)
+    "Around advice for `display-warning': collect `native-compiler' warnings.
+TYPE が `native-compiler' のとき、MESSAGE を `core-native--collect' へ渡し、
+*Warnings* には出さない。それ以外は ORIG（ARGS つき）へそのまま渡す。"
+    (if (eq (if (consp type) (car type) type) 'native-compiler)
+        (core-native--collect message)
+      (apply orig type message args)))
+
   (defun core-native--install-collector ()
+    ;; `comp-async-report-warnings-errors-hook' は Emacs 31 に存在しない。
+    ;; 非同期ネイティブコンパイルの警告は `comp--accept-and-process-async-output' が
+    ;; `display-warning' で出すので、そこに助言を掛けて集める。
     (unless core-native--installed-hook
       (setq core-native--installed-hook t)
-      (when (boundp 'comp-async-report-warnings-errors-hook)
-        (add-hook 'comp-async-report-warnings-errors-hook #'core-native--collect))))
+      (advice-add 'display-warning :around #'core-native--display-warning-a)))
 
   (defun core-native--apply-report-setting (mode)
     "Apply native-comp warning reporting MODE to the live Emacs session.
@@ -2860,11 +2869,16 @@ Runs via `after-init-hook'."
 
   (defconst core-treesit--sources
     '((bash       "https://github.com/tree-sitter/tree-sitter-bash")
+      (c          "https://github.com/tree-sitter/tree-sitter-c")
       (css        "https://github.com/tree-sitter/tree-sitter-css")
       (dockerfile "https://github.com/camdencheek/tree-sitter-dockerfile")
-      (elisp      "https://github.com/Wilfred/tree-sitter-elisp")
       (javascript "https://github.com/tree-sitter/tree-sitter-javascript")
+      (jsdoc      "https://github.com/tree-sitter/tree-sitter-jsdoc")
       (json       "https://github.com/tree-sitter/tree-sitter-json")
+      (markdown   "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                  :source-dir "tree-sitter-markdown/src")
+      (markdown-inline "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                       :source-dir "tree-sitter-markdown-inline/src")
       (python     "https://github.com/tree-sitter/tree-sitter-python")
       (toml       "https://github.com/tree-sitter/tree-sitter-toml")
       (tsx        "https://github.com/tree-sitter/tree-sitter-typescript"
@@ -2895,9 +2909,10 @@ Applied only when the corresponding grammar is actually installed.")
     :custom
     ;; Emacs 31: 文法が存在するすべての tree-sitter モードを有効化する。
     ((treesit-enabled-modes        . t)
-     ;; Emacs 31: 欠けている文法をオンデマンドでインストールする。無人インストールなら
-     ;; `always'、インストール先を選ばせるなら `ask-dir' を指定する。
-     (treesit-auto-install-grammar . 'ask)
+     ;; Emacs 31: 欠けている文法をオンデマンドでインストールする。確認なしで入れる
+     ;; `always' を指定している。確認したければ `ask'、インストール先を選ばせるなら
+     ;; `ask-dir' にする。
+     (treesit-auto-install-grammar . 'always)
      (treesit-font-lock-level      . 4))
     :config
     ;; Emacs 31: `treesit-extra-load-path' はユーザーオプションであり、その先頭要素が
@@ -3068,7 +3083,8 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
   ;; - TRAMP を永続化パスとともに設定し、既定メソッドを `scp' にする
   ;; - paredit（競合回避のため electric-pair を無効化）と puni を設定する
   ;; - show-paren、undo-fu/vundo、ace-window、visual-line-mode を設定する
-  ;; - 意味単位のテキスト選択のため expand-region を導入する
+  ;; - 意味単位のテキスト選択のため expreg（構文木。C-= / C-M-=）と
+  ;;   expand-region（C-c = で拡大）を併用する
   ;; - autorevert、transient、hl-line、hideshow、eldoc を設定する
   ;;
   ;; 分割済み（2026-10-13）:
@@ -3131,7 +3147,13 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
   (leaf visual-line-mode :straight nil
     :hook (text-mode . visual-line-mode))
 
-  (leaf expand-region :straight t :after treesit)
+  ;; expreg は tree-sitter が使えるバッファでは構文木、無ければ組み込みの
+  ;; 範囲検出で選択を広げる。expand-region は構文木を使わない従来方式で、併用する。
+  (leaf expreg :straight t
+    :bind (("C-="   . expreg-expand)
+           ("C-M-=" . expreg-contract)))
+  (leaf expand-region :straight t
+    :bind (("C-c =" . er/expand-region)))
   (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
   (leaf delsel :straight nil :global-minor-mode delete-selection-mode)
 
@@ -6760,7 +6782,10 @@ The binding list and the rationale are in the Commentary of this file."
   ;; defcustom である。:custom へ移した。
   (leaf indent-bars :straight t
     :custom ((indent-bars-prefer-character  . t)
-             (indent-bars-spacing-override  . 2))
+             (indent-bars-spacing-override  . 2)
+             ;; tree-sitter 版モードでは、構文木から深さを補正し、文字列内の空行に
+             ;; バーを描かない（indent-bars-ts）。
+             (indent-bars-treesit-support   . t))
     :hook (prog-mode-hook . indent-bars-mode))
 
   (provide 'ui-visual-aids)
@@ -13020,6 +13045,7 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;; - IME 表示（sis のキャッシュ、dirvish と nano-modeline への受け渡し）は
   ;;   personal-ime.el へ分離した
   ;; - mu4e（Homebrew の mu 同梱版）を M-x mu4e で使えるようにする
+  ;; - 自作スクリプトの置き場を `trusted-content' に追加する（flymake の sh／python 用）
   ;; - .ps1 → powershell-mode、.bas → visual-basic-mode を登録する
   ;;   （いずれも prog-mode 派生であり、prog-mode-hook は自動的に発火する）
   ;;
@@ -13269,6 +13295,22 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
   ;;
 
   (setopt auth-keychain-enable t)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 信頼するコンテンツ（自作スクリプトの置き場）
+  ;; ---------------------------------------------------------------------------
+
+  ;; sh-shellcheck-flymake と python-flymake も `trusted-content-p' を確認し、信頼されない
+  ;; ファイルでは無効化の警告を出す。lisp/ と personal/ は core-policy.el が宣言するので、
+  ;; ここではこのマシン固有の自作スクリプトの置き場だけを追加する。
+  ;; ~/Projects 全体は他人のクローンを含むため挙げない。末尾は "/"、値は
+  ;; abbreviate-file-name 形式で、実体パスに解決して与える（core-policy.el を参照）。
+  (when (boundp 'trusted-content)
+    (dolist (dir '("~/.local/bin/" "~/Projects/scripts/" "~/Projects/dotfiles/"))
+      (add-to-list 'trusted-content
+                   (abbreviate-file-name (file-name-as-directory (file-truename dir)))
+                   t)))
+
 
 ;; ---------------------------------------------------------------------------
 ;; Hugo ブログ（all-posts.org）
@@ -17739,6 +17781,19 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-17  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (core/core-policy.el): trusted-content を上書きせず、先にロードされる personal/ac1965.el の追加分と合流させる。
+	* README.org (personal/ac1965.el): trusted-content に ~/.local/bin/、~/Projects/scripts/、~/Projects/dotfiles/ を追加した。
+	シェルと Python の flymake バックエンドが untrusted content で無効化される警告を防ぐ。マシン固有のパスなので core-policy.el ではなく personal に置く。
+	* README.org (core/core-native.el) (core-native--display-warning-a, core-native--install-collector): 新規／修正。
+	存在しない comp-async-report-warnings-errors-hook に依存していたため collect モードで警告が *Warnings* に出ていた。
+	display-warning への :around 助言で native-compiler の警告を集めるようにした。
+	* README.org (core/core-treesit.el) (core-treesit--sources): c、jsdoc、markdown、markdown-inline の取得元を追加し、
+	使われていない elisp（Emacs 本体に emacs-lisp-ts-mode が無い）を削除した。
+	* README.org (early-init.el): `treesit-install-dir' と `treesit-extra-load-path' の設定を削除した。前者は Emacs 31 以降に存在せず、
+	後者は core-treesit.el が同じ値を設定している。
+	* README.org (core/core-treesit.el): treesit-auto-install-grammar を always にした。欠けている文法を確認なしで入れる。
+	* README.org (ui/ui-visual-aids.el): indent-bars-treesit-support を有効にした。
+	* README.org (core/core-editing.el): expreg を追加し、C-= で拡大、C-M-= で縮小に割り当てた。expand-region は併用し、キーの無かったものを C-c = に割り当てた。
 	* README.org (ui/ui-theme-variant.el) (ui-theme-variant-follow-system, ui-theme-variant--apply-system,
 	ui-theme-variant--follow-setup): 新規。macOS の外観（ライト／ダーク）に nano の variant を自動で合わせる。
 	起動時と ns-system-appearance-change-functions で my/ui-theme-nano-switch を呼ぶ。デーモンでは
