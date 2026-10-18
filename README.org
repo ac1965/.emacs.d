@@ -2532,6 +2532,11 @@ GC を走らせるタイミングは 2 つです。Emacs からフォーカス�
 いずれも操作の自然な切れ目です。ユーザーが手を止めている瞬間に GC を寄せることで、体感の
 引っかかりを最小化できます。
 
+ただしミニバッファはほぼ毎コマンドで閉じ、強制 GC は 10〜30ms 以上かかります（ヒープが大きいほど長い）。
+そこでミニバッファ終了時は =garbage-collect-maybe= を使い、前回の GC 以降に =gc-cons-threshold= の
+=core-gc-minibuffer-factor= 倍（既定 0.25）以上が確保されたときだけ GC します。フォーカス喪失時は
+ユーザーが離れているので、従来どおり無条件に GC します。
+
 *gcmh との分担*
 
 GC の管理は 2 段構えになっています。
@@ -2563,6 +2568,8 @@ GC の管理は 2 段構えになっています。
   ;; - `after-focus-change-function'（フォーカス喪失時）と `minibuffer-exit-hook' で
   ;;   `garbage-collect' を起動する
   ;; - `condition-case' で包み、エラーは静かに握りつぶす
+  ;; - ミニバッファ終了時は `garbage-collect-maybe' で、`core-gc-minibuffer-factor' の分だけ
+  ;;   確保された後に限って GC する（強制 GC は 10〜30ms 以上かかり、ほぼ毎コマンドで走るため）
   ;; - マスタースイッチとして `core-gc-enable-p' を尊重する
   ;;; Code:
 
@@ -2574,10 +2581,26 @@ GC の管理は 2 段構えになっています。
     "Enable GC hooks for long-running sessions."
     :type 'boolean :group 'core-gc)
 
+  (defcustom core-gc-minibuffer-factor 0.25
+    "Fraction of `gc-cons-threshold' allocated before a minibuffer-exit GC.
+The minibuffer closes after almost every command, and a forced full GC takes
+10-30 ms (more with a large heap), so it only runs when at least this fraction
+of `gc-cons-threshold' has been allocated since the last GC.  A smaller value
+collects more often."
+    :type 'number :group 'core-gc)
+
   (defun core-gc--collect ()
     "Run garbage collection safely."
     (when core-gc-enable-p
       (condition-case _err (garbage-collect) (error nil))))
+
+  (defun core-gc--collect-maybe ()
+    "Run garbage collection at minibuffer exit only when enough has been allocated.
+Uses `garbage-collect-maybe' with `core-gc-minibuffer-factor'."
+    (when core-gc-enable-p
+      (condition-case _err
+          (garbage-collect-maybe core-gc-minibuffer-factor)
+        (error nil))))
 
   ;; focus-out-hook は Emacs 27.1 で廃止された（handle-focus-out は今も実行するが、
   ;; docstring が「タイミングによっては呼ばれない」と警告している）。後継は
@@ -2598,7 +2621,7 @@ GC の管理は 2 段構えになっています。
   (remove-function after-focus-change-function #'core-gc--on-focus-change)
   (add-function :after after-focus-change-function #'core-gc--on-focus-change)
 
-  (add-hook 'minibuffer-exit-hook #'core-gc--collect)
+  (add-hook 'minibuffer-exit-hook #'core-gc--collect-maybe)
 
   (provide 'core-gc)
   ;;; core/core-gc.el ends here
@@ -8259,8 +8282,11 @@ variant; see Commentary for the rationale."
                                         (error-message-string err))))))))))))))
 
   (defun completion-lsp-on-project-switch ()
-    "Shutdown obsolete Eglot servers when switching projects."
-    (when completion-lsp-enable-p
+    "Shutdown obsolete Eglot servers when switching projects.
+Remote (TRAMP) buffers are ignored: `project-current' would run commands on
+the remote host on every `find-file', and they must not reset the tracked root."
+    (when (and completion-lsp-enable-p
+               (not (file-remote-p default-directory)))
       (let ((new-root (completion-lsp--project-root)))
         (when (and completion-lsp--current-project-root
                    new-root
@@ -10220,10 +10246,15 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
   ;; 本ファイルの責務:
   ;; - `eglot-ensure' を呼ぶ前に、現在のバッファに対して eglot がサーバを見つけられるか
   ;;   を判定する `my/eglot-guessable-p' を定義する
-  ;; - `dev-lsp-eglot--maybe-ensure' を `prog-mode-hook' にフックする
+  ;; - `dev-lsp-eglot--maybe-ensure' を `prog-mode-hook' にフックする。ファイルを訪問する
+  ;;   バッファで初めて呼ばれたときに eglot をロードする（ロードしないと `eglot--guess-contact'
+  ;;   が無く、判定が常に nil になって eglot が一度も起動しない。*scratch* では呼ばない）
   ;; - C/C++ は clangd（--background-index --clang-tidy）、Python は pyright を
   ;;   `eglot-server-programs' に登録する（clangd は Homebrew の llvm を優先）
   ;; - 最後のバッファを閉じたらサーバを止める（`eglot-autoshutdown'）
+  ;; - eglot は Emacs 同梱を使う（`:straight nil'。コーディング規則 3）。`:straight t' だと
+  ;;   ELPA から eglot と、その依存の eldoc・flymake・project・xref・jsonrpc などまで
+  ;;   取得して同梱版を上書きし、初回の起動も遅くなる
   ;; - core-switches 向けのエントリポイント `my/lsp-enable-eglot' を提供する
   ;;
   ;; rename / code-actions は `dev-lsp-rename'、`dev-lsp-code-actions'（ui-keymap の
@@ -10244,13 +10275,21 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
 
   ;;;###autoload
   (defun dev-lsp-eglot--maybe-ensure ()
-    "Enable eglot in the current buffer when the project is guessable."
-    (when (my/eglot-guessable-p) (eglot-ensure)))
+    "Enable eglot in the current file buffer when a server can be guessed.
+Eglot is loaded here on first use: `my/eglot-guessable-p' needs
+`eglot--guess-contact', which does not exist until eglot is loaded, so without
+this `require' the guard is always nil and eglot is never started.  Buffers
+that visit no file (*scratch* and the like) are skipped, so eglot (about
+130 ms to load) is not pulled in at startup."
+    (when (and buffer-file-name
+               (require 'eglot nil t)
+               (my/eglot-guessable-p))
+      (eglot-ensure)))
 
   ;; defun は leaf より前に置く（vcs-core.el の smerge と同じ理由。:hook に関数名を
   ;; 書くと leaf が autoload と declare-function を出し、後ろだと二重定義の警告になる）。
   (leaf eglot
-    :straight t
+    :straight nil
     :commands (eglot eglot-ensure)
     :custom ((eglot-autoreconnect . t)
              (eglot-autoshutdown . t))
@@ -11246,8 +11285,9 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   ;; ファイル、無ければ minibuffer で尋ねる。
   ;;; Code:
 
-  (require 'comint)
-
+  ;; comint は起動時に読み込まない（約 11ms）。`make-comint' は autoload されており、
+  ;; `my/r2' を呼んだときに初めて読み込まれる。
+  (declare-function make-comint "comint")
   (declare-function dired-get-filename "dired")
 
   (defgroup dev-radare2 nil
@@ -11889,6 +11929,9 @@ ASCII（英字）へ切り替える。
 - *範囲選択中* — リージョンが有効になった瞬間に、日本語入力なら ASCII へ切り替え、解除したら
   元の入力ソースへ戻す（ =activate-mark-hook= / =deactivate-mark-hook= 。 =utils-ime-enable-region-p= ）。
 
+フックの登録は =emacs-startup-hook= まで遅らせている。起動中のバッファの出入りで =macism= を同期で呼ぶと
+（1 回約 40ms）、起動が約 80ms 遅くなるためである。
+
 =macism= が見つからない環境（非 macOS ／未インストール）では全て no-op になる。
 ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
 =com.apple.keylayout.ABC= （ =macism= を引数なしで実行すると現在値を確認できる）。
@@ -11928,6 +11971,8 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
   ;; - `utils-ime--install-leader': リーダーキーを `menu-item' の `:filter' で包み、
   ;;   キー押下時に ASCII 化してから `ui-leader-map' を返す。これにより which-key と
   ;;   `describe-key' の挙動はプレフィックスキーとして従来どおり維持される。
+  ;; - `utils-ime--startup-init': 下の 4 種類のフックを `emacs-startup-hook' で登録する
+  ;;   （起動中は macism を呼ばないため。起動時間を約 80ms 縮める）
   ;; - `utils-ime--track-buffer-change': `buffer-list-update-hook' 上で、カレント
   ;;   バッファが `utils-ime-target-modes' の境界をまたいだときに ASCII 化／復帰する。
   ;; - `utils-ime--minibuffer-setup' / `utils-ime--minibuffer-exit':
@@ -12129,17 +12174,24 @@ Nil when the source was already ASCII or the region is inactive.")
   (with-eval-after-load 'ui-leader
     (utils-ime--install-leader))
 
-  ;; メジャーモード境界の追跡。dirvish・wdired は dired-mode 上に成り立つため、
-  ;; `utils-ime-target-modes' に `dired-mode' を含めるだけで自動的にカバーされる。
-  (add-hook 'buffer-list-update-hook #'utils-ime--track-buffer-change)
+  ;; フックの登録は起動完了後（`emacs-startup-hook'）に遅らせる。
+  ;; 起動中はバッファの出入りが多く、メジャーモード境界の追跡がそのたびに macism を
+  ;; 同期で呼ぶ（1 回約 40ms。入力ソースの取得と切替で 2 回、起動で約 80ms）。
+  ;; 起動中に ASCII 化しても使われないので、登録は起動後でよい。
+  (defun utils-ime--startup-init ()
+    "Register the hooks that switch the input source, after startup.
+Tracks major-mode boundaries, the minibuffer and the active region."
+    ;; メジャーモード境界の追跡。dirvish・wdired は dired-mode 上に成り立つため、
+    ;; `utils-ime-target-modes' に `dired-mode' を含めるだけで自動的にカバーされる。
+    (add-hook 'buffer-list-update-hook #'utils-ime--track-buffer-change)
+    ;; ミニバッファの ASCII 化／復帰。
+    (add-hook 'minibuffer-setup-hook #'utils-ime--minibuffer-setup)
+    (add-hook 'minibuffer-exit-hook #'utils-ime--minibuffer-exit)
+    ;; 範囲選択中の ASCII 化／復帰。
+    (add-hook 'activate-mark-hook #'utils-ime--region-activate)
+    (add-hook 'deactivate-mark-hook #'utils-ime--region-deactivate))
 
-  ;; ミニバッファの ASCII 化／復帰。
-  (add-hook 'minibuffer-setup-hook #'utils-ime--minibuffer-setup)
-  (add-hook 'minibuffer-exit-hook #'utils-ime--minibuffer-exit)
-
-  ;; 範囲選択中の ASCII 化／復帰。
-  (add-hook 'activate-mark-hook #'utils-ime--region-activate)
-  (add-hook 'deactivate-mark-hook #'utils-ime--region-deactivate)
+  (add-hook 'emacs-startup-hook #'utils-ime--startup-init)
 
   (provide 'utils-ime)
   ;;; utils/utils-ime.el ends here
@@ -17783,6 +17835,18 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-18  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (dev/dev-lsp-eglot.el) (dev-lsp-eglot--maybe-ensure): eglot がロードされるまで
+	`eglot--guess-contact' が無く、my/eglot-guessable-p が常に nil を返すため、eglot が自動では一度も起動しなかった。
+	ファイルを訪問するバッファで eglot をロードしてから判定する（*scratch* では呼ばず、起動時にはロードしない）。
+	* README.org (dev/dev-lsp-eglot.el): eglot を :straight nil にした（Emacs 同梱を使う。コーディング規則 3）。
+	:straight t では ELPA から eglot と依存（eldoc、flymake、project、xref、jsonrpc、external-completion）を
+	取得し、同梱の project.el などを上書きしていた。
+	* README.org (utils/utils-ime.el) (utils-ime--startup-init): バッファ境界の追跡・ミニバッファ・範囲選択のフックを
+	emacs-startup-hook で登録する。起動中に macism を同期で呼んでいた分（約 80ms）を省く。
+	* README.org (core/core-gc.el) (core-gc--collect-maybe, core-gc-minibuffer-factor): ミニバッファ終了時の GC を
+	garbage-collect-maybe にし、gc-cons-threshold の factor 倍が確保されたときだけ走らせる。フォーカス喪失時は従来どおり。
+	* README.org (completion/completion-lsp.el): リモート（TRAMP）のバッファでは project-current を呼ばない。
+	* README.org (dev/dev-radare2.el): comint を起動時に読み込まない（約 11〜16ms）。
 	* README.org (utils/utils-scratch.el, core/core-buffers.el, lisp/modules.el): *scratch* の再生成が
 	core-buffers（kill-buffer-hook + アイドルタイマー）と utils-scratch（buffer-list-update-hook）の 2 か所で
 	重複していたため、utils-scratch に統合し、core-buffers を廃止した。my:modules から core-buffers を外し、
