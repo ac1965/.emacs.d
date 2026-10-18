@@ -13070,326 +13070,315 @@ MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
 :END:
 
 #+begin_src emacs-lisp
-  ;;; personal/ac1965.el --- マシン固有の識別情報と UI スイッチ -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: personal
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; マシン固有の識別情報、ディレクトリの上書き、フォント、UI スイッチ。
-  ;;
-  ;; 本ファイルの責務:
-  ;; - このマシンの `user-full-name' と `user-mail-address' を設定する
-  ;; - auth・暗号化モジュール向けに `GPG_KEY_ID' を export する
-  ;; - `my:d:org' を、macOS では /Users/ac1965/Documents/org/ に、
-  ;;   WSL では /home/ac1965/org/ に上書きする（`my:wsl-p' で分岐）。journal と roam などの
-  ;;   派生変数は orgx-core.el が `my:d:org' から導く
-  ;; - `my:f:capture-blog-file' を ~/Projects/blog/mysite/all-posts.org に上書きする
-  ;; - フォントを設定する: JetBrains Mono（等幅）、Noto Sans JP（可変）、サイズ 18
-  ;; - `my:use-ui 'nano' と `my:use-lsp 'eglot' を有効化する
-  ;; - Hugo ブログ関連（タグ設定、capture）は personal-hugo.el へ分離した
-  ;; - IME 表示（sis のキャッシュ、dirvish と nano-modeline への受け渡し）は
-  ;;   personal-ime.el へ分離した
-  ;; - mu4e（Homebrew の mu 同梱版）を M-x mu4e で使えるようにする
-  ;; - 自作スクリプトの置き場を `trusted-content' に追加する（flymake の sh／python 用）
-  ;; - .ps1 → powershell-mode、.bas → visual-basic-mode を登録する
-  ;;   （いずれも prog-mode 派生であり、prog-mode-hook は自動的に発火する）
-  ;;
-  ;;; Code:
+    ;;; personal/ac1965.el --- マシン固有の識別情報と UI スイッチ -*- lexical-binding: t; -*-
+    ;;
+    ;; Copyright (c) 2021-2026
+    ;; Author: YAMASHITA, Takao
+    ;; License: GNU GPL v3 or later
+    ;;
+    ;; Category: personal
+    ;;
+    ;;; Commentary:
+    ;;
+    ;; マシン固有の識別情報、ディレクトリの上書き、フォント、UI スイッチ。
+    ;;
+    ;; 本ファイルの責務:
+    ;; - このマシンの `user-full-name' と `user-mail-address' を設定する
+    ;; - auth・暗号化モジュール向けに `GPG_KEY_ID' を export する
+    ;; - `my:d:org' を、macOS では /Users/ac1965/Documents/org/ に、
+    ;;   WSL では /home/ac1965/org/ に上書きする（`my:wsl-p' で分岐）。journal と roam などの
+    ;;   派生変数は orgx-core.el が `my:d:org' から導く
+    ;; - `my:f:capture-blog-file' を ~/Projects/blog/mysite/all-posts.org に上書きする
+    ;; - フォントを設定する: JetBrains Mono（等幅）、Noto Sans JP（可変）、サイズ 18
+    ;; - `my:use-ui 'nano' と `my:use-lsp 'eglot' を有効化する
+    ;; - Hugo ブログ関連（タグ設定、capture）は personal-hugo.el へ分離した
+    ;; - IME 表示（sis のキャッシュ、dirvish と nano-modeline への受け渡し）は
+    ;;   personal-ime.el へ分離した
+    ;; - mu4e（Homebrew の mu 同梱版）を M-x mu4e で使えるようにする
+    ;; - 自作スクリプトの置き場を `trusted-content' に追加する（flymake の sh／python 用）
+    ;; - .ps1 → powershell-mode、.bas → visual-basic-mode を登録する
+    ;;   （いずれも prog-mode 派生であり、prog-mode-hook は自動的に発火する）
+    ;;
+    ;;; Code:
 
-  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
-  (declare-function browse-url-default-browser "browse-url")
-
-
-  ;; ---------------------------------------------------------------------------
-  ;; 識別情報
-  ;; ---------------------------------------------------------------------------
-
-  ;; user-full-name と user-mail-address は defcustom（simple.el）である。
-  (setopt user-full-name    "YAMASHITA, Takao"
-          user-mail-address "tjy1965@gmail.com")
+    ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+    (declare-function browse-url-default-browser "browse-url")
 
 
-  ;; ---------------------------------------------------------------------------
-  ;; GPG キー
-  ;; ---------------------------------------------------------------------------
+    ;; ---------------------------------------------------------------------------
+    ;; 識別情報
+    ;; ---------------------------------------------------------------------------
 
-  (setenv "GPG_KEY_ID" "B4A5D8")
-
-
-  ;; ---------------------------------------------------------------------------
-  ;; Org ディレクトリの上書き
-  ;; ---------------------------------------------------------------------------
-  ;;
-  ;; my:d:org と my:f:capture-blog-file は orgx-core.el で定義される
-  ;; defvar のパス変数である。
-  ;;
-  ;; 本ファイルは init.el のステップ 9 で、modules.el が走るより前に
-  ;; ロードされるため、これらの setq が評価される時点では orgx-core は
-  ;; まだ実行されていない。
-  ;;
-  ;; ここで変数を設定すると、orgx-core 内の後続の defvar は何もしない
-  ;; （defvar は既存の束縛を上書きしない）。これが意図した上書き機構である。
-  ;;
-  ;; これらは defcustom ではなく defvar なので、setq が正しい。
-  ;; 全体の順序については orgx-core.el の「上書きの契約」コメントを参照。
-  ;;
-  ;; 設定するのは my:d:org だけである（2026-10-14）。journal、org-roam、pictures、biblio は
-  ;; orgx-core.el が my:d:org から導く。以前はここで journal と roam を OS ごとに
-  ;; 書いていたが、導出した場所と同じ（末尾のスラッシュの有無だけが違う）ので削除した。
-  ;;
-  ;; マシン（ログイン）単位ではなく OS 単位で値を変える必要があるため、
-  ;; `my:wsl-p'（personal/user.el で定義済み。本ファイルは user.el の後に
-  ;; ロードされるため参照可能）で分岐する。分岐が要るのは my:d:org だけである。
-  ;; WSL 側は macOS の /Users/ac1965/ に対応するホームである /home/ac1965/ を使う。
-  ;;
-  ;; my:f:capture-blog-file も上書きする。
-  ;; 既定値（"blog.org"）は存在せず、"* blog" 見出しも含まない。
-  ;; 実際の ox-hugo 単一ファイル・ソースは all-posts.org であり、
-  ;; (file+olp ... "blog") のキャプチャ・ターゲットが要求する
-  ;; "* blog" トップレベル見出しを持っている。
-  ;; パスはどの OS でもホームからの相対（~/Projects/blog/mysite/）なので、OS では分岐しない。
-  ;; WSL 側に blog プロジェクトを未 clone の場合は個別に上書きするか、orgx-auto-hugo.el 側の
-  ;; (bound-and-true-p my:f:capture-blog-file) ガードに委ねて未設定のままにしてよい。
-
-  (setq my:d:org (if (my:wsl-p)
-                     "/home/ac1965/org/"
-                   "/Users/ac1965/Documents/org/")
-        my:f:capture-blog-file (expand-file-name "Projects/blog/mysite/all-posts.org" "~"))
+    ;; user-full-name と user-mail-address は defcustom（simple.el）である。
+    (setopt user-full-name    "YAMASHITA, Takao"
+            user-mail-address "tjy1965@gmail.com")
 
 
-  ;; ---------------------------------------------------------------------------
-  ;; フォント設定
-  ;; ---------------------------------------------------------------------------
+    ;; ---------------------------------------------------------------------------
+    ;; GPG キー
+    ;; ---------------------------------------------------------------------------
 
-  ;; ui-font-default、ui-font-variable-pitch、ui-font-size は
-  ;; defcustom（ui-font.el）である。setopt を用いる。
-  ;;
-  ;; ui-font-emoji: 明示値は ui-font--system-emoji のフォールバックを上書きし、
-  ;; 起動ログのために ui-font-describe が直接読み取る。
-
-  (setopt ui-font-default        "JetBrains Mono"
-          ui-font-variable-pitch "Noto Sans JP"
-          ui-font-emoji          "Apple Color Emoji"
-          ui-font-size           18)
+    (setenv "GPG_KEY_ID" "B4A5D8")
 
 
-  ;; ---------------------------------------------------------------------------
-  ;; UI バンドル: nano
-  ;; ---------------------------------------------------------------------------
+    ;; ---------------------------------------------------------------------------
+    ;; Org ディレクトリの上書き
+    ;; ---------------------------------------------------------------------------
+    ;;
+    ;; my:d:org と my:f:capture-blog-file は orgx-core.el で定義される
+    ;; defvar のパス変数である。
+    ;;
+    ;; 本ファイルは init.el のステップ 9 で、modules.el が走るより前に
+    ;; ロードされるため、これらの setq が評価される時点では orgx-core は
+    ;; まだ実行されていない。
+    ;;
+    ;; ここで変数を設定すると、orgx-core 内の後続の defvar は何もしない
+    ;; （defvar は既存の束縛を上書きしない）。これが意図した上書き機構である。
+    ;;
+    ;; これらは defcustom ではなく defvar なので、setq が正しい。
+    ;; 全体の順序については orgx-core.el の「上書きの契約」コメントを参照。
+    ;;
+    ;; 設定するのは my:d:org だけである（2026-10-14）。journal、org-roam、pictures、biblio は
+    ;; orgx-core.el が my:d:org から導く。以前はここで journal と roam を OS ごとに
+    ;; 書いていたが、導出した場所と同じ（末尾のスラッシュの有無だけが違う）ので削除した。
+    ;;
+    ;; マシン（ログイン）単位ではなく OS 単位で値を変える必要があるため、
+    ;; `my:wsl-p'（personal/user.el で定義済み。本ファイルは user.el の後に
+    ;; ロードされるため参照可能）で分岐する。分岐が要るのは my:d:org だけである。
+    ;; WSL 側は macOS の /Users/ac1965/ に対応するホームである /home/ac1965/ を使う。
+    ;;
+    ;; my:f:capture-blog-file も上書きする。
+    ;; 既定値（"blog.org"）は存在せず、"* blog" 見出しも含まない。
+    ;; 実際の ox-hugo 単一ファイル・ソースは all-posts.org であり、
+    ;; (file+olp ... "blog") のキャプチャ・ターゲットが要求する
+    ;; "* blog" トップレベル見出しを持っている。
+    ;; パスはどの OS でもホームからの相対（~/Projects/blog/mysite/）なので、OS では分岐しない。
+    ;; WSL 側に blog プロジェクトを未 clone の場合は個別に上書きするか、orgx-auto-hugo.el 側の
+    ;; (bound-and-true-p my:f:capture-blog-file) ガードに委ねて未設定のままにしてよい。
 
-  ;; my:use-ui と my:use-lsp は defcustom（core-switches.el）である。
-  ;; setopt を用いる。
-
-  (setopt my:use-ui  'nano
-          my:use-lsp 'eglot)
-
-
-  ;; ---------------------------------------------------------------------------
-  ;; org-roam-ui
-  ;; ---------------------------------------------------------------------------
-
-  ;;
-  ;; org-roam-ui はここでは require せず :straight のみで導入されるため、
-  ;; バイトコンパイル時にこれらの defcustom を未知の自由変数として警告される。
-  ;; bare defvar でコンパイラに「特殊変数である」とだけ伝え、警告を抑止する。
-  ;;
-
-  (defvar org-roam-ui-port)
-  (defvar org-roam-ui-browser-function)
-  (defvar org-roam-ui-open-on-start)
-  (defvar org-roam-ui-sync-theme)
-  (defvar org-roam-ui-follow)
-  (defvar org-roam-ui-update-on-save)
-
-  (with-eval-after-load 'org-roam-ui
-    ;; HTTP/WebSocket
-    (setopt org-roam-ui-port 35901)
-
-    ;; ブラウザで開く
-    (setopt browse-url-browser-function #'browse-url-default-browser)
-    (setopt org-roam-ui-browser-function
-            (lambda (_url)
-              (browse-url (format "http://127.0.0.1:%d/"
-                                  org-roam-ui-port))))
-
-    ;; 自動起動
-    (setopt org-roam-ui-open-on-start t)
-
-    ;; DB変更をリアルタイム反映
-    (setopt org-roam-ui-sync-theme t
-            org-roam-ui-follow t
-            org-roam-ui-update-on-save t))
+    (setq my:d:org (if (my:wsl-p)
+                       "/home/ac1965/org/"
+                     "/Users/ac1965/Documents/org/")
+          my:f:capture-blog-file (expand-file-name "Projects/blog/mysite/all-posts.org" "~"))
 
 
-  ;; ---------------------------------------------------------------------------
-  ;; python-mode
-  ;; ---------------------------------------------------------------------------
+    ;; ---------------------------------------------------------------------------
+    ;; フォント設定
+    ;; ---------------------------------------------------------------------------
 
-  ;;
-  ;; python-mode 初期化時 (define-derived-mode python-mode 本体) で
-  ;; python-indent-guess-indent-offset-verbose を呼ぶタイミングが
-  ;; hack-local-variables より早いため、ファイルローカル変数
-  ;; (# -*- python-indent-offset: ... -*-) では抑制できない。
-  ;;
-  ;; 実測確認済み（Emacs 29.3, ob-tangle :comments link 環境）。
-  ;;
-  ;; 値自体は変えず、"Can't guess python-indent-offset" の
-  ;; メッセージだけを黙らせる。
+    ;; ui-font-default、ui-font-variable-pitch、ui-font-size は
+    ;; defcustom（ui-font.el）である。setopt を用いる。
+    ;;
+    ;; ui-font-emoji: 明示値は ui-font--system-emoji のフォールバックを上書きし、
+    ;; 起動ログのために ui-font-describe が直接読み取る。
 
-  (setopt python-indent-guess-indent-offset-verbose nil)
+    (setopt ui-font-default        "JetBrains Mono"
+            ui-font-variable-pitch "Noto Sans JP"
+            ui-font-emoji          "Apple Color Emoji"
+            ui-font-size           18)
 
 
-  ;; ---------------------------------------------------------------------------
-  ;; 拡張子 → prog-mode の登録
-  ;; ---------------------------------------------------------------------------
+    ;; ---------------------------------------------------------------------------
+    ;; UI バンドル: nano
+    ;; ---------------------------------------------------------------------------
 
-  ;;
-  ;; powershell-mode も visual-basic-mode も modules.el ではロードしない。
-  ;; いずれもこのホストでのみ使うマシン固有のツールだからである。
-  ;; leaf ブロックをここに置くことで、共有の personal/user.el を汚さずに済む。
-  ;;
-  ;; powershell-mode（MELPA/jschaf）は prog-mode 派生である。
-  ;; .ps1 と .psm1 は PowerShell スクリプトの標準的な拡張子である。
-  ;;
-  ;; visual-basic-mode（MELPA/yoshiki-1）も prog-mode 派生である。
-  ;; .bas は Excel/Access からエクスポートされた VBA モジュールファイルを対象とする。
+    ;; my:use-ui と my:use-lsp は defcustom（core-switches.el）である。
+    ;; setopt を用いる。
 
-  (leaf powershell
-    :straight t
-    :mode (("\\.ps1\\'"  . powershell-mode)
-           ("\\.psm1\\'" . powershell-mode)))
-
-  (leaf visual-basic-mode
-    :straight t
-    :mode (("\\.bas\\'" . visual-basic-mode)
-           ("\\.vba\\'" . visual-basic-mode)
-           ("\\.frm\\'" . visual-basic-mode)))
+    (setopt my:use-ui  'nano
+            my:use-lsp 'eglot)
 
 
-  ;; ---------------------------------------------------------------------------
-  ;; mu4e（メール）
-  ;; ---------------------------------------------------------------------------
+    ;; ---------------------------------------------------------------------------
+    ;; org-roam-ui
+    ;; ---------------------------------------------------------------------------
 
-  ;;
-  ;; mu4e は mu に同梱される Emacs Lisp で、MELPA/straight では入れない（mu 本体とバージョンを
-  ;; 合わせる必要がある）。Homebrew の mu が置く site-lisp を load-path に足し、
-  ;; ディレクトリが無いホスト（WSL など）では何もしない。メールは modules.el の
-  ;; 対象外（このマシンだけの設定）なので、共有の personal/user.el には置かない。
-  ;;
-  ;; M-x mu4e で起動する。初回は `mu init' と `mu index'、および mbsync の設定が必要。
-  ;; mu4e の変数はすべて defcustom なので setopt を使い、ライブラリ読み込み後の :config で設定する。
-  ;; 取得コマンドは mbsync -a、フォルダはメールボックス /work 配下。
-  ;; 送信は smtpmail（組み込み）で mail.interfusion.jp の 587 番へ STARTTLS で接続する。
-  ;; 認証情報は auth-source から引くので、パスワードはここに書かない。
+    ;;
+    ;; org-roam-ui はここでは require せず :straight のみで導入されるため、
+    ;; バイトコンパイル時にこれらの defcustom を未知の自由変数として警告される。
+    ;; bare defvar でコンパイラに「特殊変数である」とだけ伝え、警告を抑止する。
+    ;;
 
-  (leaf mu4e
-    :straight nil
-    :when (file-directory-p "/opt/homebrew/share/emacs/site-lisp/mu/mu4e")
-    :load-path ("/opt/homebrew/share/emacs/site-lisp/mu/mu4e")
-    :commands (mu4e)
-    :config
-    (setopt mu4e-get-mail-command "mbsync -a"
-            mu4e-change-filenames-when-moving t
-            mu4e-sent-folder   "/work/Sent"
-            mu4e-drafts-folder "/work/Drafts"
-            mu4e-trash-folder  "/work/Trash")
-    ;; 送信（SMTP）
-    (require 'smtpmail)
-    (setopt message-send-mail-function #'smtpmail-send-it
-            smtpmail-smtp-server "mail.interfusion.jp"
-            smtpmail-smtp-service 587
-            smtpmail-stream-type 'starttls
-            smtpmail-smtp-user "t.yamashita@mail.interfusion.jp"))
+    (defvar org-roam-ui-port)
+    (defvar org-roam-ui-browser-function)
+    (defvar org-roam-ui-open-on-start)
+    (defvar org-roam-ui-sync-theme)
+    (defvar org-roam-ui-follow)
+    (defvar org-roam-ui-update-on-save)
+
+    (with-eval-after-load 'org-roam-ui
+      ;; HTTP/WebSocket
+      (setopt org-roam-ui-port 35901)
+
+      ;; ブラウザで開く
+      (setopt browse-url-browser-function #'browse-url-default-browser)
+      (setopt org-roam-ui-browser-function
+              (lambda (_url)
+                (browse-url (format "http://127.0.0.1:%d/"
+                                    org-roam-ui-port))))
+
+      ;; 自動起動
+      (setopt org-roam-ui-open-on-start t)
+
+      ;; DB変更をリアルタイム反映
+      (setopt org-roam-ui-sync-theme t
+              org-roam-ui-follow t
+              org-roam-ui-update-on-save t))
 
 
+    ;; ---------------------------------------------------------------------------
+    ;; python-mode
+    ;; ---------------------------------------------------------------------------
 
-;; ---------------------------------------------------------------------------
-;; IME 表示（sis）
-;; ---------------------------------------------------------------------------
+    ;;
+    ;; python-mode 初期化時 (define-derived-mode python-mode 本体) で
+    ;; python-indent-guess-indent-offset-verbose を呼ぶタイミングが
+    ;; hack-local-variables より早いため、ファイルローカル変数
+    ;; (# -*- python-indent-offset: ... -*-) では抑制できない。
+    ;;
+    ;; 実測確認済み（Emacs 29.3, ob-tangle :comments link 環境）。
+    ;;
+    ;; 値自体は変えず、"Can't guess python-indent-offset" の
+    ;; メッセージだけを黙らせる。
 
-;;
-;; sis のキャッシュ、dirvish 用の mode-line セグメント、nano-modeline への受け渡しは
-;; personal-ime.el に分離した（2026-10-13）。
-;; 読み込みの位置は元の位置のまま（下のリーダーキーの割り当てより前）。
-;;
+    (setopt python-indent-guess-indent-offset-verbose nil)
 
-(require 'personal-ime)
 
+    ;; ---------------------------------------------------------------------------
+    ;; 拡張子 → prog-mode の登録
+    ;; ---------------------------------------------------------------------------
+
+    ;;
+    ;; powershell-mode も visual-basic-mode も modules.el ではロードしない。
+    ;; いずれもこのホストでのみ使うマシン固有のツールだからである。
+    ;; leaf ブロックをここに置くことで、共有の personal/user.el を汚さずに済む。
+    ;;
+    ;; powershell-mode（MELPA/jschaf）は prog-mode 派生である。
+    ;; .ps1 と .psm1 は PowerShell スクリプトの標準的な拡張子である。
+    ;;
+    ;; visual-basic-mode（MELPA/yoshiki-1）も prog-mode 派生である。
+    ;; .bas は Excel/Access からエクスポートされた VBA モジュールファイルを対象とする。
+
+    (leaf powershell
+      :straight t
+      :mode (("\\.ps1\\'"  . powershell-mode)
+             ("\\.psm1\\'" . powershell-mode)))
+
+    (leaf visual-basic-mode
+      :straight t
+      :mode (("\\.bas\\'" . visual-basic-mode)
+             ("\\.vba\\'" . visual-basic-mode)
+             ("\\.frm\\'" . visual-basic-mode)))
+
+
+    ;; ---------------------------------------------------------------------------
+    ;; mu4e（メール）
+    ;; ---------------------------------------------------------------------------
+
+    ;;
+    ;; mu4e は mu に同梱される Emacs Lisp で、MELPA/straight では入れない（mu 本体とバージョンを
+    ;; 合わせる必要がある）。Homebrew の mu が置く site-lisp を load-path に足し、
+    ;; ディレクトリが無いホスト（WSL など）では何もしない。メールは modules.el の
+    ;; 対象外（このマシンだけの設定）なので、共有の personal/user.el には置かない。
+    ;;
+    ;; M-x mu4e で起動する。初回は `mu init' と `mu index'、および mbsync の設定が必要。
+    ;; mu4e の変数はすべて defcustom なので setopt を使い、ライブラリ読み込み後の :config で設定する。
+    ;; 取得コマンドは mbsync -a、フォルダはメールボックス /work 配下。
+
+    (leaf mu4e
+      :straight nil
+      :when (file-directory-p "/opt/homebrew/share/emacs/site-lisp/mu/mu4e")
+      :load-path ("/opt/homebrew/share/emacs/site-lisp/mu/mu4e")
+      :commands (mu4e)
+      :config
+      (setopt mu4e-get-mail-command "mbsync -a"
+              mu4e-change-filenames-when-moving t
+              mu4e-sent-folder   "/work/Sent"
+              mu4e-drafts-folder "/work/Drafts"
+              mu4e-trash-folder  "/work/Trash"))
 
   ;; ---------------------------------------------------------------------------
-  ;; Leader key
-  ;; ---------------------------------------------------------------------------
-
-  (defun ac1965--bind-leader-keys ()
-    "Bind ac1965-specific keys into the leader keymap after startup.
-
-  Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
-  (depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
-  and `ui-leader-o-map' are guaranteed to be live keymaps."
-    (ui-keymap-bind 'ui-leader-t-map "m" #'my/ui-nano-modeline-toggle)
-    (ui-keymap-bind 'ui-leader-o-map "g" #'ac1965/org-hugo-set-tags)
-    (ui-keymap-bind 'ui-leader-o-map "f" #'ac1965/open-capture-blog-file))
-
-  (add-hook 'after-init-hook #'ac1965--bind-leader-keys 10)
-
-
-  ;; ---------------------------------------------------------------------------
-  ;; macOS Keychain の auth-source バックエンド — ログイン単位の制御
+  ;; IME 表示（sis）
   ;; ---------------------------------------------------------------------------
 
   ;;
-  ;; personal/device-darwin.el は、すべての macOS セッションで
-  ;; auth-keychain-enable を t に設定する。
-  ;;
-  ;; この式はログインアカウントに最終決定権を与える。
-  ;; このアカウントに限り Keychain 参照を無効にするには nil に変更する。
-  ;;
-  ;; 規則 6:
-  ;; auth-keychain-enable は defcustom である。setopt を用いる。
+  ;; sis のキャッシュ、dirvish 用の mode-line セグメント、nano-modeline への受け渡しは
+  ;; personal-ime.el に分離した（2026-10-13）。
+  ;; 読み込みの位置は元の位置のまま（下のリーダーキーの割り当てより前）。
   ;;
 
-  (setopt auth-keychain-enable t)
+  (require 'personal-ime)
+
+
+    ;; ---------------------------------------------------------------------------
+    ;; Leader key
+    ;; ---------------------------------------------------------------------------
+
+    (defun ac1965--bind-leader-keys ()
+      "Bind ac1965-specific keys into the leader keymap after startup.
+
+    Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+    (depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
+    and `ui-leader-o-map' are guaranteed to be live keymaps."
+      (ui-keymap-bind 'ui-leader-t-map "m" #'my/ui-nano-modeline-toggle)
+      (ui-keymap-bind 'ui-leader-o-map "g" #'ac1965/org-hugo-set-tags)
+      (ui-keymap-bind 'ui-leader-o-map "f" #'ac1965/open-capture-blog-file))
+
+    (add-hook 'after-init-hook #'ac1965--bind-leader-keys 10)
+
+
+    ;; ---------------------------------------------------------------------------
+    ;; macOS Keychain の auth-source バックエンド — ログイン単位の制御
+    ;; ---------------------------------------------------------------------------
+
+    ;;
+    ;; personal/device-darwin.el は、すべての macOS セッションで
+    ;; auth-keychain-enable を t に設定する。
+    ;;
+    ;; この式はログインアカウントに最終決定権を与える。
+    ;; このアカウントに限り Keychain 参照を無効にするには nil に変更する。
+    ;;
+    ;; 規則 6:
+    ;; auth-keychain-enable は defcustom である。setopt を用いる。
+    ;;
+
+    (setopt auth-keychain-enable t)
+
+    ;; ---------------------------------------------------------------------------
+    ;; 信頼するコンテンツ（自作スクリプトの置き場）
+    ;; ---------------------------------------------------------------------------
+
+    ;; sh-shellcheck-flymake と python-flymake も `trusted-content-p' を確認し、信頼されない
+    ;; ファイルでは無効化の警告を出す。lisp/ と personal/ は core-policy.el が宣言するので、
+    ;; ここではこのマシン固有の自作スクリプトの置き場だけを追加する。
+    ;; ~/Projects 全体は他人のクローンを含むため挙げない。末尾は "/"、値は
+    ;; abbreviate-file-name 形式で、実体パスに解決して与える（core-policy.el を参照）。
+    ;; narou_dl は自作だが、直下の .venv-*/ に他人のパッケージが入るため、
+    ;; リポジトリ直下ではなく自作のパッケージ narou_dl/ だけを挙げる。
+    (when (boundp 'trusted-content)
+      (dolist (dir '("~/.local/bin/" "~/Projects/scripts/" "~/Projects/dotfiles/"
+                     "~/Projects/narou_dl/narou_dl/"))
+        (add-to-list 'trusted-content
+                     (abbreviate-file-name (file-name-as-directory (file-truename dir)))
+                     t)))
+
 
   ;; ---------------------------------------------------------------------------
-  ;; 信頼するコンテンツ（自作スクリプトの置き場）
+  ;; Hugo ブログ（all-posts.org）
   ;; ---------------------------------------------------------------------------
 
-  ;; sh-shellcheck-flymake と python-flymake も `trusted-content-p' を確認し、信頼されない
-  ;; ファイルでは無効化の警告を出す。lisp/ と personal/ は core-policy.el が宣言するので、
-  ;; ここではこのマシン固有の自作スクリプトの置き場だけを追加する。
-  ;; ~/Projects 全体は他人のクローンを含むため挙げない。末尾は "/"、値は
-  ;; abbreviate-file-name 形式で、実体パスに解決して与える（core-policy.el を参照）。
-  ;; narou_dl は自作だが、直下の .venv-*/ に他人のパッケージが入るため、
-  ;; リポジトリ直下ではなく自作のパッケージ narou_dl/ だけを挙げる。
-  (when (boundp 'trusted-content)
-    (dolist (dir '("~/.local/bin/" "~/Projects/scripts/" "~/Projects/dotfiles/"
-                   "~/Projects/narou_dl/narou_dl/"))
-      (add-to-list 'trusted-content
-                   (abbreviate-file-name (file-name-as-directory (file-truename dir)))
-                   t)))
+  ;;
+  ;; タグ設定、all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの
+  ;; 上書きは personal-hugo.el に分離した（2026-10-13）。
+  ;; 上のリーダーキーの割り当て（g、f）が参照する関数もそこで定義される。
+  ;; フックはいずれも after-init-hook の深さで順序が決まるため、require の位置は問わない。
+  ;;
+
+  (require 'personal-hugo)
 
 
-;; ---------------------------------------------------------------------------
-;; Hugo ブログ（all-posts.org）
-;; ---------------------------------------------------------------------------
-
-;;
-;; タグ設定、all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの
-;; 上書きは personal-hugo.el に分離した（2026-10-13）。
-;; 上のリーダーキーの割り当て（g、f）が参照する関数もそこで定義される。
-;; フックはいずれも after-init-hook の深さで順序が決まるため、require の位置は問わない。
-;;
-
-(require 'personal-hugo)
-
-
-  (provide 'ac1965)
-  ;;; personal/ac1965.el ends here
+    (provide 'ac1965)
+    ;;; personal/ac1965.el ends here
 #+end_src
 
 *** personal/personal-ime.el
