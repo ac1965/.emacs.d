@@ -8426,10 +8426,13 @@ the remote host on every `find-file', and they must not reset the tracked root."
   ;; 桁 0 の行（dot ブロック、docstring の継続行）は戻るたびに 2 桁ずれる。
   ;; t にすると開閉とも字下げに触れないので、往復しても変わらない。
   ;;
-  ;; グローバルには設定しない。他の Org ファイルの編集や対話的な tangle の
-  ;; 結果まで変わるため。make tangle は -Q に近いバッチで走るので影響を受けない
-  ;; （字下げの除去は従来どおり働く）。ファイルローカル変数は安全な値として
-  ;; 登録されておらず確認を求められるため、フックで束縛する。
+  ;; グローバルには設定しない。他の Org ファイルの編集まで変わるため。
+  ;; make tangle は init を読まないバッチで走るので影響を受けない（字下げの除去は
+  ;; 従来どおり働く）。一方、対話的な tangle（C-c C-v t）はこのバッファローカル値を
+  ;; 見て字下げを除去せず、書き出した .el 全体が 2 桁深くなる。そこで下の :around
+  ;; advice が tangle の間だけ nil へ戻し、make tangle と同じ字下げにそろえる。
+  ;; ファイルローカル変数は安全な値として登録されておらず確認を求められるため、
+  ;; フックで束縛する。
   (defun orgx-core--preserve-readme-src-indentation ()
     "Preserve source block indentation in this repository's README.org."
     (when (and buffer-file-name
@@ -8437,7 +8440,19 @@ the remote host on every `find-file', and they must not reset the tracked root."
                              (expand-file-name "README.org" user-emacs-directory)))
       (setq-local org-src-preserve-indentation t)))
 
+  ;; 下の let を動的束縛にするため、特殊変数であることをコンパイラへ伝える
+  ;; （Org を読み込まずにコンパイルされても字句的束縛にならない）。
+  (defvar org-src-preserve-indentation)
+
+  (defun orgx-core--tangle-strip-indentation (fn &rest args)
+    "Call FN with ARGS while `org-src-preserve-indentation' is nil.
+  Tangling from README.org must strip the block indentation just as
+  `make tangle' does; the buffer-local t is only for editing."
+    (let ((org-src-preserve-indentation nil))
+      (apply fn args)))
+
   (add-hook 'org-mode-hook #'orgx-core--preserve-readme-src-indentation)
+  (advice-add 'org-babel-tangle :around #'orgx-core--tangle-strip-indentation)
 
   (leaf org
     :straight nil
@@ -13870,15 +13885,33 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;; after-init-hook の発火より前に my:modules 経由で走る）。
   ;; キー: M-SPC a a（apps → Apple Music の hydra）。
 
-  (defun apple-music--applescript (cmd)
-    "Send CMD to Music.app via osascript.  No-op on non-macOS systems."
+  (defun apple-music--osascript (lines)
+    "Run osascript with the script LINES (a list of strings), one -e each.
+  Return the trimmed output, or nil on non-macOS systems or when osascript
+  exits with an error.  No shell is involved, so LINES need no shell quoting."
     (when (eq system-type 'darwin)
-      (shell-command-to-string
-       (format "osascript -e 'tell application \"Music\" to %s'" cmd))))
+      (with-temp-buffer
+        (when (zerop (apply #'call-process "osascript" nil t nil
+                            (mapcan (lambda (l) (list "-e" l)) lines)))
+          (string-trim (buffer-string))))))
+
+  (defun apple-music--quote (string)
+    "Return STRING escaped for use inside an AppleScript string literal."
+    (replace-regexp-in-string "[\\\"]" "\\\\\\&" string))
+
+  (defun apple-music--applescript (cmd &optional launch)
+    "Send CMD to Music.app via osascript.  No-op on non-macOS systems.
+  Unless LAUNCH is non-nil, do nothing when Music.app is not running, so a
+  query or a pause never starts the application."
+    (let ((line (format "tell application \"Music\" to %s" cmd)))
+      (apple-music--osascript
+       (if launch
+           (list line)
+         (list "if application \"Music\" is running then" line "end if")))))
 
   (defun apple-music-play ()
     "Start playback in Apple Music."
-    (interactive) (apple-music--applescript "play"))
+    (interactive) (apple-music--applescript "play" t))
 
   (defun apple-music-pause ()
     "Pause playback in Apple Music."
@@ -13894,37 +13927,28 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
 
   (defun apple-music-toggle ()
     "Toggle play/pause in Apple Music."
-    (interactive) (apple-music--applescript "playpause"))
-
-  (defun apple-music-current ()
-    "Display the currently playing track name and artist from Apple Music."
-    (interactive)
-    (let* ((name   (apple-music--applescript "name of current track"))
-           (artist (apple-music--applescript "artist of current track")))
-      (message "♫ %s — %s"
-               (string-trim (or name "Unknown"))
-               (string-trim (or artist "Unknown")))))
+    (interactive) (apple-music--applescript "playpause" t))
 
   (defun apple-music--playlist-names ()
     "Return a list of playlist names from Music.app via AppleScript.
-Calls osascript with multiple -e flags to retrieve every playlist name.
-Returns nil on non-macOS systems or when Music.app is not running."
-    (when (eq system-type 'darwin)
-      (let* ((raw (shell-command-to-string
-                   (concat "osascript"
-                           " -e 'tell application \"Music\"'"
-                           " -e 'name of every playlist'"
-                           " -e 'end tell'")))
-             (trimmed (string-trim raw)))
-        (when (and trimmed (not (string-empty-p trimmed)))
-          ;; osascript はカンマ区切りのリストを返す: "foo, bar, baz"
-          (mapcar #'string-trim (split-string trimmed ", *" t))))))
+  The names are joined with linefeeds on the AppleScript side, so a name that
+  contains a comma stays in one piece.  Returns nil on non-macOS systems or
+  when Music.app is not running."
+    (let ((raw (apple-music--osascript
+                (list "if application \"Music\" is running then"
+                      "tell application \"Music\""
+                      "set AppleScript's text item delimiters to linefeed"
+                      "return (name of every playlist) as text"
+                      "end tell"
+                      "end if"))))
+      (when (and raw (not (string-empty-p raw)))
+        (split-string raw "\n" t "[ \t]+"))))
 
   (defun apple-music-playlist-play (name)
     "Play the Music.app playlist NAME immediately.
 NAME must match an existing playlist name exactly."
     (apple-music--applescript
-     (format "play playlist \"%s\"" (string-replace "\"" "\\\"" name))))
+     (format "play playlist \"%s\"" (apple-music--quote name)) t))
 
   (defun apple-music-playlist-select ()
     "Choose a Music.app playlist via completing-read and start playback.
@@ -13939,6 +13963,253 @@ Music.app is not available or the playlist list is empty."
             (apple-music-playlist-play choice)
             (message "♫ Playing playlist: %s" choice))))))
 
+  ;; 曲情報・音量・シャッフル / リピート・お気に入り・検索・モードライン表示。
+  ;; 状態を読むものは Music.app が未起動なら何もしない（起動しない）。
+
+  (defgroup apple-music nil
+    "Control Music.app from Emacs."
+    :group 'applications
+    :prefix "apple-music-")
+
+  (defvar apple-music-volume-step 10
+    "Amount of change for `apple-music-volume-up' and `apple-music-volume-down'.")
+
+  (defvar apple-music-search-limit 50
+    "Maximum number of songs `apple-music-search-play' offers for selection.")
+
+  (defvar apple-music-mode-line-interval 15
+    "Seconds between refreshes of the `apple-music-mode-line-mode' display.")
+
+  (defun apple-music--format-time (seconds)
+    "Return SECONDS (an integer) formatted as M:SS."
+    (format "%d:%02d" (/ seconds 60) (% seconds 60)))
+
+  (defun apple-music--state-mark (state)
+    "Return a one-character mark for the Music.app player STATE string."
+    (pcase state ("playing" "▶") ("paused" "⏸") (_ "■")))
+
+  (defun apple-music--track-info ()
+    "Return a plist describing the current track, or nil.
+  The keys are :name :artist :album :state :position and :duration (the last
+  two in seconds).  Return nil when Music.app is not running or has no
+  current track."
+    (let ((raw (apple-music--osascript
+                (list "if application \"Music\" is running then"
+                      "tell application \"Music\""
+                      "set t to current track"
+                      "set pp to player position"
+                      "set dur to duration of t"
+                      (concat "return (name of t) & linefeed & (artist of t) & linefeed"
+                              " & (album of t) & linefeed & (player state as text)"
+                              " & linefeed & ((round pp) as text) & linefeed"
+                              " & ((round dur) as text)")
+                      "end tell"
+                      "end if"))))
+      (when (and raw (not (string-empty-p raw)))
+        (let ((f (split-string raw "\n")))
+          (when (= (length f) 6)
+            (list :name (nth 0 f) :artist (nth 1 f) :album (nth 2 f)
+                  :state (nth 3 f)
+                  :position (string-to-number (nth 4 f))
+                  :duration (string-to-number (nth 5 f))))))))
+
+  (defun apple-music-current ()
+    "Display the current track, its album, play state and position."
+    (interactive)
+    (let ((info (apple-music--track-info)))
+      (if (null info)
+          (message "[apple-music] Nothing is playing (is Music.app running?)")
+        (let ((artist (plist-get info :artist))
+              (album  (plist-get info :album)))
+          (message "♫ %s — %s%s  %s %s / %s"
+                   (plist-get info :name)
+                   (if (string-empty-p artist) "Unknown" artist)
+                   (if (string-empty-p album) "" (format " (%s)" album))
+                   (apple-music--state-mark (plist-get info :state))
+                   (apple-music--format-time (plist-get info :position))
+                   (apple-music--format-time (plist-get info :duration)))))))
+
+  (defun apple-music--volume ()
+    "Return the Music.app sound volume (0-100) as a number, or nil."
+    (let ((v (apple-music--applescript "sound volume")))
+      (and v (string-match-p "\\`[0-9.]+\\'" v) (round (string-to-number v)))))
+
+  (defun apple-music-set-volume (level)
+    "Set the Music.app sound volume to LEVEL, clamped to 0-100."
+    (interactive (list (read-number "Volume (0-100): " (or (apple-music--volume) 50))))
+    (let ((n (max 0 (min 100 (round level)))))
+      (apple-music--applescript (format "set sound volume to %d" n))
+      (message "♫ Volume: %d" n)))
+
+  (defun apple-music--volume-change (delta)
+    "Change the Music.app sound volume by DELTA."
+    (let ((v (apple-music--volume)))
+      (if v
+          (apple-music-set-volume (+ v delta))
+        (message "[apple-music] Music.app is not running"))))
+
+  (defun apple-music-volume-up ()
+    "Raise the Music.app volume by `apple-music-volume-step'."
+    (interactive) (apple-music--volume-change apple-music-volume-step))
+
+  (defun apple-music-volume-down ()
+    "Lower the Music.app volume by `apple-music-volume-step'."
+    (interactive) (apple-music--volume-change (- apple-music-volume-step)))
+
+  (defun apple-music-shuffle-toggle ()
+    "Toggle shuffle in Music.app and report the new state."
+    (interactive)
+    (apple-music--applescript "set shuffle enabled to (not shuffle enabled)")
+    (let ((v (apple-music--applescript "shuffle enabled")))
+      (if (null v)
+          (message "[apple-music] Music.app is not running")
+        (message "♫ Shuffle: %s" (if (string= v "true") "on" "off")))))
+
+  (defun apple-music-repeat-cycle ()
+    "Cycle the Music.app repeat mode: off, all, one."
+    (interactive)
+    (let ((cur (apple-music--applescript "song repeat as text")))
+      (if (null cur)
+          (message "[apple-music] Music.app is not running")
+        (let ((next (pcase cur ("off" "all") ("all" "one") (_ "off"))))
+          (apple-music--applescript (format "set song repeat to %s" next))
+          (message "♫ Repeat: %s" next)))))
+
+  (defun apple-music-favorite-toggle ()
+    "Toggle the favorite flag of the current track and report the new state."
+    (interactive)
+    (if (null (apple-music--applescript "name of current track"))
+        (message "[apple-music] Nothing is playing (is Music.app running?)")
+      (apple-music--applescript
+       "set favorited of current track to (not favorited of current track)")
+      (message "♫ Favorite: %s"
+               (if (equal (apple-music--applescript "favorited of current track") "true")
+                   "on" "off"))))
+
+  (defun apple-music--search (query)
+    "Return songs matching QUERY as a list of (NAME . ARTIST), best first.
+  At most `apple-music-search-limit' songs are returned.  Return nil when
+  nothing matches or Music.app is not running."
+    (let ((raw (apple-music--osascript
+                (list "if application \"Music\" is running then"
+                      "tell application \"Music\""
+                      (format "set rs to search (library playlist 1) for \"%s\" only songs"
+                              (apple-music--quote query))
+                      "set n to count of rs"
+                      (format "if n > %d then set n to %d"
+                              apple-music-search-limit apple-music-search-limit)
+                      "set out to {}"
+                      "repeat with i from 1 to n"
+                      "set t to item i of rs"
+                      "set end of out to (name of t) & tab & (artist of t)"
+                      "end repeat"
+                      "set AppleScript's text item delimiters to linefeed"
+                      "return out as text"
+                      "end tell"
+                      "end if"))))
+      (when (and raw (not (string-empty-p raw)))
+        (mapcar (lambda (line)
+                  (let ((p (split-string line "\t")))
+                    (cons (car p) (or (cadr p) ""))))
+                (split-string raw "\n" t)))))
+
+  (defun apple-music-search-play (query)
+    "Search the Music.app library for QUERY and play the song you choose."
+    (interactive (list (read-string "Search Music: ")))
+    (when (string-empty-p query)
+      (user-error "Empty query"))
+    (let ((results (apple-music--search query)))
+      (if (null results)
+          (message "[apple-music] No songs found for \"%s\"" query)
+        (let* ((i 0)
+               (cands (mapcar (lambda (r)
+                                (format "%d. %s — %s" (setq i (1+ i)) (car r) (cdr r)))
+                              results))
+               (choice (completing-read "Song: " cands nil t))
+               (idx (string-to-number choice)))
+          (when (> idx 0)
+            (apple-music--applescript
+             (format "play (item %d of (search (library playlist 1) for \"%s\" only songs))"
+                     idx (apple-music--quote query))
+             t)
+            (message "♫ Playing: %s" (substring choice (1+ (string-search " " choice)))))))))
+
+  (defvar apple-music--mode-line-string ""
+    "Mode line text maintained by `apple-music-mode-line-mode'.")
+
+  (defvar apple-music--mode-line-timer nil
+    "Refresh timer of `apple-music-mode-line-mode'.")
+
+  (defvar apple-music--mode-line-process nil
+    "Running osascript process of the mode line refresh, if any.")
+
+  (defun apple-music--osascript-async (lines callback)
+    "Run osascript with LINES asynchronously and call CALLBACK with the output.
+  CALLBACK gets the trimmed output string, or nil when osascript failed.
+  Return the process, or nil on non-macOS systems."
+    (when (eq system-type 'darwin)
+      (let ((buf (generate-new-buffer " *apple-music*")))
+        (make-process
+         :name "apple-music" :buffer buf :noquery t
+         :command (cons "osascript" (mapcan (lambda (l) (list "-e" l)) lines))
+         :sentinel (lambda (proc _event)
+                     (when (memq (process-status proc) '(exit signal))
+                       (let ((out (and (zerop (process-exit-status proc))
+                                       (with-current-buffer buf
+                                         (string-trim (buffer-string))))))
+                         (kill-buffer buf)
+                         (funcall callback out))))))))
+
+  (defun apple-music--mode-line-set (out)
+    "Update the mode line text from OUT, the output of the refresh script."
+    (setq apple-music--mode-line-string
+          (if (and out (not (string-empty-p out)))
+              (let ((f (split-string out "\t")))
+                (concat " "
+                        (truncate-string-to-width
+                         (format "%s %s — %s"
+                                 (if (equal (nth 2 f) "playing") "♫" "⏸")
+                                 (nth 0 f) (or (nth 1 f) ""))
+                         40 nil nil "…")))
+            ""))
+    (force-mode-line-update t))
+
+  (defun apple-music--mode-line-update ()
+    "Refresh the mode line text asynchronously, unless a refresh is running."
+    (unless (process-live-p apple-music--mode-line-process)
+      (setq apple-music--mode-line-process
+            (apple-music--osascript-async
+             (list "if application \"Music\" is running then"
+                   "tell application \"Music\""
+                   "set t to current track"
+                   (concat "return (name of t) & tab & (artist of t) & tab"
+                           " & (player state as text)")
+                   "end tell"
+                   "end if")
+             #'apple-music--mode-line-set))))
+
+  (define-minor-mode apple-music-mode-line-mode
+    "Show the Music.app current track in the mode line.
+  The text is refreshed every `apple-music-mode-line-interval' seconds
+  without blocking Emacs.  It appears wherever `global-mode-string' is shown."
+    :global t
+    :group 'apple-music
+    (when apple-music--mode-line-timer
+      (cancel-timer apple-music--mode-line-timer)
+      (setq apple-music--mode-line-timer nil))
+    (setq apple-music--mode-line-string "")
+    (if apple-music-mode-line-mode
+        (progn
+          (or global-mode-string (setq global-mode-string '("")))
+          (add-to-list 'global-mode-string '(:eval apple-music--mode-line-string) t)
+          (apple-music--mode-line-update)
+          (setq apple-music--mode-line-timer
+                (run-with-timer apple-music-mode-line-interval
+                                apple-music-mode-line-interval
+                                #'apple-music--mode-line-update)))
+      (setq global-mode-string
+            (delete '(:eval apple-music--mode-line-string) global-mode-string))))
+
   ;; hydra-apple-music/body は defhydra が実行時に定義する関数であり、
   ;; コンパイル時には存在しないため、コンパイラに存在を伝えておく。
   (declare-function hydra-apple-music/body "hydra")
@@ -13952,14 +14223,25 @@ hydra is not installed."
       (defhydra hydra-apple-music (:hint nil :color red)
         "
 ^Apple Music^
-[_p_] play   [_s_] pause   [_n_] next   [_b_] prev   [_i_] info   [_l_] playlist   [_q_] quit
+[_p_] play   [_s_] pause   [_SPC_] toggle   [_n_] next   [_b_] prev   [_i_] info
+[_+_] vol+   [_-_] vol-    [_v_] volume     [_z_] shuffle   [_r_] repeat   [_f_] favorite
+[_/_] search   [_l_] playlist   [_m_] mode line   [_q_] quit
 "
         ("p" apple-music-play)
         ("s" apple-music-pause)
+        ("SPC" apple-music-toggle)
         ("n" apple-music-next)
         ("b" apple-music-prev)
         ("i" apple-music-current)
+        ("+" apple-music-volume-up)
+        ("-" apple-music-volume-down)
+        ("v" apple-music-set-volume :color blue)
+        ("z" apple-music-shuffle-toggle)
+        ("r" apple-music-repeat-cycle)
+        ("f" apple-music-favorite-toggle)
+        ("/" apple-music-search-play :color blue)
         ("l" apple-music-playlist-select :color blue)
+        ("m" apple-music-mode-line-mode)
         ("q" nil :color blue)))
     (ui-keymap-bind 'ui-leader-a-map "a" #'hydra-apple-music/body))
 
@@ -17862,6 +18144,18 @@ digraph personal_override_contract {
 	* README.org (orgx/orgx-core.el) (orgx-core--preserve-readme-src-indentation):
 	C-c ' (org-edit-special) から戻ると、桁 0 の行（dot ブロックなど）が 2 桁ずれていた。
 	README.org でだけ org-src-preserve-indentation を t にし、開閉で字下げに触れないようにした。
+	対話的な tangle（保存時の自動 tangle を含む）は字下げを除去せず .el が 2 桁深くなったため、
+	orgx-core--tangle-strip-indentation で org-babel-tangle の間だけ nil に戻す。
+	* README.org (personal/device-darwin.el) (apple-music--osascript): osascript をシェルを介さず
+	call-process で呼ぶ。未起動の Music.app を起動しない（play、playpause、プレイリスト再生のみ起動）。
+	(apple-music--quote): プレイリスト名の \ と " をエスケープする。
+	(apple-music--playlist-names): 改行区切りで受け取り、カンマを含む名前を分割しない。
+	(hydra-apple-music): apple-music-toggle を SPC に割り当てた。
+	* README.org (personal/device-darwin.el) (apple-music-current): アルバム、再生状態、経過時間 / 全体時間も表示する。
+	(apple-music-set-volume, apple-music-volume-up, apple-music-volume-down): 音量操作を追加。
+	(apple-music-shuffle-toggle, apple-music-repeat-cycle, apple-music-favorite-toggle): 追加。
+	(apple-music-search-play): ライブラリの曲を検索して再生する。
+	(apple-music-mode-line-mode): 再生中の曲をモードラインへ非同期で表示する。hydra に各操作を割り当てた。
 
 2026-10-18  YAMASHITA Takao  <tjy1965@gmail.com>
 
