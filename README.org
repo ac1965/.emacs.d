@@ -2957,6 +2957,8 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
   ;;   保つため。下の注記を参照）
   ;; - 3 つのモードを `core-history--startup-init' でまとめて有効化する
   ;;   （`emacs-startup-hook' 経由）
+  ;; - keyfreq でコマンドの使用回数を記録する（保存先は `no-littering-var-directory'
+  ;;   の keyfreq）。使っていない設定を整理する根拠にする。集計は M-x keyfreq-show
   ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
@@ -3004,14 +3006,35 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
     :init
     (my/ensure-directory-exists (file-name-directory (concat no-littering-var-directory "history"))))
 
+  ;; コマンドの使用頻度の記録。キー入力ではなくコマンド単位で数えるため、M-x や
+  ;; hydra から呼んだ分も入る。自己挿入や移動など、毎回数える意味のないものは除く。
+  (leaf keyfreq
+    :straight t
+    :pre-setq
+    `((keyfreq-file      . ,(concat no-littering-var-directory "keyfreq"))
+      (keyfreq-file-lock . ,(concat no-littering-var-directory "keyfreq.lock")))
+    :custom
+    ((keyfreq-excluded-commands
+      . '(self-insert-command org-self-insert-command
+          next-line previous-line forward-char backward-char
+          left-char right-char forward-word backward-word
+          mwheel-scroll mouse-set-point mouse-drag-region
+          delete-backward-char backward-delete-char-untabify
+          newline org-return keyboard-quit
+          handle-switch-frame ignore))))
+
   (defun core-history--startup-init ()
     "Activate session persistence modes after Emacs startup.
-Enables `save-place-mode', `recentf-mode', and `savehist-mode'.
+Enables `save-place-mode', `recentf-mode', and `savehist-mode', and starts
+recording command usage with `keyfreq-mode' when keyfreq is installed.
 Runs via `emacs-startup-hook' so that all module-configured paths are
 established before the persistence files are loaded."
     (save-place-mode +1)
     (recentf-mode +1)
-    (savehist-mode +1))
+    (savehist-mode +1)
+    (when (require 'keyfreq nil t)
+      (keyfreq-mode +1)
+      (keyfreq-autosave-mode +1)))
 
   (add-hook 'emacs-startup-hook #'core-history--startup-init)
 
@@ -3050,8 +3073,7 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
   ;; - TRAMP を永続化パスとともに設定し、既定メソッドを `scp' にする
   ;; - paredit（競合回避のため electric-pair を無効化）と puni を設定する
   ;; - show-paren、undo-fu/vundo、ace-window、visual-line-mode を設定する
-  ;; - 意味単位のテキスト選択のため expreg（構文木。C-= / C-M-=）と
-  ;;   expand-region（C-c = で拡大）を併用する
+  ;; - 意味単位のテキスト選択のため expreg（構文木。C-= で拡大、C-M-= で縮小）を設定する
   ;; - autorevert、transient、hl-line、hideshow、eldoc を設定する
   ;;
   ;; 分割済み（2026-10-13）:
@@ -3115,12 +3137,11 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
     :hook (text-mode . visual-line-mode))
 
   ;; expreg は tree-sitter が使えるバッファでは構文木、無ければ組み込みの
-  ;; 範囲検出で選択を広げる。expand-region は構文木を使わない従来方式で、併用する。
+  ;; 範囲検出で選択を広げる。以前は expand-region（C-c =）を併用していたが、機能が
+  ;; 重なるため削除し、expreg に一本化した。
   (leaf expreg :straight t
     :bind (("C-="   . expreg-expand)
            ("C-M-=" . expreg-contract)))
-  (leaf expand-region :straight t
-    :bind (("C-c =" . er/expand-region)))
   (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
   (leaf delsel :straight nil :global-minor-mode delete-selection-mode)
 
@@ -18321,6 +18342,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-19  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (core/core-editing.el): expand-region と C-c = を削除し、選択範囲の拡大は
+	expreg（C-= / C-M-=）に一本化した。機能が重なっていたため。
+	* README.org (core/core-history.el) (core-history--startup-init): keyfreq を追加し、コマンドの
+	使用回数を記録する。保存先は no-littering-var-directory の keyfreq。集計は M-x keyfreq-show。
 	* README.org (orgx/orgx-core.el) (orgx-core--preserve-readme-src-indentation):
 	C-c ' (org-edit-special) から戻ると、桁 0 の行（dot ブロックなど）が 2 桁ずれていた。
 	README.org でだけ org-src-preserve-indentation を t にし、開閉で字下げに触れないようにした。
