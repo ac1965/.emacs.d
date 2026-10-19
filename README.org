@@ -4430,7 +4430,8 @@ ROLES と COLOR-FN は `ui-nano-palette--resolve' に渡す。"
   ;; 表示項目（ui-nano-modeline-items.el に分離した。2026-10-14）:
   ;;   左  状態アイコン（鍵 / 鉛筆 / ファイル）、ファイル種別アイコン、バッファ名、
   ;;       git 情報、ファイルサイズ、総行数
-  ;;   右  電源（AC 87% / BATT 42%）、時刻、エンコーディング、IME、行:列、ウィンドウ固定
+  ;;   右  追加項目（再生中の曲など。`ui-nano-modeline-extra-function'）、電源（AC 87% / BATT 42%）、
+  ;;       時刻、エンコーディング、IME、行:列、ウィンドウ固定
   ;;
   ;; 以前は personal/ac1965.el にあった（2026-10-12 に移動）:
   ;;   表示内容は特定の利用者のものではなく UI の仕様であり、personal/ は他の層を
@@ -4607,7 +4608,8 @@ nano-modeline のヘッダー行に出す表示項目と、そのフェイスの
   ;; 分離した（2026-10-14）。組み込み（初期化、トグル）は ui-nano-modeline.el に残る。
   ;;
   ;; 本ファイルの責務:
-  ;; - 表示項目: 状態アイコン、ファイル種別アイコン、電源、時刻とエンコーディング、IME
+  ;; - 表示項目: 状態アイコン、ファイル種別アイコン、電源、時刻とエンコーディング、IME、
+  ;;   追加項目（`ui-nano-modeline-extra-function' が返す文字列）
   ;; - 表示項目のフェイス（`ui-nano-modeline-status-icon*'、`ui-nano-modeline-battery-*'、
   ;;   `ui-nano-modeline-secondary' / `-primary'）
   ;; - ヘッダー行の配置（左右に何を並べるか）を `ui-nano-modeline--line' で定義する
@@ -4624,6 +4626,14 @@ nano-modeline のヘッダー行に出す表示項目と、そのフェイスの
   The function is called without arguments on every redisplay, so it should
   return a cached string.  A personal file sets it to feed the machine's IME
   state to the modeline."
+    :type '(choice (const :tag "None" nil) function)
+    :group 'ui-nano-modeline)
+
+  (defcustom ui-nano-modeline-extra-function nil
+    "Function returning an extra string for the right segment, or nil.
+  The function is called without arguments on every redisplay, so it should
+  return a cached string; an empty string hides the item.  A personal file sets
+  it to show machine-specific information such as the track now playing."
     :type '(choice (const :tag "None" nil) function)
     :group 'ui-nano-modeline)
 
@@ -4648,6 +4658,19 @@ nano-modeline のヘッダー行に出す表示項目と、そのフェイスの
     (or (and ui-nano-modeline-ime-function
              (ignore-errors (funcall ui-nano-modeline-ime-function)))
         ""))
+
+  (defun ui-nano-modeline--extra ()
+    "Return the string from `ui-nano-modeline-extra-function', or \"\".
+  `%' is doubled because the header line interprets it as a format spec.  The
+  text uses the secondary face, like the rest of the right segment, so its
+  background matches the battery and time items."
+    (let ((str (and ui-nano-modeline-extra-function
+                    (ignore-errors (funcall ui-nano-modeline-extra-function)))))
+      (if (and (stringp str) (not (string-empty-p str)))
+          (propertize (replace-regexp-in-string "%" "%%" str t t)
+                      'face (when (fboundp 'nano-modeline-face)
+                              (nano-modeline-face 'secondary)))
+        "")))
 
   (defun ui-nano-modeline--time-encoding ()
     "Return a propertized \"HH:MM  CODING  IME\" string for the right segment.
@@ -4803,14 +4826,16 @@ Reusing it means the modeline never runs `pmset' itself on redisplay."
   DEFAULT is passed through to `nano-modeline-header':
   t means global (setq-default), nil means buffer-local (setq-local).
   The left segment shows the status icon, name, git info, file size and line
-  count; the right segment shows battery, time, encoding and cursor position."
+  count; the right segment shows the extra item, battery, time, encoding and
+  cursor position."
     (funcall nano-modeline-position
              '((ui-nano-modeline--buffer-status) " "
                (nano-modeline-buffer-name) " "
                (nano-modeline-git-info) " "
                (nano-modeline-file-size) " "
                (nano-modeline-buffer-line-count))
-             '((ui-nano-modeline--battery)
+             '((ui-nano-modeline--extra)
+               (ui-nano-modeline--battery)
                (ui-nano-modeline--time-encoding) " "
                (nano-modeline-cursor-position)
                (nano-modeline-window-dedicated))
@@ -13823,7 +13848,7 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;;   再生、一時停止、トグル、次、前、現在の曲（アルバム、再生状態、位置）、
   ;;   音量、シャッフル、リピート、お気に入り、曲の検索、プレイリスト選択、
   ;;   再生中の曲順一覧からの選択（プレイリストまたはアルバムを自動判別）、
-  ;;   モードラインへの曲名表示（apple-music-mode-line-mode）
+  ;;   モードラインへの曲名表示（apple-music-mode-line-mode。nano-modeline にも出す）
   ;; - hydra-apple-music を定義し、init 後に M-SPC a a へバインドする
   ;;; Code:
 
@@ -14353,6 +14378,16 @@ Music.app is not available or the playlist list is empty."
                                 #'apple-music--mode-line-update)))
       (setq global-mode-string
             (delete '(:eval apple-music--mode-line-string) global-mode-string))))
+
+  ;; apple-music-mode-line-mode が有効なとき、nano-modeline のヘッダー行にも曲名を出す。
+  ;; nano-modeline は標準のモードラインを隠すため、global-mode-string は見えない。
+  ;; 表示項目は ui/ui-nano-modeline-items.el の `ui-nano-modeline-extra-function'
+  ;; 経由で渡す（IME の `ui-nano-modeline-ime-function' と同じ方式）。
+  (defun apple-music--nano-modeline-string ()
+    "Return the mode line text of `apple-music-mode-line-mode' for nano-modeline."
+    (if apple-music-mode-line-mode apple-music--mode-line-string ""))
+
+  (setopt ui-nano-modeline-extra-function #'apple-music--nano-modeline-string)
 
   ;; hydra-apple-music/body は defhydra が実行時に定義する関数であり、
   ;; コンパイル時には存在しないため、コンパイラに存在を伝えておく。
@@ -18296,6 +18331,10 @@ digraph personal_override_contract {
 	(apple-music--quote): プレイリスト名の \ と " をエスケープする。
 	(apple-music--playlist-names): 改行区切りで受け取り、カンマを含む名前を分割しない。
 	(hydra-apple-music): apple-music-toggle を SPC に割り当てた。
+	* README.org (ui/ui-nano-modeline-items.el) (ui-nano-modeline-extra-function): ヘッダー行の右側に
+	追加項目を出す defcustom と、表示する ui-nano-modeline--extra を追加。背景は右側の他の項目と同じ secondary フェイスにそろえた。
+	* README.org (personal/device-darwin.el) (apple-music--nano-modeline-string): apple-music-mode-line-mode が
+	有効なとき、nano-modeline にも曲名を出す。
 	* README.org (personal/device-darwin.el) (apple-music-current): アルバム、再生状態、経過時間 / 全体時間も表示する。
 	(apple-music-set-volume, apple-music-volume-up, apple-music-volume-down): 音量操作を追加。
 	(apple-music-shuffle-toggle, apple-music-repeat-cycle, apple-music-favorite-toggle): 追加。
