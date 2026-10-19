@@ -14134,6 +14134,128 @@ Music.app is not available or the playlist list is empty."
              t)
             (message "♫ Playing: %s" (substring choice (1+ (string-search " " choice)))))))))
 
+  (defun apple-music--choose-track (prompt rows current)
+    "Prompt with PROMPT to pick one of ROWS and return its 1-based index.
+  ROWS is a list of (NAME . ARTIST) in play order.  CURRENT is the 1-based
+  index of the playing track (0 if unknown); it is marked and preselected.
+  The candidates keep ROWS order instead of being sorted."
+    (let* ((i 0)
+           (cands (mapcar (lambda (r)
+                            (setq i (1+ i))
+                            (format "%d.%s %s — %s" i (if (= i current) " ▶" "")
+                                    (car r) (cdr r)))
+                          rows))
+           (table (lambda (str pred action)
+                    (if (eq action 'metadata)
+                        '(metadata (display-sort-function . identity)
+                                   (cycle-sort-function . identity))
+                      (complete-with-action action cands str pred))))
+           (choice (completing-read prompt table nil t nil nil
+                                    (and (> current 0) (nth (1- current) cands))))
+           (idx (string-to-number choice)))
+      (and (> idx 0) idx)))
+
+  (defun apple-music--playlist-tracks ()
+    "Return (PLAYLIST-NAME CURRENT . ROWS) for the playlist now playing, or nil.
+  ROWS is a list of (NAME . ARTIST) in play order and CURRENT is the 1-based
+  index of the current track in it (0 if unknown)."
+    (let ((raw (apple-music--osascript
+                (list "if application \"Music\" is running then"
+                      "tell application \"Music\""
+                      "set pl to current playlist"
+                      "set ns to name of every track of pl"
+                      "set ars to artist of every track of pl"
+                      "set cur to 0"
+                      "try"
+                      "set cur to index of current track"
+                      "end try"
+                      "set out to {(name of pl) & tab & (cur as text)}"
+                      "repeat with i from 1 to count of ns"
+                      "set end of out to (item i of ns) & tab & (item i of ars)"
+                      "end repeat"
+                      "set AppleScript's text item delimiters to linefeed"
+                      "return out as text"
+                      "end tell"
+                      "end if"))))
+      (when (and raw (not (string-empty-p raw)))
+        (let* ((lines (split-string raw "\n"))
+               (head (split-string (car lines) "\t")))
+          (when (cdr lines)
+            (cons (car head)
+                  (cons (string-to-number (or (cadr head) "0"))
+                        (mapcar (lambda (line)
+                                  (let ((p (split-string line "\t")))
+                                    (cons (car p) (or (cadr p) ""))))
+                                (cdr lines)))))))))
+
+  (defun apple-music-track-select ()
+    "Choose a track from the playlist (or album) now playing and play it.
+  The tracks are listed in play order with the current one marked."
+    (interactive)
+    (let ((data (apple-music--playlist-tracks)))
+      (if (null data)
+          (message "[apple-music] No current playlist (is Music.app playing?)")
+        (let ((idx (apple-music--choose-track
+                    (format "Track [%s]: " (car data)) (cddr data) (cadr data))))
+          (when idx
+            (apple-music--applescript
+             (format "play (track %d of current playlist)" idx))
+            (message "♫ Playing: %s" (car (nth (1- idx) (cddr data)))))))))
+
+  (defun apple-music--album-tracks ()
+    "Return (ALBUM-NAME . ROWS) for the album of the current track, or nil.
+  ROWS is a list of (NAME ARTIST ID), sorted by disc and track number; ID is
+  the persistent ID used to play the track."
+    (let ((raw (apple-music--osascript
+                (list "if application \"Music\" is running then"
+                      "tell application \"Music\""
+                      "set al to album of current track"
+                      "set ts to (every track of library playlist 1 whose album is al)"
+                      "set out to {al}"
+                      "repeat with t in ts"
+                      (concat "set end of out to ((disc number of t) as text) & tab"
+                              " & ((track number of t) as text) & tab & (name of t)"
+                              " & tab & (artist of t) & tab & (persistent ID of t)")
+                      "end repeat"
+                      "set AppleScript's text item delimiters to linefeed"
+                      "return out as text"
+                      "end tell"
+                      "end if"))))
+      (when (and raw (not (string-empty-p raw)))
+        (let* ((lines (split-string raw "\n"))
+               (rows (mapcar (lambda (line) (split-string line "\t")) (cdr lines)))
+               (rows (sort rows (lambda (a b)
+                                  (let ((da (string-to-number (nth 0 a)))
+                                        (db (string-to-number (nth 0 b))))
+                                    (or (< da db)
+                                        (and (= da db)
+                                             (< (string-to-number (nth 1 a))
+                                                (string-to-number (nth 1 b))))))))))
+          (when rows
+            (cons (car lines)
+                  (mapcar (lambda (r) (list (nth 2 r) (or (nth 3 r) "") (nth 4 r)))
+                          rows)))))))
+
+  (defun apple-music-album-select ()
+    "Choose a track from the album of the current track and play it."
+    (interactive)
+    (let ((data (apple-music--album-tracks)))
+      (if (null data)
+          (message "[apple-music] No current album (is Music.app playing?)")
+        (let* ((rows (cdr data))
+               (now (apple-music--applescript "persistent ID of current track"))
+               (cur (or (cl-position now rows :key #'caddr :test #'equal) -1))
+               (idx (apple-music--choose-track
+                     (format "Album [%s]: " (car data))
+                     (mapcar (lambda (r) (cons (car r) (cadr r))) rows)
+                     (1+ cur))))
+          (when idx
+            (apple-music--applescript
+             (format "play (first track of library playlist 1 whose persistent ID is \"%s\")"
+                     (apple-music--quote (caddr (nth (1- idx) rows))))
+             t)
+            (message "♫ Playing: %s" (car (nth (1- idx) rows))))))))
+
   (defvar apple-music--mode-line-string ""
     "Mode line text maintained by `apple-music-mode-line-mode'.")
 
@@ -14225,7 +14347,7 @@ hydra is not installed."
 ^Apple Music^
 [_p_] play   [_s_] pause   [_SPC_] toggle   [_n_] next   [_b_] prev   [_i_] info
 [_+_] vol+   [_-_] vol-    [_v_] volume     [_z_] shuffle   [_r_] repeat   [_f_] favorite
-[_/_] search   [_l_] playlist   [_m_] mode line   [_q_] quit
+[_t_] tracks   [_a_] album   [_/_] search   [_l_] playlist   [_m_] mode line   [_q_] quit
 "
         ("p" apple-music-play)
         ("s" apple-music-pause)
@@ -14239,6 +14361,8 @@ hydra is not installed."
         ("z" apple-music-shuffle-toggle)
         ("r" apple-music-repeat-cycle)
         ("f" apple-music-favorite-toggle)
+        ("t" apple-music-track-select :color blue)
+        ("a" apple-music-album-select :color blue)
         ("/" apple-music-search-play :color blue)
         ("l" apple-music-playlist-select :color blue)
         ("m" apple-music-mode-line-mode)
@@ -18156,6 +18280,7 @@ digraph personal_override_contract {
 	(apple-music-shuffle-toggle, apple-music-repeat-cycle, apple-music-favorite-toggle): 追加。
 	(apple-music-search-play): ライブラリの曲を検索して再生する。
 	(apple-music-mode-line-mode): 再生中の曲をモードラインへ非同期で表示する。hydra に各操作を割り当てた。
+	(apple-music-track-select, apple-music-album-select): 再生中のプレイリスト / アルバムの曲を曲順で一覧し、選んで再生する。
 
 2026-10-18  YAMASHITA Takao  <tjy1965@gmail.com>
 
