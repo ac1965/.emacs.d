@@ -792,10 +792,10 @@ https://www.gnu.org/licenses/gpl-3.0.txt
 
 |Property|Value|
 |--------|-----|
-|Commit|10c3b7611738e3a4510833bd7dc3d26b96951a1a|
+|Commit|06f5d382e1e0b26a1c45d9a33c0b53a2fc2c74b7|
 |Branch|master|
 |System|aarch64-apple-darwin27.0.0|
-|Date|2026-10-16 23:18:22 (JST)|
+|Date|2026-10-20 23:27:31 (JST)|
 |Patch|N/A ns-inline.patch|
 |Features|ACL DBUS GIF GLIB GMP GNUTLS JPEG LCMS2 LIBXML2 MODULES NATIVE_COMP NOTIFY KQUEUE NS PDUMPER PNG RSVG SQLITE3 THREADS TIFF TOOLKIT_SCROLL_BARS TREE_SITTER WEBP XIM ZLIB|
 |Options|CC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang CXX=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ AR=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar RANLIB=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib NM=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm --with-ns --with-native-compilation=aot --with-tree-sitter --with-gnutls --without-imagemagick --with-modules --prefix=/Users/ac1965/.local 'CFLAGS=-O3 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' 'CPPFLAGS=-I/opt/homebrew/opt/libgccjit/include -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/opt/homebrew/include' 'LDFLAGS=-L/opt/homebrew/opt/libgccjit/lib -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -L/opt/homebrew/lib -framework AppKit'|
@@ -2048,9 +2048,9 @@ native-comp が走ります。
       ;; Dev（開発ツール）
       ;; -----------------------------------------------------------------------
       ;; dev-lsp-bridge は LSP 抽象化のファサードである（code-actions、rename、format の
-      ;; バックエンド非依存なディスパッチ・ラッパー）。最初にロードすることで、ui-keymap と
+      ;; バックエンド非依存なディスパッチ・ラッパー）。最初にロードすることで、
       ;; personal オーバーレイが特定のバックエンド（dev-lsp-eglot、dev-lsp-mode）に依存せずに
-      ;; dev-lsp-* コマンドをバインドできる。
+      ;; dev-lsp-* コマンドをバインドできる。M-SPC c a/r/f への割り当ては本モジュール自身が行う。
       ;; 具体的なバックエンドは core-switches が after-init-hook で遅延的に有効化する。
       dev-lsp-bridge
       dev-ai
@@ -6292,7 +6292,7 @@ Redundant paths via global keys are removed."
     (ui-keymap--leader-bind "f"   #'find-file)
     (ui-keymap--leader-bind "F"   #'find-file-other-window)
     (ui-keymap--leader-bind "O"   #'find-file-other-frame)
-    (ui-keymap--leader-bind "k"   #'my/smart-kill-buffer)       ; was C-c k
+    ;; k (smart-kill-buffer) は utils-buffers.el 側で割り当てる（層の方向のため）。
     (ui-keymap--leader-bind "u"   #'revert-buffer)              ; was b r (5 keys)
     (ui-keymap--leader-bind "z"   #'ui-hydra-text-scale/body)
 
@@ -6336,9 +6336,8 @@ Redundant paths via global keys are removed."
     (ui-keymap-bind 'ui-leader-g-map "b" #'magit-blame)
 
     ;; ── c: コード ──────────────────────────────────────────────────────────────
-    (ui-keymap-bind 'ui-leader-c-map "a" #'dev-lsp-code-actions)
-    (ui-keymap-bind 'ui-leader-c-map "r" #'dev-lsp-rename)
-    (ui-keymap-bind 'ui-leader-c-map "f" #'dev-lsp-format-buffer)
+    ;; a / r / f (LSP の code-actions・rename・format) は dev-lsp-bridge.el 側で
+    ;; 割り当てる（ui 層から dev 層を参照しないため）。
     (ui-keymap-bind 'ui-leader-c-map "d" #'xref-find-definitions)
     (ui-keymap-bind 'ui-leader-c-map "R" #'xref-find-references)
     ;; flymake のエラー操作は c-map に集約（発見容易性のため e-map にも残す）
@@ -10248,13 +10247,22 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
   ;;   統一された対話コマンドとして提供する
   ;; - 呼び出し時に `cond'/`fboundp' で eglot か lsp-mode にディスパッチする
   ;; - LSP が動いていない場合、整形は `indent-region' にフォールバックする
+  ;; - 上記 3 コマンドを `ui-leader-c-map' （M-SPC c a / r / f）へ自分で割り当てる
+  ;;   （`dev-lsp-bridge--bind-keys'）
+  ;;
+  ;; キー割り当てに関する注記:
+  ;; 以前は ui-keymap.el がこの 3 コマンドを直接参照していた。ui 層が dev 層に依存する
+  ;; ことになり、層の方向（下位が上位に依存しない）に反するため、割り当ての責務を本
+  ;; モジュールへ移した。マップ（`ui-leader-c-map'）は ui-keymap の
+  ;; `after-init-hook' で作られる（ui-leader--define-maps）ので、本モジュールの hook は
+  ;; depth 90 で登録し、必ずその後に走らせる。マップが無ければ何もしない。
   ;;
   ;; ロード順に関する注記:
   ;; dev/ セクションの先頭、具体的な LSP バックエンドのモジュール（dev-lsp-eglot、
   ;; dev-lsp-mode）より前にロードされる。これらのディスパッチ・ラッパー自体は
   ;; バックエンドに依存しないため、dev/ に置くのがアーキテクチャ上正しい。
-  ;; 本モジュールがロードされれば、ui-keymap と personal オーバーレイは `dev-lsp-*'
-  ;; コマンドをバインドできる。具体的なバックエンドは core-switches が
+  ;; personal オーバーレイも `dev-lsp-*' コマンドを特定のバックエンドに依存せず
+  ;; バインドできる。具体的なバックエンドは core-switches が
   ;; `after-init-hook' で遅延的に有効化する。
     ;;; Code:
 
@@ -10299,6 +10307,18 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
     (interactive)
     (dev-lsp--dispatch #'eglot-format-buffer #'lsp-format-buffer #'indent-region
                        "No formatter available"))
+
+  (defvar ui-leader-c-map)
+
+  (defun dev-lsp-bridge--bind-keys ()
+    "Bind the LSP commands in `ui-leader-c-map' when the map exists."
+    (when (and (boundp 'ui-leader-c-map) (keymapp ui-leader-c-map))
+      (keymap-set ui-leader-c-map "a" #'dev-lsp-code-actions)
+      (keymap-set ui-leader-c-map "r" #'dev-lsp-rename)
+      (keymap-set ui-leader-c-map "f" #'dev-lsp-format-buffer)))
+
+  ;; depth 90: ui-keymap--startup-init （depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'dev-lsp-bridge--bind-keys 90)
 
   (provide 'dev-lsp-bridge)
   ;;; dev/dev-lsp-bridge.el ends here
@@ -11860,6 +11880,14 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;; 本ファイルの責務:
   ;; - `my/smart-kill-buffer': 変更済みファイルバッファを kill する前に保存を確認し、
   ;;   ユーザーの回答にかかわらず kill する
+  ;; - 上記を `ui-leader-map' の k （M-SPC k）へ自分で割り当てる
+  ;;   （`utils-buffers--bind-keys'）
+  ;;
+  ;; キー割り当てに関する注記:
+  ;; 以前は ui-keymap.el が `my/smart-kill-buffer' を直接参照していた。ui 層が utils 層に
+  ;; 依存することになり層の方向に反するため、割り当てを本モジュールへ移した。
+  ;; `ui-leader-map' は ui-keymap の `after-init-hook' で作られるので、hook は depth 90
+  ;; で登録する。マップが無ければ何もしない。
   ;;; Code:
 
   (defun my/smart-kill-buffer (&optional buffer-or-name)
@@ -11871,6 +11899,16 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
           (when (y-or-n-p (format "Save buffer %s? " (buffer-name buf)))
             (with-current-buffer buf (save-buffer))))
         (kill-buffer buf))))
+
+  (defvar ui-leader-map)
+
+  (defun utils-buffers--bind-keys ()
+    "Bind `my/smart-kill-buffer' in `ui-leader-map' when the map exists."
+    (when (and (boundp 'ui-leader-map) (keymapp ui-leader-map))
+      (keymap-set ui-leader-map "k" #'my/smart-kill-buffer)))
+
+  ;; depth 90: ui-keymap--startup-init （depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'utils-buffers--bind-keys 90)
 
   (provide 'utils-buffers)
   ;;; utils/utils-buffers.el ends here
@@ -18340,6 +18378,14 @@ digraph personal_override_contract {
 
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
+2026-10-20  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* README.org (dev/dev-lsp-bridge.el) (dev-lsp-bridge--bind-keys): M-SPC c a/r/f の割り当てを
+	ui-keymap.el から移した。ui 層が dev 層を参照する層違反を解消するため。
+	* README.org (utils/utils-buffers.el) (utils-buffers--bind-keys): M-SPC k の割り当てを
+	ui-keymap.el から移した。同じく ui 層から utils 層への参照を解消するため。
+	* README.org (ui/ui-keymap.el) (ui-keymap--leader-binds): 上記 4 つの割り当てを削除した。
+
 2026-10-19  YAMASHITA Takao  <tjy1965@gmail.com>
 
 	* README.org (core/core-editing.el): expand-region と C-c = を削除し、選択範囲の拡大は
