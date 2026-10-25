@@ -8,10 +8,12 @@
 このリポジトリは YAMASHITA Takao (ac1965) の個人用 Emacs 設定である。
 Org 文書とソースコードを一体として管理する literate program であり、
 `README.org` を設計・仕様・実装の正本（Source of Truth）とする。
+ただし補助スクリプト（`scripts/` の 12 本）の正本は、2026-10-25 に分離した `tools.org` である。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-106 個の `.el` ターゲット（`lisp/` 配下 92 個〔`lisp/modules.el` を含む〕、
+108 個の `.el` ターゲット（`lisp/` 配下 94 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 9 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`）が生成される。
+（`scripts/` の 3 個の `.el` は `tools.org` から、残りは `README.org` から tangle される。）
 
 ```
 README.org (正本)
@@ -58,15 +60,17 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 - `personal/` 配下のすべて
 - `ChangeLog`（GNU 標準形式。README.org の Changelog 節にある
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
-- `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`,
-  `reload.py`, `claude_org_roam_export.py`, `compose.py`, `update_build_info.py`）、
+- `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`, `check_modules.py`,
+  `reload.py`, `claude_org_roam_export.py`, `compose.py`, `stats.py`, `update_build_info.py`）、
   `scripts/shot.sh`、`scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`:
-  README.org の Python / zsh / emacs-lisp ブロックから tangle（`compose.py`、
-  `shot.sh`、`demo-layout.el` は `demo.png` の撮影用で `Appendix: demo.png` 節に、
+  **`tools.org`**（`README.org` ではない）の Python / zsh / emacs-lisp ブロックから tangle
+  （`compose.py`、`shot.sh`、`demo-layout.el` は `demo.png` の撮影用で `Appendix: demo.png` 節に、
   `check-bytecomp.el` は `make check-bytecomp` 用で `Appendix: check-bytecomp.el`
   節に、`cheatsheet.el` は `svg/emacs_keybindings_cheatsheet.svg` を実際のキーマップから作る用
-  （`make cheatsheet`）で `Appendix: cheatsheet.el` 節に、`update_build_info.py` は Installation 節のビルド情報の表を更新する用で
-  `Appendix: update_build_info.py` 節にある）
+  （`make cheatsheet`）で `Appendix: cheatsheet.el` 節に、`update_build_info.py` は `README.org` の
+  Installation 節のビルド情報の表を更新する用で `Appendix: update_build_info.py` 節にある。
+  `check_modules.py` は `make check-modules`、`stats.py` は `make stats` 用）。
+  `tools.org` 自体は手で編集する正本で、`make tangle` が `README.org` に続けて tangle する
 - `svg/*.dot` / `svg/*.mmd`: tangle される図ソース（git 管理外の中間
   ファイル。`make dot-tangle` / `make mmd-tangle`）
 - `svg/*.svg`: 上記から描画してコミットするもの
@@ -117,34 +121,35 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 `lexical-binding` クッキーを 2 行目に押し下げて壊したため、意図的に
 変更した。**emacs-lisp ブロックでは** `:comments link` を再導入しないこと。
 
-この禁止は emacs-lisp ブロックにのみ適用する。Appendix の Python ブロック
+この禁止は emacs-lisp ブロックにのみ適用する。`tools.org` の Appendix の Python ブロック
 （`scripts/check_emphasis.py`, `scripts/check_fboundp_guards.py`,
 `scripts/reload.py`, `scripts/claude_org_roam_export.py`）は、各節の
 `:header-args:python:` で現在も `:comments link` を使っている。これは
 意図された設定であり、emacs-lisp の禁止を理由に変更しないこと。
-ただし `Appendix: demo.png` 節の `compose.py` と `shot.sh`、`Appendix: update_build_info.py`
-節の `update_build_info.py` は `:comments no` である（1 行目のシェバンを保つため）。
+ただし `tools.org` の `Appendix: demo.png` 節の `compose.py` と `shot.sh`、`Appendix: update_build_info.py`
+節の `update_build_info.py`、`check_modules.py`、`stats.py` は `:comments no` である（1 行目のシェバンを保つため）。
 
 ### Directory layout
 
 ```
 .emacs.d/
 ├── README.org
+├── tools.org       (補助スクリプトの正本。scripts/ へ tangle)
 ├── Makefile        (README.org から tangle — 手編集禁止)
 ├── early-init.el
 ├── init.el
 ├── lisp/
 │   ├── modules.el
 │   ├── core/       (tangle ターゲット 12)
-│   ├── ui/         (21)
+│   ├── ui/         (22)
 │   ├── auth/       (3)
 │   ├── completion/ (12)
-│   ├── orgx/       (13; 標準 9 + 任意 4)
+│   ├── orgx/       (14; 標準 10 + 任意 4)
 │   ├── vcs/        (4)
-│   ├── dev/        (16)
-│   └── utils/      (10)
+│   ├── dev/        (17)
+│   └── utils/      (9)
 ├── personal/       (9) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
-├── scripts/        (10) — tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報)
+├── scripts/        (12) — tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
 ├── demo.png        README.org から参照するスクリーンショット（手で管理。scripts/shot.sh と scripts/compose.py で撮り直す）
@@ -201,14 +206,16 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
 - モジュールのロードは決定的で、`lisp/modules.el` の `my:modules` が駆動する
 - 任意の拡張モジュールは `my:modules-extra` 経由でロードする。現在は
   `(ui-visual-aids orgx-typography orgx-brain orgx-citar ui-macos)` で、
-  `personal/user.el` で設定している
+  `personal/user.el` で設定している。macOS では `personal/device-darwin.el` が
+  `dev-apple-music` を加える
 - `orgx-roam-ui` は、標準では extras リストから意図的に除外している。
   含めると起動時に `org-roam`/`org` が強制ロードされ、Org の遅延ロードの
   意味がなくなる
 - 一部のモジュール（`dev-lsp-eglot`, `dev-lsp-mode`, `ui-doom-modeline`,
   `ui-nano-modeline`, `ui-doom-nano-modeline`, `ui-nano-palette`）は autoload 専用で、
-  `core-switches` / `ui-theme` 経由でオンデマンドにロードされ、どちらの
-  リストにも現れない
+  オンデマンドにロードされ、どちらのリストにも現れない。UI バンドルは `ui-bundles`、
+  LSP バックエンドは `dev-lsp-bridge` が `core-switches-register` で登録する（`core-switches`
+  は core 層にあり、これらのモジュール名を知らない）。`ui-nano-palette` は `ui-theme` 経由
 - LSP バックエンド（`eglot` / `lsp-mode` / `lsp-bridge`）は
   `core-switches` で選択する。コードはバックエンド非依存を保つこと
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
@@ -419,18 +426,20 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 
 | Target | Purpose |
 |---|---|
-| `make tangle` | `README.org` を `.el` ターゲットへ tangle |
+| `make tangle` | `README.org` と `tools.org` を `.el` ターゲット・`scripts/` へ tangle |
 | `make reload` | `clean` + `tangle` + `check-cookies`。古い `.elc` を避けるため、単独の `tangle` より推奨 |
-| `make lint` | `check-tangle` + `check-emphasis` + `check-cookies` + `check-fboundp-guards` + `checkdoc` を実行 |
+| `make lint` | `check-tangle` + `check-emphasis` + `check-cookies` + `check-fboundp-guards` + `check-modules` + `checkdoc` を実行 |
 | `make check-tangle` | 見出しレベルの誤りで `:tangle` を継承できない src ブロックを検出 |
 | `make check-emphasis` | 太字が verbatim を囲む場合を含む、無効な Org 強調記法を検出（Elisp ではなく Python 製） |
 | `make check-cookies` | tangle された全 `.el` が `lexical-binding: t` クッキーで始まることを検証 |
 | `make check-fboundp-guards` | `(fboundp 'X)` でガードされた呼び出しを、実際には解決できないシンボルの `#'X` 参照と照合（Python 製。事前の tangle が必要） |
+| `make check-modules` | `lisp/modules.el` の一覧と `lisp/` 配下の整合性（実在・`provide`・層の順序・上位層への `require`・どちらにも載らない `.el`）を、Emacs なしで検査（Python 製） |
+| `make stats` | 層ごとのファイル数・行数・コメント率を表示。本書の数値を更新するときの根拠にする（Python 製） |
 | `make checkdoc` | Elisp の docstring/スタイルチェック |
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |
 | `make cheatsheet` / `make check-cheatsheet` | キーバインド一覧 `svg/emacs_keybindings_cheatsheet.svg` を、init を読み込んだ Emacs の実際のキーマップから書き直す / 書き出さずに、コミット済みの SVG が今のキーマップと同じかを調べる（違えば終了コード 1）。約 40 秒かかるため `lint` には含めない。本体は `scripts/cheatsheet.el` |
 | `make check-bytecomp` | `early-init.el` と `init.el` を読み込んだ Emacs で、`lisp/`・`personal/`・`early-init.el`・`init.el` をすべてバイトコンパイルし、警告があれば一覧して終了コード 1 で終わる。読み込めずコンパイルに失敗したファイルと、init の後でロードされていないモジュールも警告に数える（出力は一時ディレクトリで `.elc` は作らない。約 40 秒かかるため `lint` には含めない。本体は `scripts/check-bytecomp.el`） |
-| `make stage` | `TRACKED`（`README.org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
+| `make stage` | `TRACKED`（`README.org`, `tools.org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
 
 `make help` の `make lint` の説明行は、`check-fboundp-guards` を含む形に直した
 （2026-10-12）。それでも、実際の `lint` の依存は上の表と

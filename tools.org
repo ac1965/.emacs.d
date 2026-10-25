@@ -1,0 +1,2183 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: Tools — 補助スクリプト群
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+* Overview
+:PROPERTIES:
+:CUSTOM_ID: tools-overview
+:END:
+
+この文書は、設定そのものではなく、設定を検証・撮影・保守する補助スクリプトの正本です。
+=README.org= から分離しました。設定の動作に関わる source block は =README.org= に残っています。
+
+- =scripts/check_emphasis.py= 、 =scripts/check_fboundp_guards.py= 、 =scripts/reload.py=
+- =scripts/claude_org_roam_export.py= 、 =scripts/update_build_info.py=
+- =scripts/check-bytecomp.el= 、 =scripts/cheatsheet.el= 、 =scripts/check_modules.py= 、 =scripts/stats.py=
+- =scripts/compose.py= 、 =scripts/shot.sh= 、 =scripts/demo-layout.el=
+
+tangle は =make tangle= が =README.org= に続けて本文書にも行います。
+
+* Appendix: check_emphasis.py — 効かない Org 強調記法の検出スクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-check-emphasis-py
+:header-args:python: :tangle scripts/check_emphasis.py :mkdirp yes :comments link
+:END:
+
+=make check-emphasis= （ =make lint= にも含まれる）が呼び出す検査本体です。
+
+*なぜ Elisp ではなく Python なのか*
+
+最初の実装は Elisp（ =scripts/check-emphasis.el= 、 =--load= で読み込む方式）でした。
+しかし本リポジトリの開発環境には Emacs 本体が無く、実機で 2 件の不具合が見つかるまで
+気づけませんでした。 =:comments link= が =lexical-binding= クッキーを 1 行目から
+追い出す問題と、 =--load FILE -- ARGS= における =command-line-args-left= の ="--"=
+処理の問題です。いずれも Elisp のバッチモード特有の癖であり、実行できない環境で
+書いたコードでは検証しきれませんでした。
+
+Python は本リポジトリの開発環境で実際に実行・検証できます。ロジックは Elisp 版と
+同一で、 =scripts/reload.py= と同じく標準ライブラリのみに依存します。
+
+*検出方法*
+
+=org-emphasis-regexp-components= が定める「直前・直後に許される文字」の集合を
+そのまま Python の =set= として持ちます。orgx-core.el の =(leaf org :config)= で
+この変数に和文の括弧・読点（「」『』（）【】、。・）を追加しているため、
+=PRE_OK= / =POST_OK= もその追加分を含めた集合にしてあります。Elisp 側の値を
+実行時に import することはできないため、orgx-core.el を変更した場合は
+=PRE_OK= / =POST_OK= を手作業で同期させてください。 =verbatim= と ~code~ を
+先に確定させて保護領域とし、次に *bold* 候補を、保護領域との位置関係で 3 通りに
+分けて判定します。
+
+- 保護領域が bold 候補を完全に包含する（例: =*scratch*= の =*= ）—
+  保護領域内の文字列がたまたま =*text*= の形をしているだけで、この =*= は
+  そもそも実在する強調マーカーではない。検査対象から除外する。
+- bold 候補が保護領域を完全に包含する（例: 「なぜ =foo= を使うのか」を
+  bold で囲んだ場合）—
+  Org の強調構文はネストしない。=org-emph-re= はマーカー種別ごとに 1 本の
+  正規表現で、最初に見つかった外側のマッチが行の該当範囲を丸ごと消費するため、
+  内側の =foo= は独立した verbatim として再マッチされず、"=" 記号がそのまま
+  literal 文字として表示される。これは違反として報告する。
+- 保護領域と bold 候補が部分的にしか重ならない（例: =if-let*= と =when-let*=
+  のように、識別子自体に含まれるリテラルの =*= が離れた 2 つの verbatim
+  スパンをまたいで =*...*= の形に見えてしまう）— どちらの包含関係でもない
+  ため、実在する強調マーカーの組ではないと判断し、除外する。
+
+コードブロック本文・見出し行・drawer/keyword/table 行（先頭が =:= =#= =|= ）は
+検査対象から除外します。
+
+*実行例*
+
+#+begin_example
+$ python3 scripts/check_emphasis.py README.org
+[check-emphasis] scanning README.org for ineffective emphasis markers ...
+  README.org:249: =my:modules= に含まれる
+[check-emphasis] FAILED: 1 ineffective marker(s)
+#+end_example
+
+複数ファイルを一度に検査できる作りになっています。 =make check-emphasis= は =$(ORG)=
+（ =README.org= ）のみを渡しますが、将来ドキュメントが分割された場合などに備えて、
+複数の =.org= ファイルをまとめて検査できる余地を残してあります。
+
+#+begin_src python
+  #!/usr/bin/env python3
+  """Detect Org emphasis markers that org-emphasis-regexp-components silently rejects.
+
+  By default, Org requires the character immediately before an opening marker and
+  immediately after a closing marker to belong to a specific set (ASCII whitespace,
+  "-", en/em dash, and a few punctuation marks -- see PRE_OK / POST_OK below).
+  Fullwidth characters (、。（）「」 etc.) are not in that set, so =verbatim=, ~code~,
+  and *bold* spans adjacent to Japanese prose are silently rendered as literal text
+  instead of being fontified -- a defect that does not affect tangling and is easy
+  to miss by eye.
+
+  This mirrors the detection rule used to auto-fix README.org during development:
+  =verbatim= and ~code~ spans are resolved first and treated as protected regions
+  (a bare = or ~ is always literal, never a bold delimiter). *bold* candidates are
+  then checked only outside those protected regions, and are skipped when
+  immediately adjacent to = or ~ (so the asterisks inside =*scratch*= are not
+  mistaken for a bold marker).
+
+  Usage:
+      python3 scripts/check_emphasis.py README.org [other.org ...]
+
+  Exit status: 0 if no violations were found in any file, 1 otherwise.
+  """
+
+  from __future__ import annotations
+
+  import re
+  import sys
+  from pathlib import Path
+
+  # Characters allowed immediately before an emphasis marker's opening char.
+  # Extends Org's ASCII-only default with the Japanese punctuation added to
+  # org-emphasis-regexp-components in orgx-core.el (leaf org :config). Keep
+  # these two sets in sync by hand -- see the comment next to that setopt call.
+  PRE_OK = set(" \t-\u2013\u2014(\"'{" "「『（【、。・")
+
+  # Characters allowed immediately after an emphasis marker's closing char.
+  POST_OK = set(" \t-\u2013\u2014.,:!?;'\")}[" "」』）】「『（【、。・")
+
+  # Only these three markers are checked. "/" (italic) is deliberately excluded:
+  # path-like strings such as "lisp/core/core-gc.el" are extremely common in this
+  # document and are not meant as italics, so including "/" would produce a flood
+  # of false positives.
+  _MARKERS = "=~*"
+
+  _BLOCK_START_RE = re.compile(r"^[ \t]*#\+begin_(src|example)", re.IGNORECASE)
+  _BLOCK_END_RE = re.compile(r"^[ \t]*#\+end_(src|example)", re.IGNORECASE)
+  _HEADING_RE = re.compile(r"^[ \t]*\*+ ")
+  _DRAWER_KEYWORD_TABLE_RE = re.compile(r"^[ \t]*[:#|]")
+
+
+  def _marker_span_re(marker: str) -> re.Pattern[str]:
+      """Build a regexp matching MARKER CONTENT MARKER.
+
+      CONTENT must not start or end with whitespace or MARKER itself, and must
+      not contain MARKER internally. This mirrors the border/body rules implied
+      by org-emphasis-regexp-components.
+      """
+      m = re.escape(marker)
+      return re.compile(rf"{m}([^\s{m}][^{m}\n]*?[^\s{m}]|[^\s{m}]){m}")
+
+
+  _SPAN_RE = {mk: _marker_span_re(mk) for mk in _MARKERS}
+
+
+  def _collect_spans(line: str, marker: str) -> list[tuple[int, int]]:
+      """Return all (start, end) spans in LINE matching MARKER, unfiltered."""
+      spans = []
+      pos = 0
+      rx = _SPAN_RE[marker]
+      while True:
+          m = rx.search(line, pos)
+          if not m:
+              break
+          spans.append((m.start(), m.end()))
+          pos = m.end()
+      return spans
+
+
+  def _overlaps(a: int, b: int, spans: list[tuple[int, int]]) -> bool:
+      return any(a < e and s < b for s, e in spans)
+
+
+  def _check_span(line: str, a: int, b: int) -> bool:
+      """Return True if the span [a, b) has a disallowed border character."""
+      pre = line[a - 1] if a > 0 else None
+      post = line[b] if b < len(line) else None
+      bad_pre = pre is not None and pre not in PRE_OK
+      bad_post = post is not None and post not in POST_OK
+      return bad_pre or bad_post
+
+
+  def _contains(outer: tuple[int, int], inner: tuple[int, int]) -> bool:
+      """True if span INNER is strictly contained within span OUTER."""
+      return outer[0] <= inner[0] and inner[1] <= outer[1]
+
+
+  def scan_line(line: str) -> list[tuple[int, int]]:
+      """Return the list of (start, end) spans in LINE with an ineffective marker."""
+      violations: list[tuple[int, int]] = []
+      protected: list[tuple[int, int]] = []
+
+      for marker in ("=", "~"):
+          for a, b in _collect_spans(line, marker):
+              if _overlaps(a, b, protected):
+                  continue
+              protected.append((a, b))
+              if _check_span(line, a, b):
+                  violations.append((a, b))
+
+      for a, b in _collect_spans(line, "*"):
+          # Case 1: the "*...*" candidate is itself entirely inside an
+          # already-confirmed =verbatim= or ~code~ span (e.g. "=*scratch*=").
+          # The asterisks are literal content there, not real bold markers,
+          # so this candidate is spurious and must not be checked at all.
+          if any(_contains((s, e), (a, b)) for s, e in protected):
+              continue
+          # Case 2: a =verbatim= or ~code~ span is entirely inside this bold
+          # candidate's content (e.g. "*foo =bar= baz*"). Org emphasis does
+          # not nest: org-emph-re is one combined regex per marker type, and
+          # the first (outer) match consumes the whole span in a single
+          # font-lock pass, so the inner marker is never independently
+          # re-matched -- it renders as literal characters, not monospace.
+          # This is a genuine violation even though PRE/POST of the outer
+          # "*...*" may themselves be perfectly valid.
+          if any(_contains((a, b), (s, e)) for s, e in protected):
+              violations.append((a, b))
+              continue
+          # Case 3: partial overlap with a protected span (crosses a
+          # boundary without full containment either way) -- e.g. two
+          # separate =verbatim= spans whose content happens to end/start
+          # with a literal "*" (identifiers like if-let*, when-let*, or
+          # glob patterns like svg/01_*.svg). The "*" characters here are
+          # literal content, not real bold markers; treat as spurious and
+          # skip, matching Case 1.
+          if _overlaps(a, b, protected):
+              continue
+          if a > 0 and line[a - 1] in "=~":
+              continue
+          if b < len(line) and line[b] in "=~":
+              continue
+          if _check_span(line, a, b):
+              violations.append((a, b))
+
+      return violations
+
+
+  def scan_file(path: Path) -> int:
+      """Scan PATH and print any ineffective emphasis markers found.
+
+      Skips source/example block bodies, heading lines, and lines beginning with
+      a drawer, keyword, or table marker (: # |). Returns the violation count.
+      """
+      bad = 0
+      in_block = False
+      text = path.read_text(encoding="utf-8")
+      for lineno, line in enumerate(text.split("\n"), start=1):
+          if _BLOCK_START_RE.match(line):
+              in_block = True
+              continue
+          if _BLOCK_END_RE.match(line):
+              in_block = False
+              continue
+          if in_block or _HEADING_RE.match(line) or _DRAWER_KEYWORD_TABLE_RE.match(line):
+              continue
+          for a, b in scan_line(line):
+              bad += 1
+              print(f"  {path}:{lineno}: {line[a:min(len(line), a + 40)]}")
+      return bad
+
+
+  def main(argv: list[str]) -> int:
+      if not argv:
+          print("usage: check_emphasis.py FILE.org [FILE.org ...]", file=sys.stderr)
+          return 2
+
+      total = 0
+      for arg in argv:
+          path = Path(arg)
+          if not path.is_file():
+              print(f"[check-emphasis] no such file: {path}", file=sys.stderr)
+              return 2
+          print(f"[check-emphasis] scanning {path} for ineffective emphasis markers ...")
+          total += scan_file(path)
+
+      if total > 0:
+          print(f"[check-emphasis] FAILED: {total} ineffective marker(s)", file=sys.stderr)
+          return 1
+      print("[check-emphasis] ok")
+      return 0
+
+
+  if __name__ == "__main__":
+      raise SystemExit(main(sys.argv[1:]))
+#+end_src
+
+* Appendix: check_fboundp_guards.py — fboundp ガードの整合性検出スクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-check-fboundp-guards-py
+:header-args:python: :tangle scripts/check_fboundp_guards.py :mkdirp yes :comments link
+:END:
+
+=make check-fboundp-guards= （ =make lint= にも含まれる）が呼び出す検査本体です。
+
+*何を検出するためのツールか*
+
+=(when (fboundp 'X) ... #'X ...)= という形——つまり X をコマンドとして
+キーバインドやフックに登録している箇所——で、X が実際に解決できない状態を検出する。
+このパターンは =condition-case= のようにエラーを出して落ちるわけではなく、
+=fboundp= が =nil= を返すだけで *黙って何も登録されない* 。実機で動かして
+初めて気づく、という壊れ方をする。
+
+このリポジトリで実際にこの形のバグが 2 件見つかっている: =dev-music.el= を
+=leaf= の =:commands= 経由の遅延ロードに変えたとき、素の =emms= コマンド自体を
+=:commands= リストに入れ忘れていたケースと、 =restart-emacs= パッケージの
+=leaf= 宣言自体がどこにも存在しないのに =(fboundp 'restart-emacs)= だけ
+書かれていたケース。どちらも起動時にエラーは出ず、該当のキーバインドが
+静かに機能しないだけだった。
+
+*検査の絞り込み方*
+
+単なる機能検出のための =fboundp= （例: =(when (fboundp 'treesit-available-p) ...)= ）は
+対象外にしている。 =X= が本文中で =#'X= として sharp-quote 参照されている
+——つまり「コマンドとして束縛している」——ケースだけに絞ることで、
+組み込み関数のバージョン互換チェックのような正当な用途を誤検出しないようにしている。
+
+X の解決可否は、次のいずれかを満たすかで判定する。
+
+1. 同じコーパス内に =(defun X ...)= / =(defalias 'X ...)= がある（ローカル定義）
+2. どこかの =leaf= の =:commands (...)= に =X= が載っている（autoload 経由）
+3. =X= の接頭辞と一致する =leaf= パッケージが =:commands= を持たない
+   （＝ eager load されている）
+4. =`X'= という Emacs docstring 引用記法の直後に "autoload" という語がある
+   （ =org-roam-ui-open= のような、パッケージ側の =;;;###autoload= を
+   コメントで明記しているケース）
+5. =fboundp= チェックの近くに「Emacs NN 以降」のようなバージョン言及がある
+   （組み込みコマンドのバージョン互換チェックだと判断する）
+
+*限界*
+
+完全な elisp パーサーではなく正規表現ベースの静的解析なので、誤検出
+（false positive）はあり得る。実際、このツールを作った際に =find_autoload_hints=
+の初版実装で =emms= という語が =dev-music.el= 中に大量に出現するせいで
+"autoload" という語と偶然近接し、意図的に再現させた =emms= バグを見逃す
+という誤検出を自分自身で踏んだ。判定条件を =`symbol'= という引用記法必須に
+絞ることで直している。指摘された箇所は最終的に人間が目視で確認すること
+——このツールは「洗い出しの手間を減らす」ためのものであり、無条件に
+信頼できる完全な保証ではない。
+
+#+begin_src python
+  #!/usr/bin/env python3
+  """check_fboundp_guards.py --- fboundp ガードで参照されるコマンドシンボルが、
+  実際に解決可能（ローカル定義 / leaf の :commands 経由の autoload / 同名 leaf
+  パッケージの eager load / 明示的な autoload コメント）かどうかを検査する。
+
+  対象パターンは (when (fboundp 'X) ... #'X ...) / (if (fboundp 'X) ... #'X ...) の
+  形だけに絞る。X が sharp-quote で参照されている、つまり「コマンドとして登録・束縛
+  している」箇所だけが対象で、単なる機能検出のための fboundp（例:
+  (when (fboundp 'treesit-available-p) ...)）は対象外。前者は解決できていないと
+  「エラーは出ないが黙って何も起きない」バグになりやすく、後者は素朴な分岐に過ぎない
+  ため。
+
+  このスクリプトは静的なテキスト解析であり、完全な elisp パーサーではない。
+  誤検出（false positive）はあり得るので、指摘された箇所は最終的に人間が確認すること。
+  """
+
+  from __future__ import annotations
+
+  import re
+  import sys
+  from pathlib import Path
+
+  # fboundp ガード + sharp-quote 参照のペアを拾う。
+  # 例: (when (fboundp 'emms) ... #'emms ...)
+  FBOUNDP_GUARD_RE = re.compile(
+      r"\((?:when|if)\s+\(fboundp\s+'([A-Za-z0-9_/:*+=<>!?-]+)\)(.*?)\)\s*(?:\)|$)",
+      re.DOTALL,
+  )
+
+  DEFUN_RE = re.compile(r"\(def(?:un|macro|subst)\s+([A-Za-z0-9_/:*+=<>!?-]+)")
+  DEFALIAS_RE = re.compile(r"\(defalias\s+'([A-Za-z0-9_/:*+=<>!?-]+)")
+  LEAF_RE = re.compile(r"\(leaf\s+([A-Za-z0-9_/:*+=<>!?-]+)\b(.*?)(?=\n\s*\(leaf\s|\Z)", re.DOTALL)
+  COMMANDS_RE = re.compile(r":commands\s*\(([^)]*)\)", re.DOTALL)
+
+
+  def collect_corpus_text(paths: list[Path]) -> str:
+      chunks = []
+      for p in paths:
+          if p.is_file():
+              chunks.append(p.read_text(encoding="utf-8", errors="replace"))
+      return "\n".join(chunks)
+
+
+  def find_local_defs(text: str) -> set[str]:
+      names = set(DEFUN_RE.findall(text))
+      names |= set(DEFALIAS_RE.findall(text))
+      return names
+
+
+  def find_commands_symbols(text: str) -> set[str]:
+      symbols: set[str] = set()
+      for m in COMMANDS_RE.finditer(text):
+          symbols |= set(m.group(1).split())
+      return symbols
+
+
+  def find_eager_leaf_prefixes(text: str) -> set[str]:
+      """:commands を持たない leaf パッケージ名を集める（= eager load とみなす）。"""
+      prefixes = set()
+      for m in LEAF_RE.finditer(text):
+          name, body = m.group(1), m.group(2)
+          # 次の leaf までの body には後続 leaf の中身が混ざらないよう、
+          # 直近の 400 文字程度に絞って :commands の有無だけ見る。
+          head = body[:2000]
+          if ":commands" not in head:
+              prefixes.add(name)
+      return prefixes
+
+
+  def symbol_covered_by_eager_leaf(symbol: str, prefixes: set[str]) -> bool:
+      for prefix in prefixes:
+          if symbol == prefix or symbol.startswith(prefix + "-"):
+              return True
+      return False
+
+
+  def find_autoload_hints(text: str, symbol: str) -> bool:
+      """`symbol' という Emacs docstring 引用記法の直後（100 文字以内）に "autoload" が
+      あれば、ドキュメント上で明示的に autoload されると宣言されているとみなす。
+      単に symbol という文字列が autoload という単語の近くに出現するだけでは
+      誤検出になりやすいため（symbol が頻出する語のときに特に）、
+      引用記法を要求して的を絞る。
+      """
+      pattern = re.compile(r"`" + re.escape(symbol) + r"'")
+      for m in pattern.finditer(text):
+          window = text[m.end() : m.end() + 100]
+          if "autoload" in window:
+              return True
+      return False
+
+
+  VERSION_COMMENT_RE = re.compile(r"Emacs\s*\d+")
+
+
+  def has_version_compat_comment(text: str, match_start: int, lookback: int = 400) -> bool:
+      """fboundp チェックの直前に「Emacs NN 以降」等のバージョン言及があれば、
+      意図的な組み込みコマンドのバージョン互換チェックとみなして除外する。
+      このリポジトリでは version-gate されたビルトインコマンドに
+      「Emacs 27 以降の同梱コマンド」のような注記を付ける慣習が既にあるため、
+      新しい抑制コメント記法を追加するのではなく、既存の書き方をそのまま検出する。
+      """
+      window = text[max(0, match_start - lookback) : match_start]
+      return bool(VERSION_COMMENT_RE.search(window))
+
+
+  def main(argv: list[str]) -> int:
+      if len(argv) < 2:
+          print("usage: check_fboundp_guards.py <lisp-dir> [<lisp-dir> ...]", file=sys.stderr)
+          return 2
+
+      roots = [Path(a) for a in argv[1:]]
+      el_files: list[Path] = []
+      for root in roots:
+          if root.is_file():
+              el_files.append(root)
+          elif root.is_dir():
+              el_files.extend(sorted(root.rglob("*.el")))
+
+      if not el_files:
+          print(f"[check-fboundp-guards] no .el files found under {roots}", file=sys.stderr)
+          return 1
+
+      print(f"[check-fboundp-guards] scanning {len(el_files)} file(s) ...")
+
+      corpus = collect_corpus_text(el_files)
+      local_defs = find_local_defs(corpus)
+      commands_symbols = find_commands_symbols(corpus)
+      eager_prefixes = find_eager_leaf_prefixes(corpus)
+
+      findings: list[tuple[str, str, int]] = []  # (file, symbol, line)
+
+      for path in el_files:
+          text = path.read_text(encoding="utf-8", errors="replace")
+          for m in FBOUNDP_GUARD_RE.finditer(text):
+              symbol, body = m.group(1), m.group(2)
+              # sharp-quote でそのシンボル自身を参照しているものだけを対象にする
+              if f"#'{symbol}" not in body and f"#'{symbol})" not in body:
+                  continue
+
+              resolved = (
+                  symbol in local_defs
+                  or symbol in commands_symbols
+                  or symbol_covered_by_eager_leaf(symbol, eager_prefixes)
+                  or find_autoload_hints(corpus, symbol)
+                  or has_version_compat_comment(text, m.start())
+              )
+              if not resolved:
+                  line_no = text.count("\n", 0, m.start()) + 1
+                  findings.append((str(path), symbol, line_no))
+
+      if findings:
+          print(f"[check-fboundp-guards] {len(findings)} unresolved guard(s) — needs manual review:")
+          for file, symbol, line in findings:
+              print(f"  {file}:{line}: (fboundp '{symbol}) — パッケージ宣言 / :commands / ローカル定義が見つからない")
+          print(
+              "[check-fboundp-guards] NOTE: このスクリプトは静的なテキスト解析なので誤検出があり得る。"
+              " 指摘箇所は目視で確認すること。"
+          )
+          return 1
+
+      print("[check-fboundp-guards] ok")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv))
+#+end_src
+
+* Appendix: reload.py — make reload 相当の Python 実装
+:PROPERTIES:
+:CUSTOM_ID: appendix-reload-py
+:header-args:python: :tangle scripts/reload.py :mkdirp yes :comments link
+:END:
+
+=make reload= と同じことを行うスタンドアロンの Python スクリプトです。 =make= や
+=README.org= 内の Makefile 定義に依存せず、 =python3 scripts/reload.py= だけで
+「古い =.elc= の削除 → tangle → lexical-binding クッキー検証」を実行します。
+
+用途は、 =make= が使えない環境や、 =reload= を別のツール（エディタのタスク、CI、
+ファイル監視スクリプトなど）から呼びたい場合です。挙動は Makefile の =reload=
+ターゲット（ =clean= → =tangle= → =check-cookies= ）を忠実に再現します。
+
+** 挙動
+
+=make reload= の 3 ステップと一対一で対応します。
+
+| ステップ | Makefile | reload.py |
+|----------+----------+-----------|
+| clean | =lisp/= と =personal/= 配下の =*.elc= を削除 | =clean()= |
+| tangle | =emacs -Q --batch= で =org-babel-tangle-file= | =tangle()= |
+| check-cookies | 各 =.el= の 1 行目に =lexical-binding: t= があるか検証 | =check_cookies()= |
+
+*設計上の注記*
+
+- tangle は =make= と同じく =emacs -Q --batch= を呼びます。組み込み Org（Emacs 32.0.50 は
+  Org 9.8.10 同梱）で tangle が完結するため、外部パッケージは不要です。
+- =EMACS= 環境変数で Emacs バイナリを差し替えられます。macOS の self-contained NS ビルドでは
+  =~/.local/bin/emacs= がバンドル外では動かないため、既定値を
+  =/Applications/Emacs.app/Contents/MacOS/Emacs= とし、存在すればそれを優先します。
+  環境変数が明示されていればそちらを尊重します。
+- clean は「削除に失敗しても続行」します（Makefile の =|| true= と同じ思想）。tangle 前に
+  =.elc= が残っていると新しい =.el= を古いバイトコンパイル結果が覆い隠すため、削除は
+  best-effort でも実行する価値があります。
+- check-cookies で 1 件でも欠落があれば終了コード 1 で終わります。CI に組み込めます。
+
+** 使い方
+
+#+begin_example
+# 既定（カレントディレクトリを root として実行）
+python3 scripts/reload.py
+
+# Emacs バイナリを差し替える
+EMACS=/opt/homebrew/bin/emacs python3 scripts/reload.py
+
+# 別の README.org / ルートを指定
+python3 scripts/reload.py --root ~/.emacs.d --org README.org
+
+# tangle だけ / 検証だけ
+python3 scripts/reload.py --only tangle
+python3 scripts/reload.py --only check-cookies
+#+end_example
+
+実行後は Makefile の =reload= と同様、Emacs を再起動して新しい =.el= を読み込みます。
+
+** reload.py
+
+#+begin_src python
+  #!/usr/bin/env python3
+  """make reload equivalent: clean *.elc -> tangle README.org -> check lexical-binding cookies.
+
+  This mirrors the Makefile `reload` target (clean -> tangle -> check-cookies)
+  without requiring `make`.  It is intentionally dependency-free (standard library
+  only) so it can run in minimal environments and be invoked from editors, CI, or
+  file-watchers.
+  """
+
+  from __future__ import annotations
+
+  import argparse
+  import os
+  import shutil
+  import subprocess
+  import sys
+  from pathlib import Path
+
+  # --- Emacs binary resolution ------------------------------------------------
+  # On macOS the self-contained NS build installs a $prefix/bin/emacs that does
+  # not work outside the .app bundle, so prefer the in-bundle binary.  An explicit
+  # EMACS environment variable always wins.
+  _MACOS_APP_EMACS = "/Applications/Emacs.app/Contents/MacOS/Emacs"
+
+
+  def resolve_emacs() -> str:
+      """Return the Emacs binary to use for batch tangling."""
+      env = os.environ.get("EMACS")
+      if env:
+          return env
+      if sys.platform == "darwin" and Path(_MACOS_APP_EMACS).is_file():
+          return _MACOS_APP_EMACS
+      found = shutil.which("emacs")
+      if found:
+          return found
+      # Fall back to the app path so the error message is actionable.
+      return _MACOS_APP_EMACS
+
+
+  # --- Step 1: clean ----------------------------------------------------------
+  def clean(lisp_dir: Path, personal_dir: Path) -> int:
+      """Delete every *.elc under lisp/ and personal/.  Best-effort (never fatal).
+
+      Stale .elc files shadow freshly tangled .el files, so removing them is worth
+      doing even if some deletions fail.  Returns the number of files removed.
+      """
+      removed = 0
+      for base in (lisp_dir, personal_dir):
+          if not base.is_dir():
+              continue
+          for elc in base.rglob("*.elc"):
+              try:
+                  elc.unlink()
+                  removed += 1
+              except OSError as err:
+                  print(f"  WARN: could not delete {elc}: {err}", file=sys.stderr)
+      print(f"[clean] removed {removed} .elc file(s) under "
+            f"{lisp_dir} and {personal_dir}")
+      return removed
+
+
+  # --- Step 2: tangle ---------------------------------------------------------
+  def tangle(emacs: str, org: Path) -> None:
+      """Tangle ORG with `emacs -Q --batch`, matching the Makefile tangle target.
+
+      Uses the built-in Org (Emacs 32.0.50 ships Org 9.8.10), so no third-party
+      packages are required.  Exits the process on failure.
+      """
+      if not org.is_file():
+          sys.exit(f"[tangle] ERROR: {org} not found")
+
+      print(f"[tangle] {org}")
+      cmd = [
+          emacs, "-Q", "--batch",
+          "--eval", "(require 'org)",
+          "--eval", "(require 'ob-core)",
+          "--eval",
+          "(org-babel-do-load-languages 'org-babel-load-languages "
+          "'((emacs-lisp . t)))",
+          "--eval", "(setq org-confirm-babel-evaluate nil noninteractive t)",
+          "--eval", f'(org-babel-tangle-file "{org}")',
+      ]
+      try:
+          subprocess.run(cmd, check=True)
+      except FileNotFoundError:
+          sys.exit(f"[tangle] ERROR: Emacs binary not found: {emacs}\n"
+                   f"          set EMACS=/path/to/emacs and retry")
+      except subprocess.CalledProcessError as err:
+          sys.exit(f"[tangle] ERROR: emacs exited with status {err.returncode}")
+
+
+  def tangle_all(emacs: str, org: Path, tools_org: Path) -> None:
+      """Tangle ORG, then TOOLS_ORG when it exists (the helper scripts)."""
+      tangle(emacs, org)
+      if tools_org.is_file():
+          tangle(emacs, tools_org)
+
+
+  # --- Step 3: check-cookies --------------------------------------------------
+  def check_cookies(lisp_dir: Path) -> int:
+      """Verify every .el under lisp/ has `lexical-binding: t` on line 1.
+
+      Returns 0 when all files pass, 1 when any file is missing the cookie.
+      """
+      if not lisp_dir.is_dir():
+          print(f"[check-cookies] {lisp_dir} does not exist; skipping")
+          return 0
+
+      print(f"[check-cookies] scanning {lisp_dir} ...")
+      fail = 0
+      for el in sorted(lisp_dir.rglob("*.el")):
+          try:
+              with el.open(encoding="utf-8", errors="replace") as handle:
+                  line1 = handle.readline().rstrip("\n")
+          except OSError as err:
+              print(f"  ERROR reading {el}: {err}")
+              fail = 1
+              continue
+          if "lexical-binding: t" not in line1:
+              print(f"  MISSING: {el}")
+              print(f"    line1: {line1}")
+              fail = 1
+
+      if fail:
+          print("[check-cookies] FAILED: some files lack the lexical-binding cookie")
+      else:
+          print("[check-cookies] ok")
+      return fail
+
+
+  # --- Orchestration ----------------------------------------------------------
+  def main(argv: list[str] | None = None) -> int:
+      parser = argparse.ArgumentParser(
+          description="make reload equivalent (clean -> tangle -> check-cookies)")
+      parser.add_argument(
+          "--root", type=Path, default=Path.cwd(),
+          help="repository root containing README.org (default: current dir)")
+      parser.add_argument(
+          "--org", default="README.org",
+          help="Org file to tangle, relative to --root (default: README.org)")
+      parser.add_argument(
+          "--tools-org", default="tools.org",
+          help="second Org file to tangle, relative to --root; skipped when "
+               "missing (default: tools.org)")
+      parser.add_argument(
+          "--lisp", default="lisp",
+          help="lisp directory, relative to --root (default: lisp)")
+      parser.add_argument(
+          "--personal", default="personal",
+          help="personal directory, relative to --root (default: personal)")
+      parser.add_argument(
+          "--only", choices=("clean", "tangle", "check-cookies"),
+          help="run only one step instead of the full reload")
+      args = parser.parse_args(argv)
+
+      root = args.root.expanduser().resolve()
+      org = (root / args.org).resolve()
+      tools_org = (root / args.tools_org).resolve()
+      lisp_dir = (root / args.lisp).resolve()
+      personal_dir = (root / args.personal).resolve()
+      emacs = resolve_emacs()
+
+      if args.only == "clean":
+          clean(lisp_dir, personal_dir)
+          return 0
+      if args.only == "tangle":
+          tangle_all(emacs, org, tools_org)
+          return 0
+      if args.only == "check-cookies":
+          return check_cookies(lisp_dir)
+
+      # Full reload: clean -> tangle -> check-cookies.
+      clean(lisp_dir, personal_dir)
+      tangle_all(emacs, org, tools_org)
+      rc = check_cookies(lisp_dir)
+      if rc == 0:
+          print(f"[reload] on-disk modules now reflect {org}; restart Emacs to load.")
+      return rc
+
+
+  if __name__ == "__main__":
+      raise SystemExit(main())
+#+end_src
+
+* Appendix: claude_org_roam_export.py — Claude チャットの org-roam 化
+:PROPERTIES:
+:CUSTOM_ID: appendix-claude-org-roam-export
+:header-args:python: :tangle scripts/claude_org_roam_export.py :mkdirp yes :comments link
+:END:
+
+Claude.ai のデータエクスポート（ =conversations.json= ）を org-roam ノードに変換する
+スタンドアロンの Python スクリプトです。1 会話につき 1 つの =.org= ノードファイルを、
+=my:d:org-roam= （既定では =~/org/roam/= 配下）に書き出します。
+
+会話の =uuid= をそのまま org-roam の =:ID:= に再利用するため、再エクスポートしても
+同じノードが更新され、重複しません。
+
+** データエクスポートの手順
+
+1. Claude.ai の Settings → Privacy → Export data を実行する。
+2. メールで ZIP アーカイブが届く。展開すると =user.json= 、 =conversations.json= 、
+   =projects.json= 、 =artifacts.json= が含まれる。
+3. 本スクリプトは =conversations.json= を入力に取る。
+
+** 生成されるノードの形
+
+- ファイル名は =YYYYMMDDHHMMSS-<スラッグ>.org= （ =created_at= 由来のタイムスタンプ + タイトル）。
+- ファイルレベルの =:PROPERTIES:= に =:ID:= （会話 uuid）、 =:CREATED:= 、 =:UPDATED:= 、
+  =:MODEL:= 、 =:SOURCE: Claude.ai= を書き込む。
+- =#+title:= に会話名（無ければ最初のメッセージの先頭行）、 =#+filetags:= にタグを付ける。
+- 既定では 1 メッセージにつき =** User= / =** Claude= の見出しを立てる。
+  =--no-heading-per-message= を付けると、見出しを立てず本文を連結する。
+
+スラッグ生成は ASCII に加えてひらがな・カタカナ・CJK 統合漢字を保持するので、
+日本語タイトルでも読めるファイル名になります。
+
+** 使い方
+
+#+begin_example
+# 基本: conversations.json を my:d:org-roam の下に変換
+python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude
+
+# タグを付ける（繰り返し可。既定は :claude:）
+python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
+    --tag claude --tag import
+
+# 見出しを立てず本文を連結する
+python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
+    --no-heading-per-message
+
+# uuid を再利用せず新しい ID を振る（重複更新をしたくない場合）
+python3 scripts/claude_org_roam_export.py conversations.json ~/org/roam/claude \
+    --fresh-uuid
+#+end_example
+
+変換後、Emacs で =M-x org-roam-db-sync= を実行すると新しいノードが org-roam の
+データベースに登録されます。本設定では org-roam の autosync を起動時に有効化しない
+（ =my/org-roam-autosync-enable= による対話起動）ため、 =org-roam-db-sync= を明示的に
+呼ぶか、autosync を有効化してから変換結果を反映してください。
+
+*出力先に関する注記*
+
+出力ディレクトリは引数で指定します。本設定の =my:d:org-roam= （ =personal/<login>.el= で
+上書き可能）配下を指定すれば、既存の org-roam ノードと同じ場所に並びます。org-roam の
+ノードは 1 ファイル 1 ノードが基本なので、Claude 由来のノードだけをサブディレクトリ
+（例: =~/org/roam/claude= ）にまとめておくと、後で一括削除や再エクスポートがしやすくなります。
+
+** claude_org_roam_export.py
+
+#+begin_src python
+  #!/usr/bin/env python3
+  """Convert a Claude.ai data export (conversations.json) into org-roam nodes.
+
+  One org-roam node file is written per conversation.  The conversation uuid is
+  reused as the :ID:, so re-running the export updates existing nodes in place
+  rather than creating duplicates.
+
+  Data export procedure on Claude.ai:
+      Settings -> Privacy -> Export data.  A ZIP archive is delivered by
+      email.  After extraction it contains user.json, conversations.json,
+      projects.json and artifacts.json.  This script consumes
+      conversations.json.
+
+  Usage:
+      python3 claude_org_roam_export.py conversations.json ~/org/roam/claude
+      python3 claude_org_roam_export.py conversations.json ~/org/roam/claude \\
+          --no-heading-per-message --tag claude --tag import
+
+  After conversion, run `M-x org-roam-db-sync` in Emacs so the new nodes are
+  registered in the org-roam database.
+  """
+
+  from __future__ import annotations
+
+  import argparse
+  import json
+  import re
+  import sys
+  import uuid as uuidlib
+  from datetime import datetime
+  from pathlib import Path
+
+  SENDER_NAMES = {"human": "User", "assistant": "Claude"}
+
+
+  def parse_time(value: str | None) -> datetime | None:
+      """Parse an ISO 8601 string into a datetime, or return None."""
+      if not value:
+          return None
+      text = value.strip().replace("Z", "")
+      text = text.split(".")[0]  # drop fractional seconds
+      try:
+          return datetime.fromisoformat(text)
+      except ValueError:
+          return None
+
+
+  def org_timestamp(value: str | None) -> str | None:
+      """Return an inactive Org timestamp for an ISO 8601 string, or None."""
+      dt = parse_time(value)
+      return dt.strftime("[%Y-%m-%d %a %H:%M]") if dt else None
+
+
+  def message_text(message: dict) -> str:
+      """Return the textual body of a message.
+
+      The top-level ``text`` field is preferred.  When it is empty, the text
+      blocks inside the ``content`` array are concatenated.
+      """
+      text = message.get("text") or ""
+      if text:
+          return text
+      blocks = message.get("content") or []
+      return "\n".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+
+
+  def slugify(title: str) -> str:
+      """Return a filesystem-safe slug, preserving kana and CJK characters."""
+      ascii_only = re.sub(r"[^0-9A-Za-z\u3040-\u30ff\u4e00-\u9fff]+", "-",
+                          (title or "").lower())
+      trimmed = ascii_only.strip("-")
+      return trimmed or "untitled"
+
+
+  def conversation_title(conversation: dict) -> str:
+      """Return a non-empty title for a conversation."""
+      name = (conversation.get("name") or "").strip()
+      if name:
+          return name
+      messages = conversation.get("chat_messages") or []
+      if messages:
+          body = message_text(messages[0]).strip()
+          first_line = body.split("\n")[0] if body else ""
+          if first_line:
+              return first_line if len(first_line) <= 60 else first_line[:57] + "..."
+      return "Untitled"
+
+
+  def node_id(conversation: dict, reuse_uuid: bool) -> str:
+      """Return the org-roam ID to assign to a conversation."""
+      conv_uuid = conversation.get("uuid")
+      if reuse_uuid and conv_uuid:
+          return conv_uuid
+      return str(uuidlib.uuid4())
+
+
+  def output_filename(conversation: dict, title: str, directory: Path) -> Path:
+      """Return an absolute output path following YYYYMMDDHHMMSS-slug.org."""
+      created = parse_time(conversation.get("created_at")) or datetime.now()
+      stamp = created.strftime("%Y%m%d%H%M%S")
+      return directory / f"{stamp}-{slugify(title)}.org"
+
+
+  def render_message(message: dict, heading_per_message: bool) -> str:
+      """Return an Org fragment for one message."""
+      label = SENDER_NAMES.get(
+          message.get("sender"),
+          (message.get("sender") or "unknown").capitalize())
+      stamp = org_timestamp(message.get("created_at"))
+      body = message_text(message).strip()
+      if heading_per_message:
+          parts = [f"** {label}"]
+          if stamp:
+              parts += [":PROPERTIES:", f":CREATED: {stamp}", ":END:"]
+          parts += ["", body, ""]
+          return "\n".join(parts)
+      header = f"*{label}:*" + (f" {stamp}" if stamp else "")
+      return "\n".join([header, "", body, ""])
+
+
+  def render_conversation(conversation: dict, tags: list[str], reuse_uuid: bool,
+                          heading_per_message: bool) -> str:
+      """Return the full Org document string for a conversation."""
+      title = conversation_title(conversation)
+      lines = [
+          ":PROPERTIES:",
+          f":ID:       {node_id(conversation, reuse_uuid)}",
+      ]
+      created = org_timestamp(conversation.get("created_at"))
+      updated = org_timestamp(conversation.get("updated_at"))
+      model = conversation.get("model")
+      if created:
+          lines.append(f":CREATED:  {created}")
+      if updated:
+          lines.append(f":UPDATED:  {updated}")
+      if isinstance(model, str) and model:
+          lines.append(f":MODEL:    {model}")
+      lines += [":SOURCE:   Claude.ai", ":END:", f"#+title: {title}"]
+      if tags:
+          lines.append("#+filetags: :" + ":".join(tags) + ":")
+      lines.append("")
+      for message in conversation.get("chat_messages") or []:
+          lines.append(render_message(message, heading_per_message))
+          lines.append("")
+      return "\n".join(lines).rstrip() + "\n"
+
+
+  def export(json_file: Path, directory: Path, tags: list[str], reuse_uuid: bool,
+             heading_per_message: bool) -> int:
+      """Convert every conversation in json_file into a node file.
+
+      Return the number of node files written.
+      """
+      with json_file.open(encoding="utf-8") as handle:
+          conversations = json.load(handle)
+      directory.mkdir(parents=True, exist_ok=True)
+      count = 0
+      for conversation in conversations:
+          title = conversation_title(conversation)
+          path = output_filename(conversation, title, directory)
+          content = render_conversation(conversation, tags, reuse_uuid,
+                                        heading_per_message)
+          path.write_text(content, encoding="utf-8")
+          count += 1
+      return count
+
+
+  def main(argv: list[str] | None = None) -> int:
+      parser = argparse.ArgumentParser(
+          description=__doc__,
+          formatter_class=argparse.RawDescriptionHelpFormatter)
+      parser.add_argument("json_file", type=Path,
+                          help="path to conversations.json")
+      parser.add_argument("directory", type=Path,
+                          help="output directory for .org nodes")
+      parser.add_argument("--tag", dest="tags", action="append", default=None,
+                          help="filetag to apply (repeatable; default: claude)")
+      parser.add_argument("--fresh-uuid", dest="reuse_uuid", action="store_false",
+                          help="generate new IDs instead of reusing Claude uuids")
+      parser.add_argument("--no-heading-per-message", dest="heading_per_message",
+                          action="store_false",
+                          help="concatenate messages instead of one heading each")
+      parser.set_defaults(reuse_uuid=True, heading_per_message=True)
+      args = parser.parse_args(argv)
+
+      if not args.json_file.exists():
+          parser.error(f"JSON file not found: {args.json_file}")
+      tags = args.tags if args.tags is not None else ["claude"]
+
+      count = export(args.json_file, args.directory, tags,
+                     args.reuse_uuid, args.heading_per_message)
+      print(f"claude-org-roam: wrote {count} node(s) into {args.directory}")
+      print("Next: run M-x org-roam-db-sync in Emacs to register the nodes.")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main())
+#+end_src
+
+* Appendix: update_build_info.py — ビルド情報を README へ反映するスクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-update-build-info-py
+:header-args:python: :tangle scripts/update_build_info.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+Installation 節のビルド情報の表（ =my/print-build-info= の出力）を、再ビルドした Emacs の実際の値で
+書き換えるスクリプトです。dotfiles の =build-emacs-macos.sh= の後に実行します。
+
+*仕組み*
+
+- 再ビルドした Emacs をバッチで起動し、 =lisp/dev/dev-tools.el= を読み込んで =my/print-build-info=
+  を呼び、 =*Build Info*= バッファの文字列を取り出します。表の書式は、その関数の 1 か所だけで定義されます。
+- README.org の =# build-info:begin= と =# build-info:end= の間（Org のコメント行なので、表示には出ません）を、
+  その文字列で置き換えます。目印が無い、または複数ある場合は、何も書き換えずに止まります。
+- 使う Emacs は、 =--emacs= 、環境変数 =EMACS= 、 =/Applications/Emacs.app/Contents/MacOS/Emacs= の順に探します。
+- 標準ライブラリだけで動きます。
+
+*使い方*
+
+#+begin_example
+python3 scripts/update_build_info.py            # README.org を書き換える
+python3 scripts/update_build_info.py --dry-run  # 差分だけ表示する
+python3 scripts/update_build_info.py --check    # 古ければ差分を出して終了コード 1
+#+end_example
+
+=--check= は、再ビルドの後で README の更新を忘れていないかを確かめるのに使えます。実行すると、
+=README.org= が変わるので、 =git diff README.org= で確認してからコミットします。
+
+*注意*
+
+- =lisp/dev/dev-tools.el= は =README.org= から tangle される生成物です。 =make tangle= （または =make reload= ）の後に実行します。
+- 日付（ =Date= ）は =emacs-build-time= 、コミット（ =Commit= ）は =emacs-repository-version= （ビルド時に埋め込まれた値）です。
+  ビルドスクリプトがソースのコミットを変えずに再ビルドしただけなら、日付だけが変わります。
+
+#+NAME: update-build-info-py
+#+begin_src python
+  #!/usr/bin/env python3
+  """Update the Emacs build information table in README.org.
+
+  Run it after build-emacs-macos.sh (dotfiles) has built and installed Emacs:
+
+      python3 scripts/update_build_info.py            # rewrite README.org
+      python3 scripts/update_build_info.py --dry-run  # show the diff only
+      python3 scripts/update_build_info.py --check    # exit 1 when out of date
+
+  It runs `my/print-build-info' (lisp/dev/dev-tools.el) in the freshly built Emacs
+  and replaces the text between the `# build-info:begin' and `# build-info:end'
+  comment lines of README.org.  The format therefore stays defined in one place.
+  Standard library only.
+  """
+
+  from __future__ import annotations
+
+  import argparse
+  import difflib
+  import os
+  import re
+  import subprocess
+  import sys
+  from pathlib import Path
+
+  ROOT = Path(__file__).resolve().parent.parent
+  BEGIN = "# build-info:begin"
+  END = "# build-info:end"
+  DEFAULT_EMACS = "/Applications/Emacs.app/Contents/MacOS/Emacs"
+  EXPR = ('(progn (my/print-build-info) '
+          '(princ (with-current-buffer "*Build Info*" (buffer-string))))')
+
+
+  def die(message: str) -> "None":
+      print(f"update_build_info: {message}", file=sys.stderr)
+      sys.exit(1)
+
+
+  def find_emacs(explicit: str | None) -> str:
+      """Return the Emacs binary: --emacs, then $EMACS, then the app bundle."""
+      if explicit and not os.access(explicit, os.X_OK):
+          die(f"--emacs {explicit} is not executable")
+      for candidate in (explicit, os.environ.get("EMACS"), DEFAULT_EMACS):
+          if candidate and os.access(candidate, os.X_OK):
+              return candidate
+      die("Emacs not found (give --emacs or set $EMACS)")
+
+
+  def build_info(emacs: str) -> str:
+      """Run `my/print-build-info' in EMACS and return its text."""
+      dev_tools = ROOT / "lisp" / "dev" / "dev-tools.el"
+      if not dev_tools.exists():
+          die(f"{dev_tools} not found; run `make tangle' first")
+      result = subprocess.run(
+          [emacs, "--batch", "-Q", "-l", str(dev_tools), "--eval", EXPR],
+          capture_output=True, text=True, check=False)
+      text = result.stdout.strip("\n")
+      if result.returncode != 0 or not text.startswith("- GNU Emacs *"):
+          die(f"my/print-build-info failed (exit {result.returncode}):\n"
+              f"{result.stderr.strip() or text}")
+      if "|Property|Value|" not in text:
+          die("unexpected output: the property table is missing")
+      return text + "\n"
+
+
+  def replace_block(readme: str, info: str) -> str:
+      """Return README with the build-info block replaced by INFO."""
+      pattern = re.compile(
+          rf"({re.escape(BEGIN)}[^\n]*\n)(.*?)(^{re.escape(END)}\b)",
+          re.S | re.M)
+      if len(pattern.findall(readme)) != 1:
+          die(f"need exactly one `{BEGIN}' ... `{END}' block in README.org")
+      return pattern.sub(lambda m: m.group(1) + info + m.group(3), readme, count=1)
+
+
+  def main() -> int:
+      parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+      parser.add_argument("--readme", type=Path, default=ROOT / "README.org")
+      parser.add_argument("--emacs", help="Emacs binary (default: $EMACS or the app bundle)")
+      mode = parser.add_mutually_exclusive_group()
+      mode.add_argument("--dry-run", action="store_true", help="show the diff, do not write")
+      mode.add_argument("--check", action="store_true", help="exit 1 when README is out of date")
+      args = parser.parse_args()
+
+      old = args.readme.read_text(encoding="utf-8")
+      new = replace_block(old, build_info(find_emacs(args.emacs)))
+      if new == old:
+          print(f"update_build_info: {args.readme.name} is up to date")
+          return 0
+
+      diff = "".join(difflib.unified_diff(
+          old.splitlines(True), new.splitlines(True),
+          f"a/{args.readme.name}", f"b/{args.readme.name}", n=0))
+      if args.check or args.dry_run:
+          print(diff, end="")
+          return 1 if args.check else 0
+      args.readme.write_text(new, encoding="utf-8")
+      print(f"update_build_info: updated {args.readme.name}")
+      print(diff, end="")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main())
+#+end_src
+
+* Appendix: check-bytecomp.el — バイトコンパイル警告の集計
+:PROPERTIES:
+:CUSTOM_ID: appendix-check-bytecomp-el
+:header-args:emacs-lisp: :tangle scripts/check-bytecomp.el :mkdirp yes
+:END:
+
+=make check-bytecomp= が呼び出す、バイトコンパイル警告の集計スクリプトです。
+
+*なぜ lint に含めないのか*
+
+- *init を読み込む必要がある* — パッケージが読み込まれていない状態でコンパイルすると、
+  ほとんどの警告は「未宣言の変数」「未定義の関数」という、読み込み前の警告になります。
+  実際の警告だけを見るため、 =early-init.el= と =init.el= を読み込んだ Emacs でコンパイルします。
+- *時間がかかる* — 約 40 秒（環境による）かかるため、 =make lint= には含めません。
+- *出力先* — コンパイル結果は一時ディレクトリへ出し、 =lisp/= には =.elc= を作りません。
+
+*使い方*
+
+#+begin_example
+make check-bytecomp
+# 特定のファイルだけ:
+CHECK_BYTECOMP_FILES="lisp/ui/ui-theme.el personal/ac1965.el" make check-bytecomp
+#+end_example
+
+警告が 1 件でもあれば、 =ファイル:行:桁: Warning: ...= の一覧を出し、終了コード 1 で終わります。次も警告として数えます。
+
+- コンパイルできなかったファイル（括弧の不一致など、読み込めない形式）
+- init の後でロードされていないモジュール（ =my:modules= と =my:modules-extra= のうち、 =my:modules-skip= に無いもの。ロードに失敗しても =my/modules-load= はメッセージを出すだけなので、ここで拾う）
+
+#+NAME: check-bytecomp-el
+#+begin_src emacs-lisp
+  ;;; check-bytecomp.el --- バイトコンパイル警告の集計 -*- lexical-binding: t; -*-
+
+  ;; `make check-bytecomp' が、init を読み込んだ Emacs に `-l' で読み込ませる。
+  ;; 環境変数:
+  ;;   ROOT                  リポジトリのルート（既定は `default-directory'）
+  ;;   CHECK_BYTECOMP_FILES  コンパイル対象のファイル（空白区切り）。省略時は
+  ;;                         lisp/ と personal/ の全 .el、early-init.el、init.el
+  ;; 警告が 1 件でもあれば、一覧を標準出力へ出して終了コード 1 で終わる。
+  ;; init の後でロードされていないモジュール（`my:modules' / `my:modules-extra'）も警告に数える。
+  ;; 標準エラーには init のメッセージが出るので、Makefile 側で捨てている。
+
+  ;;; Code:
+
+  ;; init を読み込まずに（CHECK_BYTECOMP_FILES を指定して単独で）実行しても動くよう、
+  ;; 使う関数と変数を持つライブラリを先に読み込む。
+  (require 'subr-x)
+  (require 'bytecomp)
+
+  (defvar check-bytecomp--root
+    (file-name-as-directory
+     (expand-file-name (or (getenv "ROOT") default-directory)))
+    "Repository root.")
+
+  (defun check-bytecomp--files ()
+    "Return the list of files to byte-compile."
+    (let ((env (getenv "CHECK_BYTECOMP_FILES")))
+      (if (and env (not (string-empty-p env)))
+          (mapcar (lambda (f) (expand-file-name f check-bytecomp--root))
+                  (split-string env))
+        (sort (append
+               (directory-files-recursively
+                (expand-file-name "lisp" check-bytecomp--root) "\\.el\\'")
+               (directory-files
+                (expand-file-name "personal" check-bytecomp--root) t "\\.el\\'")
+               (mapcar (lambda (f) (expand-file-name f check-bytecomp--root))
+                       '("early-init.el" "init.el")))
+              #'string<))))
+
+  (defun check-bytecomp--compile (file)
+    "Byte-compile FILE and return its warnings as a list of strings.
+  A file that fails to compile (an unbalanced parenthesis, an unreadable form)
+  is reported as one more entry.  `byte-compile-file' returns nil in that case,
+  and its message has no LINE:COLUMN prefix, so the warning pattern below
+  does not match it."
+    (with-current-buffer (get-buffer-create "*Compile-Log*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)))
+    (let* ((signaled nil)
+           (ok (condition-case err
+                   (byte-compile-file file)
+                 (error (setq signaled (error-message-string err)) nil)))
+           (result nil))
+      (with-current-buffer "*Compile-Log*"
+        (goto-char (point-min))
+        (while (re-search-forward
+                "^.+?:[0-9]+:[0-9]+: \\(?:Warning\\|Error\\): .*$" nil t)
+          (push (match-string 0) result))
+        (unless ok
+          (goto-char (point-min))
+          (push (format "%s: compile failed: %s" file
+                        (or signaled
+                            (and (re-search-forward "Error: \\(.*\\)$" nil t)
+                                 (match-string 1))
+                            "unknown error"))
+                result)))
+      (nreverse result)))
+
+  (defun check-bytecomp--unloaded-modules ()
+    "Return the modules that were meant to load but are not loaded.
+  The modules are those of `my:modules' and `my:modules-extra', minus the ones
+  in `my:modules-skip'.  Returns nil when the module lists are not defined, as
+  when this script runs without init, and when specific files were requested
+  through CHECK_BYTECOMP_FILES (a partial run does not judge the whole startup).
+  A module that failed to load makes `my/modules-load' only print a message, so
+  nothing else notices it."
+    (let ((env (getenv "CHECK_BYTECOMP_FILES")))
+      (when (and (boundp 'my:modules)
+                 (not (and env (not (string-empty-p env)))))
+        (seq-remove
+         (lambda (module)
+           (or (featurep module)
+               (and (fboundp 'modules--should-load-p)
+                    (not (modules--should-load-p module)))))
+         (append my:modules (and (boundp 'my:modules-extra) my:modules-extra))))))
+
+  (defun check-bytecomp-run ()
+    "Byte-compile every target file and exit with status 1 if a warning appeared.
+    A module that is not loaded after init also counts as a warning.
+    The compiled output goes to a temporary directory, so no .elc file is created
+    next to the sources."
+    (let* ((tmp (make-temp-file "check-bytecomp" t))
+           (byte-compile-dest-file-function
+            (lambda (f)
+              (expand-file-name (concat (file-name-nondirectory f) "c") tmp)))
+           (total 0))
+      (unwind-protect
+          (dolist (file (check-bytecomp--files))
+            (dolist (warning (check-bytecomp--compile file))
+              (setq total (1+ total))
+              (princ (format "  %s\n"
+                             (string-remove-prefix check-bytecomp--root warning)))))
+        (delete-directory tmp t))
+      (dolist (module (check-bytecomp--unloaded-modules))
+        (setq total (1+ total))
+        (princ (format "  module not loaded: %s (see the `[modules] Failed to load' message)\n"
+                       module)))
+      (princ (format "[check-bytecomp] %s (%d warning%s)\n"
+                     (if (zerop total) "ok" "FAILED")
+                     total (if (= total 1) "" "s")))
+      (kill-emacs (if (zerop total) 0 1))))
+
+  (check-bytecomp-run)
+#+end_src
+
+* Appendix: demo.png — デモ画像の撮影スクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-demo-screenshot
+:END:
+
+=demo.png= （README 冒頭のスクリーンショット）を、同じ手順で撮り直すための 3 つのスクリプトです。
+いずれも =scripts/= へ tangle されます。
+
+| ファイル | 役割 |
+|----------+------|
+| =scripts/demo-layout.el= | Emacs の中でデモ画面（3 分割、Corfu、Vertico の 3 場面）を組む（ =-l= で読み込む） |
+| =scripts/shot.sh=        | Emacs を起動して =DEMO_SCENE= の場面を組み、ウィンドウを 1 枚撮る |
+| =scripts/compose.py=     | dark と light の 2 枚、さらに補完の 2 枚（任意）を、1 枚の =demo.png= に合成する |
+
+** 使い方
+
+#+begin_example
+# dark と light をそれぞれ撮る
+scripts/shot.sh dark  /tmp/dark.png
+scripts/shot.sh light /tmp/light.png
+
+# 補完の 2 場面（Corfu / Vertico）を撮る
+DEMO_SCENE=complete scripts/shot.sh dark /tmp/complete-dark.png
+DEMO_SCENE=vertico  scripts/shot.sh dark /tmp/vertico-dark.png
+
+# 合成して demo.png に置き換える（--complete と --vertico は省略できる）
+python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
+    --complete /tmp/complete-dark.png --vertico /tmp/vertico-dark.png
+#+end_example
+
+*撮影される画面*
+
+場面は環境変数 =DEMO_SCENE= で選ぶ（既定は =layout= ）。
+
+- =layout= — 左: =README.org= の =ui/ui-nano-modeline-items.el= ブロック。右上: そこから生成された =lisp/ui/ui-nano-modeline-items.el= （読み取り専用）。
+  右下: =make lint= の実行結果。エコーエリアには起動時間が出る。
+- =complete= — elisp バッファで =completion-pre= まで入力し、Corfu のポップアップとゴーストテキストを出す。
+- =vertico= — README.org の =leaf orderless= の節を背景に、 =M-x describe-= の縦型候補を出す。
+- 合成画像は dark と light を横に並べる。補完の 2 枚を渡すと、その下に横並びの 1 段として加わる（左が Corfu、右が Vertico）。
+
+*設計上の注記*
+
+- =layout= は =window-setup-hook= の中で同期的に組む。この設定では、 =-l= で読み込んだファイルの中で作った
+  タイマーが動かなかったため（原因は調べていない）、タイマーには頼らない。 =make lint= の完了も
+  =accept-process-output= で待つ。
+- =complete= と =vertico= は入力待ちの状態を撮るため、完了マーカーだけをタイマー（ =demo--ready-after= ）で書く。
+  =vertico= は =execute-extended-command= がミニバッファで待つ間もタイマーが動く。 =complete= は最後の 1 文字を
+  =unread-command-events= へ流し、 =corfu-auto= を実際に起動させる。
+- 起動完了の「Emacs ready in …」は場面の準備より後に出るので、 =demo--ready-after= の中で =(message nil)= で消す。
+- Corfu と Vertico は同じ画面に出せない（ =M-x= を開くとポップアップが消える）ため、別の場面として撮る。
+- 非表示や別 Space のウィンドウは =screencapture= で撮れない。 =shot.sh= は、ウィンドウが見つからないとき
+  ディスプレイを起こし、Emacs を前面に出す（画面が一瞬切り替わる）。
+- nano の variant は =.var/nano-variant= に保存される。 =shot.sh= は撮影後に元の値へ戻す。
+- 後片付けでは、コマンドラインに =demo-layout.el= を含む Emacs だけを終了させる。普段使いの Emacs は巻き込まない。
+- 撮影のたびに Emacs を起動するため、 =desktop-save-mode= は撮影中だけ無効にする。
+- =shot.sh= は初回に、前面のウィンドウ ID を返す小さな Swift ヘルパーを =DEMO_DIR= （既定は =/tmp/emacs-demo= ）へ
+  コンパイルする。 =swiftc= と macOS が必要。 =compose.py= は Pillow を使い、 =pngquant= があれば
+  画像を小さくする。
+
+** demo-layout.el
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle scripts/demo-layout.el :mkdirp yes
+:END:
+
+#+NAME: demo-layout-el
+#+begin_src emacs-lisp
+  ;;; demo-layout.el --- README デモ画面のレイアウト -*- lexical-binding: t; -*-
+
+  ;; scripts/shot.sh が `-l' で読み込む。起動の最後（`window-setup-hook'）に、
+  ;; 左に README.org、右上に生成された lisp/ui/ui-nano-modeline-items.el、右下に `make lint' の
+  ;; 結果を並べる。環境変数:
+  ;;   DEMO_VARIANT  nano の variant（dark または light。既定は dark）
+  ;;   DEMO_DIR      ログと完了マーカーを書くディレクトリ（既定は /tmp/emacs-demo）
+  ;;   DEMO_SCENE    layout（既定。README・生成 .el・make lint の 3 分割）、
+  ;;                 complete（Corfu のポップアップ）、vertico（M-x の縦型候補）
+  ;; 完了すると DEMO_DIR/ready、失敗すると DEMO_DIR/error を書く。
+
+  ;;; Code:
+
+  (defvar demo-dir (file-name-as-directory (or (getenv "DEMO_DIR") "/tmp/emacs-demo"))
+    "ログと完了マーカーを書くディレクトリ。")
+
+  (defvar demo-variant (intern (or (getenv "DEMO_VARIANT") "dark"))
+    "撮影に使う nano の variant（`dark' または `light'）。")
+
+  (defun demo--log (message)
+    "MESSAGE を `demo-dir' のログへ追記する。"
+    (write-region (format "%s %s\n" (format-time-string "%T") message)
+                  nil (expand-file-name "log" demo-dir) t 'silent))
+
+  (defvar demo-scene (intern (or (getenv "DEMO_SCENE") "layout"))
+    "撮影する場面（`layout'、`complete'、`vertico' のいずれか）。")
+
+  (defun demo--goto (buffer needle)
+    "BUFFER の NEEDLE がある行頭へ移動する。"
+    (with-current-buffer buffer
+      (widen)
+      (goto-char (point-min))
+      (search-forward needle)
+      (beginning-of-line)))
+
+  (defun demo--wait-compile ()
+    "`*compilation*' のプロセスが終わるまで待ち、末尾を表示する。"
+    (let* ((buffer (get-buffer "*compilation*"))
+           (proc (and buffer (get-buffer-process buffer)))
+           (count 0))
+      (while (and proc (process-live-p proc) (< count 240))
+        (accept-process-output proc 0.5)
+        (setq count (1+ count)))
+      (when buffer
+        (with-current-buffer buffer
+          (goto-char (point-max))))))
+
+  (defun demo-layout ()
+    "デモ用の 3 分割レイアウトを組む。"
+    (condition-case err
+        (let ((root user-emacs-directory))
+          (make-directory demo-dir t)
+          (demo--log "layout start")
+          (when (fboundp 'desktop-save-mode) (desktop-save-mode -1))
+          (blink-cursor-mode -1)
+          (my/ui-theme-nano-switch demo-variant)
+          (set-frame-size nil 1440 880 t)
+          (set-frame-position nil 30 30)
+          (delete-other-windows)
+          (let* ((readme (find-file-noselect (expand-file-name "README.org" root)))
+                 (el (find-file-noselect (expand-file-name "lisp/ui/ui-nano-modeline-items.el" root)))
+                 (left (selected-window))
+                 (right (split-window-right))
+                 (bottom (with-selected-window right
+                           (split-window-below
+                            (round (* 0.50 (window-total-height right)))))))
+            (with-current-buffer readme (org-show-all))
+            (with-current-buffer el (setq buffer-read-only t))
+            (set-window-buffer left readme)
+            (set-window-buffer right el)
+            (dolist (spec (list (cons left readme) (cons right el)))
+              (demo--goto (cdr spec) "(defun ui-nano-modeline-sync-faces")
+              (set-window-point (car spec) (with-current-buffer (cdr spec) (point)))
+              (set-window-start (car spec)
+                                (with-current-buffer (cdr spec)
+                                  (save-excursion (forward-line -8) (point)))))
+            (select-window bottom)
+            (let ((default-directory root)
+                  (display-buffer-overriding-action '(display-buffer-same-window)))
+              (compile "make lint"))
+            (demo--wait-compile)
+            (set-window-point bottom (with-current-buffer "*compilation*" (point-max)))
+            (with-selected-window bottom (recenter -1))
+            (select-window left)
+            (message "Emacs ready in %.2f seconds with %d GCs."
+                     (float-time (time-subtract after-init-time before-init-time))
+                     gcs-done)
+            (sit-for 2)
+            (redisplay t)
+            (with-temp-file (expand-file-name "ready" demo-dir) (insert "ok"))
+            (demo--log "ready")))
+      (error
+       (demo--log (format "ERROR %S" err))
+       (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
+
+  (defun demo--scene-frame ()
+    "場面用にフレームを整え、README.org の見出し付近を単独ウィンドウに出す。"
+    (when (fboundp 'desktop-save-mode) (desktop-save-mode -1))
+    (blink-cursor-mode -1)
+    (my/ui-theme-nano-switch demo-variant)
+    (set-frame-size nil 1440 880 t)
+    (set-frame-position nil 30 30)
+    (delete-other-windows))
+
+  (defun demo--ready-after (seconds)
+    "SECONDS 秒後に完了マーカーを書く。入力待ちの間も動くようタイマーで行う。"
+    (run-with-timer seconds nil
+                    (lambda ()
+                      ;; 起動完了の「Emacs ready in …」は、この場面の準備より後に出るのでここで消す。
+                      (message nil)
+                      (with-temp-file (expand-file-name "ready" demo-dir) (insert "ok"))
+                      (demo--log "ready"))))
+
+  (defun demo-scene-complete ()
+    "Corfu の補完ポップアップが出た状態を作る。"
+    (condition-case err
+        (progn
+          (make-directory demo-dir t)
+          (demo--log "complete start")
+          (demo--scene-frame)
+          (switch-to-buffer (get-buffer-create "*demo-complete*"))
+          (emacs-lisp-mode)
+          (display-line-numbers-mode -1)
+          (erase-buffer)
+          (insert ";; Corfu: 入力に応じて候補がポップアップする\n\n"
+                  "(setopt completion-styles '(orderless basic)\n"
+                  "        completion-eager-display nil)\n\n"
+                  "(setopt completion-pre")
+          ;; 最後の 1 文字を入力イベントとして流し、corfu-auto を実際に起動させる。
+          (setq unread-command-events (listify-key-sequence "v"))
+          (message nil)
+          (demo--ready-after 3))
+      (error
+       (demo--log (format "ERROR %S" err))
+       (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
+
+  (defun demo-scene-vertico ()
+    "M-x に Vertico の候補が並んだ状態を作る。"
+    (condition-case err
+        (progn
+          (make-directory demo-dir t)
+          (demo--log "vertico start")
+          (demo--scene-frame)
+          (find-file (expand-file-name "README.org" user-emacs-directory))
+          (with-current-buffer (current-buffer) (org-show-all))
+          ;; 背景は補完まわりの節（orderless の設定）に合わせる。
+          (demo--goto (current-buffer) "(leaf orderless")
+          (set-window-start nil (save-excursion (forward-line -6) (point)))
+          (message nil)
+          (demo--ready-after 3)
+          (minibuffer-with-setup-hook
+              (lambda () (insert "describe-"))
+            (execute-extended-command nil)))
+      (quit nil)
+      (error
+       (demo--log (format "ERROR %S" err))
+       (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
+
+  (add-hook 'window-setup-hook
+            (pcase demo-scene
+              ('complete #'demo-scene-complete)
+              ('vertico  #'demo-scene-vertico)
+              (_         #'demo-layout))
+            90)
+
+  (provide 'demo-layout)
+  ;;; demo-layout.el ends here
+#+end_src
+
+** shot.sh
+:PROPERTIES:
+:header-args:zsh: :tangle scripts/shot.sh :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+#+NAME: shot-sh
+#+begin_src zsh
+  #!/bin/zsh
+  # README のデモ画像用に、Emacs を起動して 1 枚撮る。
+  #   scripts/shot.sh <dark|light> <出力.png>
+  # 環境変数: DEMO_DIR（作業ディレクトリ）、EMACS_APP（既定 /Applications/Emacs.app）、
+  #           DEMO_SCENE（layout|complete|vertico。既定 layout）
+  set -u
+  ROOT=${0:A:h:h}
+  VARIANT=${1:?usage: shot.sh <dark|light> <out.png>}
+  OUTPNG=${2:?usage: shot.sh <dark|light> <out.png>}
+  export DEMO_DIR=${DEMO_DIR:-/tmp/emacs-demo}
+  EMACS_APP=${EMACS_APP:-/Applications/Emacs.app}
+  VARIANT_FILE=$ROOT/.var/nano-variant
+  PATTERN="MacOS/Emacs.*demo-layout.el"
+  mkdir -p $DEMO_DIR
+  rm -f $DEMO_DIR/ready $DEMO_DIR/error $DEMO_DIR/log
+
+  # nano の variant は .var/nano-variant に保存されるので、撮影後に元へ戻す。
+  BACKUP=$(cat $VARIANT_FILE 2>/dev/null)
+  cleanup() {
+    pkill -9 -f "$PATTERN" 2>/dev/null
+    [[ -n $BACKUP ]] && print -r -- $BACKUP > $VARIANT_FILE
+  }
+  trap cleanup EXIT
+
+  # 前面のウィンドウ ID を返す小さな Swift ヘルパー（初回だけコンパイルする）。
+  if [[ ! -x $DEMO_DIR/wid ]]; then
+    cat > $DEMO_DIR/wid.swift <<'SWIFT'
+  import Foundation
+  import CoreGraphics
+  let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+  var best = 0
+  var area = 0
+  for w in list {
+    guard let owner = w[kCGWindowOwnerName as String] as? String, owner == "Emacs",
+          (w[kCGWindowLayer as String] as? Int) == 0 else { continue }
+    let b = w[kCGWindowBounds as String] as! [String: Any]
+    let a = (b["Width"] as! NSNumber).intValue * (b["Height"] as! NSNumber).intValue
+    if a > area { area = a; best = (w[kCGWindowNumber as String] as! NSNumber).intValue }
+  }
+  print(best)
+  SWIFT
+    swiftc -O $DEMO_DIR/wid.swift -o $DEMO_DIR/wid || exit 1
+  fi
+
+  open -n -a $EMACS_APP --env DEMO_VARIANT=$VARIANT --env DEMO_DIR=$DEMO_DIR --env DEMO_SCENE=${DEMO_SCENE:-layout} \
+    --args --init-directory $ROOT -l $ROOT/scripts/demo-layout.el
+
+  for i in {1..100}; do [[ -f $DEMO_DIR/ready || -f $DEMO_DIR/error ]] && break; sleep 1; done
+  [[ -f $DEMO_DIR/error ]] && { cat $DEMO_DIR/error; exit 1; }
+  [[ -f $DEMO_DIR/ready ]] || { print "timeout: see $DEMO_DIR/log"; exit 1; }
+
+  # ウィンドウが別の Space や非表示にあると撮れない。見つからなければ前面に出す。
+  WID=0
+  for i in {1..5}; do WID=$($DEMO_DIR/wid); [[ $WID != 0 ]] && break; sleep 1; done
+  if [[ $WID == 0 ]]; then
+    caffeinate -u -t 2
+    osascript -e 'tell application "Emacs" to activate'
+    for i in {1..15}; do WID=$($DEMO_DIR/wid); [[ $WID != 0 ]] && break; sleep 1; done
+  fi
+  [[ $WID == 0 ]] && { print "Emacs window not found on screen"; exit 1; }
+  screencapture -o -l$WID $OUTPNG && print "saved $OUTPNG (window $WID)"
+#+end_src
+
+** compose.py
+:PROPERTIES:
+:header-args:python: :tangle scripts/compose.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+#+NAME: compose-py
+#+begin_src python
+  #!/usr/bin/env python3
+  """Compose demo.png from Emacs screenshots.
+
+      python3 scripts/compose.py dark.png light.png demo.png \\
+          [--complete complete.png] [--vertico vertico.png]
+
+  Layout: the dark and light captures side by side; the optional completion
+  captures (DEMO_SCENE=complete / vertico) go in a second row.  Needs Pillow;
+  pngquant is used when available to shrink the result.
+  """
+
+  from __future__ import annotations
+
+  import argparse
+  import shutil
+  import subprocess
+  import sys
+  from pathlib import Path
+
+  from PIL import Image, ImageChops, ImageDraw, ImageFont
+
+  FONTS = [
+      "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+      "/System/Library/Fonts/Hiragino Sans GB.ttc",
+      "/Library/Fonts/Arial Unicode.ttf",
+  ]
+  CROP_TOP = 100          # title bar and tool bar of the NS frame (retina pixels)
+  BG = (22, 27, 34, 255)        # GitHub dark panel colour; also fine on the light theme
+  INK = (230, 237, 243, 255)    # label text
+  EDGE = (48, 54, 61, 255)      # thin outline so dark tiles stay visible on BG
+  MARGIN, GAP, LABEL_H, TILE_W = 48, 40, 74, 1700
+
+
+  def load_font(size: int) -> ImageFont.ImageFont:
+      for path in FONTS:
+          if Path(path).exists():
+              return ImageFont.truetype(path, size)
+      return ImageFont.load_default()
+
+
+  def load_capture(path: Path) -> Image.Image:
+      image = Image.open(path).convert("RGBA")
+      return image.crop((0, CROP_TOP, image.width, image.height))
+
+
+  def rounded(image: Image.Image, radius: int = 26) -> Image.Image:
+      mask = Image.new("L", image.size, 0)
+      ImageDraw.Draw(mask).rounded_rectangle(
+          (0, 0, image.width - 1, image.height - 1), radius, fill=255)
+      out = image.copy()
+      out.putalpha(ImageChops.multiply(mask, image.getchannel("A")))
+      return out
+
+
+  def main() -> int:
+      parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+      parser.add_argument("dark", type=Path)
+      parser.add_argument("light", type=Path)
+      parser.add_argument("output", type=Path)
+      parser.add_argument("--complete", type=Path, help="Corfu capture (DEMO_SCENE=complete)")
+      parser.add_argument("--vertico", type=Path, help="Vertico capture (DEMO_SCENE=vertico)")
+      args = parser.parse_args()
+
+      rows = [[("nano dark  ·  README.org → lisp/*.el → make lint", args.dark),
+               ("nano light", args.light)]]
+      extras = [("Corfu  ·  inline completion", args.complete),
+                ("Vertico  ·  M-x", args.vertico)]
+      extras = [(label, path) for label, path in extras if path]
+      if extras:
+          rows.append(extras)
+      rows = [[(label, load_capture(path)) for label, path in row] for row in rows]
+
+      row_heights = [LABEL_H + max(round(TILE_W * image.height / image.width)
+                                   for _, image in row) for row in rows]
+      width = 2 * MARGIN + 2 * TILE_W + GAP
+      height = 2 * MARGIN + sum(row_heights) + GAP * (len(rows) - 1)
+      canvas = Image.new("RGBA", (width, height), BG)
+      font = load_font(38)
+      draw = ImageDraw.Draw(canvas)
+
+      y = MARGIN
+      for row, row_h in zip(rows, row_heights):
+          for i, (label, image) in enumerate(row):
+              x = MARGIN + i * (TILE_W + GAP)
+              h = round(TILE_W * image.height / image.width)
+              draw.text((x + 6, y + 8), label, font=font, fill=INK)
+              tile = rounded(image.resize((TILE_W, h), Image.LANCZOS))
+              canvas.alpha_composite(tile, (x, y + LABEL_H))
+              draw.rounded_rectangle((x, y + LABEL_H, x + TILE_W - 1, y + LABEL_H + h - 1),
+                                     26, outline=EDGE, width=3)
+          y += row_h + GAP
+
+      canvas.convert("RGB").save(args.output, optimize=True)
+      if shutil.which("pngquant"):
+          subprocess.run(["pngquant", "--quality=85-98", "--speed", "1", "--force",
+                          "--output", str(args.output), str(args.output)], check=False)
+      print(f"saved {args.output} ({args.output.stat().st_size // 1024} KB)")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main())
+#+end_src
+
+* Appendix: cheatsheet.el — キーバインド一覧の SVG を実際のキーマップから作る
+:PROPERTIES:
+:CUSTOM_ID: appendix-cheatsheet-el
+:header-args:emacs-lisp: :tangle scripts/cheatsheet.el :mkdirp yes
+:END:
+
+=svg/emacs_keybindings_cheatsheet.svg= を作るスクリプトです。 =make cheatsheet= が呼び出します。
+
+以前のこの SVG は、Python の ReportLab で作った手動管理のアセットで、文字がパスになっていました。
+生成元がリポジトリになく、設定を変えても追従しないため、実際の割り当てとずれていました
+（存在しない =M-SPC q r= を載せていた、 =M-SPC O= や =M-SPC t n= が無い、など）。このスクリプトは、
+*起動した Emacs のキーマップそのもの* を読んで SVG を書き出します。手で書いたコマンド名はありません。
+
+*何を読むか*
+
+| 欄 | 取り出し方 |
+|----+-----------|
+| Global Single Chord | 空のグローバルキーマップに =ui-global-keys--startup-init= を実行させ、入った割り当てだけを取り出す。 =key-translation-map= の =C-h= → =DEL= も載せる |
+| Leader Level と各サブマップ | =ui-leader-map= を再帰的に読む。サブマップの見出しは =cheatsheet--submaps= の表で与える |
+| m（Org Local） | =org-mode-map= の =M-SPC m ...= を読む（ =orgx-fold= と =ui-keymap= の割り当て） |
+| Embark | =s-/= 、 =s-;= 、 =C-<f2>= の現在の割り当てを読む |
+
+見出しの表に無いサブマップが増えたときは、エラーで止まります（見出しを足すまで生成できない）。
+個人設定（ =ac1965--bind-leader-keys= ）の割り当ては載せますが、デバイス固有（ =device-*.el= ）は載せません。
+
+*使い方*
+
+#+begin_example
+make cheatsheet          # svg/emacs_keybindings_cheatsheet.svg を書き直す
+make check-cheatsheet    # 書き出さずに、コミット済みの SVG が今のキーマップと同じかを調べる（違えば終了コード 1）
+#+end_example
+
+出力は決まった順序で作るので、割り当てを変えていなければ、何度作っても同じ内容になります。
+文字は SVG のテキスト要素なので、差分も読めます。 =make check-cheatsheet= は約 40 秒かかるため
+=make lint= には含めません（ =make check-bytecomp= と同じ扱い）。
+
+#+NAME: cheatsheet-el
+#+begin_src emacs-lisp
+  ;;; cheatsheet.el --- 実際のキーマップからキーバインド一覧の SVG を作る -*- lexical-binding: t; -*-
+
+  ;; `make cheatsheet' が、init を読み込んだ Emacs に `-l' で読み込ませる。
+  ;; 環境変数:
+  ;;   ROOT              リポジトリのルート（既定は `default-directory'）
+  ;;   CHEATSHEET_OUT    出力先（既定は ROOT/svg/emacs_keybindings_cheatsheet.svg）
+  ;;   CHEATSHEET_CHECK  空でなければ、書き出さずに、出力先のファイルと内容が同じかを調べる。
+  ;;                     違えば差分があることを標準出力へ出して終了コード 1 で終わる。
+
+  ;;; Code:
+
+  (require 'cl-lib)
+  (require 'seq)
+  (require 'subr-x)
+
+  ;; バイトコンパイル時の警告を避けるための宣言（org は `cheatsheet--install' で読み込む）。
+  (defvar org-mode-map)
+
+  (defvar cheatsheet--root
+    (file-name-as-directory
+     (expand-file-name (or (getenv "ROOT") default-directory)))
+    "Repository root.")
+
+  (defconst cheatsheet--submaps
+    '(("b" "Buffers"       "#3fb950")
+      ("w" "Windows"       "#d29922")
+      ("p" "Project"       "#a371f7")
+      ("s" "Search"        "#f85149")
+      ("g" "Git"           "#ff7b72")
+      ("c" "Code / LSP"    "#2ea043")
+      ("e" "Errors"        "#e3b341")
+      ("t" "Toggles"       "#58a6ff")
+      ("o" "Org / Roam"    "#f0883e")
+      ("m" "Org Local (org-mode only)" "#f0883e")
+      ("a" "Apps"          "#db61a2")
+      ("q" "Session"       "#bc8cff")
+      ("h" "Help"          "#79c0ff"))
+    "リーダーのサブマップ（キー、見出し、色）。
+  ここに無いキーのサブマップが見つかったら、見出しを足すまでエラーにする。")
+
+  (defun cheatsheet--keymap-command-p (binding)
+    "BINDING が、キーマップではなくコマンドとして扱うものなら非 nil を返す。
+  `help-command' のように、関数セルにキーマップを持つシンボルはコマンドとして扱う。"
+    (or (not (keymapp binding))
+        (and (symbolp binding) (fboundp binding))))
+
+  (defun cheatsheet--walk (map events)
+    "MAP の割り当てを、(キー列の文字列 コマンド イベント列) の一覧にして返す。
+  EVENTS は MAP の手前までのイベント列（ベクタ）。`key-description' にイベント列ごと渡すので、
+  `ESC x' は `M-x' と表示される。"
+    (let (rows)
+      (map-keymap
+       (lambda (event binding)
+         (let ((evs (vconcat events (vector event))))
+           (cond
+            ((and (keymapp binding) (not (cheatsheet--keymap-command-p binding)))
+             (setq rows (append (cheatsheet--walk binding evs) rows)))
+            ((and (symbolp binding) binding)
+             (push (list (key-description evs) binding evs) rows)))))
+       map)
+      rows))
+
+  (defun cheatsheet--sort-rows (rows)
+    "ROWS をキー列で並べる（大文字小文字を区別せず、同じなら小文字を先に。出力を安定させる）。"
+    (sort (copy-sequence rows)
+          (lambda (a b)
+            (let ((x (downcase (car a))) (y (downcase (car b))))
+              (if (string= x y) (string> (car a) (car b)) (string< x y))))))
+
+  (defun cheatsheet--install ()
+    "キーの割り当てを入れる関数を、起動後のフックを待たずに呼ぶ。"
+    (dolist (fn '(ui-keymap--startup-init ac1965--bind-leader-keys))
+      (when (fboundp fn) (funcall fn)))
+    ;; org-mode-map の `M-SPC m ...' は org の読み込み後に入る。
+    (require 'org)
+    (require 'orgx-fold nil t))
+
+  (defun cheatsheet--global-keys ()
+    "`ui-global-keys' が設定するキーを、空のキーマップに入れて取り出す。"
+    (let ((old (current-global-map)) rows)
+      (unwind-protect
+          (progn
+            (use-global-map (make-sparse-keymap))
+            (ui-global-keys--startup-init)
+            (setq rows (cheatsheet--walk (current-global-map) [])))
+        (use-global-map old))
+      (let ((tr (keymap-lookup key-translation-map "C-h")))
+        (when tr
+          (push (list "C-h" (format "→ %s (translation)"
+                                    (key-description (if (or (stringp tr) (vectorp tr)) tr (vector tr))))
+                      [8])
+                rows)))
+      (cheatsheet--sort-rows rows)))
+
+  (defun cheatsheet--leader-sections ()
+    "リーダーキーの割り当てを、(見出し 色 行の一覧) の一覧にして返す。"
+    (let* ((lead (kbd ui-leader-key))
+           (all (cheatsheet--walk ui-leader-map lead))
+           (level (cl-remove-if (lambda (r) (> (length (nth 2 r)) (1+ (length lead)))) all))
+           sections)
+      (push (list "Leader Level (3 keys)" "#58a6ff" (cheatsheet--sort-rows level)) sections)
+      (dolist (sm cheatsheet--submaps)
+        (let* ((letter (nth 0 sm))
+               (rows (if (equal letter "m")
+                         (cheatsheet--org-local lead)
+                       (cl-remove-if-not
+                        (lambda (r)
+                          (let ((evs (nth 2 r)))
+                            (and (> (length evs) (1+ (length lead)))
+                                 (equal (char-to-string (aref evs (length lead))) letter))))
+                        all))))
+          (when rows
+            (push (list (format "%s  %s" letter (nth 1 sm)) (nth 2 sm)
+                        (cheatsheet--sort-rows rows))
+                  sections))))
+      ;; 見出しの無いサブマップが増えていないか
+      (dolist (r all)
+        (let ((evs (nth 2 r)))
+          (when (> (length evs) (1+ (length lead)))
+            (let ((letter (char-to-string (aref evs (length lead)))))
+              (unless (assoc letter cheatsheet--submaps)
+                (error "cheatsheet: no title for the submap %s (add it to `cheatsheet--submaps')"
+                       letter))))))
+      (nreverse sections)))
+
+  (defun cheatsheet--org-local (lead)
+    "`org-mode-map' にある `LEAD m ...' の割り当てを返す。"
+    (let* ((evs (vconcat lead [?m]))
+           (m (keymap-lookup org-mode-map (key-description evs))))
+      (when (keymapp m)
+        (cheatsheet--walk m evs))))
+
+  (defun cheatsheet--embark-keys ()
+    "Embark のグローバルキーを返す。割り当てが無いものは含めない。"
+    (let (rows)
+      (dolist (k '("s-/" "s-;" "C-<f2>"))
+        (let ((b (keymap-lookup (current-global-map) k)))
+          (when (and b (symbolp b))
+            (push (list (key-description (kbd k)) b (kbd k)) rows))))
+      (nreverse rows)))
+
+  ;;;; SVG
+
+  (defconst cheatsheet--col-width 330 "Width of a column.")
+  (defconst cheatsheet--gap 14 "Gap between columns and sections.")
+  (defconst cheatsheet--margin 28 "Page margin.")
+  (defconst cheatsheet--row-h 19 "Height of a row.")
+  (defconst cheatsheet--head-h 28 "Height of a section heading.")
+  (defconst cheatsheet--key-w 112 "Width of the key cap.")
+
+  (defun cheatsheet--esc (s)
+    "XML エスケープした S を返す。"
+    (replace-regexp-in-string
+     "[&<>\"]" (lambda (c) (pcase c ("&" "&amp;") ("<" "&lt;") (">" "&gt;") (_ "&quot;"))) s))
+
+  (defun cheatsheet--section-height (rows)
+    (+ cheatsheet--head-h (* (length rows) cheatsheet--row-h) 8))
+
+  (defun cheatsheet--section-svg (x y title color rows)
+    "1 つの見出しとその行の SVG を文字列で返す。"
+    (let ((h (cheatsheet--section-height rows)) (out nil))
+      (push (format "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" rx=\"6\" fill=\"#161b22\"/>"
+                    x y cheatsheet--col-width h) out)
+      (push (format "<rect x=\"%d\" y=\"%d\" width=\"4\" height=\"%d\" rx=\"2\" fill=\"%s\"/>"
+                    x y cheatsheet--head-h color) out)
+      (push (format "<text x=\"%d\" y=\"%d\" class=\"head\">%s</text>"
+                    (+ x 14) (+ y 19) (cheatsheet--esc title)) out)
+      (let ((ry (+ y cheatsheet--head-h)))
+        (dolist (r rows)
+          (push (format "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" rx=\"4\" fill=\"#0d1117\" stroke=\"%s\" stroke-opacity=\"0.7\"/>"
+                        (+ x 8) (+ ry 2) cheatsheet--key-w (- cheatsheet--row-h 4) color) out)
+          (push (format "<text x=\"%d\" y=\"%d\" class=\"key\" fill=\"%s\" text-anchor=\"middle\">%s</text>"
+                        (+ x 8 (/ cheatsheet--key-w 2)) (+ ry 14) color (cheatsheet--esc (nth 0 r))) out)
+          (push (format "<text x=\"%d\" y=\"%d\" class=\"cmd\">%s</text>"
+                        (+ x 8 cheatsheet--key-w 8) (+ ry 14)
+                        (cheatsheet--esc (format "%s" (nth 1 r)))) out)
+          (setq ry (+ ry cheatsheet--row-h))))
+      (string-join (nreverse out) "\n")))
+
+  (defun cheatsheet--build ()
+    "SVG の全文を文字列で返す。"
+    (cheatsheet--install)
+    (let* ((global (cheatsheet--global-keys))
+           (leader (cheatsheet--leader-sections))
+           (embark (cheatsheet--embark-keys))
+           (sections (append (list (list "Global Single Chord" "#58a6ff" global))
+                             leader
+                             (when embark (list (list "Embark" "#bc8cff" embark)))))
+           (ncol 3)
+           (heights (make-vector ncol cheatsheet--margin))
+           (top 78)
+           (parts nil))
+      (dotimes (i ncol) (aset heights i top))
+      (dolist (s sections)
+        (let* ((col (seq-position heights (seq-min heights)))
+               (x (+ cheatsheet--margin (* col (+ cheatsheet--col-width cheatsheet--gap))))
+               (y (aref heights col)))
+          (push (cheatsheet--section-svg x y (nth 0 s) (nth 1 s) (nth 2 s)) parts)
+          (aset heights col (+ y (cheatsheet--section-height (nth 2 s)) cheatsheet--gap))))
+      (let* ((width (+ (* 2 cheatsheet--margin) (* ncol cheatsheet--col-width) (* (1- ncol) cheatsheet--gap)))
+             (height (+ (seq-max heights) 34)))
+        (concat
+         (format "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">\n" width height width height)
+         "<style>\n"
+         "  .title{font:700 22px 'Helvetica Neue',Arial,sans-serif;fill:#f0f6fc}\n"
+         "  .sub{font:12px 'Helvetica Neue',Arial,sans-serif;fill:#8b949e}\n"
+         "  .head{font:700 13px 'Helvetica Neue',Arial,sans-serif;fill:#f0f6fc}\n"
+         "  .key{font:600 11px 'SF Mono',Menlo,Consolas,monospace}\n"
+         "  .cmd{font:11px 'SF Mono',Menlo,Consolas,monospace;fill:#c9d1d9}\n"
+         "</style>\n"
+         (format "<rect width=\"%d\" height=\"%d\" fill=\"#0d1117\"/>\n" width height)
+         (format "<text x=\"%d\" y=\"40\" class=\"title\">Emacs Keybinding Cheatsheet</text>\n" cheatsheet--margin)
+         (format "<text x=\"%d\" y=\"60\" class=\"sub\">Leader: %s  ·  generated from the live keymaps by scripts/cheatsheet.el (make cheatsheet)</text>\n"
+                 cheatsheet--margin (cheatsheet--esc (key-description (kbd ui-leader-key))))
+         (string-join (nreverse parts) "\n")
+         (format "\n<text x=\"%d\" y=\"%d\" class=\"sub\">M-SPC m = local leader (org-mode only)  ·  C-h is translated to DEL  ·  s-keys need the macOS Super key</text>\n"
+                 cheatsheet--margin (- height 14))
+         "</svg>\n"))))
+
+  (defun cheatsheet-run ()
+    "SVG を書き出す。CHEATSHEET_CHECK が空でなければ、書き出さずに差分を調べる。"
+    (let* ((out (or (let ((e (getenv "CHEATSHEET_OUT"))) (and e (not (string-empty-p e)) e))
+                    (expand-file-name "svg/emacs_keybindings_cheatsheet.svg" cheatsheet--root)))
+           (svg (cheatsheet--build))
+           (check (let ((c (getenv "CHEATSHEET_CHECK"))) (and c (not (string-empty-p c))))))
+      (if check
+          (let ((cur (and (file-exists-p out)
+                          (with-temp-buffer (insert-file-contents out) (buffer-string)))))
+            (if (equal cur svg)
+                (progn (princ "[check-cheatsheet] ok (the SVG matches the live keymaps)\n")
+                       (kill-emacs 0))
+              (princ "[check-cheatsheet] FAILED: the SVG differs from the live keymaps; run `make cheatsheet'\n")
+              (kill-emacs 1)))
+        (with-temp-file out (insert svg))
+        (princ (format "[cheatsheet] wrote %s\n" (file-relative-name out cheatsheet--root)))
+        (kill-emacs 0))))
+
+  (cheatsheet-run)
+
+  ;;; cheatsheet.el ends here
+#+end_src
+
+* Appendix: check_modules.py — modules.el と lisp/ 配下の整合性を検査するスクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-check-modules-py
+:header-args:python: :tangle scripts/check_modules.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+=make check-modules= （ =make lint= にも含まれる）が呼び出す検査本体です。 =lisp/modules.el= の
+=my:modules= と =personal/*.el= の =my:modules-extra= をテキストとして読み、Emacs を起動せずに
+次の 4 点を確かめます。
+
+- 挙がっているモジュールごとに =lisp/<層>/<名前>.el= が実在し、 =(provide '<名前>)= を持つこと
+- 一覧の順序が下位の層へ戻らないこと（ =core → ui → auth → completion → orgx → vcs → dev → utils= ）
+- どのモジュールも、より上位の層のモジュールを明示的に =require= していないこと
+- =lisp/= 配下のすべての =.el= が、どちらかの一覧に載っているか、オンデマンド読み込みの既知の一覧に載っていること
+
+オンデマンドの一覧（ =ON_DEMAND= ）は、 =core-switches= や =ui-theme= が必要になった時に読むモジュール、
+=personal/personal-ai.el= が =require= する =utils-claude= 、起動時の Org 遅延ロードのために意図して
+外している =orgx-roam-ui= です。ここに無い未登録の =.el= は、ロード漏れの疑いとして失敗にします。
+
+Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を起動せず、標準ライブラリだけで実行して検証できます。
+
+#+NAME: appendix-check-modules-py-src
+#+begin_src python
+  #!/usr/bin/env python3
+  """Check lisp/modules.el against the files under lisp/ (no Emacs needed).
+
+  Reads `my:modules' from lisp/modules.el and `my:modules-extra' from
+  personal/*.el as text, then verifies:
+    1. every listed module has lisp/<layer>/<name>.el and provides <name>;
+    2. the listed order never goes back to a lower layer;
+    3. no module explicitly `require's a module of a higher layer;
+    4. every lisp/<layer>/*.el is listed, or is a known on-demand module.
+
+  Standard library only.  Exit status 1 when any check fails.
+  """
+  import re
+  import sys
+  from pathlib import Path
+
+  LAYERS = ["core", "ui", "auth", "completion", "orgx", "vcs", "dev", "utils"]
+  # Modules loaded on demand (autoload / core-switches / ui-theme) or kept out of
+  # the default load on purpose; they appear in neither list.
+  ON_DEMAND = {
+      "dev-lsp-eglot", "dev-lsp-mode",
+      "ui-doom-modeline", "ui-nano-modeline", "ui-doom-nano-modeline",
+      "ui-nano-palette", "ui-nano-modeline-items",
+      "orgx-roam-ui",
+      # required by personal/personal-ai.el
+      "utils-claude",
+  }
+  # Explicit upward `require's that are accepted (module -> required module).
+  ALLOWED_UPWARD = {}
+
+
+  def strip_comments(text: str) -> str:
+      return re.sub(r";[^\n]*", "", text)
+
+
+  def symbols_after(text: str, marker: str) -> list[str]:
+      """Return the symbols of the quoted list that follows MARKER."""
+      start = text.index(marker)
+      open_ = text.index("'(", start) + 2
+      depth, i = 1, open_
+      while depth:
+          depth += {"(": 1, ")": -1}.get(text[i], 0)
+          i += 1
+      return strip_comments(text[open_:i - 1]).split()
+
+
+  def layer_of(name: str) -> str:
+      return name.split("-", 1)[0]
+
+
+  def main(argv: list[str]) -> int:
+      root = Path(argv[0] if argv else ".").resolve()
+      lisp = root / "lisp"
+      modules = symbols_after((lisp / "modules.el").read_text(encoding="utf-8"),
+                              "(defconst my:modules")
+      extras: list[str] = []
+      for path in sorted((root / "personal").glob("*.el")):
+          text = strip_comments(path.read_text(encoding="utf-8"))
+          for found in re.findall(r"my:modules-extra[^']*'\(([^()]*)\)", text):
+              extras += found.split()
+      errors: list[str] = []
+
+      last = -1
+      for name in modules:
+          layer = layer_of(name)
+          if layer not in LAYERS:
+              errors.append(f"{name}: unknown layer prefix `{layer}'")
+              continue
+          if LAYERS.index(layer) < last:
+              errors.append(f"{name}: listed after a module of a higher layer")
+          last = max(last, LAYERS.index(layer))
+
+      for name in modules + extras:
+          layer = layer_of(name)
+          path = lisp / layer / f"{name}.el"
+          if not path.is_file():
+              errors.append(f"{name}: {path.relative_to(root)} not found")
+              continue
+          if f"(provide '{name})" not in path.read_text(encoding="utf-8"):
+              errors.append(f"{name}: missing (provide '{name})")
+
+      for path in sorted(lisp.glob("*/*.el")):
+          name, layer = path.stem, path.parent.name
+          text = strip_comments(path.read_text(encoding="utf-8"))
+          for dep in re.findall(r"\(require '([a-z0-9]+-[a-z0-9-]+)", text):
+              if (lisp / layer_of(dep) / f"{dep}.el").is_file() \
+                      and layer_of(dep) in LAYERS \
+                      and LAYERS.index(layer_of(dep)) > LAYERS.index(layer) \
+                      and ALLOWED_UPWARD.get(name) != dep:
+                  errors.append(f"{name}: requires higher-layer module {dep}")
+          if name not in modules and name not in extras and name not in ON_DEMAND:
+              errors.append(f"{name}: not in my:modules, my:modules-extra "
+                            f"or the on-demand list")
+
+      print(f"[check-modules] {len(modules)} modules, {len(extras)} extras")
+      for e in errors:
+          print(f"  {e}")
+      print("[check-modules] " + ("FAILED" if errors else "ok"))
+      return 1 if errors else 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv[1:]))
+#+end_src
+
+* Appendix: stats.py — 層ごとの行数とコメント率を数えるスクリプト
+:PROPERTIES:
+:CUSTOM_ID: appendix-stats-py
+:header-args:python: :tangle scripts/stats.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+=make stats= が呼び出します。層ごとのファイル数、行数、コメント行数を表にします。AGENTS.md に書く
+モジュール数や tangle ターゲットの総数は、手で数えるとずれるため、この出力から写します。
+
+#+NAME: appendix-stats-py-src
+#+begin_src python
+  #!/usr/bin/env python3
+  """Print per-layer file, line and comment counts of the tangled Emacs Lisp.
+
+  The numbers AGENTS.md quotes (modules per layer, tangle targets) drift when
+  written by hand; run this and copy from here.  Standard library only.
+  """
+  import sys
+  from pathlib import Path
+
+  LAYERS = ["core", "ui", "auth", "completion", "orgx", "vcs", "dev", "utils"]
+
+
+  def count(paths):
+      lines = comments = 0
+      for path in paths:
+          for line in path.read_text(encoding="utf-8").splitlines():
+              lines += 1
+              comments += line.lstrip().startswith(";")
+      return len(paths), lines, comments
+
+
+  def main(argv):
+      root = Path(argv[0] if argv else ".").resolve()
+      groups = [(f"lisp/{layer}", sorted((root / "lisp" / layer).glob("*.el")))
+                for layer in LAYERS]
+      groups.append(("lisp/modules.el", [root / "lisp" / "modules.el"]))
+      groups.append(("personal", sorted((root / "personal").glob("*.el"))))
+      groups.append(("scripts (.el)", sorted((root / "scripts").glob("*.el"))))
+      groups.append(("root", [p for p in (root / "early-init.el", root / "init.el")
+                              if p.is_file()]))
+      print(f"{'group':<18}{'files':>6}{'lines':>8}{'comment':>9}{'ratio':>7}")
+      total = [0, 0, 0]
+      for name, paths in groups:
+          files, lines, comments = count(paths)
+          ratio = f"{100 * comments // lines}%" if lines else "-"
+          print(f"{name:<18}{files:>6}{lines:>8}{comments:>9}{ratio:>7}")
+          for i, v in enumerate((files, lines, comments)):
+              total[i] += v
+      print(f"{'total (.el)':<18}{total[0]:>6}{total[1]:>8}{total[2]:>9}"
+            f"{100 * total[2] // total[1]:>6}%")
+      return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv[1:]))
+#+end_src
