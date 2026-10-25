@@ -1969,206 +1969,6 @@ eglot が読み込まれていて接続が無いときは、管理下のバッ�
   ;;; ui/ui-imenu.el ends here
 #+end_src
 
-* ui/ui-leader.el
-:PROPERTIES:
-:CUSTOM_ID: ui-leader
-:header-args:emacs-lisp: :tangle ../lisp/ui/ui-leader.el
-:END:
-
-** ui-leader.el — Leader Key Infrastructure
-
-なぜ =M-SPC= なのか
-
-[[file:../svg/11_leader_keymap.svg]]
-
-リーダーキーは =C-c SPC= から =M-SPC= に変更しました。3 打鍵が 2 打鍵になります。
-
-=M-SPC= を選んだ理由は 3 つあります。素の Emacs で使われていないこと、macOS に横取り
-されないこと、そして親指とスペースバーの和音として押しやすいこと。リーダーはすべての操作の
-入口になるので、ここでの 1 打鍵の差は積み重なると大きく効きます。
-
-*実装の要点*
-
-=define-prefix-command= で、プレフィックス用のキーマップを変数として作っています。すでに
-キーマップがあれば作り直さずに再利用するので、何度呼んでも安全です。
-
-キーの割り当ては =keymap-set= を使います。 =define-key= + =kbd= の組み合わせを置き換える、
-Emacs 29 以降の API です。
-
-*サブマップの連鎖*
-
-=M-SPC b l= は次のように解決されます。
-
-: M-SPC b l → ui-leader-map["b"] → ui-leader-b-map["l"] → ibuffer
-
-2 段の間接参照になっているので、 =b= 配下に何を足しても、他のグループには影響しません。
-#+begin_src emacs-lisp
-  ;;; lisp/ui/ui-leader.el --- リーダーキー基盤 -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; 階層的なリーダーキーの基盤。
-  ;;
-  ;; 本モジュールが定義するのはキーマップと、ルート・リーダー接頭辞の
-  ;; グローバル設置のみである。実際のコマンド割り当ては行わない。
-  ;;
-  ;; 配置は意図的に安定かつ削除安全である:
-  ;;
-  ;; M-SPC  （旧: C-c SPC — 3 打鍵から 2 打鍵に削減）
-  ;; ├─ SPC  execute-extended-command （M-x。3 打鍵）
-  ;; ├─ RET  consult-buffer      （最頻出: 合計 3 打鍵）
-  ;; ├─ /    consult-line        （3 打鍵）
-  ;; ├─ .    other-window        （3 打鍵）
-  ;; ├─ f    find-file           （3 打鍵）
-  ;; ├─ F    find-file-other-window
-  ;; ├─ O    find-file-other-frame
-  ;; ├─ k    smart-kill-buffer   （3 打鍵）
-  ;; ├─ u    revert-buffer       （3 打鍵）
-  ;; ├─ z    text-scale-hydra
-  ;; ├─ b    バッファ
-  ;; ├─ w    ウィンドウ （+ace-window, winner）
-  ;; ├─ p    プロジェクト
-  ;; ├─ s    検索     （+consult-find）
-  ;; ├─ g    git      （+diff, log）
-  ;; ├─ c    コード   （+flymake のエラー）
-  ;; ├─ e    エラー   （flymake のショートカット）
-  ;; ├─ t    トグル   （+line-numbers, visual-line）
-  ;; ├─ o    org/roam （+todo, schedule, deadline, roam）
-  ;; ├─ m    ローカルリーダー（モード固有）
-  ;; ├─ a    アプリ   （vterm, music, docker）
-  ;; ├─ q    終了 / セッション
-  ;; └─ h    ヘルプ   （describe-*）
-  ;;
-  ;; 他のモジュールが、これらのマップにコマンドをバインドすることを想定している。
-
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'subr-x))
-
-  (defgroup ui-leader nil
-    "Leader key infrastructure."
-    :group 'convenience)
-
-  (defcustom ui-leader-key "M-SPC"
-    "Root key sequence used for the global leader key.
-  Changed from \"C-c SPC\" (3 keystrokes) to \"M-SPC\" (2 keystrokes)
-  to reduce keystroke overhead for all leader-prefixed commands."
-    :type 'string
-    :group 'ui-leader)
-
-  (defcustom ui-leader-local-suffix "m"
-    "Suffix key used for the local leader prefix."
-    :type 'string
-    :group 'ui-leader)
-
-  (defcustom ui-leader-enable-p t
-    "If non-nil, install the global leader key."
-    :type 'boolean
-    :group 'ui-leader)
-
-  (defvar ui-leader-map nil
-    "Root leader keymap.")
-
-  (defvar ui-leader-b-map nil
-    "Leader keymap for buffer commands.")
-
-  (defvar ui-leader-w-map nil
-    "Leader keymap for window commands.")
-
-  (defvar ui-leader-p-map nil
-    "Leader keymap for project commands.")
-
-  (defvar ui-leader-s-map nil
-    "Leader keymap for search commands.")
-
-  (defvar ui-leader-g-map nil
-    "Leader keymap for Git commands.")
-
-  (defvar ui-leader-c-map nil
-    "Leader keymap for code commands.")
-
-  (defvar ui-leader-e-map nil
-    "Leader keymap for error and evaluation commands.")
-
-  (defvar ui-leader-t-map nil
-    "Leader keymap for toggle commands.")
-
-  (defvar ui-leader-o-map nil
-    "Leader keymap for open and Org-related commands.")
-
-  (defvar ui-leader-m-map nil
-    "Leader keymap for local leader commands.")
-
-  (defvar ui-leader-a-map nil
-    "Leader keymap for application commands.")
-
-  (defvar ui-leader-q-map nil
-    "Leader keymap for quit and session commands.")
-
-  (defvar ui-leader-h-map nil
-    "Leader keymap for help commands.")
-
-  (defun ui-leader--ensure-prefix-map (symbol)
-    "Ensure SYMBOL names a prefix keymap and return it."
-    (unless (and (boundp symbol) (keymapp (symbol-value symbol)))
-      (define-prefix-command symbol))
-    (symbol-value symbol))
-
-  (defun ui-leader--define-maps ()
-    "Create leader maps and install the fixed prefix hierarchy."
-    (ui-leader--ensure-prefix-map 'ui-leader-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-b-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-w-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-p-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-s-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-g-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-c-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-e-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-t-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-o-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-m-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-a-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-q-map)
-    (ui-leader--ensure-prefix-map 'ui-leader-h-map)
-
-    (keymap-set ui-leader-map "b" ui-leader-b-map)
-    (keymap-set ui-leader-map "w" ui-leader-w-map)
-    (keymap-set ui-leader-map "p" ui-leader-p-map)
-    (keymap-set ui-leader-map "s" ui-leader-s-map)
-    (keymap-set ui-leader-map "g" ui-leader-g-map)
-    (keymap-set ui-leader-map "c" ui-leader-c-map)
-    (keymap-set ui-leader-map "e" ui-leader-e-map)
-    (keymap-set ui-leader-map "t" ui-leader-t-map)
-    (keymap-set ui-leader-map "o" ui-leader-o-map)
-    (keymap-set ui-leader-map ui-leader-local-suffix ui-leader-m-map)
-    (keymap-set ui-leader-map "a" ui-leader-a-map)
-    (keymap-set ui-leader-map "q" ui-leader-q-map)
-    (keymap-set ui-leader-map "h" ui-leader-h-map))
-  (defun ui-leader--bind-root ()
-    "Bind the root leader key globally."
-    (when ui-leader-enable-p
-      (ui-leader--define-maps)
-      (if (fboundp 'keymap-global-set)
-          (keymap-global-set ui-leader-key ui-leader-map)
-        (global-set-key (kbd ui-leader-key) ui-leader-map))))
-
-  ;; after-init-hook に遅延させず、ロード時に即座に実行する。
-  ;; ui-keymap.el が (require 'ui-leader) で事前ロードを保証しているため、その時点で
-  ;; すべてのマップが完全に定義されていなければならない。
-  (ui-leader--bind-root)
-
-  (provide 'ui-leader)
-
-  ;;; ui/ui-leader.el ends here
-#+end_src
-
 * ui/ui-hydra.el
 :PROPERTIES:
 :CUSTOM_ID: ui-hydra
@@ -2358,14 +2158,13 @@ Emacs 29 以降の API です。
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-keyboard.el
 :END:
 
-キーボード変換（ =C-h= を =DEL= に読み替える）のモジュールです。 =ui-keymap.el= から分離しました。
+キーボード変換（ =C-h= を =DEL= に読み替える）のモジュールです。
 
-変数と関数の接頭辞は最初から =ui-keyboard-= でしたが、ファイルが =ui-keymap.el= だったため、
-モジュール名と接頭辞が食い違っていました（コーディング規則 7）。リーダーキーの割り当てとは
-無関係な話題なので、独立したモジュールにしています。処理内容は変えていません。
+変数と関数の接頭辞が =ui-keyboard-= で、リーダーキーの割り当てとは無関係な話題なので、
+=ui-keys.el= には含めず、独立したモジュールにしています（コーディング規則 7）。
 
- =my:modules= では =ui-keymap= の直前に置いています。分離前は =ui-keymap= のロード時に
- =ui-keyboard--apply= が実行されていたので、実行のタイミングを変えないためです。
+ =my:modules= では =ui-keys= の直前に置いています。 =ui-keyboard--apply= の実行を、
+キー操作のモジュールより先に済ませるためです。
 
 #+NAME: ui-keyboard-el
 #+begin_src emacs-lisp
@@ -2427,13 +2226,319 @@ Emacs 29 以降の API です。
   ;;; ui/ui-keyboard.el ends here
 #+end_src
 
-* ui/ui-keymap.el
+* ui/ui-keys.el
 :PROPERTIES:
-:CUSTOM_ID: ui-keymap
-:header-args:emacs-lisp: :tangle ../lisp/ui/ui-keymap.el
+:CUSTOM_ID: ui-keys
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-keys.el
 :END:
 
-** ui-keymap.el — Binding Strategy
+キー操作のモジュールです。リーダーキーの基盤、リーダーへの割り当て、dirvish のキー、リーダー外のグローバルキーを
+1 つのファイルにまとめています。
+
+公開 API の名前（ =ui-keymap-bind= 、 =ui-leader-key= 、 =ui-leader-map= 、 =ui-leader-*-map= ）は変えていません。
+=personal/= 、 =dev/= 、 =utils/= 、 =orgx/= が参照しているためです。そのため、関数と変数の接頭辞はモジュール名
+ =ui-keys= と一致しません。
+
+=after-init-hook= には、 =ui-keymap--startup-init= 、 =ui-dirvish-keys--startup-init= 、 =ui-global-keys--startup-init=
+の順に登録します。 =personal/= と =dev/= 、 =utils/= の hook は depth 10 以降なので、このあとに走ります。
+ =ui-keyboard= 、 =ui-hydra= 、 =ui-which-key= は、外部パッケージの設定やキーボード変換で責務が違うため、別モジュールのままです。
+
+** リーダーキー基盤
+
+なぜ =M-SPC= なのか
+
+[[file:../svg/11_leader_keymap.svg]]
+
+リーダーキーは =C-c SPC= から =M-SPC= に変更しました。3 打鍵が 2 打鍵になります。
+
+=M-SPC= を選んだ理由は 3 つあります。素の Emacs で使われていないこと、macOS に横取り
+されないこと、そして親指とスペースバーの和音として押しやすいこと。リーダーはすべての操作の
+入口になるので、ここでの 1 打鍵の差は積み重なると大きく効きます。
+
+*実装の要点*
+
+=define-prefix-command= で、プレフィックス用のキーマップを変数として作っています。すでに
+キーマップがあれば作り直さずに再利用するので、何度呼んでも安全です。
+
+キーの割り当ては =keymap-set= を使います。 =define-key= + =kbd= の組み合わせを置き換える、
+Emacs 29 以降の API です。
+
+*サブマップの連鎖*
+
+=M-SPC b l= は次のように解決されます。
+
+: M-SPC b l → ui-leader-map["b"] → ui-leader-b-map["l"] → ibuffer
+
+2 段の間接参照になっているので、 =b= 配下に何を足しても、他のグループには影響しません。
+
+#+NAME: ui-keys-leader
+#+begin_src emacs-lisp
+  ;;; ui/ui-keys.el --- キー操作（リーダー・割り当て・dirvish・グローバル） -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; キー操作の中核。次の 4 つの責務を 1 ファイルにまとめている。
+  ;;
+  ;; 1. リーダーキー基盤（`ui-leader-*'）
+  ;; 2. リーダーとローカルリーダーへの割り当て（`ui-keymap-*'）
+  ;; 3. dirvish バッファ内のキー（`ui-dirvish-keys--*'）
+  ;; 4. リーダーの外にあるグローバルキー（`ui-global-keys--*'）
+  ;;
+  ;; 公開 API の名前は変えていない。`ui-keymap-bind'、`ui-leader-key'、`ui-leader-map'、
+  ;; `ui-leader-*-map' は personal/、dev/、utils/、orgx/ が参照するため、接頭辞は
+  ;; モジュール名 `ui-keys' と一致しない。`defgroup' も `ui-leader' のままである。
+  ;;
+  ;; ロードの順序は次のとおり。順序を入れ替えない。
+  ;; - ロード時に `ui-leader--bind-root' が走り、リーダーのキーマップが完成する。
+  ;; - `after-init-hook' には `ui-keymap--startup-init'、`ui-dirvish-keys--startup-init'、
+  ;;   `ui-global-keys--startup-init' をこの順に登録する。
+  ;;
+  ;; キーボード変換（C-h → DEL）は ui-keyboard.el が受け持つ。
+  ;; 接頭辞が `ui-keyboard-' で、リーダーとは無関係なためである。
+  ;;
+  ;; ── 1. リーダーキー基盤 ──
+  ;;
+  ;; 本モジュールが定義するのはキーマップと、ルート・リーダー接頭辞の
+  ;; グローバル設置のみである。実際のコマンド割り当ては行わない。
+  ;;
+  ;; 配置は意図的に安定かつ削除安全である:
+  ;;
+  ;; M-SPC  （旧: C-c SPC — 3 打鍵から 2 打鍵に削減）
+  ;; ├─ SPC  execute-extended-command （M-x。3 打鍵）
+  ;; ├─ RET  consult-buffer      （最頻出: 合計 3 打鍵）
+  ;; ├─ /    consult-line        （3 打鍵）
+  ;; ├─ .    other-window        （3 打鍵）
+  ;; ├─ f    find-file           （3 打鍵）
+  ;; ├─ F    find-file-other-window
+  ;; ├─ O    find-file-other-frame
+  ;; ├─ k    smart-kill-buffer   （3 打鍵）
+  ;; ├─ u    revert-buffer       （3 打鍵）
+  ;; ├─ z    text-scale-hydra
+  ;; ├─ b    バッファ
+  ;; ├─ w    ウィンドウ （+ace-window, winner）
+  ;; ├─ p    プロジェクト
+  ;; ├─ s    検索     （+consult-find）
+  ;; ├─ g    git      （+diff, log）
+  ;; ├─ c    コード   （+flymake のエラー）
+  ;; ├─ e    エラー   （flymake のショートカット）
+  ;; ├─ t    トグル   （+line-numbers, visual-line）
+  ;; ├─ o    org/roam （+todo, schedule, deadline, roam）
+  ;; ├─ m    ローカルリーダー（モード固有）
+  ;; ├─ a    アプリ   （vterm, music, docker）
+  ;; ├─ q    終了 / セッション
+  ;; └─ h    ヘルプ   （describe-*）
+  ;;
+  ;; 他のモジュールが、これらのマップにコマンドをバインドすることを想定している。
+  ;;
+  ;; ── 2. リーダーとローカルリーダーへの割り当て ──
+  ;;
+  ;; グローバルなリーダーのバインドと、メジャーモード向けのローカルリーダーのバインド。
+  ;; 本節は、上のキーマップにコマンドを割り当てるだけである。
+  ;;
+  ;; （割り当ての一覧は、下の `ui-keymap--leader-binds' を参照）
+  ;;
+  ;; ── 3. dirvish バッファのキー ──
+  ;;
+  ;; - `dirvish-mode-map' に TAB、i、o、O、z、q を割り当てる
+  ;; - dirvish 一覧を保ったまま別ウィンドウに RO で開くコマンドを 2 つ定義する
+  ;; - view-mode のバッファを、右側の専用サイドウィンドウに固定する
+  ;;
+  ;;
+  ;; ── 4. グローバルキー（リーダー外）──
+  ;;
+  ;; リーダーキー体系の外側で登録するグローバルキーバインド。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 高頻度の単一和音ナビゲーション用に C-s、C-.、s-z、M-x をバインドする
+  ;; - C-g を `my/keyboard-quit-dwim' にバインドする（ミニバッファ等を状況に応じて閉じる）
+  ;; - macOS 風のバッファ移動をバインドする（s-left/right/up/down）
+  ;; - <f1> を `help-command' にバインドする
+  ;; - macOS 風のフレーム／ウィンドウ操作をバインドする（s-o/s-m/s-w/s-./s-j）
+  ;; - 単発ファイル操作（C-c o/v）、置換・行移動（C-c r/M-g g）、
+  ;;   コメント・整列（C-c ;/:/M-a）、スクロール（C-s-up/down、
+  ;;   s-wheel-up/down）、文字サイズ（C-+/C--）をバインドする
+  ;; - すべての登録を `ui-global-keys--startup-init' により
+  ;;   `after-init-hook' に遅延する
+  ;;
+  ;; 方針:
+  ;; グローバルキーは意図的に最小限にしている。接頭辞なしの単一和音の恩恵が大きい
+  ;; 高頻度の操作と、ty07.net の備忘録（Emacsのショートカットキー）にある
+  ;; フレーム／ウィンドウ／編集の操作に限る。
+  ;;
+  ;; バインド一覧:
+  ;;   C-s     → consult-line       （バッファ内検索。isearch の代わり）
+  ;;   C-g     → my/keyboard-quit-dwim （region 解除／*Completions* を閉じる／
+  ;;                                      フォーカス外のミニバッファを閉じる。
+  ;;                                      それ以外は keyboard-quit と同じ）
+  ;;   C-.     → other-window       （ウィンドウ移動。2 打鍵）
+  ;;   s-z     → undo-redo          （macOS 流の undo/redo。C-? の代わり）
+  ;;   M-x     → execute-extended-command
+  ;;   s-←/→   → previous/next-buffer （macOS の Super キー。2 打鍵）
+  ;;   s-↑/↓   → beginning/end-of-buffer
+  ;;   <f1>    → help-command
+  ;;   C-c c   → org-capture        （Org の標準。全バッファで有効）
+  ;;   s-o     → find-file-other-frame
+  ;;   s-m     → make-frame-command
+  ;;   s-w     → delete-frame
+  ;;   s-.     → window-toggle-split-direction （fboundp で防御。Emacs 27 以降）
+  ;;   s-j     → find-file-other-window
+  ;;   C-c o   → find-file          （再導入。単発のファイル操作は M-SPC より直接和音が速い）
+  ;;   C-c v   → find-file-read-only
+  ;;   C-c k   → kill-buffer-and-window （M-SPC k の my/smart-kill-buffer とは別物。
+  ;;                                      あちらは保存確認してバッファだけを kill、
+  ;;                                      こちらはウィンドウも閉じる）
+  ;;   C-c r   → query-replace      （M-SPC s r の consult-ripgrep はプロジェクト横断検索で、
+  ;;                                 こちらはバッファ内の文字列置換。実際には重ならない）
+  ;;   M-g g   → consult-goto-line
+  ;;   C-c ;   → comment-region
+  ;;   C-c :   → uncomment-region
+  ;;   C-c M-a → align-regexp
+  ;;   C-s-↑   → scroll-down-command      （同じウィンドウで上の文章を見る）
+  ;;   C-s-↓   → scroll-up-command        （同じウィンドウで下の文章を見る）
+  ;;   s-<wheel-up>   → scroll-other-window-down
+  ;;   s-<wheel-down> → scroll-other-window
+  ;;   C-+     → text-scale-increase
+  ;;   C--     → text-scale-decrease
+  ;;
+  ;; 経緯:
+  ;; - C-c b は割り当てない。M-SPC 配下（2〜3 打鍵）から届く。
+  ;; - C-c o/v/k/r は 2026-07 に、ty07.net の備忘録と突き合わせたうえで意図的に再導入した。
+  ;;   o と v は、find-file と find-file-read-only に M-SPC 側の割り当てが元々無く、重複しない。
+  ;;   k は別のコマンド（kill-buffer-and-window）で、リーダーの my/smart-kill-buffer とは違う。
+  ;;   r も別のコマンド（query-replace）で、リーダーの consult-ripgrep とは違う。
+  ;;   いずれも、C-c b が避けた「M-SPC 側と重複する」問題を再び作らない。
+  ;; - C-? の undo-redo を s-z に替えた。macOS 全体の Cmd+Z に合わせ、他のアプリとの
+  ;;   筋肉記憶の衝突を減らすためである。C-z も候補だったが（未割り当て。core の init で
+  ;;   `(keymap-global-unset "C-z")' している）、Emacs 内の統一より、Emacs 以外のアプリとの
+  ;;   一貫性を優先して s-z を選んだ。
+  ;; - s-S-z（redo 専用）は意図的にバインドしない。`undo-redo' は、他のコマンドを一度
+  ;;   実行すると向きが自動で反転するので、2 つ目のバインドは実益なく keymap を増やすだけである。
+
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup ui-leader nil
+    "Leader key infrastructure."
+    :group 'convenience)
+
+  (defcustom ui-leader-key "M-SPC"
+    "Root key sequence used for the global leader key.
+  Changed from \"C-c SPC\" (3 keystrokes) to \"M-SPC\" (2 keystrokes)
+  to reduce keystroke overhead for all leader-prefixed commands."
+    :type 'string
+    :group 'ui-leader)
+
+  (defcustom ui-leader-local-suffix "m"
+    "Suffix key used for the local leader prefix."
+    :type 'string
+    :group 'ui-leader)
+
+  (defcustom ui-leader-enable-p t
+    "If non-nil, install the global leader key."
+    :type 'boolean
+    :group 'ui-leader)
+
+  (defvar ui-leader-map nil
+    "Root leader keymap.")
+
+  (defvar ui-leader-b-map nil
+    "Leader keymap for buffer commands.")
+
+  (defvar ui-leader-w-map nil
+    "Leader keymap for window commands.")
+
+  (defvar ui-leader-p-map nil
+    "Leader keymap for project commands.")
+
+  (defvar ui-leader-s-map nil
+    "Leader keymap for search commands.")
+
+  (defvar ui-leader-g-map nil
+    "Leader keymap for Git commands.")
+
+  (defvar ui-leader-c-map nil
+    "Leader keymap for code commands.")
+
+  (defvar ui-leader-e-map nil
+    "Leader keymap for error and evaluation commands.")
+
+  (defvar ui-leader-t-map nil
+    "Leader keymap for toggle commands.")
+
+  (defvar ui-leader-o-map nil
+    "Leader keymap for open and Org-related commands.")
+
+  (defvar ui-leader-m-map nil
+    "Leader keymap for local leader commands.")
+
+  (defvar ui-leader-a-map nil
+    "Leader keymap for application commands.")
+
+  (defvar ui-leader-q-map nil
+    "Leader keymap for quit and session commands.")
+
+  (defvar ui-leader-h-map nil
+    "Leader keymap for help commands.")
+
+  (defun ui-leader--ensure-prefix-map (symbol)
+    "Ensure SYMBOL names a prefix keymap and return it."
+    (unless (and (boundp symbol) (keymapp (symbol-value symbol)))
+      (define-prefix-command symbol))
+    (symbol-value symbol))
+
+  (defun ui-leader--define-maps ()
+    "Create leader maps and install the fixed prefix hierarchy."
+    (ui-leader--ensure-prefix-map 'ui-leader-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-b-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-w-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-p-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-s-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-g-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-c-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-e-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-t-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-o-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-m-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-a-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-q-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-h-map)
+
+    (keymap-set ui-leader-map "b" ui-leader-b-map)
+    (keymap-set ui-leader-map "w" ui-leader-w-map)
+    (keymap-set ui-leader-map "p" ui-leader-p-map)
+    (keymap-set ui-leader-map "s" ui-leader-s-map)
+    (keymap-set ui-leader-map "g" ui-leader-g-map)
+    (keymap-set ui-leader-map "c" ui-leader-c-map)
+    (keymap-set ui-leader-map "e" ui-leader-e-map)
+    (keymap-set ui-leader-map "t" ui-leader-t-map)
+    (keymap-set ui-leader-map "o" ui-leader-o-map)
+    (keymap-set ui-leader-map ui-leader-local-suffix ui-leader-m-map)
+    (keymap-set ui-leader-map "a" ui-leader-a-map)
+    (keymap-set ui-leader-map "q" ui-leader-q-map)
+    (keymap-set ui-leader-map "h" ui-leader-h-map))
+  (defun ui-leader--bind-root ()
+    "Bind the root leader key globally."
+    (when ui-leader-enable-p
+      (ui-leader--define-maps)
+      (if (fboundp 'keymap-global-set)
+          (keymap-global-set ui-leader-key ui-leader-map)
+        (global-set-key (kbd ui-leader-key) ui-leader-map))))
+
+  ;; after-init-hook に遅延させず、ロード時に即座に実行する。
+  ;; 後続の割り当て（ui-keymap-*）が参照するため、その時点で
+  ;; すべてのマップが完全に定義されていなければならない。
+  (ui-leader--bind-root)
+#+end_src
+
+** リーダーへの割り当て
 
 キーバインドの設計では、「よく使うものほど短く」を徹底しています。方針は次の 3 つです。
 
@@ -2451,36 +2556,11 @@ Emacs 29 以降の API です。
 =ui-keymap-bind= は =map= をキーマップそのものではなく、シンボルとして受け取ります。そして
 =keymap-set= を呼ぶ前に、 =keymapp= で本当にキーマップかどうかを確認します。
 
-この一手間のおかげで、 =ui-leader.el= がまだロードされていない状況でも、エラーで停止せずに
+この一手間のおかげで、リーダーキー基盤がまだ定義されていない状況でも、エラーで停止せずに
 安全に動きます。削除安全性の考え方を、キーバインドの層でも守っている形です。
-#+NAME: ui-keymap
-#+begin_src emacs-lisp
-  ;;; ui/ui-keymap.el --- リーダーおよびローカルリーダーのバインド -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; リーダーキーへのコマンド割り当て。
-  ;;
-  ;; 本モジュールが定義するもの:
-  ;;
-  ;; - グローバルなリーダーのバインド
-  ;; - メジャーモード向けのローカルリーダーのバインド
-  ;;
-  ;; dirvish 専用のキー割り当ては ui-dirvish-keys.el が受け持つ。
-  ;;
-  ;; キーボード変換（C-h → DEL）は ui-keyboard.el が受け持つ。
-  ;; 接頭辞が `ui-keyboard-' で、リーダーとは無関係なためである。
-  ;;
-  ;; リーダーキーの基盤そのものは `ui-leader.el' で定義される。
-  ;; 本モジュールは、それらのマップにコマンドを割り当てるだけである。
 
-  ;;; Code:
+#+NAME: ui-keys-keymap
+#+begin_src emacs-lisp
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
   (declare-function flymake-goto-next-error "flymake")
@@ -2489,8 +2569,6 @@ Emacs 29 以降の API です。
   (declare-function org-schedule "org")
   (declare-function org-todo "org")
 
-  (eval-when-compile (require 'subr-x))
-  (require 'ui-leader nil t)
 
   (defun ui-keymap-bind (map key cmd)
     "Bind KEY to CMD inside MAP when MAP exists."
@@ -2642,46 +2720,17 @@ Emacs 29 以降の API です。
     (ui-keymap--local-leader-binds))
 
   (add-hook 'after-init-hook #'ui-keymap--startup-init)
-
-  (provide 'ui-keymap)
-
-  ;;; ui/ui-keymap.el ends here
 #+end_src
 
-* ui/ui-dirvish-keys.el
-:PROPERTIES:
-:CUSTOM_ID: ui-dirvish-keys
-:header-args:emacs-lisp: :tangle ../lisp/ui/ui-dirvish-keys.el
-:END:
+** dirvish バッファのキー
 
-dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から分離しました。
+dirvish のバッファ内のキー割り当てです。キーの割り当ては ui 層の仕事なので、dirvish の本体の設定（ =core-dired.el= ）ではなく
+ui 層に置いています。 =o= 、 =O= 、 =z= 、 =q= などの割り当てと、view-mode バッファを右側のサイドウィンドウに出す設定を持ちます。
 
-キーの割り当ては ui 層の仕事なので、dirvish の本体の設定（ =core-dired.el= ）ではなく ui 層に置いています。
-=ui-keymap.el= の約 70 行を占めていた、リーダーキーとは関係のない話題です。 =o= 、 =O= 、 =z= 、 =q= などの
-割り当てと、view-mode バッファを右側のサイドウィンドウに出す設定を持ちます。
+登録は =after-init-hook= で行い、その中で =with-eval-after-load 'dirvish= を使います。
 
-関数名は =ui-keymap--dirvish-*= から =ui-dirvish-keys--*= に改名しました。登録のタイミングは変えていません。
-分離前と同じく、 =after-init-hook= で =with-eval-after-load 'dirvish= を登録します。
-
-#+NAME: ui-dirvish-keys-el
+#+NAME: ui-keys-dirvish
 #+begin_src emacs-lisp
-  ;;; ui/ui-dirvish-keys.el --- dirvish バッファのキー割り当て -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; dirvish バッファ内のキー割り当て。
-  ;;
-  ;; 本ファイルの責務:
-  ;; - `dirvish-mode-map' に TAB、i、o、O、z、q を割り当てる
-  ;; - dirvish 一覧を保ったまま別ウィンドウに RO で開くコマンドを 2 つ定義する
-  ;; - view-mode のバッファを、右側の専用サイドウィンドウに固定する
-  ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
   (declare-function dired-find-file-other-window "dired")
@@ -2750,96 +2799,14 @@ dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から�
         (keymap-set dirvish-mode-map "q"   #'dirvish-quit))))
 
   (add-hook 'after-init-hook #'ui-dirvish-keys--startup-init)
-
-  (provide 'ui-dirvish-keys)
-  ;;; ui/ui-dirvish-keys.el ends here
 #+end_src
 
-* ui/ui-global-keys.el
-:PROPERTIES:
-:CUSTOM_ID: ui-global-keys
-:header-args:emacs-lisp: :tangle ../lisp/ui/ui-global-keys.el
-:END:
+** グローバルキー（リーダー外）
 
+リーダーキー体系の外側で登録するグローバルキーバインドです。バインドの一覧と経緯は、先頭の Commentary にあります。
+
+#+NAME: ui-keys-global
 #+begin_src emacs-lisp
-  ;;; lisp/ui/ui-global-keys.el --- グローバルキーバインド（リーダー外） -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; リーダーキー体系の外側で登録するグローバルキーバインド。
-  ;;
-  ;; 本ファイルの責務:
-  ;; - 高頻度の単一和音ナビゲーション用に C-s、C-.、s-z、M-x をバインドする
-  ;; - C-g を `my/keyboard-quit-dwim' にバインドする（ミニバッファ等を状況に応じて閉じる）
-  ;; - macOS 風のバッファ移動をバインドする（s-left/right/up/down）
-  ;; - <f1> を `help-command' にバインドする
-  ;; - macOS 風のフレーム／ウィンドウ操作をバインドする（s-o/s-m/s-w/s-./s-j）
-  ;; - 単発ファイル操作（C-c o/v）、置換・行移動（C-c r/M-g g）、
-  ;;   コメント・整列（C-c ;/:/M-a）、スクロール（C-s-up/down、
-  ;;   s-wheel-up/down）、文字サイズ（C-+/C--）をバインドする
-  ;; - すべての登録を `ui-global-keys--startup-init' により
-  ;;   `after-init-hook' に遅延する
-  ;;
-  ;; 方針:
-  ;; グローバルキーは意図的に最小限にしている。接頭辞なしの単一和音の恩恵が大きい
-  ;; 高頻度の操作と、ty07.net の備忘録（Emacsのショートカットキー）にある
-  ;; フレーム／ウィンドウ／編集の操作に限る。
-  ;;
-  ;; バインド一覧:
-  ;;   C-s     → consult-line       （バッファ内検索。isearch の代わり）
-  ;;   C-g     → my/keyboard-quit-dwim （region 解除／*Completions* を閉じる／
-  ;;                                      フォーカス外のミニバッファを閉じる。
-  ;;                                      それ以外は keyboard-quit と同じ）
-  ;;   C-.     → other-window       （ウィンドウ移動。2 打鍵）
-  ;;   s-z     → undo-redo          （macOS 流の undo/redo。C-? の代わり）
-  ;;   M-x     → execute-extended-command
-  ;;   s-←/→   → previous/next-buffer （macOS の Super キー。2 打鍵）
-  ;;   s-↑/↓   → beginning/end-of-buffer
-  ;;   <f1>    → help-command
-  ;;   C-c c   → org-capture        （Org の標準。全バッファで有効）
-  ;;   s-o     → find-file-other-frame
-  ;;   s-m     → make-frame-command
-  ;;   s-w     → delete-frame
-  ;;   s-.     → window-toggle-split-direction （fboundp で防御。Emacs 27 以降）
-  ;;   s-j     → find-file-other-window
-  ;;   C-c o   → find-file          （再導入。単発のファイル操作は M-SPC より直接和音が速い）
-  ;;   C-c v   → find-file-read-only
-  ;;   C-c k   → kill-buffer-and-window （M-SPC k の my/smart-kill-buffer とは別物。
-  ;;                                      あちらは保存確認してバッファだけを kill、
-  ;;                                      こちらはウィンドウも閉じる）
-  ;;   C-c r   → query-replace      （M-SPC s r の consult-ripgrep はプロジェクト横断検索で、
-  ;;                                 こちらはバッファ内の文字列置換。実際には重ならない）
-  ;;   M-g g   → consult-goto-line
-  ;;   C-c ;   → comment-region
-  ;;   C-c :   → uncomment-region
-  ;;   C-c M-a → align-regexp
-  ;;   C-s-↑   → scroll-down-command      （同じウィンドウで上の文章を見る）
-  ;;   C-s-↓   → scroll-up-command        （同じウィンドウで下の文章を見る）
-  ;;   s-<wheel-up>   → scroll-other-window-down
-  ;;   s-<wheel-down> → scroll-other-window
-  ;;   C-+     → text-scale-increase
-  ;;   C--     → text-scale-decrease
-  ;;
-  ;; 経緯:
-  ;; - C-c b は割り当てない。M-SPC 配下（2〜3 打鍵）から届く。
-  ;; - C-c o/v/k/r は 2026-07 に、ty07.net の備忘録と突き合わせたうえで意図的に再導入した。
-  ;;   o と v は、find-file と find-file-read-only に M-SPC 側の割り当てが元々無く、重複しない。
-  ;;   k は別のコマンド（kill-buffer-and-window）で、リーダーの my/smart-kill-buffer とは違う。
-  ;;   r も別のコマンド（query-replace）で、リーダーの consult-ripgrep とは違う。
-  ;;   いずれも、C-c b が避けた「M-SPC 側と重複する」問題を再び作らない。
-  ;; - C-? の undo-redo を s-z に替えた。macOS 全体の Cmd+Z に合わせ、他のアプリとの
-  ;;   筋肉記憶の衝突を減らすためである。C-z も候補だったが（未割り当て。core の init で
-  ;;   `(keymap-global-unset "C-z")' している）、Emacs 内の統一より、Emacs 以外のアプリとの
-  ;;   一貫性を優先して s-z を選んだ。
-  ;; - s-S-z（redo 専用）は意図的にバインドしない。`undo-redo' は、他のコマンドを一度
-  ;;   実行すると向きが自動で反転するので、2 つ目のバインドは実益なく keymap を増やすだけである。
-  ;;; Code:
 
   (defun my/keyboard-quit-dwim ()
     "Do-What-I-Mean behaviour for `keyboard-quit'.
@@ -2927,9 +2894,16 @@ dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から�
     (keymap-global-set "C--"       #'text-scale-decrease))
 
   (add-hook 'after-init-hook #'ui-global-keys--startup-init)
+#+end_src
 
-  (provide 'ui-global-keys)
-  ;;; ui-global-keys.el ends here
+** フッター
+
+#+NAME: ui-keys-footer
+#+begin_src emacs-lisp
+
+  (provide 'ui-keys)
+
+  ;;; ui/ui-keys.el ends here
 #+end_src
 
 * ui/ui-visual-aids.el
