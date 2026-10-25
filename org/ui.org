@@ -1969,263 +1969,6 @@ eglot が読み込まれていて接続が無いときは、管理下のバッ�
   ;;; ui/ui-imenu.el ends here
 #+end_src
 
-* ui/ui-hydra.el
-:PROPERTIES:
-:CUSTOM_ID: ui-hydra
-:header-args:emacs-lisp: :tangle ../lisp/ui/ui-hydra.el
-:END:
-
-#+begin_src emacs-lisp
-  ;;; lisp/ui/ui-hydra.el --- UI 用の Hydra（オプション） -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; UI 層が用いるオプションの Hydra ヘルパー。
-  ;;
-  ;; Hydra は、テキストの拡大縮小などの対話的な調整のために、小さな一時キーマップを
-  ;; 提供する。
-  ;;
-  ;; 本モジュールは Hydra を初回呼び出し時にのみ遅延定義するため、`hydra' パッケージが
-  ;; インストールされていない環境でも設定は正しく動作する。
-  ;;
-
-  ;;; Code:
-
-  (eval-when-compile (require 'subr-x))
-
-  (defgroup ui-hydra nil
-    "Hydra helpers for UI."
-    :group 'convenience)
-
-  (defcustom ui-hydra-enable-p t
-    "If non-nil, enable optional Hydra helpers."
-    :type 'boolean
-    :group 'ui-hydra)
-
-  (defvar ui-hydra-text-scale--defined nil
-    "Non-nil once the text scale hydra has been defined.")
-
-  (defun ui-hydra-define-text-scale ()
-    "Define the text scale hydra if Hydra is available.
-
-  The hydra provides quick access to:
-
-  - increase text scale
-  - decrease text scale
-  - reset scaling"
-    (when (and ui-hydra-enable-p
-               (not ui-hydra-text-scale--defined)
-               (require 'hydra nil t))
-      (setq ui-hydra-text-scale--defined t)
-      (defhydra ui-hydra-text-scale (:hint nil :color red)
-  	      "
-  ^Text Scaling^
-  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
-  "
-  	      ("+" text-scale-increase)
-  	      ("-" text-scale-decrease)
-  	      ("0" (text-scale-set 0) :color blue)
-  	      ("q" nil "quit" :color blue))))
-
-  (defun ui-hydra-text-scale/body ()
-    "Activate the text scaling hydra.
-
-  If Hydra is not installed, signal a user error."
-    (interactive)
-    (ui-hydra-define-text-scale)
-    (if (fboundp 'ui-hydra-text-scale/body)
-        (call-interactively 'ui-hydra-text-scale/body)
-      (user-error "Hydra is not available")))
-
-  (provide 'ui-hydra)
-
-  ;;; ui-hydra.el ends here
-#+end_src
-
-* ui/ui-which-key.el
-:PROPERTIES:
-:CUSTOM_ID: ui-which-key
-:header-args:emacs-lisp: :tangle ../lisp/ui/ui-which-key.el
-:END:
-
-#+begin_src emacs-lisp
-  ;;; lisp/ui/ui-which-key.el --- リーダーマップ向け which-key 統合 -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; リーダーキー基盤のための which-key 統合。
-  ;;
-  ;; Emacs 30 以降は which-key を組み込みパッケージとして同梱している。それ以前の
-  ;; バージョンでは単体パッケージを導入する。
-  ;;
-  ;; 本モジュールが設定するもの:
-  ;;
-  ;; - which-key の有効化
-  ;; - リーダーキー接頭辞のラベル
-  ;; - アイドル遅延の設定
-  ;;
-  ;; 本モジュールはリーダーのバインドを定義しない。ミニバッファのポップアップにおける
-  ;; 発見容易性を高めるだけである。
-
-  ;;; Code:
-
-  (eval-when-compile (require 'subr-x))
-
-  (defgroup ui-which-key nil
-    "which-key integration."
-    :group 'convenience)
-
-  (defcustom ui-which-key-enable-p t
-    "If non-nil, enable which-key integration."
-    :type 'boolean
-    :group 'ui-which-key)
-
-  (defcustom ui-which-key-idle-delay 0.4
-    "Idle delay in seconds before which-key popup appears."
-    :type 'number
-    :group 'ui-which-key)
-
-  ;; Emacs 30 未満のみ MELPA から単体パッケージを導入する。Emacs 30 以降は組み込みの
-  ;; ため何もしない（straight には一切触れさせない）。有効化（which-key-mode 1）と設定は
-  ;; 両バージョンとも下記の `ui-which-key--startup-init' が一元的に行う。
-  ;;
-  ;; version<= による文字列比較ではなく整数の emacs-major-version を使う。
-  ;; "30.0.90"（プレリリース）のようなバージョン文字列は固定文字列 "30.0" との比較結果が
-  ;; 予測しにくいのに対し、整数比較は曖昧さがない。
-  ;;
-  ;; `(leaf which-key :straight nil/t :if (...))' という2つの leaf 宣言に分ける方式は使えない。
-  ;; Emacs 30 環境（which-key が組み込みの場合）で実機検証したところ
-  ;; "Symbol's value as variable is void: which-key" というエラーで ui-which-key.el
-  ;; 自体の読み込みが失敗することが判明した。leaf-keywords.el の :straight 拡張と
-  ;; :if の組み合わせ方に起因すると見られるが、正確な内部要因までは特定できていない。
-  ;; leaf マクロを経由せず素の elisp でバージョン分岐すれば、この問題自体を回避できる。
-  (when (< emacs-major-version 30)
-    (straight-use-package 'which-key))
-
-  (defun ui-which-key--label-leader-groups ()
-    "Attach descriptive labels to leader key prefixes for which-key."
-    (when (and (featurep 'which-key)
-               (fboundp 'which-key-add-key-based-replacements)
-               (boundp 'ui-leader-key)
-               (stringp ui-leader-key))
-      (let ((p ui-leader-key))
-        (dolist (it `((,p . "leader")
-                      (,(concat p " b") . "buffers")
-                      (,(concat p " w") . "windows")
-                      (,(concat p " p") . "project")
-                      (,(concat p " s") . "search")
-                      (,(concat p " g") . "git")
-                      (,(concat p " c") . "code")
-                      (,(concat p " e") . "errors")
-                      (,(concat p " t") . "toggles")
-                      (,(concat p " o") . "org/roam")
-                      (,(concat p " m") . "mode/local")
-                      (,(concat p " a") . "apps")
-                      (,(concat p " q") . "quit/session")
-                      (,(concat p " h") . "help/describe")))
-          (which-key-add-key-based-replacements (car it) (cdr it))))))
-
-  (defun ui-which-key--startup-init ()
-    "Initialize which-key integration at startup."
-    (when (and ui-which-key-enable-p
-               (require 'which-key nil t))
-      (setopt which-key-idle-delay ui-which-key-idle-delay)
-      (which-key-mode 1)
-      (ui-which-key--label-leader-groups)))
-
-  (add-hook 'after-init-hook #'ui-which-key--startup-init)
-
-  (provide 'ui-which-key)
-
-  ;;; ui-which-key.el ends here
-#+end_src
-
-* ui/ui-keyboard.el
-:PROPERTIES:
-:CUSTOM_ID: ui-keyboard
-:header-args:emacs-lisp: :tangle ../lisp/ui/ui-keyboard.el
-:END:
-
-キーボード変換（ =C-h= を =DEL= に読み替える）のモジュールです。
-
-変数と関数の接頭辞が =ui-keyboard-= で、リーダーキーの割り当てとは無関係な話題なので、
-=ui-keys.el= には含めず、独立したモジュールにしています（コーディング規則 7）。
-
- =my:modules= では =ui-keys= の直前に置いています。 =ui-keyboard--apply= の実行を、
-キー操作のモジュールより先に済ませるためです。
-
-#+NAME: ui-keyboard-el
-#+begin_src emacs-lisp
-  ;;; ui/ui-keyboard.el --- キーボード変換（C-h → DEL） -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: ui
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; 任意のキーボード変換。`ui-keyboard-map-c-h-to-del' が非 nil のとき、
-  ;; `key-translation-map' で C-h を DEL に読み替える。オプションを変更すると
-  ;; 変数ウォッチャーが再適用する。
-  ;;; Code:
-
-  (defgroup ui-keyboard nil
-    "Keyboard translation helpers."
-    :group 'ui)
-
-  (defcustom ui-keyboard-map-c-h-to-del t
-    "If non-nil, translate C-h to DEL (Backspace)."
-    :type 'boolean
-    :group 'ui-keyboard)
-
-  (defvar ui-keyboard--translation-active-p nil
-    "Non-nil when the C-h → DEL translation is currently active.")
-
-  (defun ui-keyboard--apply ()
-    "Apply or remove keyboard translations according to configuration."
-    (cond
-     ((and ui-keyboard-map-c-h-to-del
-           (not ui-keyboard--translation-active-p))
-      ;; define-key + kbd → keymap-set（Emacs 29 以降の API）
-      ;; key-translation-map は通常のキーマップであり、keymap-set に対応している。
-      (keymap-set key-translation-map "C-h" "DEL")
-      (setq ui-keyboard--translation-active-p t))
-     ((and (not ui-keyboard-map-c-h-to-del)
-           ui-keyboard--translation-active-p)
-      (keymap-set key-translation-map "C-h" nil)
-      (setq ui-keyboard--translation-active-p nil))))
-
-  (ui-keyboard--apply)
-
-  ;; watcher は無名 lambda ではなく名前付き defun にする。
-  ;; add-variable-watcher に渡した無名 lambda は remove-variable-watcher で除去できず、
-  ;; describe-function で検査もできず、eval-buffer をまたいだ重複登録に対しても安全でない。
-  ;; 副作用を伴う登録は名前付き関数で行う、というプロジェクト全体の規約でもある。
-  ;;
-  (defun ui-keyboard--watcher (_sym _newval _op _where)
-    "Variable watcher: re-apply keyboard translation when the option changes."
-    (ui-keyboard--apply))
-
-  (add-variable-watcher 'ui-keyboard-map-c-h-to-del #'ui-keyboard--watcher)
-
-  (provide 'ui-keyboard)
-  ;;; ui/ui-keyboard.el ends here
-#+end_src
-
 * ui/ui-keys.el
 :PROPERTIES:
 :CUSTOM_ID: ui-keys
@@ -2239,9 +1982,10 @@ eglot が読み込まれていて接続が無いときは、管理下のバッ�
 =personal/= 、 =dev/= 、 =utils/= 、 =orgx/= が参照しているためです。そのため、関数と変数の接頭辞はモジュール名
  =ui-keys= と一致しません。
 
-=after-init-hook= には、 =ui-keymap--startup-init= 、 =ui-dirvish-keys--startup-init= 、 =ui-global-keys--startup-init=
-の順に登録します。 =personal/= と =dev/= 、 =utils/= の hook は depth 10 以降なので、このあとに走ります。
- =ui-keyboard= 、 =ui-hydra= 、 =ui-which-key= は、外部パッケージの設定やキーボード変換で責務が違うため、別モジュールのままです。
+=after-init-hook= には、 =ui-which-key--startup-init= 、 =ui-keymap--startup-init= 、 =ui-dirvish-keys--startup-init= 、
+=ui-global-keys--startup-init= の順に登録します。 =personal/= と =dev/= 、 =utils/= の hook は depth 10 以降なので、このあとに走ります。
+Hydra、which-key、キーボード変換も、キー操作の一部としてこのファイルに含めます。
+ロード時の実行順は、リーダー基盤、キーボード変換の順です。 =after-init-hook= には which-key を先に登録します。
 
 ** リーダーキー基盤
 
@@ -2283,12 +2027,15 @@ Emacs 29 以降の API です。
   ;;
   ;;; Commentary:
   ;;
-  ;; キー操作の中核。次の 4 つの責務を 1 ファイルにまとめている。
+  ;; キー操作の中核。次の 7 つの責務を 1 ファイルにまとめている。
   ;;
   ;; 1. リーダーキー基盤（`ui-leader-*'）
-  ;; 2. リーダーとローカルリーダーへの割り当て（`ui-keymap-*'）
-  ;; 3. dirvish バッファ内のキー（`ui-dirvish-keys--*'）
-  ;; 4. リーダーの外にあるグローバルキー（`ui-global-keys--*'）
+  ;; 2. Hydra ヘルパー（`ui-hydra-*'）
+  ;; 3. which-key 統合（`ui-which-key-*'）
+  ;; 4. キーボード変換（`ui-keyboard-*'）
+  ;; 5. リーダーとローカルリーダーへの割り当て（`ui-keymap-*'）
+  ;; 6. dirvish バッファ内のキー（`ui-dirvish-keys--*'）
+  ;; 7. リーダーの外にあるグローバルキー（`ui-global-keys--*'）
   ;;
   ;; 公開 API の名前は変えていない。`ui-keymap-bind'、`ui-leader-key'、`ui-leader-map'、
   ;; `ui-leader-*-map' は personal/、dev/、utils/、orgx/ が参照するため、接頭辞は
@@ -2296,11 +2043,9 @@ Emacs 29 以降の API です。
   ;;
   ;; ロードの順序は次のとおり。順序を入れ替えない。
   ;; - ロード時に `ui-leader--bind-root' が走り、リーダーのキーマップが完成する。
-  ;; - `after-init-hook' には `ui-keymap--startup-init'、`ui-dirvish-keys--startup-init'、
-  ;;   `ui-global-keys--startup-init' をこの順に登録する。
-  ;;
-  ;; キーボード変換（C-h → DEL）は ui-keyboard.el が受け持つ。
-  ;; 接頭辞が `ui-keyboard-' で、リーダーとは無関係なためである。
+  ;; - ロード時に `ui-keyboard--apply' が走る。
+  ;; - `after-init-hook' には `ui-which-key--startup-init'、`ui-keymap--startup-init'、
+  ;;   `ui-dirvish-keys--startup-init'、`ui-global-keys--startup-init' をこの順に登録する。
   ;;
   ;; ── 1. リーダーキー基盤 ──
   ;;
@@ -2336,21 +2081,21 @@ Emacs 29 以降の API です。
   ;;
   ;; 他のモジュールが、これらのマップにコマンドをバインドすることを想定している。
   ;;
-  ;; ── 2. リーダーとローカルリーダーへの割り当て ──
+  ;; ── 5. リーダーとローカルリーダーへの割り当て ──
   ;;
   ;; グローバルなリーダーのバインドと、メジャーモード向けのローカルリーダーのバインド。
   ;; 本節は、上のキーマップにコマンドを割り当てるだけである。
   ;;
   ;; （割り当ての一覧は、下の `ui-keymap--leader-binds' を参照）
   ;;
-  ;; ── 3. dirvish バッファのキー ──
+  ;; ── 6. dirvish バッファのキー ──
   ;;
   ;; - `dirvish-mode-map' に TAB、i、o、O、z、q を割り当てる
   ;; - dirvish 一覧を保ったまま別ウィンドウに RO で開くコマンドを 2 つ定義する
   ;; - view-mode のバッファを、右側の専用サイドウィンドウに固定する
   ;;
   ;;
-  ;; ── 4. グローバルキー（リーダー外）──
+  ;; ── 7. グローバルキー（リーダー外）──
   ;;
   ;; リーダーキー体系の外側で登録するグローバルキーバインド。
   ;;
@@ -2536,6 +2281,178 @@ Emacs 29 以降の API です。
   ;; 後続の割り当て（ui-keymap-*）が参照するため、その時点で
   ;; すべてのマップが完全に定義されていなければならない。
   (ui-leader--bind-root)
+#+end_src
+
+** Hydra ヘルパー
+
+テキストの拡大縮小のための Hydra です。 =hydra= パッケージは初回の呼び出し時にだけ読み込むので、
+インストールされていない環境でも設定は動きます。
+
+#+NAME: ui-keys-hydra
+#+begin_src emacs-lisp
+
+  (defgroup ui-hydra nil
+    "Hydra helpers for UI."
+    :group 'convenience)
+
+  (defcustom ui-hydra-enable-p t
+    "If non-nil, enable optional Hydra helpers."
+    :type 'boolean
+    :group 'ui-hydra)
+
+  (defvar ui-hydra-text-scale--defined nil
+    "Non-nil once the text scale hydra has been defined.")
+
+  (defun ui-hydra-define-text-scale ()
+    "Define the text scale hydra if Hydra is available.
+
+  The hydra provides quick access to:
+
+  - increase text scale
+  - decrease text scale
+  - reset scaling"
+    (when (and ui-hydra-enable-p
+               (not ui-hydra-text-scale--defined)
+               (require 'hydra nil t))
+      (setq ui-hydra-text-scale--defined t)
+      (defhydra ui-hydra-text-scale (:hint nil :color red)
+  	      "
+  ^Text Scaling^
+  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
+  "
+  	      ("+" text-scale-increase)
+  	      ("-" text-scale-decrease)
+  	      ("0" (text-scale-set 0) :color blue)
+  	      ("q" nil "quit" :color blue))))
+
+  (defun ui-hydra-text-scale/body ()
+    "Activate the text scaling hydra.
+
+  If Hydra is not installed, signal a user error."
+    (interactive)
+    (ui-hydra-define-text-scale)
+    (if (fboundp 'ui-hydra-text-scale/body)
+        (call-interactively 'ui-hydra-text-scale/body)
+      (user-error "Hydra is not available")))
+#+end_src
+
+** which-key 統合
+
+リーダーキー接頭辞のラベルと、アイドル遅延を設定します。Emacs 30 以降は which-key が組み込みです。
+
+#+NAME: ui-keys-which-key
+#+begin_src emacs-lisp
+
+  (defgroup ui-which-key nil
+    "which-key integration."
+    :group 'convenience)
+
+  (defcustom ui-which-key-enable-p t
+    "If non-nil, enable which-key integration."
+    :type 'boolean
+    :group 'ui-which-key)
+
+  (defcustom ui-which-key-idle-delay 0.4
+    "Idle delay in seconds before which-key popup appears."
+    :type 'number
+    :group 'ui-which-key)
+
+  ;; Emacs 30 未満のみ MELPA から単体パッケージを導入する。Emacs 30 以降は組み込みの
+  ;; ため何もしない（straight には一切触れさせない）。有効化（which-key-mode 1）と設定は
+  ;; 両バージョンとも下記の `ui-which-key--startup-init' が一元的に行う。
+  ;;
+  ;; version<= による文字列比較ではなく整数の emacs-major-version を使う。
+  ;; "30.0.90"（プレリリース）のようなバージョン文字列は固定文字列 "30.0" との比較結果が
+  ;; 予測しにくいのに対し、整数比較は曖昧さがない。
+  ;;
+  ;; `(leaf which-key :straight nil/t :if (...))' という2つの leaf 宣言に分ける方式は使えない。
+  ;; Emacs 30 環境（which-key が組み込みの場合）で実機検証したところ
+  ;; "Symbol's value as variable is void: which-key" というエラーで ui-which-key.el
+  ;; 自体の読み込みが失敗することが判明した。leaf-keywords.el の :straight 拡張と
+  ;; :if の組み合わせ方に起因すると見られるが、正確な内部要因までは特定できていない。
+  ;; leaf マクロを経由せず素の elisp でバージョン分岐すれば、この問題自体を回避できる。
+  (when (< emacs-major-version 30)
+    (straight-use-package 'which-key))
+
+  (defun ui-which-key--label-leader-groups ()
+    "Attach descriptive labels to leader key prefixes for which-key."
+    (when (and (featurep 'which-key)
+               (fboundp 'which-key-add-key-based-replacements)
+               (boundp 'ui-leader-key)
+               (stringp ui-leader-key))
+      (let ((p ui-leader-key))
+        (dolist (it `((,p . "leader")
+                      (,(concat p " b") . "buffers")
+                      (,(concat p " w") . "windows")
+                      (,(concat p " p") . "project")
+                      (,(concat p " s") . "search")
+                      (,(concat p " g") . "git")
+                      (,(concat p " c") . "code")
+                      (,(concat p " e") . "errors")
+                      (,(concat p " t") . "toggles")
+                      (,(concat p " o") . "org/roam")
+                      (,(concat p " m") . "mode/local")
+                      (,(concat p " a") . "apps")
+                      (,(concat p " q") . "quit/session")
+                      (,(concat p " h") . "help/describe")))
+          (which-key-add-key-based-replacements (car it) (cdr it))))))
+
+  (defun ui-which-key--startup-init ()
+    "Initialize which-key integration at startup."
+    (when (and ui-which-key-enable-p
+               (require 'which-key nil t))
+      (setopt which-key-idle-delay ui-which-key-idle-delay)
+      (which-key-mode 1)
+      (ui-which-key--label-leader-groups)))
+
+  (add-hook 'after-init-hook #'ui-which-key--startup-init)
+#+end_src
+
+** キーボード変換
+
+=C-h= を =DEL= に読み替える変換です。オプションを変えると、変数ウォッチャーが再適用します。
+
+#+NAME: ui-keys-keyboard
+#+begin_src emacs-lisp
+
+  (defgroup ui-keyboard nil
+    "Keyboard translation helpers."
+    :group 'ui)
+
+  (defcustom ui-keyboard-map-c-h-to-del t
+    "If non-nil, translate C-h to DEL (Backspace)."
+    :type 'boolean
+    :group 'ui-keyboard)
+
+  (defvar ui-keyboard--translation-active-p nil
+    "Non-nil when the C-h → DEL translation is currently active.")
+
+  (defun ui-keyboard--apply ()
+    "Apply or remove keyboard translations according to configuration."
+    (cond
+     ((and ui-keyboard-map-c-h-to-del
+           (not ui-keyboard--translation-active-p))
+      ;; define-key + kbd → keymap-set（Emacs 29 以降の API）
+      ;; key-translation-map は通常のキーマップであり、keymap-set に対応している。
+      (keymap-set key-translation-map "C-h" "DEL")
+      (setq ui-keyboard--translation-active-p t))
+     ((and (not ui-keyboard-map-c-h-to-del)
+           ui-keyboard--translation-active-p)
+      (keymap-set key-translation-map "C-h" nil)
+      (setq ui-keyboard--translation-active-p nil))))
+
+  (ui-keyboard--apply)
+
+  ;; watcher は無名 lambda ではなく名前付き defun にする。
+  ;; add-variable-watcher に渡した無名 lambda は remove-variable-watcher で除去できず、
+  ;; describe-function で検査もできず、eval-buffer をまたいだ重複登録に対しても安全でない。
+  ;; 副作用を伴う登録は名前付き関数で行う、というプロジェクト全体の規約でもある。
+  ;;
+  (defun ui-keyboard--watcher (_sym _newval _op _where)
+    "Variable watcher: re-apply keyboard translation when the option changes."
+    (ui-keyboard--apply))
+
+  (add-variable-watcher 'ui-keyboard-map-c-h-to-del #'ui-keyboard--watcher)
 #+end_src
 
 ** リーダーへの割り当て

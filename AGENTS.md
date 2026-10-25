@@ -22,7 +22,7 @@ Org 文書とソースコードを一体として管理する literate program �
 以降の本書で `README.org` の source block と書いた箇所は、特に断らない限り、上の表のどの Org 文書にも当てはまる。
 `org/` の各ファイルは、`:tangle ../lisp/...` のように、`.emacs.d/` からの相対パスに `../` を付ける。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-103 個の `.el` ターゲット（`lisp/` 配下 88 個〔`lisp/modules.el` を含む〕、
+100 個の `.el` ターゲット（`lisp/` 配下 85 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 9 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`）が生成される。
 （`scripts/` の 4 個の `.el` は `org/tools.org` から、`early-init.el`・`init.el` は `org/boot.org` から、`lisp/` と `personal/` の `.el` は上の表の各 Org 文書から tangle される。）
@@ -153,7 +153,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 ├── lisp/
 │   ├── modules.el
 │   ├── core/       (tangle ターゲット 12)
-│   ├── ui/         (19)
+│   ├── ui/         (16)
 │   ├── auth/       (3)
 │   ├── completion/ (9)
 │   ├── orgx/       (14; 標準 10 + 任意 4)
@@ -230,7 +230,7 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
   は core 層にあり、これらのモジュール名を知らない）。`ui-nano-palette` は `ui-theme` 経由
 - LSP バックエンド（`eglot` / `lsp-mode`。切り替えを吸収するファサードが `dev-lsp-bridge`）は
   `core-switches` で選択する。コードはバックエンド非依存を保つこと
-- キー操作のモジュールは、2026-10-25 に `ui-leader` / `ui-keymap` / `ui-dirvish-keys` / `ui-global-keys` の 4 つを `ui-keys` に集約した（`org/ui.org` の `* ui/ui-keys.el`）。公開 API（`ui-keymap-bind`、`ui-leader-key`、`ui-leader-map`、`ui-leader-*-map`）の名前は、`personal/`・`dev/`・`utils/`・`orgx/` が参照するため変えていないので、接頭辞はモジュール名と一致しない。`after-init-hook` には `ui-keymap--startup-init` → `ui-dirvish-keys--startup-init` → `ui-global-keys--startup-init` の順に登録する暗黙の契約があり、順序を入れ替えない。`ui-keyboard`（接頭辞 `ui-keyboard-`）、`ui-hydra`、`ui-which-key`（外部パッケージの設定）は責務が違うので別モジュールのまま。feature 名は `ui-keys` だけで、`ui-leader` などの旧 feature 名は存在しない（`with-eval-after-load` では `'ui-keys` を使う）
+- キー操作のモジュールは、2026-10-25 に `ui-leader` / `ui-keymap` / `ui-dirvish-keys` / `ui-global-keys` / `ui-hydra` / `ui-which-key` / `ui-keyboard` の 7 つを `ui-keys` に集約した（`org/ui.org` の `* ui/ui-keys.el`）。公開 API（`ui-keymap-bind`、`ui-leader-key`、`ui-leader-map`、`ui-leader-*-map`）の名前は、`personal/`・`dev/`・`utils/`・`orgx/` が参照するため変えていないので、接頭辞（`ui-leader-` / `ui-keymap-` / `ui-hydra-` / `ui-which-key-` / `ui-keyboard-` など）はモジュール名と一致しない。ファイル内の並びは、リーダー基盤 → Hydra → which-key → キーボード変換 → 割り当て → dirvish → グローバルの順で、ロード時の実行（`ui-leader--bind-root`、`ui-keyboard--apply`）と `after-init-hook` への登録順（`ui-which-key--startup-init` → `ui-keymap--startup-init` → `ui-dirvish-keys--startup-init` → `ui-global-keys--startup-init`）は暗黙の契約なので入れ替えない。feature 名は `ui-keys` だけで、旧 feature 名は存在しない（`with-eval-after-load` では `'ui-keys` を使う）
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
   このリポジトリには存在しない。存在すると仮定しないこと。
   ただし mu4e だけは `personal/ac1965.el` の leaf で設定している（モジュールではない）
