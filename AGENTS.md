@@ -8,12 +8,24 @@
 このリポジトリは YAMASHITA Takao (ac1965) の個人用 Emacs 設定である。
 Org 文書とソースコードを一体として管理する literate program であり、
 `README.org` を設計・仕様・実装の正本（Source of Truth）とする。
-ただし補助スクリプト（`scripts/` の 12 本）の正本は、2026-10-25 に分離した `tools.org` である。
+ただし正本は 1 枚ではない。2026-10-25 に、次のとおり複数の Org 文書へ分けた。
+どの文書も、説明とコードを同じ節に同居させる（この性質は、分割しても保つ）。
+
+| 生成物 | 正本 |
+|---|---|
+| `early-init.el`、`init.el`、`lisp/modules.el` | `org/boot.org` |
+| `lisp/<layer>/*.el` | `org/<layer>.org`（`core` / `ui` / `auth` / `completion` / `orgx` / `dev` / `vcs` / `utils`） |
+| `personal/*.el` | `org/personal.org` |
+| `scripts/*`（補助スクリプト） | `org/tools.org` |
+| `Makefile`、`LICENSE`、`ChangeLog`、`svg/*.dot` / `svg/*.mmd` | `README.org` |
+
+以降の本書で `README.org` の source block と書いた箇所は、特に断らない限り、上の表のどの Org 文書にも当てはまる。
+`org/` の各ファイルは、`:tangle ../lisp/...` のように、`.emacs.d/` からの相対パスに `../` を付ける。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-108 個の `.el` ターゲット（`lisp/` 配下 94 個〔`lisp/modules.el` を含む〕、
+106 個の `.el` ターゲット（`lisp/` 配下 91 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 9 個、ルートの `early-init.el` と `init.el`、
-`scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`）が生成される。
-（`scripts/` の 3 個の `.el` は `tools.org` から、残りは `README.org` から tangle される。）
+`scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`）が生成される。
+（`scripts/` の 4 個の `.el` は `org/tools.org` から、残りは `README.org` から tangle される。）
 
 ```
 README.org (正本)
@@ -62,15 +74,15 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`, `check_modules.py`,
   `reload.py`, `claude_org_roam_export.py`, `compose.py`, `stats.py`, `update_build_info.py`）、
-  `scripts/shot.sh`、`scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`:
-  **`tools.org`**（`README.org` ではない）の Python / zsh / emacs-lisp ブロックから tangle
+  `scripts/shot.sh`、`scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`:
+  **`org/tools.org`**（`README.org` ではない）の Python / zsh / emacs-lisp ブロックから tangle
   （`compose.py`、`shot.sh`、`demo-layout.el` は `demo.png` の撮影用で `Appendix: demo.png` 節に、
   `check-bytecomp.el` は `make check-bytecomp` 用で `Appendix: check-bytecomp.el`
   節に、`cheatsheet.el` は `svg/emacs_keybindings_cheatsheet.svg` を実際のキーマップから作る用
   （`make cheatsheet`）で `Appendix: cheatsheet.el` 節に、`update_build_info.py` は `README.org` の
   Installation 節のビルド情報の表を更新する用で `Appendix: update_build_info.py` 節にある。
-  `check_modules.py` は `make check-modules`、`stats.py` は `make stats` 用）。
-  `tools.org` 自体は手で編集する正本で、`make tangle` が `README.org` に続けて tangle する
+  `check_modules.py` は `make check-modules`、`stats.py` は `make stats`、`orphans.el` は `make check-orphans` / `make clean-orphans` 用）。
+  `org/tools.org` 自体は手で編集する正本で、`make tangle` が他の Org 文書とあわせて tangle する
 - `svg/*.dot` / `svg/*.mmd`: tangle される図ソース（git 管理外の中間
   ファイル。`make dot-tangle` / `make mmd-tangle`）
 - `svg/*.svg`: 上記から描画してコミットするもの
@@ -121,20 +133,20 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 `lexical-binding` クッキーを 2 行目に押し下げて壊したため、意図的に
 変更した。**emacs-lisp ブロックでは** `:comments link` を再導入しないこと。
 
-この禁止は emacs-lisp ブロックにのみ適用する。`tools.org` の Appendix の Python ブロック
+この禁止は emacs-lisp ブロックにのみ適用する。`org/tools.org` の Appendix の Python ブロック
 （`scripts/check_emphasis.py`, `scripts/check_fboundp_guards.py`,
 `scripts/reload.py`, `scripts/claude_org_roam_export.py`）は、各節の
 `:header-args:python:` で現在も `:comments link` を使っている。これは
 意図された設定であり、emacs-lisp の禁止を理由に変更しないこと。
-ただし `tools.org` の `Appendix: demo.png` 節の `compose.py` と `shot.sh`、`Appendix: update_build_info.py`
+ただし `org/tools.org` の `Appendix: demo.png` 節の `compose.py` と `shot.sh`、`Appendix: update_build_info.py`
 節の `update_build_info.py`、`check_modules.py`、`stats.py` は `:comments no` である（1 行目のシェバンを保つため）。
 
 ### Directory layout
 
 ```
 .emacs.d/
-├── README.org
-├── tools.org       (補助スクリプトの正本。scripts/ へ tangle)
+├── README.org      (設計・索引・Makefile・図のソース・Changelog)
+├── org/            (層ごとの正本: boot, core, ui, auth, completion, orgx, dev, vcs, utils, personal。補助スクリプトの tools)
 ├── Makefile        (README.org から tangle — 手編集禁止)
 ├── early-init.el
 ├── init.el
@@ -143,13 +155,13 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── core/       (tangle ターゲット 12)
 │   ├── ui/         (22)
 │   ├── auth/       (3)
-│   ├── completion/ (12)
+│   ├── completion/ (9)
 │   ├── orgx/       (14; 標準 10 + 任意 4)
 │   ├── vcs/        (4)
 │   ├── dev/        (17)
 │   └── utils/      (9)
 ├── personal/       (9) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
-├── scripts/        (12) — tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats)
+├── scripts/        (13) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
 ├── demo.png        README.org から参照するスクリーンショット（手で管理。scripts/shot.sh と scripts/compose.py で撮り直す）
@@ -426,20 +438,21 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 
 | Target | Purpose |
 |---|---|
-| `make tangle` | `README.org` と `tools.org` を `.el` ターゲット・`scripts/` へ tangle |
-| `make reload` | `clean` + `tangle` + `check-cookies`。古い `.elc` を避けるため、単独の `tangle` より推奨 |
-| `make lint` | `check-tangle` + `check-emphasis` + `check-cookies` + `check-fboundp-guards` + `check-modules` + `checkdoc` を実行 |
+| `make tangle` | `README.org` と `org/*.org` を `.el` ターゲット・`scripts/` へ tangle |
+| `make reload` | `clean` + `tangle` + `check-cookies` + `clean-orphans`。古い `.elc` と、tangle 先から外れた古い生成物（統合・改名・ブランチ切替で残る `.el` など）を避けるため、単独の `tangle` より推奨。途中で `Makefile` が書き換わったら、新しい `Makefile` でもう一度 `reload` を実行する |
+| `make lint` | `check-tangle` + `check-emphasis` + `check-cookies` + `check-fboundp-guards` + `check-modules` + `check-orphans` + `checkdoc` を実行 |
 | `make check-tangle` | 見出しレベルの誤りで `:tangle` を継承できない src ブロックを検出 |
 | `make check-emphasis` | 太字が verbatim を囲む場合を含む、無効な Org 強調記法を検出（Elisp ではなく Python 製） |
 | `make check-cookies` | tangle された全 `.el` が `lexical-binding: t` クッキーで始まることを検証 |
 | `make check-fboundp-guards` | `(fboundp 'X)` でガードされた呼び出しを、実際には解決できないシンボルの `#'X` 参照と照合（Python 製。事前の tangle が必要） |
 | `make check-modules` | `lisp/modules.el` の一覧と `lisp/` 配下の整合性（実在・`provide`・層の順序・上位層への `require`・どちらにも載らない `.el`）を、Emacs なしで検査（Python 製） |
+| `make check-orphans` / `make clean-orphans` | `lisp/`・`personal/`・`scripts/` の `.el`・`.elc`・`.py`・`.sh` のうち、どの Org 文書も tangle しないもの（孤立した生成物）を一覧する（あれば失敗）／削除する。本体は `scripts/orphans.el`。tangle 先を 20 件未満しか取れないときは何も消さない |
 | `make stats` | 層ごとのファイル数・行数・コメント率を表示。本書の数値を更新するときの根拠にする（Python 製） |
 | `make checkdoc` | Elisp の docstring/スタイルチェック |
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |
 | `make cheatsheet` / `make check-cheatsheet` | キーバインド一覧 `svg/emacs_keybindings_cheatsheet.svg` を、init を読み込んだ Emacs の実際のキーマップから書き直す / 書き出さずに、コミット済みの SVG が今のキーマップと同じかを調べる（違えば終了コード 1）。約 40 秒かかるため `lint` には含めない。本体は `scripts/cheatsheet.el` |
 | `make check-bytecomp` | `early-init.el` と `init.el` を読み込んだ Emacs で、`lisp/`・`personal/`・`early-init.el`・`init.el` をすべてバイトコンパイルし、警告があれば一覧して終了コード 1 で終わる。読み込めずコンパイルに失敗したファイルと、init の後でロードされていないモジュールも警告に数える（出力は一時ディレクトリで `.elc` は作らない。約 40 秒かかるため `lint` には含めない。本体は `scripts/check-bytecomp.el`） |
-| `make stage` | `TRACKED`（`README.org`, `tools.org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
+| `make stage` | `TRACKED`（`README.org`, `org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
 
 `make help` の `make lint` の説明行は、`check-fboundp-guards` を含む形に直した
 （2026-10-12）。それでも、実際の `lint` の依存は上の表と

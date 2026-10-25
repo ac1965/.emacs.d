@@ -1,0 +1,229 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: vcs 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+vcs 層（バージョン管理）のモジュールの正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* vcs/
+:PROPERTIES:
+:CUSTOM_ID: vcs-modules
+:END:
+
+* vcs/vcs-core.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-core
+:header-args:emacs-lisp: :tangle ../lisp/vcs/vcs-core.el
+:END:
+
+Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだけで 40 件を超えます）。
+
+これまで「Magit を使う理由」になっていた操作の多くが、いまや組み込みのインタフェースから
+使えます。複数ワークツリー、cherry-pick と revert、incoming/outgoing の差分、非同期チェック
+イン、VC Directory からの stash 削除 — このあたりです。
+
+*それでも Magit は消していません*
+
+本モジュールは Magit を *削除しません* 。組み込み層を有効化して、両方を使える状態にしています。
+
+理由は単純で、「Magit をやめられるかどうか」は、思い込みではなく実際に使ってみた実感で判断
+すべきだからです。まず両方を使える状態を作り、それから決める。その順序を守るための構成です。
+やめるか否かの判断を、思い込みではなく実測された経験に基づいて下せるようにするためである。
+
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-core.el --- 組み込み VC のポリシー（Emacs 31） -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Emacs 31 の VC 書き直しを活用した、組み込み `vc' の設定。
+  ;;
+  ;; 覚えておく価値のあるキーバインド（すべて組み込み。サードパーティ不要）:
+  ;;
+  ;;   C-x v v     vc-next-action            C-x v @   vc-revert
+  ;;   C-x v b l   vc-print-fileset-branch-log
+  ;;   C-x v b L   vc-print-root-branch-log
+  ;;   C-x v R     vc-rename-file            C-x v !   （独自の入力履歴）
+  ;;   VC Directory 内:  V  vc-dir-root-next-action
+  ;;                     z d / D  Git の stash を削除
+  ;;
+  ;; 本モジュールは dev 層に依存してはならない（層の不変条件）。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf vc
+    :straight nil
+    :if (>= emacs-major-version 31)
+    :custom
+    (;; Refuse to rewrite history that has already been published.  This is the
+     ;; Emacs 31 の VC 書き直しで追加された、最も価値のある安全オプション。
+     (vc-allow-rewriting-published-history . nil)
+     ;; チェックインは非同期で行う。失敗は握りつぶさず表面化させる。
+     (vc-async-checkin                 . t)
+     (vc-display-failed-async-commands . t)
+     ;; incoming/outgoing 系のコマンドを独自の接頭辞で区別する。
+     (vc-use-incoming-outgoing-prefixes . t)
+     ;; VC Directory の整理。
+     (vc-dir-auto-hide-up-to-date        . t)
+     (vc-dir-save-some-buffers-on-revert . t)
+     ;; マージで衝突が残った場合、衝突解決（smerge）を提示する。
+     (vc-resolve-conflicts . t)
+     ;; コミット前に、log-edit バッファでコミット差分を表示する。
+     (log-edit-hook . '(log-edit-show-files log-edit-show-diff)))
+    :config
+    ;; Emacs 31: 作業ツリーが Emacs の外側で変化した場合（ブランチ切替、rebase、pull）、
+    ;; バッファを自動的に再読込する。
+    (when (fboundp 'vc-auto-revert-mode)
+      (vc-auto-revert-mode 1)))
+
+  (defun vcs-core--maybe-enable-smerge ()
+    "Enable `smerge-mode' when the visited file contains conflict markers."
+    (save-excursion
+      (goto-char (point-min))
+      (when (re-search-forward "^<<<<<<< " nil t)
+        (smerge-mode 1))))
+
+  ;; SMerge は Emacs 31 で `repeat-map' を獲得した。最初の衝突コマンドの後は、
+  ;; 以降のキーを接頭辞なしで繰り返せる。
+  ;; defun は leaf より前に置く。:hook に関数名を書くと leaf は、その関数が未定義なら
+  ;; パッケージ名への autoload と declare-function を出すため、後ろに置くと
+  ;; 「defined multiple times」の警告になり、誤った autoload も一瞬登録される。
+  (leaf smerge-mode
+    :straight nil
+    :hook ((find-file-hook . vcs-core--maybe-enable-smerge)))
+
+  (provide 'vcs-core)
+  ;;; vcs/vcs-core.el ends here
+#+end_src
+
+* vcs/vcs-magit.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-magit
+:header-args:emacs-lisp: :tangle ../lisp/vcs/vcs-magit.el
+:END:
+
+#+NAME: vcs-magit
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-magit.el --- Magit の設定 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Magit（Git クライアント）の設定。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `magit-display-buffer-fullframe-status-v1' により、ステータスを全画面表示する
+  ;;
+  ;; - magit バッファを bury するとき、直前のウィンドウ構成を復元する
+  ;; - Ediff の制御パネルを別フレームにせず、同一フレームで開く
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function ediff-setup-windows-plain "ediff-wind")
+  (declare-function magit-display-buffer-fullframe-status-v1 "magit-mode")
+  (declare-function magit-restore-window-configuration "magit-mode")
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf magit :straight t
+    :custom ((magit-display-buffer-function . #'magit-display-buffer-fullframe-status-v1)
+             (magit-bury-buffer-function . #'magit-restore-window-configuration)))
+
+  ;; Ediff: 制御パネルを別フレームにせず同一フレームで開く（nano-modeline /
+  ;; posframe 環境でフレーム管理を増やさないため）。
+  (leaf ediff
+    :straight nil
+    :custom ((ediff-window-setup-function . #'ediff-setup-windows-plain)
+             (ediff-split-window-function . #'split-window-horizontally)))
+
+  (provide 'vcs-magit)
+  ;;; vcs/vcs-magit.el ends here
+#+end_src
+
+* vcs/vcs-gutter.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-gutter
+:header-args:emacs-lisp: :tangle ../lisp/vcs/vcs-gutter.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-gutter.el --- VCS のガター表示 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; diff-hl による VCS のガター表示。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 初期化後に `global-diff-hl-mode' を有効化する
+  ;; - magit の pre/post-refresh フックでフリンジ表示を更新する
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf diff-hl
+    :straight t
+    :hook ((after-init-hook . global-diff-hl-mode)
+           (magit-pre-refresh . diff-hl-magit-pre-refresh)
+           (magit-post-refresh . diff-hl-magit-post-refresh)))
+
+  (provide 'vcs-gutter)
+  ;;; vcs/vcs-gutter.el ends here
+#+end_src
+
+* vcs/vcs-forge.el
+:PROPERTIES:
+:CUSTOM_ID: vcs-forge
+:header-args:emacs-lisp: :tangle ../lisp/vcs/vcs-forge.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; vcs/vcs-forge.el --- Magit Forge 統合 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: vcs
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; GitHub/GitLab の Issue と Pull Request のための Magit Forge 統合。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - magit が利用可能になった後に forge をロードする
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf forge :straight t :after magit)
+
+  (provide 'vcs-forge)
+  ;;; vcs/vcs-forge.el ends here
+#+end_src

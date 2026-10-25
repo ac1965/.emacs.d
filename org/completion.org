@@ -1,0 +1,755 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: completion 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+completion 層（補完）のモジュールの正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* completion/
+:PROPERTIES:
+:CUSTOM_ID: completion-modules
+:END:
+
+* completion/completion-core.el
+:PROPERTIES:
+:CUSTOM_ID: completion-core
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-core.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; completion/completion-core.el --- 補完のコア設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 補完のコア: orderless 補完スタイル。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - orderless を導入し、`completion-styles' を orderless + basic に設定する
+  ;;
+  ;; 注意: `completion-category-overrides' はここでは設定しない。正式かつ拡張された
+  ;; 上書きテーブル（file、symbol、keyword、tex、dabbrev）は completion-capf.el にあり、
+  ;; 本モジュールより後にロードされる。両方のファイルで上書きを定義すると、
+  ;; 「後勝ち」の意味論により completion-capf.el が静かに勝ってしまい、ここでの宣言は
+  ;; 誤解を招くものになる。正となる情報源を 1 つに絞る方が明快で、推論も容易である。
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf orderless
+    :straight t
+    :custom
+    ((completion-styles . '(orderless basic))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31 の補完エンジン
+  ;; ---------------------------------------------------------------------------
+  ;; - `completion-eager-display' / `completion-eager-update' は "*Completions*"
+  ;;   バッファをポップアップし、逐次更新する。その役割は既に Vertico が担っているため、
+  ;;   将来 Emacs の既定値が変わっても候補リストが二重に現れないよう、両者を nil に固定する。
+  ;;
+  ;; - `completion-pcm-leading-wildcard' により partial-completion スタイルが substring
+  ;;   （どこでも一致）のように振る舞う。orderless の隣に置くフォールバックの `basic'
+  ;;   補完としては、これが望ましい挙動である。
+  ;; - `flex' スタイルは Emacs 31 で再実装された（高速化とランキング改善）。
+  ;;   orderless のディスパッチャに頼るより、file カテゴリで直接使う価値がある。
+  ;;
+  (leaf emacs
+    :straight nil
+    :if (>= emacs-major-version 31)
+    :custom
+    ((completion-eager-display        . nil)
+     (completion-eager-update         . nil)
+     (completion-pcm-leading-wildcard . t)))
+
+  (provide 'completion-core)
+  ;;; completion/completion-core.el ends here
+#+end_src
+
+* completion/completion-vertico.el
+:PROPERTIES:
+:CUSTOM_ID: completion-vertico
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-vertico.el
+:END:
+
+#+NAME: completion-vertico
+#+begin_src emacs-lisp
+  ;;; completion/completion-vertico.el --- Vertico によるミニバッファ UI -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; posframe 表示と marginalia 注釈を備えた Vertico のミニバッファ UI。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 二重初期化を避けるため、`window-setup-hook' で vertico、marginalia を
+  ;;   ちょうど一度だけ初期化する
+  ;; - posframe 表示はグラフィカルセッションでのみ、初回のグラフィカル
+  ;;   フレームができた時点で一度だけ有効化する（daemon 対応。vertico/
+  ;;   marginalia の初期化とは独立に扱う）
+  ;; - vertico の候補表示数と posframe の枠幅を設定する
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (declare-function core-runtime-add-hook-once "core-runtime")
+
+  (defun completion-vertico--init ()
+    "Initialize Vertico and Marginalia.
+  These are frame-independent (minibuffer completion works without a
+  display), so unlike posframe below, no daemon branch is needed here.
+  一度だけ実行する保証は `core-runtime-add-hook-once' が担う（下の登録を参照）。"
+    (vertico-mode 1)
+    (marginalia-mode 1))
+
+  ;; 初回実行で自身を window-setup-hook から外す。
+  (core-runtime-add-hook-once 'window-setup-hook #'completion-vertico--init)
+
+  ;; vertico-posframe だけは vertico-mode / marginalia-mode と切り離して
+  ;; 扱う。--daemon 起動時、上の completion-vertico--init は実フレームの無い
+  ;; window-setup-hook で走ってしまうため、その中で単純に (display-graphic-p)
+  ;; を見るだけだと daemon では常に nil と判定され、しかも
+  ;; completion-vertico--init が自分自身をフックから除去して
+  ;; しまうため、後から emacsclient -c で本物のフレームが繋がっても
+  ;; 二度と再試行されない（posframe が永久に効かないバグ）。
+  ;;
+  ;; ligature / nano-modeline と同じパターンで、初回のグラフィカルフレームが
+  ;; できるまで独立して遅延させる。
+  (defun completion-vertico--activate-posframe (&optional _frame)
+    "posframe / vertico-posframe を require し、有効化する。"
+    (require 'posframe)
+    (require 'vertico-posframe)
+    (setopt vertico-posframe-border-width 2)
+    (vertico-posframe-mode 1)
+    (require 'vertico-multiform nil t))
+
+  ;; nano-modeline / ui-theme と同じ理由（after-make-frame-functions はフレーム
+  ;; 実体化の途中で走り、色がまだ確定していない）で、posframe の子フレーム背景色
+  ;; も同種の影響を受け得る。直接の破損は未確認だが、同じ
+  ;; `core-runtime-run-on-first-graphic-frame' で予防的に 1 tick 遅らせておく。
+  (defun completion-vertico--maybe-activate-posframe ()
+    "グラフィカルな画面なら vertico-posframe を有効化する。非 daemon 用。"
+    (when (display-graphic-p)
+      (completion-vertico--activate-posframe)))
+
+  (declare-function core-runtime-run-on-first-graphic-frame "core-runtime")
+
+  (if (daemonp)
+      (core-runtime-run-on-first-graphic-frame #'completion-vertico--activate-posframe)
+    (core-runtime-add-hook-once 'window-setup-hook
+                                #'completion-vertico--maybe-activate-posframe))
+
+  (leaf vertico
+    :straight t
+    :custom ((vertico-count . 15)))
+
+  (leaf marginalia
+    :straight t
+    ;; marginalia-align は defcustom である。どの leaf 宣言にも属させず浮かせるのではなく、
+    ;; marginalia の leaf ブロックが所有する形にしている。
+    :custom ((marginalia-align . 'right)))
+
+  (leaf posframe
+    :straight t
+    :require nil)
+
+  ;; leaf の :if は「モジュールのロード時」に一度だけ評価される。--daemon
+  ;; 起動時はその時点で実フレームが無いため (display-graphic-p) は常に nil
+  ;; となり、vertico-posframe パッケージ自体が永久にロードされなかった
+  ;; （ligature が :when で抱えていたのと同じ daemon 対応バグ）。
+  ;; :if を撤去して :require nil にし、実際の require と有効化は上の
+  ;; completion-vertico--activate-posframe に委ねる。
+  (leaf vertico-posframe
+    :straight t
+    :after (vertico posframe)
+    :require nil)
+
+  (provide 'completion-vertico)
+  ;;; completion/completion-vertico.el ends here
+#+end_src
+
+* completion/completion-consult.el
+:PROPERTIES:
+:CUSTOM_ID: completion-consult
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-consult.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; completion/completion-consult.el --- Consult による検索とナビゲーション -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Consult: 検索と相互参照ナビゲーションの強化。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - より豊かな候補表示のため、`xref-show-xrefs-function' と
+  ;;   `xref-show-definitions-function' を `consult-xref' 経由にする
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf consult
+    :straight t
+    :custom ((xref-show-xrefs-function        . #'consult-xref)
+             (xref-show-definitions-function . #'consult-xref)))
+
+  (provide 'completion-consult)
+  ;;; completion/completion-consult.el ends here
+#+end_src
+
+* completion/completion-embark.el
+:PROPERTIES:
+:CUSTOM_ID: completion-embark
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-embark.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; completion/completion-embark.el --- Embark のアクション -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Consult と統合した Embark の文脈依存アクション。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `prefix-help-command' を `embark-prefix-help-command' に設定する
+  ;; - `embark-collect' バッファで `consult-preview-at-point-mode' を有効化する
+  ;; - Embark 本体のグローバルキーバインドを設定する（s-/、s-;、C-<f2>）
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf embark
+    :straight t
+    :custom ((prefix-help-command . #'embark-prefix-help-command))
+    ;; s-/ act、s-; dwim、C-<f2> でバインディング一覧（ty07.net 備忘録より）。
+    ;; パッケージ固有のコマンドのため、汎用の ui-global-keys.el ではなく
+    ;; ここ（Embark 自身の leaf ブロック）にまとめる。
+    :bind (("s-/"    . embark-act)
+           ("s-;"    . embark-dwim)
+           ("C-<f2>" . embark-bindings)))
+  (leaf embark-consult
+    :straight t
+    :after (embark consult)
+    :hook (embark-collect-mode . consult-preview-at-point-mode))
+
+  (provide 'completion-embark)
+  ;;; completion/completion-embark.el ends here
+#+end_src
+
+* completion/completion-corfu.el
+:PROPERTIES:
+:CUSTOM_ID: completion-corfu
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-corfu.el
+:END:
+
+#+NAME: completion-corfu
+#+begin_src emacs-lisp
+  ;;; completion/completion-corfu.el --- Corfu ポップアップ補完モジュール -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; kind-icon と CAPE ソースを備えた Corfu のバッファ内ポップアップ補完。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - フレーム生成のたびに再設定が走らないよう、`window-setup-hook' で corfu、
+  ;;   kind-icon、cape をちょうど一度だけ初期化する
+  ;; - `global-corfu-mode' を有効化し、`tab-always-indent' を 'complete に設定する
+  ;; - cape-elisp-symbol、cape-file、cape-dabbrev を CAPF として登録する
+  ;; - 補完アイコンのため kind-icon をマージン整形関数として設置する
+  ;; - Emacs 31 以降は、prog-mode と org-mode で `completion-preview-mode' を有効化し、
+  ;;   ランキングを Corfu に合わせる（ターミナル系のバッファでは抑止する）
+  ;;
+  ;; 注意: `remove-hook' の対象は `window-setup-hook' であって、
+  ;; `completion-at-point-functions' ではない。
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar completion-preview-active-mode-map)
+  (defvar corfu-margin-formatters)
+  (declare-function completion-preview-next-candidate "completion-preview")
+  (declare-function completion-preview-prev-candidate "completion-preview")
+
+  (eval-when-compile (require 'leaf))
+
+  (declare-function core-runtime-add-hook-once "core-runtime")
+
+  (defun completion-corfu--init ()
+    "Initialize Corfu, kind-icon, and Cape.
+  Activates `global-corfu-mode', registers kind-icon as a margin formatter,
+  and prepends Cape sources (elisp-symbol, file, dabbrev) to the global CAPF list.
+  一度だけ実行する保証は `core-runtime-add-hook-once' が担う（下の登録を参照）。"
+    (require 'corfu)
+    ;; tab-always-indent は defcustom（indent.el）であり、下の leaf corfu :custom で設定する。
+    (global-corfu-mode 1)
+    (require 'kind-icon)
+    ;; kind-icon が既に存在する場合の重複登録を避けるため cl-pushnew を使う。
+    (cl-pushnew #'kind-icon-margin-formatter corfu-margin-formatters)
+    (require 'cape)
+    ;; 3 回の add-to-list を連ねるのではなく、単一の setq を用いる。
+    ;; add-to-list は重複検出のたびにリストを走査する（O(n) × 3）。
+    ;; setq + append なら目的のスタックを一手で構築でき、意図した優先順位
+    ;; （elisp-symbol > file > dabbrev > 既存）も明示できる。
+    (setq completion-at-point-functions
+          (append '(cape-elisp-symbol cape-file cape-dabbrev)
+                  completion-at-point-functions)))
+
+  ;; 以降のフレーム生成で初期化が繰り返されないよう、初回実行で自身を
+  ;; window-setup-hook から外す（completion-at-point-functions からではない）。
+  (core-runtime-add-hook-once 'window-setup-hook #'completion-corfu--init)
+
+  (leaf corfu :straight t
+    :custom ((corfu-auto        . t)
+             (corfu-cycle       . t)
+             ;; tab-always-indent は defcustom であり、:custom に属する。
+             (tab-always-indent . 'complete)))
+  (leaf kind-icon :straight t :after corfu :require t
+    :custom ((kind-icon-default-face . 'corfu-default)))
+  (leaf cape :straight t :after corfu)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: Completion Preview（組み込みのインライン「ゴーストテキスト」）
+  ;; ---------------------------------------------------------------------------
+  ;; Completion Preview は、ポップアップを開かずに最上位候補をポイントの先にインライン表示する。
+  ;; Emacs 31 が `completion-preview-sort-function' をユーザーオプションに昇格させたのは、
+  ;; まさに Corfu のようなポップアップ UI と整合させられるようにするためである。
+  ;; ソート関数を共有すれば、プレビューされる候補は常に Corfu が最初に挿入する候補と
+  ;; 一致し、2 つのインタフェースが食い違うことがなくなる。
+  ;; `completion-preview-inhibit-functions'（31 の新機能）により、プレビューのオーバーレイが
+  ;; プロセス出力と衝突するターミナルや REPL のバッファでは無効化する。
+  (defun completion-corfu--preview-inhibit-p ()
+    "Return non-nil in buffers where inline completion preview is unwanted."
+    (derived-mode-p 'vterm-mode 'eshell-mode 'comint-mode 'term-mode))
+
+  (leaf completion-preview
+    :straight nil
+    :if (>= emacs-major-version 31)
+    :custom
+    ((completion-preview-minimum-symbol-length . 3))
+    :hook ((prog-mode-hook . completion-preview-mode)
+           (org-mode-hook  . completion-preview-mode))
+    :config
+    ;; プレビューのランキングを Corfu に合わせる。Corfu が明示的なソート関数を持たない
+    ;; 場合は、独自のものを作らず Emacs の既定を保つ。
+    (when (bound-and-true-p corfu-sort-function)
+      (setopt completion-preview-sort-function corfu-sort-function))
+    (setopt completion-preview-inhibit-functions
+            (list #'completion-corfu--preview-inhibit-p))
+    (keymap-set completion-preview-active-mode-map "M-n" #'completion-preview-next-candidate)
+    (keymap-set completion-preview-active-mode-map "M-p" #'completion-preview-prev-candidate))
+
+  (provide 'completion-corfu)
+  ;;; completion/completion-corfu.el ends here
+#+end_src
+
+* completion/completion-icons.el
+:PROPERTIES:
+:CUSTOM_ID: completion-icons
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-icons.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; completion/completion-icons.el --- 補完 UI 用アイコン -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; ibuffer と補完注釈 UI への nerd-icons 統合。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - ibuffer バッファで `nerd-icons-ibuffer-mode' を有効化する
+  ;; - `marginalia-mode' に `nerd-icons-completion-marginalia-setup' をフックする
+  ;;
+  ;; 注意: marginalia-align はここではなく completion-vertico.el（leaf marginalia の
+  ;; :custom ブロック）で設定する。marginalia を導入する leaf ブロックが設定を所有する方が、
+  ;; 下流ファイルでの素の setq より明快である。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf nerd-icons-ibuffer :straight t :hook (ibuffer-mode-hook . nerd-icons-ibuffer-mode))
+  (leaf nerd-icons-completion
+    :straight t
+    :hook (marginalia-mode-hook . nerd-icons-completion-marginalia-setup)
+    :config (nerd-icons-completion-mode))
+
+  (provide 'completion-icons)
+  ;;; completion/completion-icons.el ends here
+#+end_src
+
+* completion/completion-capf.el
+:PROPERTIES:
+:CUSTOM_ID: completion-capf
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-capf.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; completion/completion-capf.el --- モード別 CAPF 設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; モード別の `completion-at-point-functions'（CAPF）スタック。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - バッファローカルな CAPF 設定関数 `completion--set-capfs' を提供する
+  ;; - emacs-lisp、prog、text、org、shell、repl の各 CAPF スタックを定義する
+  ;; - 各スタックを対応するモードフックに登録する
+  ;; - 正式な `completion-category-overrides' テーブルを所有する
+  ;;
+  ;; 注意: `completion-category-overrides' はここでのみ設定する。
+  ;; completion-core.el は意図的にこれを省いている。本ファイルは（completion-core.el で
+  ;; 設定される）基本の orderless スタイルを、file、symbol、keyword、tex、dabbrev の
+  ;; カテゴリ別ルールで拡張する。正となる情報源を 1 つに保つことで、後勝ちによる
+  ;; 静かな衝突を防いでいる。
+  ;;; Code:
+
+  (defun completion--set-capfs (capfs)
+    "Set `completion-at-point-functions' buffer-locally to CAPFS.
+  Duplicates are dropped (the first occurrence wins), so stacks built by
+  appending to the existing list stay idempotent when several hooks run."
+    (setq-local completion-at-point-functions (delete-dups (copy-sequence capfs))))
+
+  (defun completion--elisp-capfs ()
+    "Install Emacs Lisp CAPF stack: symbol, file, and dabbrev sources."
+    (completion--set-capfs '(cape-elisp-symbol cape-file cape-dabbrev)))
+
+  (defun completion--prog-capfs ()
+    "Augment the existing prog-mode CAPF stack with file and dabbrev sources."
+    (completion--set-capfs (append completion-at-point-functions '(cape-file cape-dabbrev))))
+
+  (defun completion--text-capfs ()
+    "Install text-mode CAPF stack: dabbrev and file sources."
+    (completion--set-capfs '(cape-dabbrev cape-file)))
+
+  (defun completion--org-capfs ()
+    "Install Org-mode CAPF stack: dabbrev, file, and TeX symbol sources."
+    (completion--set-capfs '(cape-dabbrev cape-file cape-tex)))
+
+  (defun completion--shell-capfs ()
+    "Install shell-mode CAPF stack: file path and dabbrev sources."
+    (completion--set-capfs '(cape-file cape-dabbrev)))
+
+  (defun completion--repl-capfs ()
+    "Augment the existing REPL CAPF stack with dabbrev source."
+    (completion--set-capfs (append completion-at-point-functions '(cape-dabbrev))))
+
+  (add-hook 'emacs-lisp-mode-hook #'completion--elisp-capfs)
+  (add-hook 'lisp-interaction-mode-hook #'completion--elisp-capfs)
+  (add-hook 'prog-mode-hook #'completion--prog-capfs)
+  (add-hook 'text-mode-hook #'completion--text-capfs)
+  (add-hook 'org-mode-hook #'completion--org-capfs)
+  (add-hook 'sh-mode-hook #'completion--shell-capfs)
+  (add-hook 'eshell-mode-hook #'completion--shell-capfs)
+  (add-hook 'ielm-mode-hook #'completion--repl-capfs)
+  (add-hook 'comint-mode-hook #'completion--repl-capfs)
+
+  ;; completion-category-overrides は defcustom（minibuffer.el）である。
+  ;; 本ファイルが正式な所有者であり（Commentary 参照）、setter と型検証を尊重するため
+  ;; setopt を用いる。
+  (setopt completion-category-overrides
+          '((file (styles basic partial-completion))
+            (symbol (styles orderless))
+            (keyword (styles orderless))
+            (tex (styles basic))
+            (dabbrev (styles basic))))
+
+  (provide 'completion-capf)
+  ;;; completion/completion-capf.el ends here
+#+end_src
+
+* completion/completion-org-src.el
+:PROPERTIES:
+:CUSTOM_ID: completion-org-src
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-org-src.el
+:END:
+
+** completion-org-src.el — Org SRC Block Completion
+
+Org のソースブロックの中でも、その言語に応じた補完がほしい。この要求に応えるのがここです。
+
+[[file:../svg/07_capf_dispatch.svg]]
+
+*どうやって言語を判定しているか*
+
+=org-edit-special= で開く編集バッファは、その言語自身のメジャーモード（ =python-mode= など）を持ちます。
+=org-src-mode-hook= で =derived-mode-p= によってそのモードを判定し、Python ブロックには Python の補完が、
+Elisp ブロックには Elisp の補完が適用されます。
+
+*4 つの関数の分担と、登録順の意味*
+
+以前は 4 つのファイルに分けていましたが、どれも =org-src-mode-hook= に 1 つずつ関数を足すだけの小さな
+モジュールで、公開するシンボルもありません。そこで 1 つのファイルにまとめ、責務は関数ごとに分けています。
+
+- =completion--org-src-capfs= — 編集バッファのモード判定と CAPF スタックの選択（汎用）
+- =completion--org-src-lang-capfs= — shell / SQL / Python の言語ごとの CAPF 選択
+- =completion--org-src-corfu-setup= — corfu の遅延と接頭辞（バッファローカル）
+- =completion--org-src-orderless-setup= — orderless のカテゴリ別スタイル（バッファローカル）
+
+=add-hook= は関数をフックの先頭へ足すので、実行順は登録の逆になります。このファイルでは、汎用、言語別、
+corfu、orderless の順に登録しているため、実行順は orderless、corfu、言語別、汎用です。言語別のスタックが
+汎用より先に設定され、後から走る汎用の =completion--set-capfs= が重複を除くので、言語別の並びが保たれます。
+*登録の並びを入れ替えないでください。*
+
+#+NAME: completion-org-src-el
+#+begin_src emacs-lisp
+  ;;; completion/completion-org-src.el --- Org SRC 編集バッファ向けの補完設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Org SRC 編集バッファ向けの補完設定。`org-src-mode-hook' に 4 つの関数を登録する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 派生したメジャーモードに応じて CAPF スタックを選択する（elisp → elisp-capfs、
+  ;;   prog → prog-capfs、それ以外 → text-capfs）。`completion--org-src-capfs'
+  ;; - shell、SQL、Python モードに対して、きめ細かいスタックを提供する。
+  ;;   `completion--org-src-lang-capfs'
+  ;; - コードブロック内での補完をより即応的にするため、`corfu-auto-delay' を 0.1 秒、
+  ;;   `corfu-auto-prefix' を 1 に下げ、`corfu-cycle' を無効化する。
+  ;;   `completion--org-src-corfu-setup'
+  ;; - バッファローカルな `completion-category-overrides' を設定し、symbol、keyword、
+  ;;   function、variable の各カテゴリで orderless を、file と dabbrev で
+  ;;   basic/partial-completion を使わせる。`completion--org-src-orderless-setup'
+  ;;
+  ;; 注意（登録順）: `add-hook' は既定で先頭に追加するため、`org-src-mode-hook' での実行順は
+  ;; 登録の逆になる。下では汎用、言語別、corfu、orderless の順に登録するので、実行順は
+  ;; orderless、corfu、言語別、汎用である。言語別のスタックを設定した後に汎用のスタック
+  ;; （`completion--org-src-capfs'）も続けて走るが、`completion--set-capfs' が重複を除くので、
+  ;; 言語別スタックの並びは保たれ、`cape-file' と `cape-dabbrev' は重複しない。
+  ;; 登録の並びを入れ替えないこと。
+  ;;
+  ;; 変数代入に関する注記: `corfu-auto'、`corfu-auto-delay'、`corfu-auto-prefix'、
+  ;; `corfu-cycle'、`completion-category-overrides' はいずれも defcustom である。
+  ;; コーディング規則 6 は defcustom への代入に `setopt' を要求するが、規則 6 は
+  ;; グローバル設定に適用されるものである。ここでは、グローバル値に影響を与えずに
+  ;; org-src-mode バッファ内でのみ *バッファローカル* な上書きを確立するため、意図的に
+  ;; `setq-local' を用いる。`setopt' にはバッファローカル版が無いため、この用途では
+  ;; `setq-local' が唯一かつ正しい形式である。グローバルな `completion-category-overrides'
+  ;; の正式な所有者は completion-capf.el である。
+  ;;; Code:
+
+  (defun completion--org-src-capfs ()
+    "Select the CAPF stack appropriate for the current Org SRC edit buffer.
+  Dispatches to `completion--elisp-capfs' for Emacs Lisp, `completion--prog-capfs'
+  for other prog modes, and `completion--text-capfs' as a fallback."
+    (cond ((derived-mode-p 'emacs-lisp-mode) (completion--elisp-capfs))
+          ((derived-mode-p 'prog-mode) (completion--prog-capfs))
+          (t (completion--text-capfs))))
+
+  (defun completion--org-src-shell-capfs ()
+    (completion--set-capfs '(cape-file cape-dabbrev)))
+
+  (defun completion--org-src-sql-capfs ()
+    (completion--set-capfs '(cape-dabbrev cape-file)))
+
+  (defun completion--org-src-python-capfs ()
+    (completion--set-capfs (append completion-at-point-functions '(cape-file cape-dabbrev))))
+
+  (defun completion--org-src-lang-capfs ()
+    "Apply a language-specific CAPF stack for the current Org SRC edit buffer.
+  Handles shell, SQL, and Python modes with dedicated stacks; returns nil for
+  other languages so the generic `completion--org-src-capfs' stack applies."
+    (cond ((derived-mode-p 'sh-mode 'shell-mode 'eshell-mode) (completion--org-src-shell-capfs))
+          ((derived-mode-p 'sql-mode) (completion--org-src-sql-capfs))
+          ((derived-mode-p 'python-mode) (completion--org-src-python-capfs))
+          (t nil)))
+
+  (defun completion--org-src-corfu-setup ()
+    "Configure Corfu for responsive completion inside Org SRC edit buffers.
+  Enables auto-completion, reduces delay to 0.1 s, lowers prefix threshold to 1,
+  and disables cycling — all as buffer-local values that leave the global
+  defcustom settings intact.  Uses setq-local because setopt has no buffer-local
+  variant; see Commentary for the rationale."
+    ;; バッファローカルな上書き: グローバルな defcustom の値を変えずに org-src-mode
+    ;; バッファだけ高速な補完設定にしたいので、ここでは setq-local が正しい
+    ;; （上の Commentary を参照）。
+    (setq-local corfu-auto t)
+    (setq-local corfu-auto-delay 0.1)
+    (setq-local corfu-auto-prefix 1)
+    (setq-local corfu-cycle nil))
+
+  (defun completion--org-src-orderless-setup ()
+    "Configure Orderless completion styles for the current Org SRC edit buffer.
+  Sets `completion-category-overrides' buffer-locally so that symbol, keyword,
+  function, and variable categories use Orderless, while file and dabbrev use
+  basic/partial-completion.  Does not affect the global value owned by
+  completion-capf.el.  Uses setq-local because setopt has no buffer-local variant."
+    ;; バッファローカルな上書き: completion-capf.el が所有するグローバルな
+    ;; completion-category-overrides の値には影響しない（上の Commentary を参照）。
+    (setq-local completion-category-overrides
+                '((symbol  (styles orderless)) (keyword (styles orderless))
+                  (function (styles orderless)) (variable (styles orderless))
+                  (file     (styles basic partial-completion))
+                  (dabbrev  (styles basic)))))
+
+  ;; 登録の並びを入れ替えないこと（Commentary の「登録順」を参照）。
+  (add-hook 'org-src-mode-hook #'completion--org-src-capfs)
+  (add-hook 'org-src-mode-hook #'completion--org-src-lang-capfs)
+  (add-hook 'org-src-mode-hook #'completion--org-src-corfu-setup)
+  (add-hook 'org-src-mode-hook #'completion--org-src-orderless-setup)
+
+  (provide 'completion-org-src)
+  ;;; completion/completion-org-src.el ends here
+#+end_src
+
+* completion/completion-lsp.el
+:PROPERTIES:
+:CUSTOM_ID: completion-lsp
+:header-args:emacs-lisp: :tangle ../lisp/completion/completion-lsp.el
+:END:
+
+** completion-lsp.el — Eglot Lifecycle Cleanup
+
+プロジェクトを切り替えたときに、不要になった Eglot サーバを止めるモジュールです。
+
+=find-file-hook= と =project-switch-project-hook= で現在のプロジェクトのルートを調べ、前回と変わっていれば、
+前のルート配下で動いている Eglot サーバを停止します。Eglot の公開 API（ =eglot-managed-buffers= 、
+=eglot-current-server= 、 =eglot-shutdown= ）だけを使い、 =eglot--project= は =fboundp= で守っています。
+
+補完用の CAPF 関数（ =eglot-completion-at-point= など）はここでは追加しません。それらは Eglot 自身が
+接続したバッファで登録します。lsp-mode には対応しません。
+#+begin_src emacs-lisp
+  ;;; completion/completion-lsp.el --- LSP ライフサイクルの後始末 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: completion
+  ;;
+  ;;; Commentary:
+  ;; プロジェクト切替時に、不要になった Eglot サーバを防御的に停止する。
+  ;;
+  ;; 内部変数 `eglot--servers' は使わず、公開 API の `eglot-current-server' +
+  ;; `eglot-managed-buffers' で稼働中のサーバを調べる。
+  ;; `eglot--project' は内部関数なので、Emacs のバージョン差に対して安全であるよう
+  ;; `fboundp' でガードしている。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function project-root "project")
+
+  (eval-when-compile (require 'leaf))
+
+  ;; defcustom を定義する他のすべてのモジュールと規約を揃えるため defgroup を
+  ;; 追加した。defgroup が無いと :group の参照が解決できず、バイトコンパイル時に
+  ;; 警告が出る。
+  (defgroup completion-lsp nil
+    "LSP lifecycle cleanup helpers."
+    :group 'completion)
+
+  (defcustom completion-lsp-enable-p t
+    "Enable LSP lifecycle cleanup."
+    :type 'boolean
+    :group 'completion-lsp)
+
+  (defvar completion-lsp--current-project-root nil
+    "The project root active when the last project-switch check ran.")
+
+  (defun completion-lsp--project-root ()
+    "Return the root directory of the current project, or nil."
+    (when-let* ((project (project-current nil)))
+      (expand-file-name (project-root project))))
+
+  (defun completion-lsp--shutdown-stale-servers (old-root)
+    "Shutdown Eglot servers whose root matches OLD-ROOT.
+
+    Uses only public Eglot API (eglot-managed-buffers, eglot-current-server,
+    eglot-shutdown) to avoid breakage from internal variable changes.
+    eglot--project is guarded with fboundp for forward compatibility."
+    (when (and (stringp old-root)
+               (featurep 'eglot)
+               (fboundp 'eglot-managed-buffers)
+               (fboundp 'eglot-current-server)
+               (fboundp 'eglot-shutdown))
+      (let ((seen-servers (make-hash-table :test 'eq)))
+        (dolist (buf (eglot-managed-buffers))
+          (when (buffer-live-p buf)
+            (with-current-buffer buf
+              (when-let* ((server (ignore-errors (eglot-current-server))))
+                (unless (gethash server seen-servers)
+                  (puthash server t seen-servers)
+                  (let ((server-root
+                         (ignore-errors
+                           (when (fboundp 'eglot--project)
+                             (expand-file-name
+                              (project-root (eglot--project server)))))))
+                    (when (and server-root
+                               (string-prefix-p old-root server-root))
+                      (condition-case err
+                          (eglot-shutdown server)
+                        (error (message "[completion-lsp] failed to shut down stale server: %s"
+                                        (error-message-string err))))))))))))))
+
+  (defun completion-lsp-on-project-switch ()
+    "Shutdown obsolete Eglot servers when switching projects.
+  Remote (TRAMP) buffers are ignored: `project-current' would run commands on
+  the remote host on every `find-file', and they must not reset the tracked root."
+    (when (and completion-lsp-enable-p
+               (not (file-remote-p default-directory)))
+      (let ((new-root (completion-lsp--project-root)))
+        (when (and completion-lsp--current-project-root
+                   new-root
+                   (not (string-equal completion-lsp--current-project-root new-root)))
+          (completion-lsp--shutdown-stale-servers
+           completion-lsp--current-project-root))
+        (setq completion-lsp--current-project-root new-root))))
+
+  (add-hook 'find-file-hook #'completion-lsp-on-project-switch)
+  (add-hook 'project-switch-project-hook #'completion-lsp-on-project-switch)
+
+  (provide 'completion-lsp)
+  ;;; completion/completion-lsp.el ends here
+#+end_src

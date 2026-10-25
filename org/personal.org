@@ -1,0 +1,1808 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: personal 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+personal 層（ユーザー／デバイス固有のオーバーレイ）の正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* Personal Configuration
+:PROPERTIES:
+:CUSTOM_ID: personal-config
+:END:
+
+** Overview
+
+=personal/= には、ユーザーやデバイスに固有のオーバーレイを置きます。
+
+これらのファイルには次の性質があります。
+
+- *バージョン管理から除外される* （あるいは共有コミットには含めない）
+- *編集して安全* — 変更しても他のユーザーには影響しません
+- *モジュールの前にロードされる* — =init.el= のステップ 9 で読み込まれ、 =modules.el= を require するステップ 10 より先に走ります。
+  パス変数などの上書きは、後から評価される =defvar= や =defcustom= が既存の値を上書きしないことで効きます。
+  リーダーキーの割り当てのように、モジュールが整ってから実行したいものは =after-init-hook= の depth 10 に回します
+
+*なぜ分けるのか*
+
+フォント、API キーの参照先、macOS 固有の設定 — これらは「その人のその機械」でしか意味を
+持ちません。共有される =lisp/= に混ぜると、他の環境で不可解な挙動を引き起こします。境界を
+はっきり引いておけば、共有部分だけを安心して git に載せられます。
+
+主なファイルは次のとおりです。
+
+| ファイル | 目的 |
+|------+---------|
+| =personal/user.el= | 全マシン共通の個人設定、`my:wsl-p'、デバイスファイルのロード |
+| =personal/<login>.el= | 識別情報、フォント、UI、LSP スイッチ |
+| =personal/personal-ime.el= | IME（sis）状態の nano-modeline・dirvish への表示 |
+| =personal/personal-hugo.el= | Hugo ブログ（ =all-posts.org= ）のタグ設定と capture |
+| =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Keychain。Apple Music の操作は =dev-apple-music= を追加で読み込む |
+| =personal/device-wsl.el= | WSL のクリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
+| =personal/personal-messages.el= | macOS Messages.app のアーカイバ |
+| =personal/personal-ai.el= | Org Babel と Claude API の統合（どこからも自動では読み込まれない。使うときは =(require 'personal-ai)= する） |
+| =personal/personal-llm.el= | ローカル LLM ルーター（=~/.local/bin/localllm=）との統合（=my/llm-run=） |
+
+[[file:../svg/13_personal_override_contract.svg]]
+** personal/user.el
+:PROPERTIES:
+:CUSTOM_ID: personal-user
+:header-args:emacs-lisp: :tangle ../personal/user.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/user.el --- 共有の個人設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;; 本設定を使うすべてのマシンで読み込まれる、共有の個人設定。
+  ;;
+  ;; personal-messages は `with-eval-after-load 'org' + `locate-library' のガード +
+  ;; `run-with-idle-timer' により安全にロードする。`run-with-timer' をロード時（t=0）に
+  ;; 無条件で発火させると、org の初期化との競合状態を生むためである。
+  ;;
+  ;; `run-with-idle-timer' の REPEAT 引数は `t' ではなく数値（秒）でなければならない。
+  ;; `t' は「Emacs がアイドルになるたびに実行」を意味し、意図よりはるかに高頻度で
+  ;; 発火する。文書化された意図に合わせ 600（10 分）にしている。
+  ;;
+  ;; ui-visual-aids、orgx-typography、ui-macos を `my:modules-extra' に追加する処理は、
+  ;; core/ ではなくここに置く。
+  ;; core モジュールが上位層（ui、orgx）のモジュール名を注入してはならない。これは個人の
+  ;; 表示上の選択であり、personal 層に属する。本ファイルは init.el のステップ 9 で、
+  ;; modules.el が require されるステップ 10 より前にロードされるため、my/modules-load が
+  ;; 走る時点で extra リストは完全に構築済みである。
+  ;;
+  ;;
+  ;;; Code:
+
+  ;; user-full-name と user-mail-address は defcustom（simple.el）である。
+  ;; setter と型検証を尊重するため setopt を用いる。
+  (setopt user-full-name    "YAMASHITA, Takao"
+          user-mail-address "tjy1965@gmail.com")
+
+  ;; 任意の UI / org モジュール拡張。
+  ;;
+  ;; 理由: これらは個人の表示上の選択（視覚補助、タイポグラフィ、macOS の仕上げ）であり、
+  ;; 共有ポリシーではない。personal 層でここに宣言することで、core/ モジュールが上位層
+  ;; （ui、orgx）への参照をモジュールのロードリストに注入してはならない、という規則を保つ。
+  ;;
+  ;;
+  ;; これは `modules.el' が require される前に走る: init.el はステップ 9 で
+  ;; personal/user.el をロードし、ステップ 10 で modules を require するため、
+  ;; my/modules-load が最終リストを走査する時点で my:modules-extra は構築済みである。
+  ;; orgx-roam-ui は意図的に含めない。org-roam-ui はモジュールのロード時に
+  ;; (straight-use-package 'org-roam-ui) を行い、with-eval-after-load 'org-roam 経由で
+  ;; アイドルタイマーを仕込む。これが org-roam -> org を起動直後に引き込む経路になるため、
+  ;; Org の遅延ロードを優先してここから除外した。UI が必要になったら M-x org-roam-ui-open
+  ;; を実行する（autoload されているのでその場でロードされる）。
+  ;; グラフを常用する運用に戻す場合は orgx-roam-ui をこのリストへ戻す。
+  (setq my:modules-extra
+        (delete-dups
+         (append my:modules-extra
+                 '(ui-visual-aids
+                   orgx-typography
+                   orgx-brain
+                   orgx-citar
+                   ui-macos))))
+
+  ;; ロケールとエンコーディングの初期化。
+  ;;
+  ;; `set-language-environment' は `prefer-coding-system' より前でなければならない。
+  ;; "Japanese" を指定して呼ぶことで、日本語テキスト検出のための内部コーディングシステム
+  ;; 優先順位リスト（EUC-JP、Shift_JIS、UTF-8）が調整される。
+  ;; 続く `prefer-coding-system' が utf-8 をそのリストの先頭に昇格させ、読み書きの
+  ;; 双方で UTF-8 が優先されることを保証する。
+  ;;
+  ;; 従来の `set-locale-environment "UTF-8"' はプロセスのロケールを設定するだけで、
+  ;; Emacs 内部のコーディングシステム優先順位リストを調整しなかった。そのため日本語
+  ;; ファイルの検出が不安定だった。
+  ;;
+  ;; コーディング規則 §6: これらは defcustom ではないため、素の setq / 関数の直接呼び出しが
+  ;; ここでは正しい。
+  (leaf my:locale
+    :straight nil
+    :init
+    (set-language-environment "Japanese")   ; adjusts coding-system priority list
+    (prefer-coding-system 'utf-8)           ; promotes utf-8 to head of priority list
+    (set-default-coding-systems 'utf-8)
+    (set-terminal-coding-system 'utf-8)
+    (set-keyboard-coding-system 'utf-8)
+    (set-file-name-coding-system 'utf-8)
+    (set-selection-coding-system 'utf-8)
+    (setenv "LANG" "en_US.UTF-8"))
+
+  ;; WSL 判定ユーティリティ
+  ;;
+  ;; WSL (Windows Subsystem for Linux) 上の `system-type' は素の Linux と同じ
+  ;; `gnu/linux' であり、`system-type' だけでは区別できない。WSL は環境変数
+  ;; `WSL_DISTRO_NAME'（wsl.exe が各ディストロ起動時に設定する）で確実に判定できる。
+  ;;
+  ;; この関数はデバイスファイルのロード（直後）と、後段の `personal/ac1965.el'
+  ;; （`my:d:org*' 等のパス分岐）の両方から参照されるため、両者より前に位置する
+  ;; 本ファイル（`personal/user.el'）内で定義する。
+  (defun my:wsl-p ()
+    "現在 WSL 上で動作していれば non-nil を返す."
+    (and (eq system-type 'gnu/linux)
+         (getenv "WSL_DISTRO_NAME")))
+
+  ;; デバイス固有の設定をロードする
+  ;;
+  ;; WSL は `system-type' が `gnu/linux' と衝突するため、`my:wsl-p' を優先判定し、
+  ;; 該当すれば `device-wsl.el' を、そうでなければ従来どおり
+  ;; `device-<system-type>.el' をロードする。
+  (let* ((personal-dir
+          (expand-file-name "personal/"
+                            (or (bound-and-true-p my:d) user-emacs-directory)))
+         (device-file
+          (expand-file-name
+           (if (my:wsl-p)
+               "device-wsl.el"
+             (concat "device-" (symbol-name system-type) ".el"))
+           personal-dir)))
+    (when (file-exists-p device-file)
+      (load device-file nil 'nomessage)))
+
+  ;; personal-messages: macOS の Messages.app を org-roam にアーカイブする
+  ;;
+  ;; ロード戦略:
+  ;;   1. `locate-library' でガードする — ファイルが無ければ静かにスキップ。
+  ;;   2. `with-eval-after-load 'org' により、Org の準備完了までロードを遅延する。
+  ;;   3. `run-with-idle-timer' の REPEAT には数値（600 秒 = 10 分）を渡し、
+  ;;      アーカイブが 10 分のアイドル期間につき最大 1 回になるようにする。
+  ;;      注意: REPEAT に `t' を渡すと「Emacs がアイドルになるたびに発火」となり、
+  ;;      頻度が高すぎる。間隔には必ず正の数値を使うこと。
+  ;;
+  (when (locate-library "personal-messages")
+    (with-eval-after-load 'org
+      (when (require 'personal-messages nil t)
+        (when (fboundp 'personal-messages-archive)
+          ;; 初回はアイドル 120 秒後。以降は 600 秒（10 分）ごとに繰り返す。
+          (run-with-idle-timer 120 600 #'personal-messages-archive)))))
+
+  ;; personal-llm: ローカル LLM ルーター（~/.local/bin/localllm）統合
+  ;;
+  ;; personal-messages と異なり org 本体には依存しない（Org-roam バッファからの
+  ;; 呼び出しでもリージョン／バッファ文字列を渡すだけで org 固有関数を使わない）
+  ;; ため、`with-eval-after-load 'org' で遅延させる必要はない。`locate-library'
+  ;; でガードし、ファイルが無ければ静かにスキップする。
+  (when (locate-library "personal-llm")
+    (require 'personal-llm nil t))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 自動保存の除外設定（個人ポリシー）
+  ;; ---------------------------------------------------------------------------
+  ;; 自動保存の対象外とするファイルを設定する。
+  ;; コアの既定で既に除外済み: gpg age enc pem p12 pfx。
+  ;; 個人的な除外はここに追加する。
+
+  ;; 追加のファイル名パターンを除外（フルパスに対して照合）:
+  (setopt core-autosave-exclude-name-patterns
+          '("\\.authinfo"         ; credential files (plain or encrypted)
+            "\\.netrc"            ; legacy netrc
+            "/tmp/"                ; temp files — let OS manage them
+            "\\.bak\\'"           ; already-a-backup files
+            "COMMIT_EDITMSG\\'"   ; git commit message buffers
+            "MERGE_MSG\\'"
+            "rebase-merge/"
+            "\\.log\\'"))         ; log files — append-only, save noise
+
+  ;; メジャーモードによる除外:
+  (setopt core-autosave-exclude-modes
+          '(erc-mode               ; IRC — messages are server-side
+            circe-mode
+            term-mode              ; terminal emulators — no file backing anyway
+            vterm-mode
+            eshell-mode
+            sql-interactive-mode)) ; SQL REPL output
+
+  (provide 'user)
+  ;;; personal/user.el ends here
+#+end_src
+
+** personal/ac1965.el
+:PROPERTIES:
+:CUSTOM_ID: personal-user-login
+:header-args:emacs-lisp: :tangle ../personal/ac1965.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/ac1965.el --- マシン固有の識別情報と UI スイッチ -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; マシン固有の識別情報、ディレクトリの上書き、フォント、UI スイッチ。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - このマシンの `user-full-name' と `user-mail-address' を設定する
+  ;; - auth・暗号化モジュール向けに `GPG_KEY_ID' を export する
+  ;; - `my:d:org' を、macOS では /Users/ac1965/Documents/org/ に、
+  ;;   WSL では /home/ac1965/org/ に上書きする（`my:wsl-p' で分岐）。journal と roam などの
+  ;;   派生変数は orgx-core.el が `my:d:org' から導く
+  ;; - `my:f:capture-blog-file' を ~/Projects/blog/mysite/all-posts.org に上書きする
+  ;; - フォントを設定する: JetBrains Mono（等幅）、Noto Sans JP（可変）、サイズ 18
+  ;; - `my:use-ui 'nano' と `my:use-lsp 'eglot' を有効化する
+  ;; - Hugo ブログ関連（タグ設定、capture）は personal-hugo.el へ分離した
+  ;; - IME 表示（sis のキャッシュ、dirvish と nano-modeline への受け渡し）は
+  ;;   personal-ime.el へ分離した
+  ;; - mu4e（Homebrew の mu 同梱版）を M-x mu4e で使えるようにする
+  ;; - 自作スクリプトの置き場を `trusted-content' に追加する（flymake の sh／python 用）
+  ;; - .ps1 → powershell-mode、.bas → visual-basic-mode を登録する
+  ;;   （いずれも prog-mode 派生であり、prog-mode-hook は自動的に発火する）
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function browse-url-default-browser "browse-url")
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; 識別情報
+  ;; ---------------------------------------------------------------------------
+
+  ;; user-full-name と user-mail-address は defcustom（simple.el）である。
+  (setopt user-full-name    "YAMASHITA, Takao"
+          user-mail-address "tjy1965@gmail.com")
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; GPG キー
+  ;; ---------------------------------------------------------------------------
+
+  (setenv "GPG_KEY_ID" "B4A5D8")
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; Org ディレクトリの上書き
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; my:d:org と my:f:capture-blog-file は orgx-core.el で定義される
+  ;; defvar のパス変数である。
+  ;;
+  ;; 本ファイルは init.el のステップ 9 で、modules.el が走るより前に
+  ;; ロードされるため、これらの setq が評価される時点では orgx-core は
+  ;; まだ実行されていない。
+  ;;
+  ;; ここで変数を設定すると、orgx-core 内の後続の defvar は何もしない
+  ;; （defvar は既存の束縛を上書きしない）。これが意図した上書き機構である。
+  ;;
+  ;; これらは defcustom ではなく defvar なので、setq が正しい。
+  ;; 全体の順序については orgx-core.el の「上書きの契約」コメントを参照。
+  ;;
+  ;; 設定するのは my:d:org だけである。journal、org-roam、pictures、biblio は
+  ;; orgx-core.el が my:d:org から導く。ここで journal と roam を OS ごとに書くと、
+  ;; 導出した場所と同じ（末尾のスラッシュの有無だけが違う）内容の重複になるためである。
+  ;;
+  ;; マシン（ログイン）単位ではなく OS 単位で値を変える必要があるため、
+  ;; `my:wsl-p'（personal/user.el で定義済み。本ファイルは user.el の後に
+  ;; ロードされるため参照可能）で分岐する。分岐が要るのは my:d:org だけである。
+  ;; WSL 側は macOS の /Users/ac1965/ に対応するホームである /home/ac1965/ を使う。
+  ;;
+  ;; my:f:capture-blog-file も上書きする。
+  ;; 既定値（"blog.org"）は存在せず、"* blog" 見出しも含まない。
+  ;; 実際の ox-hugo 単一ファイル・ソースは all-posts.org であり、
+  ;; (file+olp ... "blog") のキャプチャ・ターゲットが要求する
+  ;; "* blog" トップレベル見出しを持っている。
+  ;; パスはどの OS でもホームからの相対（~/Projects/blog/mysite/）なので、OS では分岐しない。
+  ;; WSL 側に blog プロジェクトを未 clone の場合は個別に上書きするか、orgx-auto-hugo.el 側の
+  ;; (bound-and-true-p my:f:capture-blog-file) ガードに委ねて未設定のままにしてよい。
+
+  (setq my:d:org (if (my:wsl-p)
+                     "/home/ac1965/org/"
+                   "/Users/ac1965/Documents/org/")
+        my:f:capture-blog-file (expand-file-name "Projects/blog/mysite/all-posts.org" "~"))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; フォント設定
+  ;; ---------------------------------------------------------------------------
+
+  ;; ui-font-default、ui-font-variable-pitch、ui-font-size は
+  ;; defcustom（ui-font.el）である。setopt を用いる。
+  ;;
+  ;; ui-font-emoji: 明示値は ui-font--system-emoji のフォールバックを上書きし、
+  ;; 起動ログのために ui-font-describe が直接読み取る。
+
+  (setopt ui-font-default        "JetBrains Mono"
+          ui-font-variable-pitch "Noto Sans JP"
+          ui-font-emoji          "Apple Color Emoji"
+          ui-font-size           18)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; UI バンドル: nano
+  ;; ---------------------------------------------------------------------------
+
+  ;; my:use-ui と my:use-lsp は defcustom（core-switches.el）である。
+  ;; setopt を用いる。
+
+  (setopt my:use-ui  'nano
+          my:use-lsp 'eglot)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; org-roam-ui
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; org-roam-ui はここでは require せず :straight のみで導入されるため、
+  ;; バイトコンパイル時にこれらの defcustom を未知の自由変数として警告される。
+  ;; bare defvar でコンパイラに「特殊変数である」とだけ伝え、警告を抑止する。
+  ;;
+
+  (defvar org-roam-ui-port)
+  (defvar org-roam-ui-browser-function)
+  (defvar org-roam-ui-open-on-start)
+  (defvar org-roam-ui-sync-theme)
+  (defvar org-roam-ui-follow)
+  (defvar org-roam-ui-update-on-save)
+
+  (with-eval-after-load 'org-roam-ui
+    ;; HTTP/WebSocket
+    (setopt org-roam-ui-port 35901)
+
+    ;; ブラウザで開く
+    (setopt browse-url-browser-function #'browse-url-default-browser)
+    (setopt org-roam-ui-browser-function
+            (lambda (_url)
+              (browse-url (format "http://127.0.0.1:%d/"
+                                  org-roam-ui-port))))
+
+    ;; 自動起動
+    (setopt org-roam-ui-open-on-start t)
+
+    ;; DB変更をリアルタイム反映
+    (setopt org-roam-ui-sync-theme t
+            org-roam-ui-follow t
+            org-roam-ui-update-on-save t))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; python-mode
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; python-mode 初期化時 (define-derived-mode python-mode 本体) で
+  ;; python-indent-guess-indent-offset-verbose を呼ぶタイミングが
+  ;; hack-local-variables より早いため、ファイルローカル変数
+  ;; (# -*- python-indent-offset: ... -*-) では抑制できない。
+  ;;
+  ;; 実測確認済み（Emacs 29.3, ob-tangle :comments link 環境）。
+  ;;
+  ;; 値自体は変えず、"Can't guess python-indent-offset" の
+  ;; メッセージだけを黙らせる。
+
+  (setopt python-indent-guess-indent-offset-verbose nil)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; 拡張子 → prog-mode の登録
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; powershell-mode も visual-basic-mode も modules.el ではロードしない。
+  ;; いずれもこのホストでのみ使うマシン固有のツールだからである。
+  ;; leaf ブロックをここに置くことで、共有の personal/user.el を汚さずに済む。
+  ;;
+  ;; powershell-mode（MELPA/jschaf）は prog-mode 派生である。
+  ;; .ps1 と .psm1 は PowerShell スクリプトの標準的な拡張子である。
+  ;;
+  ;; visual-basic-mode（MELPA/yoshiki-1）も prog-mode 派生である。
+  ;; .bas は Excel/Access からエクスポートされた VBA モジュールファイルを対象とする。
+
+  (leaf powershell
+    :straight t
+    :mode (("\\.ps1\\'"  . powershell-mode)
+           ("\\.psm1\\'" . powershell-mode)))
+
+  (leaf visual-basic-mode
+    :straight t
+    :mode (("\\.bas\\'" . visual-basic-mode)
+           ("\\.vba\\'" . visual-basic-mode)
+           ("\\.frm\\'" . visual-basic-mode)))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; mu4e（メール）
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; mu4e は mu に同梱される Emacs Lisp で、MELPA/straight では入れない（mu 本体とバージョンを
+  ;; 合わせる必要がある）。Homebrew の mu が置く site-lisp を load-path に足し、
+  ;; ディレクトリが無いホスト（WSL など）では何もしない。メールは modules.el の
+  ;; 対象外（このマシンだけの設定）なので、共有の personal/user.el には置かない。
+  ;;
+  ;; M-x mu4e で起動する。初回は `mu init' と `mu index'、および mbsync の設定が必要。
+  ;; mu4e の変数はすべて defcustom なので setopt を使い、ライブラリ読み込み後の :config で設定する。
+  ;; 取得コマンドは mbsync -a、フォルダはメールボックス /work 配下。
+
+  (leaf mu4e
+    :straight nil
+    :when (file-directory-p "/opt/homebrew/share/emacs/site-lisp/mu/mu4e")
+    :load-path ("/opt/homebrew/share/emacs/site-lisp/mu/mu4e")
+    :commands (mu4e)
+    :config
+    (setopt mu4e-get-mail-command "mbsync -a"
+            mu4e-change-filenames-when-moving t
+            mu4e-sent-folder   "/work/Sent"
+            mu4e-drafts-folder "/work/Drafts"
+            mu4e-trash-folder  "/work/Trash"))
+
+  ;; ---------------------------------------------------------------------------
+  ;; IME 表示（sis）
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; sis のキャッシュ、dirvish 用の mode-line セグメント、nano-modeline への受け渡しは
+  ;; personal-ime.el が受け持つ。
+  ;; 読み込みの位置は、下のリーダーキーの割り当てより前に置く。
+  ;;
+
+  (require 'personal-ime)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; Leader key
+  ;; ---------------------------------------------------------------------------
+
+  (defun ac1965--bind-leader-keys ()
+    "Bind ac1965-specific keys into the leader keymap after startup.
+
+    Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+    (depth 0) has called `ui-leader--define-maps', so `ui-leader-t-map'
+    and `ui-leader-o-map' are guaranteed to be live keymaps."
+    (ui-keymap-bind 'ui-leader-t-map "m" #'my/ui-nano-modeline-toggle)
+    (ui-keymap-bind 'ui-leader-o-map "g" #'ac1965/org-hugo-set-tags)
+    (ui-keymap-bind 'ui-leader-o-map "f" #'ac1965/open-capture-blog-file))
+
+  (add-hook 'after-init-hook #'ac1965--bind-leader-keys 10)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; macOS Keychain の auth-source バックエンド — ログイン単位の制御
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; personal/device-darwin.el は、すべての macOS セッションで
+  ;; auth-keychain-enable を t に設定する。
+  ;;
+  ;; この式はログインアカウントに最終決定権を与える。
+  ;; このアカウントに限り Keychain 参照を無効にするには nil に変更する。
+  ;;
+  ;; 規則 6:
+  ;; auth-keychain-enable は defcustom である。setopt を用いる。
+  ;;
+
+  (setopt auth-keychain-enable t)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 信頼するコンテンツ（自作スクリプトの置き場）
+  ;; ---------------------------------------------------------------------------
+
+  ;; sh-shellcheck-flymake と python-flymake も `trusted-content-p' を確認し、信頼されない
+  ;; ファイルでは無効化の警告を出す。lisp/ と personal/ は core-policy.el が宣言するので、
+  ;; ここではこのマシン固有の自作スクリプトの置き場だけを追加する。
+  ;; ~/Projects 全体は他人のクローンを含むため挙げない。末尾は "/"、値は
+  ;; abbreviate-file-name 形式で、実体パスに解決して与える（core-policy.el を参照）。
+  ;; narou_dl は自作だが、直下の .venv-*/ に他人のパッケージが入るため、
+  ;; リポジトリ直下ではなく自作のパッケージ narou_dl/ だけを挙げる。
+  (when (boundp 'trusted-content)
+    (dolist (dir '("~/.local/bin/" "~/Projects/scripts/" "~/Projects/dotfiles/"
+                   "~/Projects/narou_dl/narou_dl/"))
+      (add-to-list 'trusted-content
+                   (abbreviate-file-name (file-name-as-directory (file-truename dir)))
+                   t)))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; Hugo ブログ（all-posts.org）
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; タグ設定、all-posts.org を開くコマンド、Blog capture の確定時処理、"b" テンプレートの
+  ;; 上書きは personal-hugo.el が受け持つ。
+  ;; 上のリーダーキーの割り当て（g、f）が参照する関数もそこで定義される。
+  ;; フックはいずれも after-init-hook の深さで順序が決まるため、require の位置は問わない。
+  ;;
+
+  (require 'personal-hugo)
+
+
+  (provide 'ac1965)
+  ;;; personal/ac1965.el ends here
+#+end_src
+
+** personal/personal-ime.el
+:PROPERTIES:
+:CUSTOM_ID: personal-ime
+:header-args:emacs-lisp: :tangle ../personal/personal-ime.el
+:END:
+
+IME（sis）の状態を、nano-modeline と dirvish の mode-line に表示するための設定です。
+=personal/ac1965.el= から分離しました。
+
+内容は 3 つです。sis-change-hook が更新するキャッシュ変数、dirvish 用の mode-line セグメント、
+ =ui-nano-modeline-ime-function= への受け渡しです。いずれも =ac1965--sis-indicator= を共有します。
+関数と変数の名前は =ac1965--= の接頭辞のまま据え置いています。
+
+=ac1965.el= は =(require 'personal-ime)= で読み込みます。読み込む位置は、分離前にこのコードが
+あった位置のままです。読み込み順に敏感な箇所（ =dirvish= の =NOERROR= の =require= など）の理由は、
+以下のコードのコメントを参照してください。
+
+#+NAME: personal-ime-el
+#+begin_src emacs-lisp
+  ;;; personal/personal-ime.el --- IME 状態のモードライン表示 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; IME（sis）の状態を、nano-modeline と dirvish の mode-line に表示する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `sis-change-hook' で更新するグローバルなキャッシュ `ac1965--sis-indicator' を持つ
+  ;; - dirvish の mode-line に `ime' セグメントを登録する
+  ;; - `ui-nano-modeline-ime-function' に、キャッシュを返す関数を渡す
+  ;;
+  ;; 名前は旧来の ac1965-- の接頭辞のまま（core-dired.el や README の記述が参照するため）。
+  ;;; Code:
+
+  ;; ---------------------------------------------------------------------------
+  ;; nano-modeline の IME インジケータ
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; sis--current は sis-global-respect-mode の pre/post-command-hook ハンドラ
+  ;; （sis--save-to-buffer = sis--get）が更新する。
+  ;;
+  ;; sis-change-hook は値が変化したとき sis--update-state の内部で発火する。
+  ;;
+  ;; キャッシュ変数は nano-modeline の :eval ブロックがフレームごとに読む。
+  ;; プロセス起動のオーバーヘッドはゼロである。
+  ;;
+  ;; defvar-local ではなく defvar とする理由:
+  ;; sis-change-hook は IME 切替を起こしたバッファで発火する。
+  ;; バッファローカル変数ではそのバッファしか更新されないが、
+  ;; グローバル変数なら直ちにすべてのバッファへ反映される。
+  ;;
+
+  (defvar ac1965--sis-indicator ""
+    "Cached IME indicator string for the nano-modeline right segment.
+  Updated by `ac1965--sis-update-indicator' via `sis-change-hook'.
+  Values: \" A\" (english), \" あ\" (other), \"\" (unknown/unset).
+  Global so all buffers reflect the current IME state.")
+
+  (defun ac1965--sis-update-indicator ()
+    "Update `ac1965--sis-indicator' from the current `sis--current' value.
+  Attached to `sis-change-hook'; called whenever sis detects an IME switch."
+    (setq ac1965--sis-indicator
+          (pcase (and (boundp 'sis--current) sis--current)
+            ('english " A")
+            ('other   " あ")
+            (_        ""))))
+
+  (with-eval-after-load 'sis
+    (add-hook 'sis-change-hook #'ac1965--sis-update-indicator))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; dirvish 用 IME mode-line セグメント
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; dirvish は編集バッファの nano-modeline パイプラインを通らない独自の
+  ;; mode-line（`dirvish-mode-line-format'、core/core-dired.el の
+  ;; `core-dired--activate' で :right に `ime' を追加済み）を持つため、
+  ;; ウィンドウ最大化時など見た目上の手がかりが少ない状況では dirvish バッファに
+  ;; 入った瞬間 IME 状態が分からなくなっていた。
+  ;;
+  ;; ここでは新たに osascript/macism を呼ぶのではなく、上で定義済みの
+  ;; `ac1965--sis-indicator'（sis-change-hook が更新するグローバルキャッシュ）を
+  ;; そのまま読むだけのセグメントを `dirvish-define-mode-line' で登録する。
+  ;;
+  ;; プロセス起動コストはゼロで、編集バッファ側と表示内容も常に一致する。
+  ;;
+  ;; `dirvish-define-mode-line' はマクロであり dirvish がロード済みである必要がある。
+  ;; 本ファイルは modules.el より前（init.el のステップ 9）にロードされ、dirvish 本体は
+  ;; その後に core-dired が読み込むため、ここを評価する時点では dirvish は未ロードである。
+  ;; そこで `with-eval-after-load' で包み、dirvish のロード後に定義する。
+  ;;
+  ;; マクロ定義そのものはコンパイル時に展開されるため、バイトコンパイラが
+  ;; `dirvish-define-mode-line' を普通の関数呼び出しと誤解しないよう、
+  ;; eval-when-compile で dirvish を require しておく。
+  ;;
+  ;; NOERROR (第2引数 nil、第3引数 t) が必須:
+  ;;
+  ;; `eval-when-compile' はバイトコンパイル時にしか特別扱いされない。
+  ;; 本ファイルのようにインタプリタ実行（非コンパイル）される .el を
+  ;; `load' すると、Emacs のロード時 eager macro-expansion がこの
+  ;; トップレベルフォームを即座に展開しようとする。
+  ;;
+  ;; personal/personal-ime.el（ac1965.el から require される）は init.el ステップ9で、modules.el（ステップ10、
+  ;; core-dired の `(leaf dirvish :straight t :require nil)' が dirvish を
+  ;; 実際にインストールする箇所）より前にロードされるため、この時点では
+  ;; dirvish はまだ load-path 上に存在しない。
+  ;;
+  ;; NOERROR なしだと `(require 'dirvish)' が file-missing で失敗し、
+  ;; 本ファイルの残りがロードされなくなる。
+  ;;
+  ;; NOERROR で「失敗したら nil を返すだけ」にしておけば、この時点では
+  ;; require をあきらめて後続の `with-eval-after-load' 登録に進み、
+  ;; 実際に dirvish がロードされたときに遅延展開されて正しく登録される。
+
+  (eval-when-compile
+    (require 'dirvish nil t))
+
+  (with-eval-after-load 'dirvish
+    (dirvish-define-mode-line ime
+  			    "Show the cached sis IME indicator (`ac1965--sis-indicator') in dirvish's
+  own mode-line. Mirrors the editing-buffer nano-modeline segment so IME
+  state (English / Japanese) stays legible while browsing in dirvish,
+  including when the frame is maximized. Reads the shared cache only —
+  no subprocess is spawned here; `ac1965--sis-update-indicator' (attached to
+  `sis-change-hook') is what keeps the cache current."
+  			    (when (boundp 'ac1965--sis-indicator)
+  			      (string-trim ac1965--sis-indicator))))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; nano-modeline 用の IME 表示
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; モードラインの表示内容（表示項目・フェイス・全体への適用・トグル）は
+  ;; ui/ui-nano-modeline.el にある（設計は同ファイルの Commentary を参照）。
+  ;; ここには、このマシン固有の入力である
+  ;; IME の状態だけを置き、`ui-nano-modeline-ime-function' を通して渡す。
+  ;;
+
+  (defun ac1965--sis-indicator-string ()
+    "Return the cached IME indicator (`ac1965--sis-indicator') for the modeline."
+    ac1965--sis-indicator)
+
+  (setopt ui-nano-modeline-ime-function #'ac1965--sis-indicator-string)
+
+  (provide 'personal-ime)
+  ;;; personal/personal-ime.el ends here
+#+end_src
+
+** personal/personal-hugo.el
+:PROPERTIES:
+:CUSTOM_ID: personal-hugo
+:header-args:emacs-lisp: :tangle ../personal/personal-hugo.el
+:END:
+
+Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =personal/ac1965.el= から分離しました。
+
+分けたのは、ブログ関連が約 210 行あり、識別情報やフォントなどのログイン固有の設定と話題が違うからです。
+この中のコードはすべて =my:f:capture-blog-file= を起点にしていて、 =ac1965.el= の他の部分とは
+依存がありません。関数名は =ac1965/= と =ac1965--= の接頭辞のまま据え置いています。リーダーキーの
+割り当て（ =ac1965.el= ）がこの名前を指しているためです。
+
+=ac1965.el= は =(require 'personal-hugo)= で読み込みます。 =personal/= は =load-path= に入っているので、
+追加の設定は要りません。
+
+#+NAME: personal-hugo-el
+#+begin_src emacs-lisp
+  ;;; personal/personal-hugo.el --- Hugo ブログの執筆支援 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; all-posts.org（ox-hugo の単一ファイル・ソース）の執筆支援。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 既存のインラインタグを補完候補にして Org のタグを設定する
+  ;;   （`ac1965/org-hugo-set-tags'）
+  ;; - `my:f:capture-blog-file' を直接開く（`ac1965/open-capture-blog-file'）
+  ;; - Blog capture の確定前にタグを設定する。C-g ではタグ設定だけをスキップする
+  ;; - orgx-hugo.el の "b" テンプレートから EXPORT_HUGO_TAGS のプロンプトを除く
+  ;;   （`orgx-hugo-capture-prompt-tags-p' を nil にする）
+  ;;
+  ;; 関数名は ac1965.el のリーダーキー割り当てが参照するため、旧来の接頭辞のまま。
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function org-get-tags "org")
+  (declare-function org-map-entries "org")
+  (declare-function org-set-tags-command "org")
+
+  ;; ---------------------------------------------------------------------------
+  ;; all-posts.org（Hugo ブログ）の既存タグ補完付きタグ設定
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; my:f:capture-blog-file（personal/ac1965.el で all-posts.org に上書き済み）を
+  ;; 走査し、過去に使ったインラインタグを補完候補にした状態で
+  ;; org-set-tags-command を呼ぶ。
+  ;;
+  ;; キャプチャ用の *Capture* バッファ自体には他の見出しが無いため、
+  ;; 補完対象はカレントバッファではなく my:f:capture-blog-file を直接開いて集める。
+  ;;
+
+  (defun ac1965--org-hugo-tag-alist-from-buffer ()
+    "Return existing inline tags from `my:f:capture-blog-file'.
+
+  The tags are returned in `org-tag-alist' format.
+  Return nil when the file is unset or does not exist."
+    (let (tags)
+      (when (and (bound-and-true-p my:f:capture-blog-file)
+                 (file-exists-p my:f:capture-blog-file))
+        (with-current-buffer (find-file-noselect my:f:capture-blog-file)
+          (org-map-entries
+           (lambda ()
+             (dolist (tag (org-get-tags nil t))
+               (unless (member tag tags)
+                 (push tag tags)))))))
+      (mapcar #'list tags)))
+
+  ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
+  ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、タグ候補の指定が効かない。
+  (defvar org-tag-alist)
+
+  (defun ac1965/org-hugo-set-tags ()
+    "Set Org tags on the current heading using existing Hugo tags as candidates.
+
+  This is the normal interactive tag-setting command.  Special handling
+  of `C-g' during Blog capture is implemented by
+  `ac1965--org-capture-set-blog-tags', not here.
+  Signal a `user-error' outside `org-mode' buffers, where the Org parser
+  would otherwise warn and fail."
+    (interactive)
+    (unless (derived-mode-p 'org-mode)
+      (user-error "Org バッファではありません: %s" (buffer-name)))
+    (let ((org-tag-alist (ac1965--org-hugo-tag-alist-from-buffer)))
+      (call-interactively #'org-set-tags-command)))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; all-posts.org（Hugo ブログ）を直接開くショートカット
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; ブログ記事の一覧・既存タグの確認・手動編集のために、
+  ;; キャプチャを経由せず my:f:capture-blog-file を直接開きたい場面向け。
+  ;;
+  ;; 個人設定の上書きが未反映（orgx-core.el の既定値 blog.org のまま）だったり、
+  ;; パス自体が存在しない環境で呼んだ場合は find-file を黙って失敗させず、
+  ;; user-error で理由を示す。
+  ;;
+
+  (defun ac1965/open-capture-blog-file ()
+    "Open `my:f:capture-blog-file', the single-file ox-hugo blog source."
+    (interactive)
+    (if (and (bound-and-true-p my:f:capture-blog-file)
+             (file-exists-p my:f:capture-blog-file))
+        (find-file my:f:capture-blog-file)
+      (user-error
+       "my:f:capture-blog-file が未設定か、ファイルが存在しません: %s"
+       (bound-and-true-p my:f:capture-blog-file))))
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; Blog capture の before-finalize でタグを設定する
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; 目的:
+  ;;
+  ;;   C-g → タグだけキャンセル → capture → ox-hugo
+  ;;
+  ;; capture の確定フロー:
+  ;;
+  ;;   C-c C-c
+  ;;       ↓
+  ;;   org-capture-before-finalize-hook
+  ;;       ↓
+  ;;   ac1965--org-capture-set-blog-tags
+  ;;       ↓
+  ;;   ac1965/org-hugo-set-tags
+  ;;       │
+  ;;       ├─ タグ設定完了
+  ;;       │      ↓
+  ;;       │   正常 return
+  ;;       │
+  ;;       └─ C-g
+  ;;            ↓
+  ;;          quit
+  ;;            ↓
+  ;;          condition-case で捕捉
+  ;;            ↓
+  ;;          タグ設定をスキップ
+  ;;            ↓
+  ;;          正常 return
+  ;;       ↓
+  ;;   org-capture finalize
+  ;;       ↓
+  ;;   org-capture-after-finalize-hook
+  ;;       ↓
+  ;;   orgx-auto-hugo / ox-hugo
+  ;;
+  ;; 重要:
+  ;;
+  ;; `condition-case' の範囲は `ac1965/org-hugo-set-tags' の呼び出しだけ。
+  ;;
+  ;; したがってタグ選択中の C-g は `org-capture-finalize' まで伝播せず、
+  ;; タグ設定だけをキャンセルする。
+  ;;
+  ;; `quit' を捕捉した後も、この hook 関数は正常 return するため、
+  ;; `org-capture-before-finalize-hook' は正常終了し、capture の finalize と
+  ;; その後の ox-hugo 処理が継続する。
+  ;;
+  ;; なお、通常の capture 自体をキャンセルする `C-c C-k' には介入しない。
+  ;;
+
+  (declare-function org-capture-get "org-capture"
+                    (&optional prop-name local))
+  (declare-function orgx-auto-hugo-blog-capture-p "orgx-auto-hugo")
+
+  (defun ac1965--org-capture-set-blog-tags ()
+    "Set tags for a Blog capture before finalization.
+  A capture is a Blog capture when it targets `my:f:capture-blog-file'
+  (see `orgx-auto-hugo-blog-capture-p').
+
+  When `C-g' is pressed during tag selection, catch the resulting
+  `quit' locally and skip only the tag-setting operation.
+
+  The function then returns normally, allowing `org-capture-finalize'
+  and subsequent ox-hugo processing to continue."
+    (when (and (fboundp 'orgx-auto-hugo-blog-capture-p)
+               (orgx-auto-hugo-blog-capture-p))
+      (condition-case nil
+          (ac1965/org-hugo-set-tags)
+        (quit
+         (message "タグ設定をスキップしました")))))
+
+  (add-hook 'org-capture-before-finalize-hook
+            #'ac1965--org-capture-set-blog-tags)
+
+
+  ;; ---------------------------------------------------------------------------
+  ;; Blog capture template
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; タグは `ac1965--org-capture-set-blog-tags' が `org-capture-before-finalize-hook' で
+  ;; 設定する。capture template 側で `%^{Tags}' を使うとタグ入力が二重になるため、
+  ;; テンプレートからタグのプロンプトを除く。
+  ;;
+  ;; テンプレート本体は orgx-hugo.el が持つ。ここで "b" テンプレートを丸ごと置き換えると
+  ;; 本文が二重になるため、オプションで切り替える形にしている。personal は modules.el より前にロードされるので、
+  ;; `orgx-hugo' の defcustom より先に値が入る。defcustom は既存の値を上書きしない。
+  ;;
+  (setopt orgx-hugo-capture-prompt-tags-p nil)
+
+  (provide 'personal-hugo)
+  ;;; personal/personal-hugo.el ends here
+#+end_src
+
+** personal/device-darwin.el
+:PROPERTIES:
+:CUSTOM_ID: device-darwin
+:header-args:emacs-lisp: :tangle ../personal/device-darwin.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/device-darwin.el --- macOS デバイス固有の設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; macOS デバイス固有の設定: IME 切替、マウススクロール、Keychain。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - sis を無条件にロードする。macism がある場合に ISM とグローバルモードを有効化する
+  ;;   （sis--current は nano-modeline のために常に利用可能に保つ）
+  ;; - Logitech MX Ergo S 向けにマウス／トラックパッドのスクロールを調整する:
+  ;;   1 行単位、慣性なし、スクロールマージン 3 行
+  ;; - Apple Music の操作（dev/dev-apple-music.el）を `my:modules-extra' に加える
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  ;; IME — sis（smart input source）
+  ;;
+  ;; macism がインストールされているか否かにかかわらず、nano-modeline の IME インジケータが
+  ;; sis--current を利用できるよう、sis は常にロードする（:when のガードを付けない）。
+  ;; ISM バックエンド（macism）とグローバルモードは、macism が存在する場合にのみ
+  ;; 有効化する。無い場合、sis はロードされるが不活性のままとなる。
+  ;;
+  ;; nano-modeline の IME インジケータには sis-global-respect-mode が必須である。
+  ;; これはコマンドごとに sis--save-to-buffer（= sis--get）を呼ぶ pre/post-command-hook
+  ;; ハンドラを設置し、sis--current を最新に保ち、入力ソースが変化したときに
+  ;; sis-change-hook を発火させる。これが無いと、sis-global-context-mode は
+  ;; evil-insert-state-entry-hook でしか発火しない（evil を使わない環境では無関係）ため、
+  ;; sis--current は永久に nil のままとなり、nano-modeline のインジケータは更新されない。
+  ;;
+  (leaf sis
+    :straight t
+    :require t
+    :config
+    (when (and (eq system-type 'darwin) (executable-find "macism"))
+      (sis-ism-lazyman-config nil "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
+      (sis-global-respect-mode t)
+      (sis-global-context-mode t)
+      (sis-global-inline-mode t)))
+
+  ;; マウス / スクロール — Logitech MX Ergo S
+  ;; leaf の :when (display-graphic-p) は「モジュールのロード時」に一度だけ
+  ;; 評価される。--daemon 起動時はその時点で実フレームが無いため常に nil と
+  ;; なり、これらのスクロール設定が永久に適用されない（ligature 等と同じ
+  ;; daemon 対応バグ）。パッケージの require は不要な単なる setopt なので、
+  ;; 初回のグラフィカルフレームができた時点で一度だけ適用する関数に変更した。
+  (defvar ac1965--mouse-configured-p nil)
+
+  (defun ac1965--maybe-configure-mouse (&optional frame)
+    "FRAME がグラフィカルなら、初回に限りマウス／スクロール設定を適用する。"
+    (unless ac1965--mouse-configured-p
+      (when (display-graphic-p (or frame (selected-frame)))
+        (setq ac1965--mouse-configured-p t)
+        (setopt scroll-step                       1
+                scroll-conservatively             101
+                scroll-preserve-screen-position   t
+                scroll-margin                     3
+                mouse-wheel-scroll-amount         '(3 ((shift) . 1) ((meta) . nil) ((control) . nil))
+                mouse-wheel-progressive-speed     nil
+                mouse-wheel-follow-mouse          t
+                pixel-scroll-precision-use-momentum nil))))
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'ac1965--maybe-configure-mouse)
+    (add-hook 'after-init-hook #'ac1965--maybe-configure-mouse))
+
+  ;; Apple Music の操作（dev-apple-music）は、macOS でだけ追加で読み込む。
+  ;; 本ファイルは modules.el より前にロードされるので、この時点で my:modules-extra へ足せる。
+  (setq my:modules-extra (delete-dups (append my:modules-extra '(dev-apple-music))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; macOS Keychain の auth-source バックエンド
+  ;; ---------------------------------------------------------------------------
+  ;; この macOS デバイスで Keychain バックエンドを有効化する。
+  ;; 本ファイルの後にロードされる personal/ac1965.el が、特定のログインアカウントに対して
+  ;; Keychain 参照を無効化するため、これを nil に上書きすることがある。
+  ;;
+  ;; 規則 6: auth-keychain-enable は defcustom である。setopt を用いる。
+  (setopt auth-keychain-enable t)
+
+  (provide 'device-darwin)
+  ;;; personal/device-darwin.el ends here
+#+end_src
+
+** personal/device-wsl.el
+:PROPERTIES:
+:CUSTOM_ID: device-wsl
+:header-args:emacs-lisp: :tangle ../personal/device-wsl.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/device-wsl.el --- WSL デバイス固有の設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; WSL (Windows Subsystem for Linux) デバイス固有の設定:
+  ;; Windows クリップボードとの連携、既定ブラウザの起動、Explorer 連携。
+  ;;
+  ;; `personal/user.el' の `my:wsl-p' によって WSL 判定済みの状態でのみ
+  ;; ロードされる（`device-darwin.el' の macOS 判定と対になる位置づけ）ため、
+  ;; 本ファイル内では改めて `my:wsl-p' や `system-type' のガードを行わない。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - リーダーキーを `M-SPC' から `C-c SPC' へ切り替える（Alt+Space は Windows
+  ;;   側のシステムショートカットと衝突しやすく、人間工学的にも押しにくいため）
+  ;; - `win32yank.exe' が存在すれば、kill-ring と Windows クリップボードを
+  ;;   `interprogram-cut-function' / `interprogram-paste-function' 経由で橋渡しする
+  ;; - `wslview'（wslu パッケージ）が存在すれば、`browse-url' の既定を
+  ;;   Windows 側の既定ブラウザ起動に切り替える
+  ;; - 現在のディレクトリを Explorer で開くコマンドを提供する
+  ;; - 現在のファイルパスを Windows 形式（`wslpath -w'）に変換してコピーするコマンドを提供する
+  ;; - hydra-wsl を定義し、init 後にリーダー a w（本ファイルの変更により
+  ;;   WSL では C-c SPC a w）へバインドする
+  ;;
+  ;; 前提（Emacs の外側で用意するもの、本ファイルの範囲外）:
+  ;; - win32yank.exe: `winget install --id=equalsraf.win32yank' 等で Windows 側に導入し、
+  ;;   WSL 側の $PATH からも解決できるようにしておく
+  ;;   （WSLg 由来の /mnt/c 経由 PATH で通常は解決される。`which win32yank.exe' で確認）
+  ;; - wslu: `sudo apt install wslu'（`wslview' を含む）
+  ;; - GPG pinentry: `~/.gnupg/gpg-agent.conf' で `pinentry-program' を
+  ;;   `pinentry-curses'（または WSLg 利用時は `pinentry-gtk'）に設定する
+  ;;   （macOS の pinentry-touchid に相当する処理だが、gpg-agent 側の設定であり
+  ;;   Emacs Lisp では制御しないため、ここにはコードを置かない）
+  ;;; Code:
+
+  ;; 本ファイルは `leaf' マクロを使わない（`defvar'/`defun'/`setq' のみ）ため、
+  ;; `device-darwin.el' と異なり `(eval-when-compile (require 'leaf))' は不要。
+  ;; `-Q --batch' 単体ロードでも straight.el のブートストラップなしに読み込める。
+
+  ;; ---------------------------------------------------------------------------
+  ;; リーダーキーの代替 — M-SPC → C-c SPC
+  ;; ---------------------------------------------------------------------------
+  ;; Alt+Space はWindowsのシステムメニュー・ショートカットと衝突しやすく、
+  ;; また人間工学的にも押しにくいため、WSLでは3打鍵に戻る形にはなるが
+  ;; 衝突が少なく確実な `C-c SPC' を使う。
+  ;;
+  ;; 注意（読み込み順序）: 本ファイル（personal/device-wsl.el）は
+  ;; `personal/user.el' の内部から、`(require 'modules)'（ui 層・
+  ;; `ui-leader' を含む）より *前* に同期的にロードされる。つまり本ファイルの
+  ;; トップレベルが評価される時点では `ui-leader-key' も `ui-leader-map' も
+  ;; まだ `boundp' ですらない。ここでトップレベルに直接リバインド処理を
+  ;; 書くと `when' の条件が黙って不成立になり、後から `ui-leader--bind-root'
+  ;; が既定値 "M-SPC" で結線した状態が最終的に残ってしまう（実機で発生した
+  ;; 不具合）。
+  ;;
+  ;; そのため `with-eval-after-load' で 'ui-leader を待ち、`ui-leader.el' が
+  ;; ロードされ `ui-leader--bind-root' が "M-SPC" で一度結線した *直後* に
+  ;; 確実に実行されるようにする。これなら `personal/user.el' → `modules.el'
+  ;; という実際のロード順序に依存せず、常に「結線の後」に上書きできる。
+  ;; （`utils-ime--install-leader' の IME切替ラッパーは macism 依存＝macOS
+  ;;  限定の機能であり、WSL 上ではもともと不活性なので、ここでは単純な
+  ;;  `ui-leader-map' への張り替えでよい。）
+
+  (with-eval-after-load 'ui-leader
+    (when (and (boundp 'ui-leader-key) (stringp ui-leader-key)
+               (boundp 'ui-leader-map) (keymapp ui-leader-map))
+      (keymap-global-unset ui-leader-key)   ; 旧 "M-SPC" を解除
+      (setopt ui-leader-key "C-c SPC")
+      (if (fboundp 'keymap-global-set)
+          (keymap-global-set ui-leader-key ui-leader-map)
+        (global-set-key (kbd ui-leader-key) ui-leader-map))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; クリップボード連携 — win32yank.exe
+  ;; ---------------------------------------------------------------------------
+  ;; win32yank.exe は標準入出力経由でテキストを受け渡すだけの単純なブリッジである。
+  ;; コピー（cut）は非同期プロセスへ標準入力として書き込み、ペースト（paste）は
+  ;; 同期的に標準出力を読む。win32yank.exe が見つからない場合は双方とも no-op のままとし、
+  ;; Emacs 標準の（WSL 内では機能しない）kill-ring 動作にフォールバックする。
+
+  (defvar device-wsl--win32yank-executable (executable-find "win32yank.exe")
+    "win32yank.exe のパス。見つからなければ nil。
+  Windows クリップボードとの橋渡しに使う。
+  未インストールなら `winget install --id=equalsraf.win32yank' 等で導入する。")
+
+  (defun device-wsl--clipboard-cut (text &optional _push)
+    "TEXT を win32yank.exe 経由で Windows クリップボードへコピーする.
+  `interprogram-cut-function' として使う。"
+    (when device-wsl--win32yank-executable
+      (let ((proc (make-process :name "win32yank-cut"
+                                :command (list device-wsl--win32yank-executable
+                                               "-i" "--crlf")
+                                :connection-type 'pipe
+                                :noquery t)))
+        (process-send-string proc text)
+        (process-send-eof proc))))
+
+  (defun device-wsl--clipboard-paste ()
+    "win32yank.exe 経由で Windows クリップボードの内容を返す.
+  `interprogram-paste-function' として使う。取得失敗時は nil を返す。"
+    (when device-wsl--win32yank-executable
+      (let ((result (shell-command-to-string
+                     (concat (shell-quote-argument device-wsl--win32yank-executable)
+                             " -o --lf"))))
+        (unless (string-empty-p result) result))))
+
+  (when device-wsl--win32yank-executable
+    (setq interprogram-cut-function   #'device-wsl--clipboard-cut
+          interprogram-paste-function #'device-wsl--clipboard-paste))
+
+  ;; ---------------------------------------------------------------------------
+  ;; ブラウザ起動 — wslview
+  ;; ---------------------------------------------------------------------------
+  ;; org-roam-ui 等が `browse-url' を呼ぶ際、既定の `browse-url-default-browser' は
+  ;; WSL 内に GUI ブラウザが無ければ失敗する。wslview（wslu パッケージ）を経由すると
+  ;; Windows 側の既定ブラウザで URL が開く。
+
+  (defvar device-wsl--wslview-executable (executable-find "wslview")
+    "wslview のパス。見つからなければ nil。
+  未インストールなら `sudo apt install wslu' で導入する。")
+
+  (when device-wsl--wslview-executable
+    (setopt browse-url-generic-program  device-wsl--wslview-executable
+            browse-url-browser-function #'browse-url-generic))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Explorer 連携
+  ;; ---------------------------------------------------------------------------
+
+  (defun device-wsl-open-in-explorer ()
+    "現在のバッファのディレクトリを Windows Explorer で開く.
+  `dired-mode' 中はそのディレクトリを、それ以外は `default-directory' を対象とする。"
+    (interactive)
+    (let ((dir (expand-file-name default-directory)))
+      (if (executable-find "explorer.exe")
+          (call-process "explorer.exe" nil 0 nil dir)
+        (message "[device-wsl] explorer.exe が見つかりません（$PATH に Windows 側パスが含まれているか確認）"))))
+
+  (defun device-wsl-copy-windows-path ()
+    "現在のファイル（無ければ `default-directory'）のパスを Windows 形式に変換し、
+  `wslpath -w' の結果を kill-ring へコピーする。"
+    (interactive)
+    (let ((file (or (buffer-file-name) default-directory)))
+      (if (executable-find "wslpath")
+          (let ((winpath (string-trim
+                          (shell-command-to-string
+                           (format "wslpath -w %s" (shell-quote-argument (expand-file-name file)))))))
+            (kill-new winpath)
+            (message "[device-wsl] Windows path copied: %s" winpath))
+        (message "[device-wsl] wslpath コマンドが見つかりません"))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; macOS Super(s-)キーバインドの置き換え
+  ;; ---------------------------------------------------------------------------
+  ;; WSL では Super キーのイベントが実用上届かない
+  ;; （ターミナルは Super を伝える手段を持たず、WSLg 環境でも Windows キーは
+  ;;   Windows 側にシステムショートカットとして横取りされることが多い）ため、
+  ;; `lisp/ui/ui-global-keys.el' が定義する `s-' 系バインドは WSL 上では
+  ;; 事実上デッドコードになる（無害だが発火しない）。
+  ;;
+  ;; ここでは共有ファイル（ui-global-keys.el）には一切手を入れず、WSL 専用の
+  ;; 代替バインドを本ファイルに追加登録する。方針は頻度で2段階に分ける:
+  ;;
+  ;;   高頻度クラスタ（undo/redo、バッファ間移動、他ウィンドウのスクロール）
+  ;;     → C-M-（Control+Alt 同時押し）、または C-z（core init で既に unset
+  ;;       済みのため衝突なく再利用できる。lisp/ui/ui-global-keys.el の
+  ;;       s-z を選んだ理由のコメントを参照）
+  ;;   低頻度クラスタ（フレーム／ウィンドウ管理）
+  ;;     → 既存の `ui-leader-w-map'（WSL では C-c SPC w）に統合
+  ;;
+  ;; C-M-<left>/<right>/<up>/<down> は vanilla Emacs・org-mode いずれの既定
+  ;; バインドとも衝突しない（sexp 移動は C-M-f/C-M-b であり arrow 版は無い。
+  ;; org の見出し操作は素の M-<arrow> であり C-M- ではない）ことを確認済み。
+
+  (defun device-wsl--global-keys-init ()
+    "macOS の Super(s-)系グローバルキーを WSL 用に代替登録する.
+  Runs on `after-init-hook'."
+    ;; undo/redo — macOS の s-z、Windows 標準の Ctrl+Z 規約とも一致する
+    (keymap-global-set "C-z" #'undo-redo)
+    ;; バッファ間移動 — 元 s-<left>/<right>/<up>/<down>
+    (keymap-global-set "C-M-<left>"  #'previous-buffer)
+    (keymap-global-set "C-M-<right>" #'next-buffer)
+    (keymap-global-set "C-M-<up>"    #'beginning-of-buffer)
+    (keymap-global-set "C-M-<down>"  #'end-of-buffer)
+    ;; 他ウィンドウのスクロール — 元 s-<wheel-up>/<wheel-down>
+    (keymap-global-set "C-M-<wheel-up>"   #'scroll-other-window-down)
+    (keymap-global-set "C-M-<wheel-down>" #'scroll-other-window)
+    ;; 現在ウィンドウのスクロール — 元 C-s-<up>/<down>（元々3キー和音のため、
+    ;; C-c プレフィックス［逐次2打鍵］へ格下げしても体感の重さは同程度）
+    (keymap-global-set "C-c <up>"   #'scroll-down-command)
+    (keymap-global-set "C-c <down>" #'scroll-up-command))
+
+  (add-hook 'after-init-hook #'device-wsl--global-keys-init 10)
+
+  ;; ---------------------------------------------------------------------------
+  ;; フレーム／ウィンドウ管理 — ui-leader-w-map への統合
+  ;; ---------------------------------------------------------------------------
+  ;; 元 s-o/s-m/s-w/s-./s-j。既存の ui-leader-w-map（既存の割り当て:
+  ;; s/v/d/o/=/w/r/R/m/M）とは文字が重複しない。`ui-leader--define-maps' が
+  ;; 済んでいる必要があるため、`device-wsl--hydra-init' と同じ理由で
+  ;; after-init-hook depth 10 で実行する。
+
+  (defun device-wsl--leader-window-keys-init ()
+    "フレーム／ウィンドウ管理コマンドを `ui-leader-w-map' に追加登録する.
+  Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+  (depth 0) has called `ui-leader--define-maps'."
+    (ui-keymap-bind 'ui-leader-w-map "f" #'find-file-other-frame)  ; f = frame
+    (ui-keymap-bind 'ui-leader-w-map "j" #'find-file-other-window) ; 元 s-j を継承
+    (ui-keymap-bind 'ui-leader-w-map "n" #'make-frame-command)     ; n = new
+    (ui-keymap-bind 'ui-leader-w-map "k" #'delete-frame)           ; k = kill
+    ;; window-toggle-split-direction は Emacs 27 以降の同梱コマンド。
+    (when (fboundp 'window-toggle-split-direction)
+      (ui-keymap-bind 'ui-leader-w-map "t" #'window-toggle-split-direction))) ; t = toggle
+
+  (add-hook 'after-init-hook #'device-wsl--leader-window-keys-init 10)
+
+  ;; ---------------------------------------------------------------------------
+  ;; hydra-wsl — リーダー a w（WSL では C-c SPC a w）
+  ;; ---------------------------------------------------------------------------
+  ;; `dev-apple-music--init' と同じ理由（hydra と `ui-leader-a-map' の
+  ;; 準備完了を待つ）により after-init-hook depth 10 で実行する。
+  ;; `ui-leader-a-map' の "a" は dev-apple-music.el 側で Apple Music に割り当てられて
+  ;; いるが、両ファイルは排他的にロードされる（同一マシンで両方は読み込まれない）ため、
+  ;; キーの重複は実際には発生しない。ここでは記憶しやすさを優先し "w"（Windows）とする。
+
+  ;; hydra-wsl/body は defhydra が実行時に定義する関数であり、コンパイル時には
+  ;; 存在しないため、コンパイラに存在を伝えておく。
+  (declare-function hydra-wsl/body "hydra")
+
+  (defun device-wsl--hydra-init ()
+    "`hydra-wsl' を定義し、leader キーへバインドする.
+  Runs on `after-init-hook' at depth 10, after `ui-keymap--startup-init'
+  (depth 0) has called `ui-leader--define-maps', so `ui-leader-a-map' is
+  guaranteed to be a live keymap. Requires hydra at runtime; no-op if
+  hydra is not installed."
+    (when (require 'hydra nil t)
+      (defhydra hydra-wsl (:hint nil :color blue)
+                "
+  ^WSL / Windows 連携^
+  [_e_] Explorerで開く   [_p_] Windowsパスをコピー   [_q_] quit
+  "
+                ("e" device-wsl-open-in-explorer)
+                ("p" device-wsl-copy-windows-path)
+                ("q" nil))
+      (ui-keymap-bind 'ui-leader-a-map "w" #'hydra-wsl/body)))
+
+  (add-hook 'after-init-hook #'device-wsl--hydra-init 10)
+
+  (provide 'device-wsl)
+  ;;; personal/device-wsl.el ends here
+#+end_src
+
+** personal/personal-messages.el
+:PROPERTIES:
+:CUSTOM_ID: personal-messages
+:header-args:emacs-lisp: :tangle ../personal/personal-messages.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/personal-messages.el --- macOS Messages.app のアーカイバ -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;; macOS の Messages.app のチャット履歴を SQLite 経由で読み取り、新着メッセージを
+  ;; org-roam のノートにアーカイブする。
+  ;;
+  ;; 注意: 本モジュールは Org の準備完了後に `personal/user.el' から遅延ロードされ、
+  ;; `run-with-idle-timer' により起動時の実行を防いでいる。
+  ;; 理由は `personal/user.el' の Commentary を参照。
+  ;;
+  ;;; Code:
+
+  ;; 実行時の (require 'org) は置かない。
+  ;; 本ファイルは personal/user.el 内の (with-eval-after-load 'org ...) 経由でロードされる
+  ;; ため、このコードが走る時点で org はロード済みであることが保証される。冗長な
+  ;; トップレベルの require は遅延ロード戦略を台無しにし、起動コストを増やす。
+  ;;
+  ;; (require 'subr-x) は eval-when-compile に置く。
+  ;; subr-x のマクロ（when-let*、string-trim 等）はマクロ展開のためコンパイル時に必要だが、
+  ;; 実行時には不要である — Emacs がインライン展開するためである。
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup personal-messages nil
+    "macOS Messages.app archiver."
+    :group 'convenience)
+
+  (defcustom personal-messages-db-path
+    (expand-file-name "~/Library/Messages/chat.db")
+    "Path to the Messages.app SQLite database."
+    :type 'file :group 'personal-messages)
+
+  (defcustom personal-messages-archive-dir
+    (expand-file-name "messages/"
+                      (or (bound-and-true-p my:d:org-roam)
+                          (expand-file-name "org-roam/" (or (bound-and-true-p my:d:org)
+                                                            (expand-file-name "~/org")))))
+    "Directory where archived message notes are saved."
+    :type 'directory :group 'personal-messages)
+
+  (defcustom personal-messages-last-archived nil
+    "Timestamp of the last archived message."
+    :type '(choice (const nil) float) :group 'personal-messages)
+
+  (defun personal-messages--db-available-p ()
+    (and (eq system-type 'darwin)
+         (file-readable-p personal-messages-db-path)
+         (executable-find "sqlite3")))
+
+  (defun personal-messages--query ()
+    (when (personal-messages--db-available-p)
+      (let* (;; last-archived は Unix 秒。chat.db の message.date は 2001-01-01 起点の
+             ;; ナノ秒なので、978307200（2001-01-01 の Unix 時刻）を引いてから換算する。
+             (since (or personal-messages-last-archived 0))
+             (cmd (format
+                   "sqlite3 -readonly %s \"SELECT handle.id, message.text, message.date FROM message JOIN handle ON message.handle_id = handle.rowid WHERE message.date > %d AND message.is_from_me = 0 ORDER BY message.date DESC LIMIT 50;\""
+                   (shell-quote-argument personal-messages-db-path)
+                   (round (* (max 0 (- since 978307200)) 1e9)))))
+        (let ((output (shell-command-to-string cmd)))
+          (when (and output (not (string-empty-p (string-trim output))))
+            (split-string output "\n" t))))))
+
+  (defun personal-messages--archive-message (contact text timestamp)
+    (let* ((date-str (format-time-string "%Y-%m-%d" (seconds-to-time timestamp)))
+           (slug (replace-regexp-in-string "[^[:alnum:]]+" "-"
+                                           (downcase (or contact "unknown"))))
+           (filename (format "%s-messages-%s.org" date-str slug))
+           (path (expand-file-name filename personal-messages-archive-dir)))
+      (unless (file-directory-p personal-messages-archive-dir)
+        (make-directory personal-messages-archive-dir t))
+      (with-temp-buffer
+        (when (file-exists-p path)
+          (insert-file-contents path))
+        (goto-char (point-max))
+        (unless (looking-back "\n" 1)
+          (insert "\n"))
+        (insert (format "\n* [%s] %s\n%s\n"
+                        (format-time-string "%Y-%m-%d %H:%M" (seconds-to-time timestamp))
+                        (or contact "Unknown")
+                        (or text "")))
+        (write-region (point-min) (point-max) path nil 'silent))))
+
+  ;;;###autoload
+  (defun personal-messages-archive ()
+    "Archive new messages from Messages.app into org-roam."
+    (when (personal-messages--db-available-p)
+      (condition-case err
+          (let ((rows (personal-messages--query))
+                (count 0))
+            (dolist (row rows)
+              (let* ((parts (split-string row "|"))
+  		   (contact (nth 0 parts))
+  		   (text    (nth 1 parts))
+  		   (ts-ns   (string-to-number (or (nth 2 parts) "0")))
+  		   (ts-mac  (/ ts-ns 1e9))
+  		   (ts      (+ ts-mac 978307200)))
+                (when (> ts 0)
+                  (personal-messages--archive-message contact text ts)
+                  (cl-incf count)
+                  (when (> ts (or personal-messages-last-archived 0))
+                    ;; personal-messages-last-archived はセッションをまたいで
+                    ;; 永続化する必要がある defcustom である。setopt は値を設定するだけだが、
+                    ;; customize-save-variable は設定と同時に custom-file へ書き出すため、
+                    ;; Emacs を再起動しても値が保たれる。
+                    (customize-save-variable
+                     'personal-messages-last-archived ts)))))
+            (when (> count 0)
+              (message "[personal-messages] archived %d message(s)" count)))
+        (error
+         (message "[personal-messages] archive failed: %s"
+                  (error-message-string err))))))
+
+  (provide 'personal-messages)
+  ;;; personal/personal-messages.el ends here
+#+end_src
+
+** personal/personal-ai.el
+:PROPERTIES:
+:CUSTOM_ID: personal-ai
+:header-args:emacs-lisp: :tangle ../personal/personal-ai.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/personal-ai.el --- Org Babel + Claude API 統合 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Claude API に対する Org Babel および対話的 Emacs Lisp ワークフローの統合。
+  ;; 本モジュールは HTTP 通信と auth-source によるキー取得のすべてを
+  ;; `utils-claude'（utils 層）に依存する。
+  ;;
+  ;; Org Babel 統合:
+  ;;   `claude' Babel 言語を登録し、`#+begin_src claude' で始まるソースブロックの本文を
+  ;;   ユーザーメッセージとして送信し、その応答をブロックの結果として挿入する。
+  ;;
+  ;;
+  ;;   README.org での使用例:
+  ;;
+  ;;     #+begin_src claude :system "You are an Emacs Lisp refactoring expert."
+  ;;     次の関数を、中間リストを作らないようにリファクタリングしてください:
+  ;;     (defun foo (xs) (let ((acc nil)) (dolist (x xs) (push x acc)) acc))
+  ;;     #+end_src
+  ;;
+  ;;   対応するヘッダ引数:
+  ;;     :system  — システムプロンプト文字列（既定: `personal-ai-default-system'）
+  ;;     :model   — モデル識別子（既定: `utils-claude-default-model'）
+  ;;     :tokens  — max_tokens の整数値（既定: `utils-claude-max-tokens'）
+  ;;
+  ;; 対話コマンド:
+  ;;   `my/claude-refactor-defun'        — ポイント位置の defun をリファクタリングする
+  ;;   `my/claude-complete-docstring'    — ポイント位置の defun の docstring を生成する
+  ;;   `my/claude-analyze-require-graph' — 上位層への require 違反を報告する
+  ;;
+  ;; すべての対話コマンドは、結果を `org-mode' で描画される専用の
+  ;; `*Claude Output*' バッファに挿入する。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar org-babel-load-languages)
+
+  (eval-when-compile
+    (require 'cl-lib)
+    (require 'subr-x))
+
+  (require 'ob)
+  (require 'utils-claude)
+
+  (defgroup personal-ai nil
+    "Org Babel and interactive Claude API integration."
+    :group 'org-babel
+    :prefix "personal-ai-")
+
+  (defcustom personal-ai-default-system
+    "You are an expert Emacs Lisp programmer and software architect.
+  Respond in plain text. Omit preamble. Be concise and precise."
+    "Default system prompt sent with every Claude request from this module."
+    :type 'string
+    :group 'personal-ai)
+
+  (defcustom personal-ai-output-buffer "*Claude Output*"
+    "Name of the buffer used to display interactive Claude results."
+    :type 'string
+    :group 'personal-ai)
+
+  ;;; ── Org Babel の言語登録 ──────────────────────────────────────────────────
+
+  (defun org-babel-execute:claude (body params)
+    "Execute a Claude Babel block with BODY as the user message.
+  PARAMS is the alist of header arguments from the source block.
+  Returns the assistant response text as a string, suitable for
+  insertion as the block result under :results value semantics."
+    (let* ((system  (or (cdr (assq :system params))
+                        personal-ai-default-system))
+           (model   (cdr (assq :model params)))
+           (tokens  (when-let* ((raw (cdr (assq :tokens params))))
+                      (if (stringp raw) (string-to-number raw) raw)))
+           (messages (list (list :role "user" :content body))))
+      (condition-case err
+          (utils-claude-request-sync messages model tokens system)
+        (utils-claude-error
+         (error "Claude Babel block failed: %s" (cadr err))))))
+
+  (add-to-list 'org-babel-load-languages '(claude . t))
+
+  ;;; ── 非公開ヘルパー ────────────────────────────────────────────────────────
+
+  (defun personal-ai--show-result (header text)
+    "Display HEADER and TEXT in `personal-ai-output-buffer' in org-mode."
+    (let ((buf (get-buffer-create personal-ai-output-buffer)))
+      (with-current-buffer buf
+        (unless (derived-mode-p 'org-mode)
+          (org-mode))
+        (goto-char (point-max))
+        (unless (bobp)
+          (insert "\n\n"))
+        (insert (format "* %s\n\n%s\n" header text))
+        (goto-char (point-max)))
+      (pop-to-buffer buf)))
+
+  (defun personal-ai--defun-at-point ()
+    "Return the top-level defun source string surrounding point, or nil."
+    (save-excursion
+      (condition-case nil
+          (progn
+            (beginning-of-defun)
+            (let ((beg (point)))
+              (end-of-defun)
+              (buffer-substring-no-properties beg (point))))
+        (error nil))))
+
+  ;;; ── 対話コマンド ──────────────────────────────────────────────────────────
+
+  (defun my/claude-refactor-defun ()
+    "Send the top-level defun at point to Claude and display refactoring suggestions.
+  Instructs Claude to preserve the public interface and docstring, and to
+  apply this configuration's coding rules: lexical-binding, named defun
+  for hooks, setopt for defcustom, setq for defvar and internal state."
+    (interactive)
+    (let ((src (personal-ai--defun-at-point)))
+      (unless src
+        (user-error "No defun found at point"))
+      (message "Sending defun to Claude...")
+      (utils-claude-request
+       (list (list :role "user"
+                   :content (format "Refactor the following Emacs Lisp function.\n\
+  Preserve its public interface and docstring.\n\
+  Apply these rules: lexical-binding, named defun (no lambdas in hooks),\n\
+  setopt for defcustom, setq for defvar and internal state.\n\n%s" src)))
+       (lambda (result)
+         (personal-ai--show-result
+          (format "Refactor: %s"
+                  (and (string-match "(def[a-z]+ \\([^ \n(]+\\)" src)
+                       (match-string 1 src)))
+          result))
+       nil nil personal-ai-default-system)))
+
+  (defun my/claude-complete-docstring ()
+    "Generate a docstring for the top-level defun at point and display it.
+  The response contains only the docstring body text, ready for insertion
+  between the argument list and the first expression of the defun."
+    (interactive)
+    (let ((src (personal-ai--defun-at-point)))
+      (unless src
+        (user-error "No defun found at point"))
+      (message "Requesting docstring from Claude...")
+      (utils-claude-request
+       (list (list :role "user"
+                   :content (format "Write a concise Emacs Lisp docstring for the \
+  following function.\nOutput only the docstring text (no surrounding quotes, \
+  no code fence).\nFirst line: single sentence summary ending with a period.\n\
+  Subsequent lines: describe arguments and return value.\n\n%s" src)))
+       (lambda (result)
+         (personal-ai--show-result
+          (format "Docstring: %s"
+                  (and (string-match "(def[a-z]+ \\([^ \n(]+\\)" src)
+                       (match-string 1 src)))
+          result))
+       nil nil "You are an Emacs Lisp documentation expert. Be concise.")))
+
+  (defun my/claude-analyze-require-graph ()
+    "Analyze require statements in the current buffer and report layer
+  violations.
+  Detects upward-layer dependencies relative to the 10-layer architecture:
+  early-init → core → ui → auth → completion → orgx → vcs → dev → utils
+  → personal.
+  Results are displayed in `personal-ai-output-buffer'."
+    (interactive)
+    (unless buffer-file-name
+      (user-error "Buffer is not visiting a file"))
+    (let* ((src  (buffer-substring-no-properties (point-min) (point-max)))
+           (file (file-name-nondirectory buffer-file-name)))
+      (message "Analyzing require graph in %s..." file)
+      (utils-claude-request
+       (list (list :role "user"
+                   :content (format "Analyze the following Emacs Lisp module (%s) \
+  for dependency issues.\n\
+  Layer order (low to high): early-init, core, ui, auth, completion, \
+  orgx, vcs, dev, utils, personal.\n\
+  Rules: a module must not require a module from a higher layer.\n\
+  List every (require ...) or (load ...) call, identify its layer, \
+  and flag any upward-layer dependency.\n\
+  Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
+                                    file src)))
+       (lambda (result)
+         (personal-ai--show-result
+          (format "Require graph: %s" file)
+          result))
+       nil nil personal-ai-default-system)))
+
+  (provide 'personal-ai)
+  ;;; personal/personal-ai.el ends here
+#+end_src
+
+** personal/personal-llm.el
+:PROPERTIES:
+:CUSTOM_ID: personal-llm
+:header-args:emacs-lisp: :tangle ../personal/personal-llm.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; personal/personal-llm.el --- ローカル LLM ルーター統合 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; =~/.local/bin/localllm= （ローカル Ollama モデルへのルーター）を Emacs から呼び出すための
+  ;; 薄い統合層。プロンプトの内容に応じてどのモデル（qwen3:14b / qwen3-coder /
+  ;; LFM2.5-8B-A1B / qwen2.5vl）へ振り分けるかの判定ロジックは、すべて
+  ;; =~/.local/bin/localllm= 側の責務であり、本ファイルはそれに一切関与しない。
+  ;; 本ファイルの責務は次の3点のみ:
+  ;;
+  ;;   1. プロンプトをルータープロセスの標準入力へ送る
+  ;;   2. 応答をストリーミングで `personal-llm-output-buffer' へ挿入する
+  ;;   3. Org-roam / コーディングバッファ向けの薄いラッパーコマンドを提供する
+  ;;
+  ;; 公開 API:
+  ;;   `my/llm-run'                    — 任意のプロンプトをルーターへ送る（対話コマンド）
+  ;;   `my/llm-run-from-org-roam'      — 現在の Org-roam ノート（リージョンか全体）を送る。
+  ;;                                     タスクは指定しない — ノートは雑多な内容を含み得るため
+  ;;                                     ルーター側のルールベース自動判定に委ねる。
+  ;;   `my/llm-run-from-coding-buffer' — ポイント位置の defun（かリージョン）を
+  ;;                                     --task coding 固定で送る。自動判定を待たず
+  ;;                                     確実に qwen3-coder へ振り分けるため。
+  ;;
+  ;; 実行ファイルの場所は `personal-llm-script-path' で変更できる。
+  ;; 本モジュールは org を要求しない（Org の遅延ロード方針を壊さない）。
+  ;;
+  ;; スクリプト名を単に "llm" にしなかったのは、Homebrew の llm（datasette 版、
+  ;; 既定で OpenAI API を叩く）と PATH 上で衝突するため。本モジュールは
+  ;; `expand-file-name' で解決した絶対パスを直接 `make-process' に渡すので
+  ;; その衝突の影響を受けないが、同じ理由でユーザーがターミナルから素の
+  ;; "llm" と打つと Homebrew 版に奪われる（実際に発生し、OpenAI の課金エラーが
+  ;; 出た）。以後は "localllm" という別名を使うことでこれを避けている。
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'cl-lib)
+    (require 'subr-x))
+
+  (defgroup personal-llm nil
+    "Local Ollama model router integration (~/.local/bin/localllm)."
+    :group 'tools
+    :prefix "personal-llm-")
+
+  (defcustom personal-llm-script-path "~/.local/bin/localllm"
+    "Path to the local LLM router script invoked by `my/llm-run'."
+    :type 'file
+    :group 'personal-llm)
+
+  (defcustom personal-llm-output-buffer "*LLM Router Output*"
+    "Name of the buffer used to display streamed LLM router output."
+    :type 'string
+    :group 'personal-llm)
+
+  (defconst personal-llm--valid-tasks '(general coding agent vision)
+    "Task symbols accepted by the ~/.local/bin/localllm router's --task flag.")
+
+  ;;; ── 非公開ヘルパー ────────────────────────────────────────────────────────
+
+  (defun personal-llm--ensure-script ()
+    "Return the expanded, executable path to the router script.
+  Signals `user-error' if `personal-llm-script-path' does not point to an
+  executable file."
+    (let ((script (expand-file-name personal-llm-script-path)))
+      (unless (file-executable-p script)
+        (user-error "LLM router script not found or not executable: %s" script))
+      script))
+
+  (defun personal-llm--task-string (task)
+    "Return TASK (a symbol) as the string expected by the router's --task flag.
+  Signals `user-error' if TASK is not one of `personal-llm--valid-tasks'."
+    (unless (memq task personal-llm--valid-tasks)
+      (user-error "Unknown LLM task %S (expected one of %S)"
+                  task personal-llm--valid-tasks))
+    (symbol-name task))
+
+  (defun personal-llm--defun-at-point ()
+    "Return the top-level defun source string surrounding point, or nil."
+    (save-excursion
+      (condition-case nil
+          (progn
+            (beginning-of-defun)
+            (let ((beg (point)))
+              (end-of-defun)
+              (buffer-substring-no-properties beg (point))))
+        (error nil))))
+
+  (defun personal-llm--sentinel (proc event)
+    "Report completion of the router PROC via EVENT in the echo area."
+    (when (memq (process-status proc) '(exit signal))
+      (message "[llm] %s" (string-trim event))))
+
+  (defun personal-llm--prepare-output-buffer (task)
+    "Pop to `personal-llm-output-buffer', appending a heading for TASK.
+  TASK is a symbol or nil (rendered as \"auto\" in the heading).
+  Returns the buffer, with point at its end."
+    (let ((buf (get-buffer-create personal-llm-output-buffer)))
+      (with-current-buffer buf
+        (unless (derived-mode-p 'org-mode)
+          (org-mode))
+        (goto-char (point-max))
+        (unless (bobp)
+          (insert "\n\n"))
+        (insert (format "* llm (%s) — %s\n\n"
+                        (or task "auto")
+                        (format-time-string "%Y-%m-%d %H:%M:%S")))
+        (goto-char (point-max)))
+      (pop-to-buffer buf)
+      buf))
+
+  (defun personal-llm--start-process (prompt task image-path)
+    "Start the router process for PROMPT, streaming into its output buffer.
+  TASK, when non-nil, is validated and forwarded as the router's --task flag.
+  IMAGE-PATH, when non-nil, is expanded and forwarded as --image."
+    (let* ((script (personal-llm--ensure-script))
+           (task-str (and task (personal-llm--task-string task)))
+           (command (append (list script)
+                            (when task-str (list "--task" task-str))
+                            (when image-path
+                              (list "--image" (expand-file-name image-path)))))
+           (buf (personal-llm--prepare-output-buffer task))
+           (proc (make-process :name "personal-llm"
+                               :buffer buf
+                               :command command
+                               :noquery t
+                               :sentinel #'personal-llm--sentinel)))
+      (process-send-string proc prompt)
+      (process-send-eof proc)
+      proc))
+
+  ;;; ── 対話コマンド ──────────────────────────────────────────────────────────
+
+  (defun my/llm-run (prompt &optional task image-path)
+    "Send PROMPT to the local LLM router and stream the response.
+  TASK, when non-nil, must be one of the symbols `general', `coding',
+  `agent', or `vision'; it is forwarded as the router's --task flag,
+  overriding its own rule-based auto-detection. When TASK is nil, the
+  router decides from PROMPT's content (or from IMAGE-PATH's presence).
+  IMAGE-PATH, when non-nil, is forwarded as the router's --image flag.
+
+  Interactively, PROMPT is the active region if any, otherwise it is
+  read from the minibuffer; TASK and IMAGE-PATH are left nil. Call this
+  function from Lisp (see `my/llm-run-from-coding-buffer') to pin a task
+  or attach an image."
+    (interactive
+     (list (if (use-region-p)
+               (buffer-substring-no-properties (region-beginning) (region-end))
+             (read-string "LLM prompt: "))))
+    (when (string-empty-p (string-trim prompt))
+      (user-error "Nothing to send to the LLM router"))
+    (message "[llm] sending to router (task: %s)..." (or task "auto"))
+    (personal-llm--start-process prompt task image-path))
+
+  (defun my/llm-run-from-org-roam ()
+    "Send the current Org-roam note to the LLM router.
+  Sends the active region if any, otherwise the whole buffer. The task
+  is left unspecified so the router's rule-based detection picks it —
+  Org-roam notes span general writing, coding notes, and action items
+  alike, so pinning a single task here would waste that detection."
+    (interactive)
+    (my/llm-run
+     (if (use-region-p)
+         (buffer-substring-no-properties (region-beginning) (region-end))
+       (buffer-substring-no-properties (point-min) (point-max)))))
+
+  (defun my/llm-run-from-coding-buffer ()
+    "Send the current defun (or active region) to the LLM router as `coding'.
+  Pinning the task bypasses the router's rule-based auto-detection so the
+  prompt is always routed to the coding model, regardless of how much
+  prose the snippet happens to mix in."
+    (interactive)
+    (let ((src (if (use-region-p)
+                   (buffer-substring-no-properties (region-beginning) (region-end))
+                 (personal-llm--defun-at-point))))
+      (unless src
+        (user-error "No region active and no defun found at point"))
+      (my/llm-run src 'coding)))
+
+  (provide 'personal-llm)
+  ;;; personal/personal-llm.el ends here
+#+end_src

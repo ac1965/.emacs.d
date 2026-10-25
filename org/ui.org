@@ -1,0 +1,3131 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: ui 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+ui 層（UX のみ。削除しても壊れない）のモジュールの正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* ui/
+:PROPERTIES:
+:CUSTOM_ID: ui-modules
+:END:
+
+* ui/ui-font.el
+:PROPERTIES:
+:CUSTOM_ID: ui-font
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-font.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-font.el --- フォント設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; フォント設定: 等幅、可変ピッチ、絵文字、リガチャ。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `ui-font-*' カスタマイズ変数を定義する（フォントファミリ、サイズ、絵文字）
+  ;; - `ui-font--system-default' と `ui-font--system-emoji' により
+  ;;   OS を考慮したフォールバックを提供する
+  ;; - `ui-font-apply' で全フェイスを適用し、`after-init-hook' と
+  ;;   `after-make-frame-functions' にフックする（daemon 対応）
+  ;; - グラフィカルフレームで `global-ligature-mode' を有効化する
+  ;;   （初回のグラフィカルフレーム作成時に一度だけ。daemon 対応）
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (defgroup ui-font nil "Font configuration for UI." :group 'ui)
+
+  (defcustom ui-font-default nil
+    "Default monospace font family. If nil, OS-dependent fallback."
+    :type '(choice (const :tag "Auto" nil) (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-variable-pitch nil
+    "Variable-pitch font family."
+    :type '(choice (const :tag "Auto" nil) (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-emoji nil
+    "Emoji font family."
+    :type '(choice (const :tag "Auto" nil) (string :tag "Font family"))
+    :group 'ui-font)
+
+  (defcustom ui-font-size 18
+    "Default font size in points."
+    :type 'integer :group 'ui-font)
+
+  (defun ui-font--system-default ()
+    "Return the default monospace font family for the current OS."
+    (cond ((eq system-type 'darwin)     "Menlo")
+          ((eq system-type 'gnu/linux)  "Monospace")
+          ((eq system-type 'windows-nt) "Consolas")
+          (t "Monospace")))
+
+  (defun ui-font--system-emoji ()
+    "Return the default emoji font family for the current OS."
+    (cond ((eq system-type 'darwin)     "Apple Color Emoji")
+          ((eq system-type 'gnu/linux)  "Noto Color Emoji")
+          ((eq system-type 'windows-nt) "Segoe UI Emoji")
+          (t "Noto Color Emoji")))
+
+  (defun ui-font-apply ()
+    "Apply configured fonts to the current graphical frame."
+    (when (display-graphic-p)
+      (set-face-attribute 'default nil
+                          :family (or ui-font-default (ui-font--system-default))
+                          :height (* 10 ui-font-size))
+      (set-face-attribute 'variable-pitch nil
+                          :family (or ui-font-variable-pitch
+                                      ui-font-default
+                                      (ui-font--system-default)))
+      (set-fontset-font t 'emoji
+                        (font-spec :family (or ui-font-emoji (ui-font--system-emoji))))
+      (ui-font-describe)))
+
+  ;;;###autoload
+  (defun ui-font-show-current ()
+    "Display the currently active default font."
+    (interactive)
+    (let ((family (face-attribute 'default :family))
+          (height (face-attribute 'default :height)))
+      (message "Current font: %s, %.1f pt" family (/ height 10.0))))
+
+  ;;;###autoload
+  (defun ui-font-describe ()
+    "Show detailed information about the current font configuration."
+    (interactive)
+    (unless (display-graphic-p)
+      (user-error "Fonts are only meaningful in graphical frames"))
+    (let* ((default-family  (face-attribute 'default :family))
+           (default-height  (face-attribute 'default :height))
+           (variable-family (face-attribute 'variable-pitch :family))
+           ;; 絵文字のフォントファミリは、ui-font-apply が set-fontset-font に渡した
+           ;; defcustom／フォールバックの値から読む。(font-get (font-spec :script 'emoji) :family) で
+           ;; 探す方法は使えない。登録済みの fontset
+           ;; エントリではなくフォントの利用可否を問い合わせるため、macOS では nil を
+           ;; 返し「unknown」と報告されてしまう。
+           (emoji-family    (or ui-font-emoji (ui-font--system-emoji))))
+      (message "Fonts applied:\n  Default        : %s (%.1f pt)\n  Variable-pitch : %s\n  Emoji          : %s"
+               default-family (/ default-height 10.0)
+               variable-family emoji-family)))
+
+  ;; 無名 lambda を名前付き defun に抽出した。
+  ;; 理由: デーモン分岐が after-make-frame-functions に無名関数を登録していたため、
+  ;; 除去も検査もできなかった。
+  (defun ui-font--apply-to-frame (frame)
+    "Apply font configuration to FRAME (for daemon mode)."
+    (with-selected-frame frame (ui-font-apply)))
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'ui-font--apply-to-frame)
+    (add-hook 'after-init-hook #'ui-font-apply))
+
+  ;; leaf の :when は「モジュールのロード時」に一度だけ評価される。通常起動では
+  ;; その時点で既にグラフィカルフレームがあるため (display-graphic-p) は機能するが、
+  ;; --daemon 起動時はモジュールのロード自体がフレームの無い状態で行われるため、
+  ;; :when (display-graphic-p) は常に nil と評価され、ligature が永久にロードされない
+  ;; という daemon 対応バグになっていた。フォント適用（上の ui-font--apply-to-frame）と
+  ;; 同じ「初回のグラフィカルフレームで一度だけ有効化する」パターンに揃える。
+  (leaf ligature
+    :straight (ligature :type git :host github :repo "mickeynp/ligature.el")
+    :require nil)
+
+  (defvar ui-font--ligature-activated-p nil
+    "Non-nil once ligature has been configured and enabled.")
+
+  (defun ui-font--activate-ligature ()
+    "ligature を require し、prog-mode 用の定義とグローバル有効化を行う。
+  `ui-font--maybe-activate-ligature' から一度だけ呼ばれる。"
+    (require 'ligature)
+    ;; prog-mode 用にリガチャを登録してから、グローバルに有効化する。
+    ;; global-ligature-mode はグローバルなマイナーモードであるため、prog-mode-hook に
+    ;; 追加してはならない — 繰り返し有効化するのは冗長であり、デバッグを混乱させる。
+    (ligature-set-ligatures 'prog-mode '("->" "=>" "::" "===" "!=" "&&" "||"))
+    (global-ligature-mode 1))
+
+  (defun ui-font--maybe-activate-ligature (&optional frame)
+    "FRAME がグラフィカルなら、初回に限り ligature を有効化する。
+  `after-make-frame-functions' （daemon）と `after-init-hook' （通常起動）の
+  両方から呼ばれる。通常起動の =after-init-hook= には引数が渡らないため、
+  FRAME は省略可能にし、その場合は `selected-frame' を見る。"
+    (when (and (not ui-font--ligature-activated-p)
+               (display-graphic-p (or frame (selected-frame))))
+      (setq ui-font--ligature-activated-p t)
+      (ui-font--activate-ligature)))
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'ui-font--maybe-activate-ligature)
+    (add-hook 'after-init-hook #'ui-font--maybe-activate-ligature))
+
+  (provide 'ui-font)
+  ;;; ui-font.el ends here
+#+end_src
+
+* ui/ui-nano-palette.el
+:PROPERTIES:
+:CUSTOM_ID: ui-nano-palette
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-nano-palette.el
+:END:
+
+#+NAME: ui-nano-palette
+#+begin_src emacs-lisp
+  ;;; ui/ui-nano-palette.el --- Nano 風カラーパレット（発展版） -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; UI 層が使用する、発展版の Nano パレット。
+  ;;
+  ;; 本モジュールが提供するもの:
+  ;;
+  ;; - 意味づけされたパレット変数
+  ;; - 安全なフェイス適用
+  ;; - パレットの色の上書き（`ui-nano-palette-color-*' の defcustom）
+  ;; - 再適用（`load-theme' の後と、dirvish のロード後）
+  ;; - テーマ再読込に対する堅牢性
+  ;;
+  ;; 設計目標:
+  ;;
+  ;; - 最小限のパレット
+  ;; - 意味に基づく色の使用
+  ;; - UI の一貫性
+  ;; - 冪等な適用
+  ;;
+  ;;; Code:
+
+  (defgroup ui-nano-palette nil
+    "Minimal nano-style palette."
+    :group 'faces)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; 基本パレット
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom ui-nano-palette-color-background "#fafafa"
+    "Main editor background."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-foreground "#374151"
+    "Primary text color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-subtle "#e5e7eb"
+    "Subtle UI surface."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; テキスト用パレット
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom ui-nano-palette-color-strong "#111827"
+    "Strong text color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-muted "#9ca3af"
+    "Muted text color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; アクセント用パレット
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom ui-nano-palette-color-salient "#2563eb"
+    "Primary accent color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-popout "#6b7280"
+    "Secondary accent color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; 状態を表す意味色
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom ui-nano-palette-color-success "#10b981"
+    "Success state color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-warning "#f59e0b"
+    "Warning state color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-critical "#dc2626"
+    "Critical error color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-info "#0284c7"
+    "Informational color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; 操作系の色
+  ;;;; ---------------------------------------------------------------------------
+
+  (defcustom ui-nano-palette-color-selection "#dbeafe"
+    "Selection background."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  (defcustom ui-nano-palette-color-cursor "#2563eb"
+    "Cursor color."
+    :type 'color
+    :group 'ui-nano-palette)
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; ユーティリティ
+  ;;;; ---------------------------------------------------------------------------
+
+  (defvar ui-nano-palette--touched-faces nil
+    "`ui-nano-palette--safe-face' が属性を設定したフェイスの一覧。
+  dark へ切り替えるとき、テーマが定義していない（light の固定色が残る）フェイスを
+  元の定義へ戻すために使う。")
+
+  (defun ui-nano-palette--safe-face (face &rest args)
+    "Safely apply FACE attributes."
+    (when (facep face)
+      (cl-pushnew face ui-nano-palette--touched-faces)
+      (apply #'set-face-attribute face nil args)))
+
+  ;;;; ---------------------------------------------------------------------------
+  ;;;; フェイスの適用
+  ;;;; ---------------------------------------------------------------------------
+
+  ;; このパレットは明るい背景を前提にした固定色である。`nano-dark' に切り替えた後も
+  ;; `default' や font-lock を明るい配色で上書きしてしまい、light と dark の見た目が
+  ;; 同じになっていた。dark のときはパレットを適用せず、nano-theme 側のフェイスに任せる。
+  ;; dark では、light のとき set-face-attribute で焼いた固定色を戻す。テーマが
+  ;; 定義するフェイスは enable-theme が再計算するが、dirvish-hl-line のように
+  ;; テーマが触れないフェイスには明るい背景色が残り、白い文字が読めなくなる。
+  ;; `default' はフォント設定を失わないよう対象から除く。
+  ;; テーマ（nano-dark）が定義しない dired / dirvish のフェイスには、dark 用の色を
+  ;; nano-theme 自身のパレット（`nano-dark-*'、Nord 系）から与える。独自の dark 色は
+  ;; 作らない。`nano-dark-*' が未定義のときは何も設定しない（元の定義のまま）。
+  (defun ui-nano-palette--dark-color (symbol)
+    "`nano-theme' の dark パレット SYMBOL の色を返す。未定義なら nil。"
+    (let ((value (and (boundp symbol) (symbol-value symbol))))
+      (and (stringp value) value)))
+
+  ;; フェイスの一覧。(FACE :属性 値 ...) の並びで、値が色の役割（ROLE）の名前なら、
+  ;; 適用時にパレットの色へ解決する。(box ROLE) は 1px の枠線の指定になる。
+  ;; ROLE 以外の値（bold、semi-bold、italic、t など）はそのまま渡す。
+  (defconst ui-nano-palette--roles
+    '(background foreground subtle strong muted salient popout success warning
+                 critical info selection cursor)
+    "`ui-nano-palette-color-ROLE' の ROLE の一覧（light 用）。")
+
+  (defconst ui-nano-palette--dark-roles
+    '(salient faded critical strong popout subtle)
+    "`nano-dark-ROLE' の ROLE の一覧（dark の追加フェイス用）。")
+
+  (defconst ui-nano-palette--light-faces
+    '(;; 既定フェイス
+      (default :background background :foreground foreground)
+      ;; リージョン
+      (region :background selection)
+      ;; 現在行のハイライト（global-hl-line-mode）。
+      ;; dirvish-hl-line と同じ色を使い、バッファの種類を問わず見た目を揃える。
+      ;; この設定が抜けていたため、global-hl-line-mode を有効化しても
+      ;; 通常の編集バッファでは現在行の背景色が付かなかった。
+      (hl-line :background subtle)
+      ;; 太字 / 斜体
+      (bold :foreground strong :weight bold)
+      (italic :slant italic)
+      ;; フォントロック
+      (font-lock-comment-face :foreground muted)
+      (font-lock-keyword-face :foreground salient :weight semi-bold)
+      (font-lock-string-face :foreground popout)
+      (font-lock-function-name-face :foreground info)
+      (font-lock-type-face :foreground salient)
+      (font-lock-variable-name-face :foreground strong)
+      ;; メッセージ
+      (error :foreground critical :weight bold)
+      (warning :foreground warning :weight bold)
+      (success :foreground success)
+      (link :foreground salient :underline t)
+      (minibuffer-prompt :foreground salient :weight semi-bold)
+      ;; モードライン
+      (mode-line :background subtle :foreground strong :box (box subtle))
+      (mode-line-inactive :background background :foreground muted
+                          :box (box background))
+      ;; dired / dirvish
+      (dired-directory :foreground salient :weight bold)
+      (dired-symlink :foreground info)
+      (dired-ignored :foreground muted)
+      (dired-flagged :foreground critical :weight bold)
+      (dired-marked :foreground salient :weight bold)
+      (dired-header :foreground strong :weight bold)
+      (dired-warning :foreground warning :weight bold)
+      (dirvish-hl-line :background subtle)
+      (dirvish-git-commit-message-face :foreground muted)
+      (dirvish-header-line-path-face :foreground strong :weight bold)
+      (dirvish-subtree-state-face :foreground salient))
+    "light のパレットで設定するフェイスの一覧。")
+
+  (defconst ui-nano-palette--dark-faces
+    '((dired-directory :foreground salient :weight bold)
+      (dired-symlink :foreground salient)
+      (dired-ignored :foreground faded)
+      (dired-flagged :foreground critical :weight bold)
+      (dired-marked :foreground salient :weight bold)
+      (dired-header :foreground strong :weight bold)
+      (dired-warning :foreground popout :weight bold)
+      (dirvish-hl-line :background subtle)
+      (dirvish-git-commit-message-face :foreground faded)
+      (dirvish-header-line-path-face :foreground strong :weight bold)
+      (dirvish-subtree-state-face :foreground salient))
+    "dark で、テーマが定義しない dired / dirvish のフェイスに与える色の一覧。")
+
+  (defun ui-nano-palette--resolve (value roles color-fn)
+    "フェイスの一覧の属性値 VALUE を、`set-face-attribute' に渡す値へ解決する。
+  VALUE が ROLES の要素なら COLOR-FN で色にし、(box ROLE) は枠線の指定にする。
+  それ以外は VALUE をそのまま返す。"
+    (cond ((and (symbolp value) (memq value roles))
+           (funcall color-fn value))
+          ((eq (car-safe value) 'box)
+           (list :line-width 1 :color (funcall color-fn (cadr value))))
+          (t value)))
+
+  (defun ui-nano-palette--apply-specs (specs roles color-fn)
+    "SPECS（フェイスの一覧）を `ui-nano-palette--safe-face' で適用する。
+  ROLES と COLOR-FN は `ui-nano-palette--resolve' に渡す。"
+    (dolist (spec specs)
+      (let ((attrs (cdr spec)) resolved)
+        (while attrs
+          (push (pop attrs) resolved)
+          (push (ui-nano-palette--resolve (pop attrs) roles color-fn) resolved))
+        (apply #'ui-nano-palette--safe-face (car spec) (nreverse resolved)))))
+
+  (defun ui-nano-palette--dark-role-color (role)
+    "dark パレットの ROLE の色を返す。未定義なら nil。"
+    (ui-nano-palette--dark-color (intern (format "nano-dark-%s" role))))
+
+  (defun ui-nano-palette--apply-dark-extras ()
+    "dired / dirvish のフェイスに `nano-dark-*' の色を与える。
+  必要な色がひとつでも未定義なら、何も設定しない（元の定義のまま）。"
+    (when (seq-every-p #'ui-nano-palette--dark-role-color
+                       ui-nano-palette--dark-roles)
+      (ui-nano-palette--apply-specs ui-nano-palette--dark-faces
+                                    ui-nano-palette--dark-roles
+                                    #'ui-nano-palette--dark-role-color)))
+
+  (defun ui-nano-palette-apply-faces ()
+    "Apply Nano palette; in dark, restore touched faces and apply dark extras."
+    (if (eq frame-background-mode 'dark)
+        (progn
+          (dolist (face ui-nano-palette--touched-faces)
+            (unless (eq face 'default)
+              (face-spec-recalc face nil)))
+          ;; light パレットが `set-face-attribute' で default に焼き込んだ背景色は
+          ;; face-spec-recalc では消えない。通常起動では light の適用後に dark へ
+          ;; 切り替わるため、dark の色を明示して上書きする。
+          (let ((bg (ui-nano-palette--dark-color 'nano-dark-background))
+                (fg (ui-nano-palette--dark-color 'nano-dark-foreground)))
+            (when (and bg fg)
+              (ui-nano-palette--safe-face 'default :background bg :foreground fg)))
+          (ui-nano-palette--apply-dark-extras))
+      (ui-nano-palette--apply-palette)))
+
+  (defun ui-nano-palette--light-color (role)
+    "light パレットの ROLE の色を返す。"
+    (symbol-value (intern (format "ui-nano-palette-color-%s" role))))
+
+  (defun ui-nano-palette--apply-palette ()
+    "Apply the (light) Nano palette."
+    ;; カーソル
+    (setq cursor-type 'bar)
+    (set-cursor-color ui-nano-palette-color-cursor)
+    (ui-nano-palette--apply-specs ui-nano-palette--light-faces
+                                  ui-nano-palette--roles
+                                  #'ui-nano-palette--light-color))
+
+  (defun ui-nano-palette--reapply-after-theme (&rest _)
+    "Reapply Nano palette after theme load."
+    (ui-nano-palette-apply-faces))
+
+  (advice-add 'load-theme :after #'ui-nano-palette--reapply-after-theme)
+
+  ;; dirvish は dired-noselect 初回呼び出し時まで require されない
+  ;; （core/core-dired.el の `core-dired--ensure' 参照）。
+  ;; そのため起動時の `ui-nano-palette-apply-faces' 呼び出し時点では
+  ;; `dirvish-hl-line' 等がまだ defface されておらず、`ui-nano-palette--safe-face'
+  ;; の facep チェックに弾かれて黙ってスキップされていた。dirvish は
+  ;; カーソルを非表示にしてこのフェイスのオーバーレイだけでカレント行を
+  ;; 示す設計のため、パレット未適用のままだと現在行が全く見えなくなる。
+  ;; dirvish が実際に require されたタイミングで一度だけ再適用する。
+  (with-eval-after-load 'dirvish
+    (ui-nano-palette-apply-faces))
+
+  (provide 'ui-nano-palette)
+
+  ;;; ui/ui-nano-palette.el ends here
+#+end_src
+
+* ui/ui-doom-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-doom-modeline
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-doom-modeline.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-doom-modeline.el --- Doom modeline UI バンドル -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Doom modeline UI バンドル: nerd-icons + doom-modeline の設定。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - nerd-icons と doom-modeline を導入・設定する
+  ;; - モードラインの高さ、バッファ名の表示形式、単語数表示を設定する
+  ;; - core-switches から呼ばれるエントリポイント `my/ui-enable-doom' を提供する
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+  (declare-function doom-modeline-mode "doom-modeline")
+
+  (leaf nerd-icons :straight t)
+
+  (leaf doom-modeline
+    :straight t
+    :custom ((doom-modeline-height . 28)
+             (doom-modeline-buffer-file-name-style . 'truncate-with-project)
+             (doom-modeline-minor-modes . nil)
+             (doom-modeline-enable-word-count . t))
+    :config (doom-modeline-mode 1))
+
+  ;;;###autoload
+  (defun my/ui-enable-doom ()
+    "Activate the Doom modeline UI bundle."
+    (interactive)
+    (doom-modeline-mode 1)
+    (message "[ui] Doom modeline enabled."))
+
+  (provide 'ui-doom-modeline)
+  ;;; ui/ui-doom-modeline.el ends here
+#+end_src
+
+* ui/ui-doom-nano-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-doom-nano-modeline
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-doom-nano-modeline.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-doom-nano-modeline.el --- Doom Nano modeline UI バンドル -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Doom Nano modeline UI バンドル: ronisbr/doom-nano-modeline の設定。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - doom-nano-modeline（rougier/nano-modeline の Doom 向け移植）を導入する
+  ;; - core-switches から呼ばれるエントリポイント `my/ui-enable-doom-nano' を提供する
+  ;;
+  ;; 設計メモ:
+  ;;
+  ;;   上流の doom-nano-modeline は `doom-themes' に依存する（`require' している）が、
+  ;;   Doom Emacs 本体には依存しない。evil の参照は `bound-and-true-p' で守られて
+  ;;   いるため、evil 無しでも動作する。モードラインの退避・復元は上流の
+  ;;   `doom-nano-modeline-mode' が自前で行うので、Doom の
+  ;;   `global-hide-mode-line-mode' は不要である。
+  ;;
+  ;;   nano バンドル（ui-nano-modeline）とは排他的に使う。`my:use-ui' で
+  ;;   どちらか一方だけを選ぶこと。本モジュールは `my:modules' に載せず、
+  ;;   core-switches の autoload からのみロードされる。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+  (declare-function doom-nano-modeline-mode "doom-nano-modeline")
+
+  (leaf doom-themes :straight t :require nil)
+
+  (leaf doom-nano-modeline
+    :straight (doom-nano-modeline :type git :host github
+                                  :repo "ronisbr/doom-nano-modeline")
+    :require nil)
+
+  ;;;###autoload
+  (defun my/ui-enable-doom-nano ()
+    "Activate the Doom Nano modeline UI bundle."
+    (interactive)
+    (when (require 'doom-nano-modeline nil 'noerror)
+      (doom-nano-modeline-mode 1)
+      (message "[ui] doom-nano-modeline enabled.")))
+
+  (provide 'ui-doom-nano-modeline)
+  ;;; ui/ui-doom-nano-modeline.el ends here
+#+end_src
+
+* ui/ui-nano-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-nano-modeline
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-nano-modeline.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-nano-modeline.el --- Nano modeline UI バンドル -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Nano modeline UI バンドル: rougier/nano-modeline の設定と、このリポジトリで使う
+  ;; ヘッダー行の表示内容。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - フラグで初期化をガードし、以降のフレーム生成時に再設定が走らないようにする
+  ;; - nano-modeline のパディングとモード別フックを設定する
+  ;; - 全バッファ共通のヘッダー行を全体に適用し、標準のモードラインを隠す
+  ;; - ヘッダー行の表示を切り替えるコマンド `my/ui-nano-modeline-toggle' を提供する
+  ;; - core-switches から呼ばれるエントリポイント `my/ui-enable-nano' を提供する
+  ;; - 表示項目（状態アイコン、電源、時刻など）とそのフェイスは ui-nano-modeline-items.el に置く
+  ;;
+  ;; 表示項目（ui-nano-modeline-items.el に置く）:
+  ;;   左  状態アイコン（鍵 / 鉛筆 / ファイル）、ファイル種別アイコン、バッファ名、
+  ;;       git 情報、ファイルサイズ、総行数
+  ;;   右  追加項目（再生中の曲など。`ui-nano-modeline-extra-function'）、電源（AC 87% / BATT 42%）、
+  ;;       時刻、エンコーディング、IME、行:列、ウィンドウ固定
+  ;;
+  ;; personal/ ではなく本モジュールに置く理由:
+  ;;   表示内容は特定の利用者のものではなく UI の仕様であり、personal/ は他の層を
+  ;;   変更しないオーバーレイとする契約（Appendix: personal のロード順と defvar 上書きの
+  ;;   契約）に合わせている。personal/ に置くのは利用者固有の入力だけで、IME の状態は
+  ;;   `ui-nano-modeline-ime-function' を通して渡す。
+  ;;
+  ;; 設計上の判断:
+  ;; - 再描画のたびに評価される処理の費用は、nano 有効の実機で実測した。
+  ;;   README.org（1.6 万行、586KB）でヘッダー行全体が 0.21 ms、283 行のファイルで
+  ;;   0.04 ms。25 万行・8.7MB の巨大ファイルでも初回 11.6 ms、2 回目以降は約 2.4 ms
+  ;;   で、60fps の予算（16.7 ms）に収まる。支配的なのは総行数の計算で、巨大ファイル
+  ;;   でだけ効く。よってキャッシュは入れない。10MB を超えるファイルを日常的に扱う
+  ;;   ようになったら、総行数を `buffer-chars-modified-tick' でキャッシュする。
+  ;; - 電源は Emacs 標準の `battery' が更新のたびに渡す値を `battery-update-functions'
+  ;;   で受け取る。再描画のたびに pmset を呼ばない。
+  ;; - ヘッダー行の文字列は、モードラインが `%' を解釈するため `%%' と書く。
+  ;; - アイコン用の文字には、状態のフェイスとは別にアイコンのフォントを指定する。
+  ;;   一つのフェイスで全体を塗ると、アイコンのフォント指定が消えるため。
+  ;;
+  ;; ui-nano-palette のロード責任:
+  ;;
+  ;;   本モジュールは ui-nano-palette を require しない。（my:modules 経由で常に
+  ;;   ロードされる）ui-theme.el が `(require 'ui-nano-palette nil t)' を実行しており、
+  ;;   パレットの正式なローダはそちらである。パレットがロードされると、ui-theme.el が
+  ;;   `with-eval-after-load' でそれを適用する。
+  ;;   dev-term.el も `with-eval-after-load' でパレットのロードに反応する。
+  ;;   他のモジュールが初回ロードを起動する必要はない。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (require 'ui-nano-modeline-items)
+
+  ;; このファイルで使う外部シンボルの宣言（バイトコンパイラの警告を避けるため）。
+  (defvar nano-modeline-padding)
+  (declare-function nano-modeline-prog-mode "nano-modeline")
+  (declare-function nano-modeline-text-mode "nano-modeline")
+
+  (defvar ui-nano-modeline--initialized nil)
+
+  (defun ui-nano-modeline--available-p ()
+    (require 'nano-modeline nil 'noerror))
+
+  (defvar ui-nano-modeline--saved-mode-line-format nil
+    "Saved value of `mode-line-format' before nano-modeline suppressed it.
+
+  Restored by `my/ui-nano-modeline-toggle' when toggling off.")
+
+  (defun ui-nano-modeline--apply-global ()
+    "Set nano-modeline as the global header-line and hide the mode-line.
+
+  Saves the current default `mode-line-format' into
+  `ui-nano-modeline--saved-mode-line-format' before clearing it, so that
+  `my/ui-nano-modeline-toggle' can restore it later.
+
+  Calls `ui-nano-modeline--prog-mode' with default=t so that
+  `nano-modeline-header' uses setq-default, covering every buffer
+  including those that never trigger a major-mode hook."
+    (unless ui-nano-modeline--saved-mode-line-format
+      (setq ui-nano-modeline--saved-mode-line-format
+            (default-value 'mode-line-format)))
+    (ui-nano-modeline--prog-mode t)
+    (setq-default mode-line-format nil))
+
+  ;;;###autoload
+  (defun my/ui-nano-modeline-toggle ()
+    "Toggle nano-modeline header-line display globally.
+
+  When header-line-format is set (visible), clears it globally and
+  restores `mode-line-format' from `ui-nano-modeline--saved-mode-line-format'.
+  When cleared, calls `ui-nano-modeline--apply-global' to re-enable the
+  header-line globally and suppress the mode-line again."
+    (interactive)
+    (unless ui-nano-modeline--initialized
+      (user-error "nano-modeline is not enabled (see `my:use-ui')"))
+    (if (default-value 'header-line-format)
+        (progn
+          (setq-default header-line-format nil)
+          (setq-default mode-line-format
+                        (or ui-nano-modeline--saved-mode-line-format
+                            mode-line-format)))
+      (ui-nano-modeline--apply-global)))
+
+  (defun ui-nano-modeline--install-layout ()
+    "Apply the shared header-line layout to every buffer and hide the mode-line.
+  Called once from `ui-nano-modeline--setup', after `nano-modeline' has been
+  loaded.  The mode-specific hooks that `ui-nano-modeline--setup' registers
+  call the overridden functions with DEFAULT nil, which is harmless."
+    (advice-add 'nano-modeline-prog-mode :override #'ui-nano-modeline--prog-mode)
+    (advice-add 'nano-modeline-text-mode :override #'ui-nano-modeline--text-mode)
+    (ui-nano-modeline--apply-global))
+
+  ;; nano-modeline.el は defface（nano-modeline-active 等）の値を、
+  ;; (face-foreground 'default) / (face-background 'header-line nil t) を
+  ;; backquote でロード時に一度だけ焼き込む実装になっている。
+  ;; --daemon 起動時（実フレームが無い状態）で (require 'nano-modeline) すると、
+  ;; これらの呼び出しが nil を返し、その nil がフェイスの :foreground / :background
+  ;; に永久に焼き込まれてしまう（defface は一度評価されると再評価されない）。
+  ;; 後から emacsclient -c で本物のグラフィカルフレームが繋がっても直らず、
+  ;; "Unable to load color unspecified-fg/unspecified-bg" のエラーになる。
+  ;;
+  ;; ligature / core--fullscreen-once と同じ「初回のグラフィカルフレームまで
+  ;; require を遅らせる」パターンで、require そのものを FRAME の
+  ;; display-graphic-p 確認より後ろへ動かす。
+  (defun ui-nano-modeline--setup (&optional frame)
+    (when (and (not ui-nano-modeline--initialized)
+               (display-graphic-p (or frame (selected-frame)))
+               (ui-nano-modeline--available-p))
+      (setopt nano-modeline-padding '(0.20 . 0.25))
+      (add-hook 'prog-mode-hook #'nano-modeline-prog-mode)
+      (add-hook 'text-mode-hook #'nano-modeline-text-mode)
+      (ui-nano-modeline--install-layout)
+      (setq ui-nano-modeline--initialized t)
+      (message "[ui] nano-modeline initialized.")))
+
+  (leaf nano-modeline
+    :straight (nano-modeline :type git :host github :repo "rougier/nano-modeline")
+    :after nano-emacs
+    :require nil)
+
+  ;; nano-modeline の defface は (face-foreground 'default) のように現在の色を
+  ;; 「問い合わせる」ため、フレーム実体化の途中では値が確定しておらず nil が返る
+  ;; （display-graphic-p のガードだけでは防げなかった、実機検証で判明した問題）。
+  ;; daemon では、フレームの実体化後に呼ぶ `core-runtime-run-on-first-graphic-frame'
+  ;; に任せる（1 tick の遅延とグラフィカル判定を一箇所にまとめたもの）。
+  (declare-function core-runtime-run-on-first-graphic-frame "core-runtime")
+
+  (if (daemonp)
+      (core-runtime-run-on-first-graphic-frame #'ui-nano-modeline--setup)
+    (add-hook 'after-init-hook #'ui-nano-modeline--setup))
+
+  ;;;###autoload
+  (defun my/ui-enable-nano ()
+    "Activate the Nano modeline UI bundle."
+    (interactive)
+    (ui-nano-modeline--setup))
+
+  (provide 'ui-nano-modeline)
+  ;;; ui/ui-nano-modeline.el ends here
+#+end_src
+
+* ui/ui-nano-modeline-items.el
+:PROPERTIES:
+:CUSTOM_ID: ui-nano-modeline-items
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-nano-modeline-items.el
+:END:
+
+nano-modeline のヘッダー行に出す表示項目と、そのフェイスのモジュールです。 =ui-nano-modeline.el= から分離しました。
+
+表示項目（約 200 行）と、組み込み・トグル・セットアップ（約 120 行）が 1 ファイルに同居していたため、
+表示項目の側を独立させています。 =ui-nano-modeline.el= が =(require 'ui-nano-modeline-items)= で読み込みます。
+このモジュールは =my:modules= に載せません。 =ui-nano-modeline.el= と同じく、nano のバンドルを選んだときにだけ
+ロードされます。
+
+あわせて、 =ui-theme.el= にあった nano-modeline のフェイスの同期（ =ui-theme--sync-modeline-faces= ）も
+ここへ移しました。これは nano-modeline のためだけの処理なので、nano のバンドルを使わない構成では
+実行されません。関数は =ui-nano-modeline-sync-faces= に、フェイスは =ui-nano-modeline-secondary= と
+=ui-nano-modeline-primary= に改名しました。 =ui-theme.el= からは、定義されているときだけ呼びます。
+
+#+NAME: ui-nano-modeline-items-el
+#+begin_src emacs-lisp
+  ;;; ui/ui-nano-modeline-items.el --- Nano modeline の表示項目 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Nano modeline のヘッダー行に出す表示項目と、そのフェイス。組み込み（初期化、トグル）は
+  ;; ui-nano-modeline.el が受け持つ。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 表示項目: 状態アイコン、ファイル種別アイコン、電源、時刻とエンコーディング、IME、
+  ;;   追加項目（`ui-nano-modeline-extra-function' が返す文字列）
+  ;; - 表示項目のフェイス（`ui-nano-modeline-status-icon*'、`ui-nano-modeline-battery-*'、
+  ;;   `ui-nano-modeline-secondary' / `-primary'）
+  ;; - ヘッダー行の配置（左右に何を並べるか）を `ui-nano-modeline--line' で定義する
+  ;; - nano-modeline の基底フェイスを、テーマの light / dark に追従させる
+  ;;   （`ui-nano-modeline-sync-faces'）
+  ;;; Code:
+
+  (defgroup ui-nano-modeline nil
+    "Header-line contents for the nano-modeline bundle."
+    :group 'ui)
+
+  (defcustom ui-nano-modeline-ime-function nil
+    "Function returning the IME indicator string for the right segment, or nil.
+    The function is called without arguments on every redisplay, so it should
+    return a cached string.  A personal file sets it to feed the machine's IME
+    state to the modeline."
+    :type '(choice (const :tag "None" nil) function)
+    :group 'ui-nano-modeline)
+
+  (defcustom ui-nano-modeline-extra-function nil
+    "Function returning an extra string for the right segment, or nil.
+    The function is called without arguments on every redisplay, so it should
+    return a cached string; an empty string hides the item.  A personal file sets
+    it to show machine-specific information such as the track now playing."
+    :type '(choice (const :tag "None" nil) function)
+    :group 'ui-nano-modeline)
+
+  ;; このファイルで使う外部シンボルの宣言（バイトコンパイラの警告を避けるため）。
+  (defvar nano-modeline-position)
+  (defvar nano-modeline-padding)
+  (defvar nano-modeline-faces)
+  (defvar battery-load-low)
+  (defvar battery-load-critical)
+  (defvar battery-update-functions)
+  (defvar display-battery-mode)
+  (declare-function battery-update "battery")
+  (declare-function nano-modeline-face "nano-modeline")
+  (declare-function nano-modeline-buffer-status "nano-modeline")
+  (declare-function nano-modeline-prog-mode "nano-modeline")
+  (declare-function nano-modeline-text-mode "nano-modeline")
+  (declare-function nerd-icons-faicon "nerd-icons")
+  (declare-function nerd-icons-icon-for-buffer "nerd-icons")
+
+  (defun ui-nano-modeline--ime-indicator ()
+    "Return the IME indicator from `ui-nano-modeline-ime-function', or \"\"."
+    (or (and ui-nano-modeline-ime-function
+             (ignore-errors (funcall ui-nano-modeline-ime-function)))
+        ""))
+
+  (defun ui-nano-modeline--extra ()
+    "Return the string from `ui-nano-modeline-extra-function', or \"\".
+    `%' is doubled because the header line interprets it as a format spec.  The
+    text uses the secondary face, like the rest of the right segment, so its
+    background matches the battery and time items."
+    (let ((str (and ui-nano-modeline-extra-function
+                    (ignore-errors (funcall ui-nano-modeline-extra-function)))))
+      (if (and (stringp str) (not (string-empty-p str)))
+          (propertize (replace-regexp-in-string "%" "%%" str t t)
+                      'face (when (fboundp 'nano-modeline-face)
+                              (nano-modeline-face 'secondary)))
+        "")))
+
+  (defun ui-nano-modeline--time-encoding ()
+    "Return a propertized \"HH:MM  CODING  IME\" string for the right segment.
+
+    Evaluated on every redisplay inside `nano-modeline--make'.  Time and coding
+    system are computed directly; the IME part comes from
+    `ui-nano-modeline-ime-function', which must return a cached string so that no
+    process is spawned here.  Coding system suffix modifiers (-unix, -dos, -mac,
+    -with-signature) are stripped."
+    (let* ((time-str (format-time-string "%H:%M"))
+           (cs       (or (and (boundp 'buffer-file-coding-system)
+                              buffer-file-coding-system)
+                         'utf-8))
+           (cs-name  (replace-regexp-in-string
+                      "-\\(?:unix\\|dos\\|mac\\|with-signature\\)\\'"
+                      ""
+                      (symbol-name (coding-system-base cs)))))
+      (propertize
+       (concat time-str "  " cs-name (ui-nano-modeline--ime-indicator))
+       'face (when (fboundp 'nano-modeline-face)
+               (nano-modeline-face 'secondary)))))
+
+  (defvar ui-nano-modeline--battery-data nil
+    "Last battery status alist reported through `battery-update-functions'.
+  Keys are the `battery-status-function' format characters: ?L is the power
+  source (\"AC\" or \"Battery\") and ?p is the load percentage.")
+
+  (defun ui-nano-modeline--battery-update (data)
+    "Remember DATA, the alist `battery-update' just computed, for the nano-modeline.
+  Reusing it means the modeline never runs `pmset' itself on redisplay."
+    (setq ui-nano-modeline--battery-data data))
+
+  ;; このファイルは起動後（after-init）に読まれるため、`battery' の最初の更新は
+  ;; すでに終わっていることがある。その場合は値を受け取れるよう一度更新する。
+  (with-eval-after-load 'battery
+    (add-hook 'battery-update-functions #'ui-nano-modeline--battery-update)
+    (when (bound-and-true-p display-battery-mode)
+      (battery-update)))
+
+  ;; 低残量は橙色の文字、危険は赤い背景に白い文字。ヘッダー行の背景
+  ;; （dark は nano-subtle #434C5E、light は #ECEFF1）に対する明暗比が、
+  ;; 低残量で約 5:1（dark は #FFB74D）と約 4.7:1（light は #B54708）、
+  ;; 危険で約 5.6:1（白 on #C62828）になるように選んである。
+  (defface ui-nano-modeline-battery-low
+    '((((background dark)) :foreground "#FFB74D" :weight bold)
+      (t :foreground "#B54708" :weight bold))
+    "Face of the nano-modeline battery text when the load is low (orange)."
+    :group 'ui-nano-modeline)
+
+  (defface ui-nano-modeline-battery-critical
+    '((t :background "#C62828" :foreground "#FFFFFF" :weight bold))
+    "Face of the nano-modeline battery text when the load is critical."
+    :group 'ui-nano-modeline)
+
+  (defun ui-nano-modeline--battery ()
+    "Return \"AC 87%  \" or \"BATT 42%  \" for the nano-modeline right segment.
+
+    The text comes from `ui-nano-modeline--battery-data' (kept current by
+    `display-battery-mode').  On battery it uses the
+    `ui-nano-modeline-battery-low' and `ui-nano-modeline-battery-critical'
+    faces below `battery-load-low' and `battery-load-critical'.  Returns an
+    empty string when there is no battery information, for example before the
+    first update or on a machine without a battery."
+    (let* ((data ui-nano-modeline--battery-data)
+           (source (cdr (assq ?L data)))
+           (load (cdr (assq ?p data)))
+           (percent (and (stringp load) (string-match-p "\\`[0-9]+\\'" load)
+                         (string-to-number load)))
+           (on-ac (equal source "AC"))
+           (base (when (fboundp 'nano-modeline-face)
+                   (nano-modeline-face 'secondary))))
+      (if (not (and percent (member source '("AC" "Battery"))))
+          ""
+        (propertize
+         ;; モードラインは :eval の結果の % を解釈するため、% を %% に重ねて書く。
+         (format "%s %d%%%%  " (if on-ac "AC" "BATT") percent)
+         'face (cond ((and (not on-ac) (< percent battery-load-critical))
+                      (list 'ui-nano-modeline-battery-critical base))
+                     ((and (not on-ac) (< percent battery-load-low))
+                      (list 'ui-nano-modeline-battery-low base))
+                     (t base))))))
+
+  (defface ui-nano-modeline-status-icon
+    '((t :background "#FFD180" :foreground "#4E342E"))
+    "Face of the buffer status icon in the nano-modeline (amber)."
+    :group 'ui-nano-modeline)
+
+  (defface ui-nano-modeline-status-icon-modified
+    '((t :inherit ui-nano-modeline-status-icon :background "#FFAB40" :foreground "#3E2723"))
+    "Face of the status icon for a modified buffer (stronger amber)."
+    :group 'ui-nano-modeline)
+
+  (defface ui-nano-modeline-status-icon-read-only
+    '((t :inherit ui-nano-modeline-status-icon :background "#FFE9B8"))
+    "Face of the status icon for a read-only buffer (paler amber)."
+    :group 'ui-nano-modeline)
+
+  (defun ui-nano-modeline--type-icon ()
+    "Return the file type icon of the current buffer for the nano-modeline.
+
+    The icon comes from `nerd-icons-icon-for-buffer' (by major mode), so it keeps
+    its own colour and icon font.  Only the background is added, by inheriting
+    `nano-modeline-active', so that it sits on the same band as the rest of the
+    line.  Returns an empty string when there is no icon."
+    (let* ((icon  (nerd-icons-icon-for-buffer))
+           (props (and (stringp icon) (> (length icon) 0)
+                       (get-text-property 0 'face icon))))
+      (if (not (and (consp props) (plist-get props :family)))
+          ""
+        (concat
+         (propertize " " 'face 'nano-modeline-active)
+         (propertize (substring-no-properties icon)
+                     'face (list :family (plist-get props :family)
+                                 :inherit (delq nil (list (plist-get props :inherit)
+                                                          'nano-modeline-active))))))))
+
+  (defun ui-nano-modeline--buffer-status ()
+    "Return the buffer status segment, shown as an icon when possible.
+
+    Read-only buffers get a lock, modified ones a pencil and the rest a file
+    icon, on amber backgrounds that vary by state (`ui-nano-modeline-status-icon'
+    and its -modified / -read-only variants).  The
+    vertical padding is `nano-modeline-padding'.  Falls back to
+    `nano-modeline-buffer-status' (the text \"RO\" / \"**\" / \"RW\") on a
+    non-graphical display or when `nerd-icons' is unavailable.
+
+    The whole segment gets one face, so the icon font is set here as a separate
+    face ahead of it, and the padding spaces carry the face too.  The file type
+    icon of the buffer (`ui-nano-modeline--type-icon') follows the status icon."
+    (if (not (and (display-graphic-p) (require 'nerd-icons nil t)))
+        (nano-modeline-buffer-status)
+      (let* ((name  (cond (buffer-read-only      "nf-fa-lock")
+                          ((buffer-modified-p)   "nf-fa-pencil")
+                          (t                     "nf-fa-file_o")))
+             (glyph (substring-no-properties (nerd-icons-faicon name)))
+             (face  (cond (buffer-read-only      'ui-nano-modeline-status-icon-read-only)
+                          ((buffer-modified-p)   'ui-nano-modeline-status-icon-modified)
+                          (t                     'ui-nano-modeline-status-icon)))
+             (gap   (propertize " " 'display '(space :width 0.4)))
+             (top   (propertize " " 'display `(raise ,(car nano-modeline-padding))))
+             (bot   (propertize " " 'display `(raise ,(- (cdr nano-modeline-padding))))))
+        ;; top / bot（raise を指定しただけの空白）にも face が必要。
+        ;; 付けないと、アイコンの周りだけ地の色が見えて継ぎ目になる。
+        (concat
+         (propertize (concat top gap) 'face face)
+         (propertize glyph 'face (list '(:family "Symbols Nerd Font Mono") face))
+         (propertize (concat gap bot) 'face face)
+         (ui-nano-modeline--type-icon)))))
+
+  (defun ui-nano-modeline--line (&optional default)
+    "Install the nano-modeline layout used for every buffer.
+
+    DEFAULT is passed through to `nano-modeline-header':
+    t means global (setq-default), nil means buffer-local (setq-local).
+    The left segment shows the status icon, name, git info, file size and line
+    count; the right segment shows the extra item, battery, time, encoding and
+    cursor position."
+    (funcall nano-modeline-position
+             '((ui-nano-modeline--buffer-status) " "
+               (nano-modeline-buffer-name) " "
+               (nano-modeline-git-info) " "
+               (nano-modeline-file-size) " "
+               (nano-modeline-buffer-line-count))
+             '((ui-nano-modeline--extra)
+               (ui-nano-modeline--battery)
+               (ui-nano-modeline--time-encoding) " "
+               (nano-modeline-cursor-position)
+               (nano-modeline-window-dedicated))
+             default))
+
+  (defun ui-nano-modeline--prog-mode (&optional default)
+    "Override `nano-modeline-prog-mode' with the shared layout.
+
+    DEFAULT is passed through to `ui-nano-modeline--line'."
+    (ui-nano-modeline--line default))
+
+  (defun ui-nano-modeline--text-mode (&optional default)
+    "Override `nano-modeline-text-mode' with the shared layout.
+
+    DEFAULT is passed through to `ui-nano-modeline--line'."
+    (ui-nano-modeline--line default))
+
+  (defun ui-nano-modeline--dark-foreground ()
+    "dark の前景色。nano-theme の `nano-dark-foreground' が使えなければ既定の色を返す。"
+    (let ((value (and (boundp 'nano-dark-foreground) nano-dark-foreground)))
+      (if (and (stringp value) (not (string-empty-p value))) value "#ECEFF4")))
+
+  ;; nano-modeline の `nano-modeline-active' / `-inactive' は defface のロード時に
+  ;; その時点の default / header-line の色を焼き込む。nano-theme はこの 2 つの
+  ;; 定義をコメントアウトしている（`(:inherit nano-subtle)' 相当を想定）ため、
+  ;; light で読み込まれた値が dark に切り替えた後も残り、明るい背景に dark の
+  ;; 文字色（白）が載って判読できなくなる。テーマ追従の `nano-subtle' を継承させる。
+  (defun ui-nano-modeline-sync-faces ()
+    "nano-modeline の基底フェイスを現在のテーマ（light / dark）に追従させる。"
+    (when (and (facep 'nano-modeline-active) (facep 'nano-subtle))
+      (dolist (face '(nano-modeline-active nano-modeline-inactive))
+        (set-face-attribute face nil
+                            :inherit 'nano-subtle
+                            :foreground 'unspecified
+                            :background 'unspecified
+                            :box nil)))
+    ;; `nano-modeline--empty-face' は header-line の土台（face-remap 先）で、
+    ;; defface のロード時の default 前景色（light では Black）を焼き込む。
+    ;; 前景色を明示しない項目（git-info / file-size / buffer-line-count など）は
+    ;; この色を引き継ぐため、dark では背景に黒文字が載って読めなくなる。
+    ;; 現在の default の前景色へ追従させる。
+    (when (facep 'nano-modeline--empty-face)
+      (set-face-attribute 'nano-modeline--empty-face nil
+                          :inherit nil
+                          :foreground (face-attribute 'default :foreground nil t)))
+    (when (facep 'ui-nano-modeline-secondary)
+      (if (eq frame-background-mode 'dark)
+          (set-face-attribute 'ui-nano-modeline-secondary nil
+                              :inherit nil
+                              :foreground (ui-nano-modeline--dark-foreground))
+        (set-face-attribute 'ui-nano-modeline-secondary nil
+                            :inherit 'nano-faded
+                            :foreground 'unspecified))))
+
+  ;; 右側（時刻・エンコーディング・行列位置）は nano-modeline の secondary フェイスで
+  ;; 描かれ、既定では `nano-faded' を継承する。dark では nano-faded (#677691) が
+  ;; ヘッダー背景 nano-subtle (#434C5E) に近く、明暗比が約 1.9:1 しかなく読みにくい。
+  ;; nano-faded は本文の注釈にも使うため変更せず、モードライン専用のフェイスを挟む。
+  (defface ui-nano-modeline-secondary
+    '((t :inherit nano-faded))
+    "nano-modeline の右側表示用フェイス。dark では前景色を明るくする。"
+    :group 'ui-nano-modeline)
+
+  ;; git-info / file-size / buffer-line-count は primary フェイスで描かれる。
+  ;; light / dark とも右側（secondary）と同じ色にそろえる。
+  (defface ui-nano-modeline-primary
+    '((t :inherit ui-nano-modeline-secondary))
+    "nano-modeline の左側の補助情報用フェイス。右側と同じ色にする。"
+    :group 'ui-nano-modeline)
+
+  (with-eval-after-load 'nano-modeline
+    ;; 既定値の status-**-active は nano-popout-i が未定義だと nil を含む
+    ;; （`face' 型に合わない）。setopt の型検証で警告が出るため nil を除く。
+    (setopt nano-modeline-faces
+            (append '((secondary-active . (ui-nano-modeline-secondary))
+                      (primary-active . (ui-nano-modeline-primary)))
+                    (mapcar (lambda (entry)
+                              (cons (car entry) (delq nil (copy-sequence (cdr entry)))))
+                            (seq-remove (lambda (entry)
+                                          (memq (car entry)
+                                                '(secondary-active primary-active)))
+                                        nano-modeline-faces))))
+    (ui-nano-modeline-sync-faces))
+
+  (provide 'ui-nano-modeline-items)
+  ;;; ui/ui-nano-modeline-items.el ends here
+#+end_src
+
+* ui/ui-theme.el
+:PROPERTIES:
+:CUSTOM_ID: ui-theme
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-theme.el
+:END:
+
+#+NAME: ui-theme
+#+begin_src emacs-lisp
+  ;;; ui/ui-theme.el --- UI 層のテーマ設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; UI 層のテーマ設定モジュール。
+  ;;
+  ;; 責務:
+  ;;
+  ;; - Nano テーマをロードする（`my:use-ui' が 'nano / 'doom-nano で、利用可能な場合）
+  ;; - `my:use-ui' が 'doom のときは、doom-themes のテーマ（`ui-theme-doom-theme'）をロードする
+  ;; - ui-nano-palette 経由で Nano のフェイスを設定する（同上）
+  ;; - パレットの色（個人設定で上書きされた値を含む）を読み出して適用する
+  ;; - 括弧対応のハイライト用フェイスを設定する
+  ;;
+  ;; 別モジュールが受け持つもの:
+  ;; - nano-modeline のフェイスの同期は ui-nano-modeline-items.el へ
+  ;; - light / dark の保存・復元と切替は ui-theme-variant.el へ
+  ;; - line-spacing と spacious-padding は ui-window.el へ
+  ;;
+  ;; 設計目標:
+  ;;
+  ;; - 決定論的な初期化
+  ;; - デーモンに対して安全なフレーム処理
+  ;; - テーマ再読込に対する安全性
+  ;; - Emacs 30 / 31 への前方互換性
+  ;;
+  ;; `my:use-ui' との関係:
+  ;;
+  ;;   `ui-theme--init' は `my:use-ui' で分岐する。
+  ;;   - 'nano / 'doom-nano（`ui-theme-nano-p'）: nano のテーマ、パレット、フェイスの調整を適用する。
+  ;;   - 'doom（`ui-theme-doom-p'）: doom-themes のテーマ `ui-theme-doom-theme' を `load-theme' する。
+  ;;     nano のテーマ、パレット、nano-emacs / nano-theme の導入のいずれも行わない。
+  ;;   - 'none: 何もしない（Emacs の既定のテーマのまま）。
+  ;;   `my:use-ui' はロード時に決まっている（personal/ の設定は modules.el より前に走り、
+  ;;   core-switches は本モジュールより前にロードされる）ので、判定はロード時と
+  ;;   `ui-theme--init' の実行時に行う。
+  ;;
+  ;;   'doom や 'none ではパレットのロードは強制されない。`my:use-ui' が nano 系のときだけ
+  ;;   パレットをロードして nano を適用する。
+  ;;
+  ;;   `ui-theme--apply-faces' が `ui-nano-palette-apply-faces' を fboundp で守るのは、
+  ;;   パレットのファイルが無い場合に備えるためである。
+  ;;
+  ;;   ui-nano-palette の正式なロード経路:
+  ;;   ui-nano-palette の初回ロードを起動する責任を持つのは ui-theme.el のみである。
+  ;;   ui-theme は常に my:modules に含まれるが、下記の
+  ;;   `(require 'ui-nano-palette nil t)' は nano 系のときだけ実行される。
+  ;;   ui-nano-modeline.el と dev-term.el は `with-eval-after-load' で反応するのみで、
+  ;;   ui-nano-palette を直接 require してはならない。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function nano-dark "nano-theme-support")
+  (declare-function nano-light "nano-theme-support")
+
+  (eval-when-compile
+    (require 'leaf))
+
+  (defun ui-theme-nano-p ()
+    "Return non-nil when `my:use-ui' selects a bundle that uses the nano theme.
+  That is `nano' or `doom-nano'."
+    (and (memq (bound-and-true-p my:use-ui) '(nano doom-nano)) t))
+
+  (defun ui-theme-doom-p ()
+    "Return non-nil when `my:use-ui' is `doom', which uses a doom-themes theme.
+  With `none' the default theme is kept."
+    (eq (bound-and-true-p my:use-ui) 'doom))
+
+  ;; NOERROR 形式（第 3 引数 t）なのは、ファイルが見つからなくても起動を止めないため。
+  ;; nano 系の UI のときだけロードする（冒頭の Commentary を参照）。
+  (when (ui-theme-nano-p)
+    (require 'ui-nano-palette nil t)
+
+    ;; パレットのロード直後に、実際のパレット色をテーマへ反映させるためフェイスを再適用する。
+    ;; すでにロード済みならここで即座に実行され、未ロードならロードされた時点で実行される。
+    (with-eval-after-load 'ui-nano-palette
+      (when (fboundp 'ui-theme--apply-faces)
+        (ui-theme--apply-faces))))
+
+  (defgroup ui-theme nil
+    "UI theme configuration."
+    :group 'ui)
+
+  (defcustom ui-theme-enable-p t
+    "Enable UI theme configuration."
+    :type 'boolean
+    :group 'ui-theme)
+
+  (defcustom ui-theme-doom-theme 'doom-one
+    "The doom-themes theme to load when `my:use-ui' is `doom'.
+  Any theme that doom-themes provides, for example `doom-one',
+  `doom-one-light' or `doom-nord'."
+    :type 'symbol
+    :group 'ui-theme)
+
+  (defun ui-theme--color (symbol &optional fallback)
+    "パレット変数 SYMBOL の色を返す。未定義・空なら FALLBACK（省略時は nil）を返す。
+  色の正本は `ui-nano-palette'。ここに色の固定値を重ねて持たないための窓口。
+  `ui-nano-palette-color-*' には FALLBACK を渡さない（既定値は `ui-nano-palette' だけが持つ）。
+  `nano-dark-*' のような外部パッケージの変数には、FALLBACK を渡してよい。"
+    (let ((value (and (boundp symbol) (symbol-value symbol))))
+      (if (and (stringp value) (not (string-empty-p value))) value fallback)))
+
+  (defun ui-theme--safe-face (face &rest args)
+    "Apply ARGS to FACE when FACE exists."
+    (when (facep face)
+      (apply #'set-face-attribute face nil args)))
+
+  (defun ui-theme--apply-faces ()
+    "Apply UI face policy."
+    (when (fboundp 'ui-nano-palette-apply-faces)
+      (ui-nano-palette-apply-faces))
+
+    (ui-theme--safe-face 'bold :weight 'bold)
+    (ui-theme--safe-face 'italic :slant 'italic)
+
+    ;; 以下の固定色は明るい背景用。dark では nano-theme 側に任せる。
+    (unless (eq frame-background-mode 'dark)
+      (let ((subtle (ui-theme--color 'ui-nano-palette-color-subtle))
+            (strong (ui-theme--color 'ui-nano-palette-color-strong)))
+        (when subtle
+          (ui-theme--safe-face 'electric-pair-overlay-face :background subtle))
+        (when (and subtle strong)
+          (ui-theme--safe-face
+           'show-paren-match
+           :background subtle
+           :foreground strong
+           :weight 'bold))))
+
+    ;; nano-modeline のフェイスの同期は、モードライン側（ui-nano-modeline-items.el）が持つ。
+    ;; nano のバンドルを使っていないときは、定義されていないので何もしない。
+    (when (fboundp 'ui-nano-modeline-sync-faces)
+      (ui-nano-modeline-sync-faces))
+
+    (when-let* ((critical (ui-theme--color 'ui-nano-palette-color-critical)))
+      (ui-theme--safe-face
+       'show-paren-mismatch
+       :background critical
+       :foreground "white"
+       :weight 'bold)))
+
+  (defun ui-theme--apply-frame (frame)
+    "Apply graphical UI settings to FRAME."
+    (with-selected-frame frame
+      (when (display-graphic-p frame)
+        (ui-theme--apply-faces))))
+
+  (defun ui-theme--after-theme (&rest _)
+    "Reapply UI policy after theme changes."
+    (ui-theme--apply-faces))
+
+  (defun ui-theme--init-doom ()
+    "Load the doom-themes theme `ui-theme-doom-theme'.
+  A missing doom-themes or an unknown theme only prints a message, so that
+  startup goes on."
+    (if (not (require 'doom-themes nil t))
+        (message "[ui-theme] doom-themes is not available; keeping the default theme.")
+      (condition-case err
+          (load-theme ui-theme-doom-theme t)
+        (error
+         (message "[ui-theme] failed to load %s: %s"
+                  ui-theme-doom-theme (error-message-string err))))))
+
+  (defun ui-theme--init-nano ()
+    "Apply the nano theme, the palette and the face adjustments."
+    (progn
+
+      (require 'nano-layout nil t)
+      (require 'nano-faces nil t)
+
+      (when (member 'nano (custom-available-themes))
+        (load-theme 'nano t)
+        (when (fboundp 'nano-faces)
+          (nano-faces)))
+
+      (ui-theme--apply-faces)
+
+      (add-hook 'after-make-frame-functions #'ui-theme--apply-frame)
+
+      (if (boundp 'enable-theme-functions)
+          (add-hook 'enable-theme-functions #'ui-theme--after-theme)
+        (advice-add 'enable-theme :after #'ui-theme--after-theme))
+
+      (ui-theme--apply-frame (selected-frame))
+      ;; 前回終了時に選んだ variant を復元する（フックの登録後に行う）。
+      (when (fboundp 'ui-theme-variant-restore)
+        (ui-theme-variant-restore))))
+
+  (defun ui-theme--init ()
+    "Initialize UI theme configuration according to `my:use-ui'.
+  `nano' and `doom-nano' get the nano theme (`ui-theme-nano-p'), `doom' gets
+  `ui-theme-doom-theme' (`ui-theme-doom-p'), and `none' keeps the default theme."
+    (when ui-theme-enable-p
+      (cond ((ui-theme-nano-p) (ui-theme--init-nano))
+            ((ui-theme-doom-p) (ui-theme--init-doom)))))
+
+  (leaf doom-themes
+    :when (ui-theme-doom-p)
+    :straight t
+    :require nil)
+
+  (leaf nano-emacs
+    :when (ui-theme-nano-p)
+    :straight (nano-emacs
+               :type git
+               :host github
+               :repo "rougier/nano-emacs"))
+
+  (leaf nano-theme
+    :when (ui-theme-nano-p)
+    :straight (nano-theme
+               :type git
+               :host github
+               :repo "rougier/nano-theme"))
+
+  ;; --daemon 起動時、`emacs-startup-hook' は実フレームが無い状態で走る。
+  ;; `ui-theme--init' は nano-faces / nano-theme を require・適用するが、
+  ;; nano-faces 内部の色計算（`face-foreground' / `face-background' 等）は
+  ;; 実フレームが無いと nil を返し、その nil がフェイスに永久に焼き込まれる
+  ;; （nano-modeline.el の defface と同種の問題。詳細は git log を参照）。
+  ;; 通常起動（ターミナルを含む）では従来どおり `emacs-startup-hook' から
+  ;; 無条件に呼ぶ（ターミナルでも 256 色パレットとして意味があるため、
+  ;; display-graphic-p では絞らない）。daemon の場合のみ、初回のグラフィカル
+  ;; フレームが実体化するまで `core-runtime-run-on-first-graphic-frame' で遅延させる。
+  (declare-function core-runtime-run-on-first-graphic-frame "core-runtime")
+
+  (if (daemonp)
+      (core-runtime-run-on-first-graphic-frame (lambda (_frame) (ui-theme--init)))
+    (add-hook 'emacs-startup-hook #'ui-theme--init))
+
+  (provide 'ui-theme)
+
+  ;;; ui/ui-theme.el ends here
+#+end_src
+
+* ui/ui-bundles.el
+:PROPERTIES:
+:CUSTOM_ID: ui-bundles
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-bundles.el
+:END:
+
+UI バンドル（doom、nano、doom-nano）を =core-switches= の登録簿へ登録するモジュールです。
+
+=core-switches= は core 層にいるため、ui 層のモジュール名を知ってはなりません。そこで名前を知っている
+ui 層の側が、 =core-switches-register= で「この選択肢は、このファイルのこの関数で有効化する」と登録します。
+登録は =autoload= を伴うので、バンドルのファイルは =my:use-ui= で選ばれたときにだけロードされます。
+バンドル本体（ =ui-doom-modeline= 、 =ui-nano-modeline= 、 =ui-doom-nano-modeline= ）は、
+どのリストにも載らず、ここで登録した =autoload= 経由でだけロードされます。
+
+#+NAME: ui-bundles-el
+#+begin_src emacs-lisp
+  ;;; ui/ui-bundles.el --- UI バンドルの登録 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; UI バンドルを `core-switches' の登録簿へ登録する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - doom、nano、doom-nano の 3 つを `core-switches-register' で登録する
+  ;;   （エントリポイントは `my/ui-enable-doom'、`my/ui-enable-nano'、`my/ui-enable-doom-nano'）
+  ;; - `my/ui-nano-modeline-toggle' の autoload を宣言する
+  ;;
+  ;; core-switches は core 層にあり、ui 層のモジュール名を知らない。名前を知る側が登録する。
+  ;; バンドル本体は autoload からのみロードされ、`my:modules' にも `my:modules-extra' にも載らない。
+  ;;; Code:
+
+  (require 'core-switches)
+
+  (core-switches-register 'ui 'doom 'my/ui-enable-doom
+                          "ui/ui-doom-modeline" "Doom UI" "doom-modeline")
+  (core-switches-register 'ui 'nano 'my/ui-enable-nano
+                          "ui/ui-nano-modeline" "Nano UI" "nano-modeline")
+  (core-switches-register 'ui 'doom-nano 'my/ui-enable-doom-nano
+                          "ui/ui-doom-nano-modeline" "Doom Nano UI" "doom-nano-modeline")
+
+  (autoload 'my/ui-nano-modeline-toggle "ui/ui-nano-modeline"
+    "Toggle the nano-modeline header-line." t)
+
+  (provide 'ui-bundles)
+  ;;; ui/ui-bundles.el ends here
+#+end_src
+
+* ui/ui-theme-variant.el
+:PROPERTIES:
+:CUSTOM_ID: ui-theme-variant
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-theme-variant.el
+:END:
+
+nano の light / dark の切替、選んだ variant の保存、起動時の復元のモジュールです。 =ui-theme.el= から分離しました。
+
+切替コマンド =my/ui-theme-nano-switch= の名前は変えていません（リーダーキー =M-SPC t n= が指しています）。
+内部の名前は =ui-theme-variant--*= に、復元の入口は =ui-theme-variant-restore= にしました。
+=ui-theme.el= は、 =ui-theme--init= の最後に、定義されていれば =ui-theme-variant-restore= を呼びます。
+=my:modules= では =ui-theme= の直前に置いています。
+
+#+NAME: ui-theme-variant-el
+#+begin_src emacs-lisp
+  ;;; ui/ui-theme-variant.el --- nano の light / dark の保存と復元 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; nano の light / dark の切替、選んだ variant の保存、起動時の復元。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/ui-theme-nano-switch' で nano-light / nano-dark を切り替え、選択を保存する
+  ;;   （`my:use-ui' が nano 系でなければ user-error）
+  ;; - 前回の選択を `ui-theme-variant-restore' で復元する（ui-theme.el の初期化の最後に呼ばれる）
+  ;; - `ui-theme-variant-follow-system' が非 nil なら、macOS の外観（ライト／ダーク）に追従する。
+  ;;   起動時と `ns-system-appearance-change-functions' で `my/ui-theme-nano-switch' を呼ぶ。
+  ;;   この場合、保存した選択より OS の外観を優先する。手動の切替は次に外観が変わるまでの上書きになる。
+  ;;   デーモンでは `ns-system-appearance' が最初のフレームができるまで決まらないため、
+  ;;   `after-make-frame-functions' から 1 tick 遅らせて合わせる（AGENTS.md の Daemon-mode pattern）
+  ;;; Code:
+
+  (defgroup ui-theme-variant nil
+    "nano の light / dark の切替と保存。"
+    :group 'faces)
+
+  (defcustom ui-theme-variant-follow-system t
+    "非 nil なら、macOS の外観（ライト／ダーク）に nano の variant を合わせる。"
+    :type 'boolean
+    :group 'ui-theme-variant)
+
+  (defvar ns-system-appearance)
+  (defvar ns-system-appearance-change-functions)
+
+  (declare-function nano-dark "nano-theme-support")
+  (declare-function nano-light "nano-theme-support")
+
+  (defvar ui-theme-variant--file
+    (expand-file-name "nano-variant" my:d:var)
+    "最後に選んだ nano の variant（light / dark）を保存するファイル。")
+
+  (defun ui-theme-variant--save (variant)
+    "VARIANT を `ui-theme-variant--file' に保存する。失敗しても無視する。"
+    (ignore-errors
+      (with-temp-file ui-theme-variant--file
+        (insert (symbol-name variant) "\n"))))
+
+  (defun ui-theme-variant-restore ()
+    "保存された variant が dark なら nano-dark を適用する。"
+    (when (file-readable-p ui-theme-variant--file)
+      (when (equal (string-trim
+                    (with-temp-buffer
+                      (insert-file-contents ui-theme-variant--file)
+                      (buffer-string)))
+                   "dark")
+        (my/ui-theme-nano-switch 'dark)))
+    (ui-theme-variant--follow-setup))
+
+  (defun ui-theme-variant--apply-system (&optional appearance)
+    "APPEARANCE（`light' / `dark'。省略時は `ns-system-appearance'）に variant を合わせる。
+  `ui-theme-variant-follow-system' が nil、nano が無効、APPEARANCE が不明のときは何もしない。"
+    (let ((app (or appearance (bound-and-true-p ns-system-appearance))))
+      (when (and ui-theme-variant-follow-system
+                 (memq app '(light dark))
+                 (fboundp 'ui-theme-nano-p)
+                 (ui-theme-nano-p))
+        (my/ui-theme-nano-switch app))))
+
+  (defun ui-theme-variant--follow-setup ()
+    "OS の外観への追従を設定する。外観の変化時と、現在の外観での初期化を登録する。
+  デーモンでは最初のフレームができてから、1 tick 遅らせて合わせる。"
+    (when ui-theme-variant-follow-system
+      (add-hook 'ns-system-appearance-change-functions
+                #'ui-theme-variant--apply-system)
+      (if (daemonp)
+          (add-hook 'after-make-frame-functions
+                    (lambda (_frame)
+                      (run-with-timer 0 nil #'ui-theme-variant--apply-system)))
+        (ui-theme-variant--apply-system))))
+
+  ;;;###autoload
+  (defun my/ui-theme-nano-switch (variant)
+    "nano テーマを VARIANT（`light' または `dark'）に切り替える。
+    `nano-light' / `nano-dark' は `enable-theme' 経由で `nano' を再有効化し、
+    `default-frame-alist' も更新する。`load-theme' で nano-light 等を重ねない。"
+    (interactive
+     (list (intern (completing-read "nano variant: " '("light" "dark") nil t))))
+    (when (and (fboundp 'ui-theme-nano-p) (not (ui-theme-nano-p)))
+      (user-error "nano theme is not enabled (see `my:use-ui')"))
+    (require 'nano-theme-support)
+    (if (eq variant 'dark) (nano-dark) (nano-light))
+    (ui-theme-variant--save variant))
+
+  (provide 'ui-theme-variant)
+  ;;; ui/ui-theme-variant.el ends here
+#+end_src
+
+* ui/ui-window.el
+:PROPERTIES:
+:CUSTOM_ID: ui-window
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-window.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-window.el --- ウィンドウ管理の補助 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; ウィンドウ管理: zoom、desktop セッション、winner、レイアウトのスナップショット。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 黄金比風の自動ウィンドウサイズ調整のため zoom を設定する
+  ;; - `desktop-save-mode' でウィンドウレイアウトをセッション間で永続化する
+  ;; - ウィンドウ構成の undo/redo のため `winner-mode' を有効化する
+  ;; - `my:saved-window-config' に保存する名前付きスナップショットのため
+  ;;   `my/save-window-layout' と `my/restore-window-layout' を提供する
+  ;; - 行間（`ui-window-line-spacing'）と、グラフィカルフレームの余白（spacious-padding）を設定する
+  ;;   （テーマの適用は ui-theme.el が受け持つ）
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf zoom
+    :straight t
+    :custom ((zoom-size . '(0.62 . 0.62))
+             (zoom-ignored-major-modes . '(dired-mode treemacs-mode))
+             (zoom-ignored-buffer-names . '("*Messages*" "*Help*")))
+    :hook (after-init-hook . zoom-mode))
+
+  (leaf desktop
+    :straight nil
+    :config
+    (let ((dir (concat no-littering-var-directory "desktop/")))
+      ;; desktop.* の 8 変数はすべて defcustom（desktop.el）である。
+      ;; setter と型検証が尊重されるよう、let 内で setopt を用いる。
+      ;; desktop-path は実行時に dir から導出する必要があるため、let 束縛は残している。
+      ;;
+      ;; desktop-restore-frames は既定で t である。--daemon 起動時（実
+      ;; ディスプレイ接続が無い状態）でもこれが働き、desktop-read が
+      ;; フレームセットを復元しようとする。復元されたフレームは、実際には
+      ;; 表示に接続していないにもかかわらず、以前の GUI セッションで保存された
+      ;; フレームパラメータ（display / window-system 等）を持つため、
+      ;; (display-graphic-p FRAME) が true を返してしまう「ゾンビフレーム」に
+      ;; なる。これが nano-modeline / ui-theme / vertico-posframe 等の
+      ;; after-make-frame-functions ガードを素通りさせ、色計算が壊れる
+      ;; 直接の原因だった（個別パッケージ側をいくら直しても、この根本原因を
+      ;; 直さない限り再発する）。daemon では実フレームは emacsclient の接続に
+      ;; よってのみ作られるべきなので、daemon 起動時に限り無効化する。
+      ;; バッファの復元（desktop-restore-eager）には影響しない。
+      ;;
+      ;; desktop-load-locked-desktop は check-pid とする。nil だと、
+      ;; クラッシュや強制終了のあとに古いロックファイルが残ると、持ち主の PID が
+      ;; すでに死んでいても「Desktop file in use; not loaded.」となって読み込まれず、
+      ;; 終了時の保存も失敗する（desktop-owner は PID が生きているかを調べない）。
+      ;; check-pid は、ロックの持ち主が自分、または生きていない場合に読み込む。
+      ;; 別の Emacs が実際に使っている間は、従来どおり読み込まない。
+      (setopt desktop-dirname              dir
+              desktop-path                 (list dir)
+              desktop-base-file-name       "desktop"
+              desktop-base-lock-name       "lock"
+              desktop-restore-eager        10
+              desktop-restore-frames       (not (daemonp))
+              desktop-save                 t
+              desktop-load-locked-desktop  'check-pid
+              desktop-auto-save-timeout    300)
+      (my/ensure-directory-exists dir)
+      (desktop-save-mode 1)))
+
+  (leaf winner :straight nil :global-minor-mode t)
+
+  (defvar my:saved-window-config nil)
+
+  (defun my/save-window-layout ()
+    "Save the current window configuration to `my:saved-window-config'."
+    (interactive)
+    (setq my:saved-window-config (window-state-get nil t))
+    (message "Window configuration saved."))
+
+  (defun my/restore-window-layout ()
+    "Restore the window configuration saved by `my/save-window-layout'."
+    (interactive)
+    (if my:saved-window-config
+        (window-state-put my:saved-window-config)
+      (message "No saved window configuration found.")))
+
+  (defgroup ui-window nil
+    "Window and frame layout."
+    :group 'ui)
+
+  (defcustom ui-window-line-spacing 0.24
+    "Default line spacing."
+    :type 'number
+    :group 'ui-window)
+
+  (setq-default line-spacing ui-window-line-spacing)
+
+  (leaf spacious-padding
+    :straight t
+    :custom
+    ((spacious-padding-widths . '((left . 15) (right . 15)))
+     (spacious-padding-subtle-mode-line . t)))
+
+  (declare-function spacious-padding-mode "spacious-padding")
+
+  (defun ui-window--apply-padding (&optional frame)
+    "FRAME（省略時は選択中のフレーム）がグラフィカルなら spacious-padding を有効にする。"
+    (when (and (fboundp 'spacious-padding-mode)
+               (display-graphic-p (or frame (selected-frame))))
+      (spacious-padding-mode 1)))
+
+  ;; テーマの適用（ui-theme.el）より後に走らせるため、フックの深さを 90 にする。
+  ;; spacious-padding-mode はグローバルなマイナーモードで、何度呼んでも害はない。
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'ui-window--apply-padding 90)
+    (add-hook 'emacs-startup-hook #'ui-window--apply-padding 90))
+
+  (provide 'ui-window)
+  ;;; ui/ui-window.el ends here
+#+end_src
+
+* ui/ui-utils.el
+:PROPERTIES:
+:CUSTOM_ID: ui-utils
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-utils.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-utils.el --- UI ユーティリティと Treemacs 設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; UI の雑多なユーティリティと統合。
+  ;;
+  ;; 提供するもの:
+  ;;
+  ;; - minions によるモードラインの圧縮
+  ;; - 時刻とバッテリーの表示
+  ;; - Treemacs の設定
+  ;; - Dired のアイコン
+  ;; - macOS のクリップボード統合
+  ;;
+  ;; 本モジュールは意図的に、UI のコアポリシーを定義しない。
+
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function treemacs-filewatch-mode "treemacs-filewatch-mode")
+  (declare-function treemacs-follow-mode "treemacs-follow-mode")
+
+  (eval-when-compile (require 'leaf))
+
+  ;; --------------------------------------------------
+  ;; モードライン関連のユーティリティ
+  ;; --------------------------------------------------
+
+  (leaf minions
+    :straight t
+    :custom ((minions-mode-line-lighter . "⚙"))
+    :hook (after-init-hook . minions-mode))
+
+  ;; --------------------------------------------------
+  ;; 時刻 / バッテリー表示
+  ;; --------------------------------------------------
+
+  (leaf time
+    :straight nil
+    :custom ((display-time-interval . 30)
+             (display-time-day-and-date . t)
+             (display-time-24hr-format . t))
+    :hook (after-init-hook . display-time-mode))
+
+  (leaf battery
+    :straight nil
+    :if (fboundp 'display-battery-mode)
+    :custom ((battery-load-low . 30)
+             (battery-load-critical . 15))
+    :hook (after-init-hook . display-battery-mode))
+
+  ;; --------------------------------------------------
+  ;; Treemacs
+  ;; --------------------------------------------------
+
+  ;; leaf の :if は「モジュールのロード時」に一度だけ評価される。--daemon
+  ;; 起動時はその時点で実フレームが無いため (display-graphic-p) は常に nil
+  ;; となり、treemacs パッケージ自体が永久にロードされない（ligature・
+  ;; vertico-posframe と同じ daemon 対応バグ）。treemacs はユーザーが
+  ;; M-x treemacs で明示的に呼ぶまで自動起動しないパッケージであり、
+  ;; ターミナルでも（アイコンは無いが）動作するため、display-graphic-p での
+  ;; 事前ゲートは不要である。:if を撤去し、:require nil による通常の遅延
+  ;; ロード（初回コマンド呼び出し時に本体がロードされ、そのとき初めて
+  ;; カスタム変数とフックが with-eval-after-load 経由で適用される）に変更した。
+  (leaf treemacs
+    :straight t
+    :require nil)
+
+  (with-eval-after-load 'treemacs
+    (setopt treemacs-indentation 2
+            treemacs-missing-project-action 'remove)
+    (add-hook 'treemacs-mode-hook #'treemacs-filewatch-mode)
+    (add-hook 'treemacs-mode-hook #'treemacs-follow-mode))
+
+  ;; --------------------------------------------------
+  ;; Dired アイコン
+  ;; --------------------------------------------------
+
+  (leaf nerd-icons-dired
+    :straight t
+    :hook (dired-mode-hook . nerd-icons-dired-mode))
+
+  ;; --------------------------------------------------
+  ;; macOS クリップボード
+  ;; --------------------------------------------------
+
+  ;; leaf の :if (memq window-system '(mac ns)) は、グローバル変数
+  ;; window-system をモジュールのロード時に一度だけ読む。--daemon 起動時は
+  ;; その時点で実フレームが無いため window-system は nil となり、pbcopy が
+  ;; 永久に有効化されない（ligature 等と同じ daemon 対応バグ）。グローバル
+  ;; 変数ではなく、実際に作られたフレームの種別を (framep frame) で個別に
+  ;; 確認する形に変更した。
+  (leaf pbcopy
+    :straight t
+    :require nil)
+
+  (defvar ui-utils--pbcopy-activated-p nil)
+
+  (defun ui-utils--maybe-activate-pbcopy (&optional frame)
+    "FRAME が macOS の GUI（mac/ns）なら pbcopy を一度だけ有効化する。"
+    (unless ui-utils--pbcopy-activated-p
+      (when (memq (framep (or frame (selected-frame))) '(mac ns))
+        (setq ui-utils--pbcopy-activated-p t)
+        (require 'pbcopy)
+        (turn-on-pbcopy))))
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'ui-utils--maybe-activate-pbcopy)
+    (add-hook 'after-init-hook #'ui-utils--maybe-activate-pbcopy))
+
+  (provide 'ui-utils)
+
+  ;;; ui/ui-utils.el ends here
+#+end_src
+
+* ui/ui-health-modeline.el
+:PROPERTIES:
+:CUSTOM_ID: ui-health-modeline
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-health-modeline.el
+:END:
+
+** ui-health-modeline.el — Session Status Display
+
+モードラインに、バッファ数・プロセス数・Eglot が管理するバッファ数を出すだけのモジュール
+です。ただし、書き方には注意が必要です。
+
+*eglot が無い環境でも壊さない*
+
+=featurep= と =fboundp= の二重チェックで、eglot が存在しない環境でのエラーを防いでいます。
+eglot が読み込まれていて接続が無いときは、管理下のバッファが 0 個なので =LSP:0= と表示されます。
+
+*軽さが正義*
+
+この関数はモードラインが更新されるたびに呼ばれます。つまり、ほぼ全てのコマンドの後に走ると
+思ってください。重い処理を書けば、その分だけ Emacs 全体がもたつきます。
+
+=length= による O(n) の走査は、バッファ数・プロセス数の規模なら許容範囲です。それ以上のことを
+ここでやりたくなったら、いったん立ち止まってください。
+#+begin_src emacs-lisp
+  ;;; ui/ui-health-modeline.el --- セッションの健全性インジケータ -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; モードラインに軽量なセッション健全性インジケータを表示する。
+  ;;
+  ;; 表示する指標:
+  ;;
+  ;;  - バッファ数
+  ;;  - 実行中プロセス数
+  ;;  - Eglot が管理するバッファ数
+  ;;
+  ;; これらの指標により、重い計測機構を持ち込むことなく、Emacs セッションの負荷と
+  ;; バックグラウンド活動を即座に把握できる。
+
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf) (require 'subr-x))
+
+  (defgroup ui-health-modeline nil
+    "Mode-line indicators for session health."
+    :group 'mode-line)
+
+  (defcustom ui-health-show-buffers-p t
+    "If non-nil, display the number of live buffers."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defcustom ui-health-show-processes-p t
+    "If non-nil, display the number of running processes."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defcustom ui-health-show-eglot-p t
+    "If non-nil, display the number of Eglot-managed buffers."
+    :type 'boolean
+    :group 'ui-health-modeline)
+
+  (defvar ui-health--mode-line-string ""
+    "Mode-line string containing session health indicators.")
+
+  (defun ui-health--buffers-count ()
+    "Return the number of live buffers."
+    (length (buffer-list)))
+
+  (defun ui-health--processes-count ()
+    "Return the number of active processes."
+    (length (process-list)))
+
+  (defun ui-health--eglot-count ()
+    "Return the number of buffers currently managed by Eglot.
+
+  Returns nil when Eglot is not loaded or unavailable."
+    (when (and ui-health-show-eglot-p
+               (featurep 'eglot)
+               (fboundp 'eglot-managed-buffers))
+      (length (eglot-managed-buffers))))
+
+  (defun ui-health--update ()
+    "Update the mode-line session health indicators."
+    (setq ui-health--mode-line-string
+          (concat
+           (when ui-health-show-buffers-p
+             (format " B:%d" (ui-health--buffers-count)))
+           (when ui-health-show-processes-p
+             (format " P:%d" (ui-health--processes-count)))
+           (when-let* ((n (ui-health--eglot-count)))
+             (format " LSP:%d" n))))
+    (force-mode-line-update))
+
+  (add-hook 'buffer-list-update-hook #'ui-health--update)
+  (add-hook 'process-status-change-hook #'ui-health--update)
+
+  (with-eval-after-load 'eglot
+    (add-hook 'eglot-managed-mode-hook #'ui-health--update)
+    (add-hook 'eglot-shutdown-hook #'ui-health--update))
+
+  ;; `global-mode-string' は、先頭が "" の文字列のリストにする。先頭が文字列でないと、
+  ;; `(ui-health--mode-line-string)' のような「シンボルで始まるリスト」が (SYMBOL THEN ELSE)
+  ;; の条件式として解釈され、doom-modeline などでは "*invalid*" と表示されていた（nano では
+  ;; モードラインを隠すので見えなかった）。`display-time-mode' なども同じ作法で空文字列を置く。
+  (unless (member 'ui-health--mode-line-string global-mode-string)
+    (setq global-mode-string
+          (append (or global-mode-string '(""))
+                  '(ui-health--mode-line-string))))
+
+  (ui-health--update)
+
+  (provide 'ui-health-modeline)
+
+  ;;; ui/ui-health-modeline.el ends here
+#+end_src
+
+* ui/ui-imenu.el
+:PROPERTIES:
+:CUSTOM_ID: ui-imenu
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-imenu.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-imenu.el --- Imenu / アウトラインの UI 統合 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Imenu を用いたシンボル・ナビゲーションの UI 統合。
+  ;;
+  ;; `imenu-list' によるサイドパネルのシンボル・アウトラインを提供する。
+  ;; 本モジュールは Imenu の意味論を変更せず、大きなバッファを移動するための
+  ;; 視覚的な索引を追加するだけである。
+  ;;
+  ;; 機能:
+  ;;
+  ;; - 左側のシンボルツリー
+  ;; - 有効化時の自動フォーカス
+  ;; - Imenu 対応メジャーモードとの軽量な統合
+  ;;
+  ;; 本モジュールは意図的に設定を最小限に保っている。
+
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+  (require 'imenu)
+
+  (leaf imenu-list
+    :straight t
+    :commands (imenu-list-minor-mode
+               imenu-list-display-dwim
+               imenu-list-stop-timer)
+    :custom ((imenu-list-position . 'left)
+             (imenu-list-size . 36)
+             (imenu-list-focus-after-activation . t)))
+
+  (provide 'ui-imenu)
+
+  ;;; ui/ui-imenu.el ends here
+#+end_src
+
+* ui/ui-leader.el
+:PROPERTIES:
+:CUSTOM_ID: ui-leader
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-leader.el
+:END:
+
+** ui-leader.el — Leader Key Infrastructure
+
+なぜ =M-SPC= なのか
+
+[[file:../svg/11_leader_keymap.svg]]
+
+リーダーキーは =C-c SPC= から =M-SPC= に変更しました。3 打鍵が 2 打鍵になります。
+
+=M-SPC= を選んだ理由は 3 つあります。素の Emacs で使われていないこと、macOS に横取り
+されないこと、そして親指とスペースバーの和音として押しやすいこと。リーダーはすべての操作の
+入口になるので、ここでの 1 打鍵の差は積み重なると大きく効きます。
+
+*実装の要点*
+
+=define-prefix-command= で、プレフィックス用のキーマップを変数として作っています。すでに
+キーマップがあれば作り直さずに再利用するので、何度呼んでも安全です。
+
+キーの割り当ては =keymap-set= を使います。 =define-key= + =kbd= の組み合わせを置き換える、
+Emacs 29 以降の API です。
+
+*サブマップの連鎖*
+
+=M-SPC b l= は次のように解決されます。
+
+: M-SPC b l → ui-leader-map["b"] → ui-leader-b-map["l"] → ibuffer
+
+2 段の間接参照になっているので、 =b= 配下に何を足しても、他のグループには影響しません。
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-leader.el --- リーダーキー基盤 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 階層的なリーダーキーの基盤。
+  ;;
+  ;; 本モジュールが定義するのはキーマップと、ルート・リーダー接頭辞の
+  ;; グローバル設置のみである。実際のコマンド割り当ては行わない。
+  ;;
+  ;; 配置は意図的に安定かつ削除安全である:
+  ;;
+  ;; M-SPC  （旧: C-c SPC — 3 打鍵から 2 打鍵に削減）
+  ;; ├─ SPC  execute-extended-command （M-x。3 打鍵）
+  ;; ├─ RET  consult-buffer      （最頻出: 合計 3 打鍵）
+  ;; ├─ /    consult-line        （3 打鍵）
+  ;; ├─ .    other-window        （3 打鍵）
+  ;; ├─ f    find-file           （3 打鍵）
+  ;; ├─ F    find-file-other-window
+  ;; ├─ O    find-file-other-frame
+  ;; ├─ k    smart-kill-buffer   （3 打鍵）
+  ;; ├─ u    revert-buffer       （3 打鍵）
+  ;; ├─ z    text-scale-hydra
+  ;; ├─ b    バッファ
+  ;; ├─ w    ウィンドウ （+ace-window, winner）
+  ;; ├─ p    プロジェクト
+  ;; ├─ s    検索     （+consult-find）
+  ;; ├─ g    git      （+diff, log）
+  ;; ├─ c    コード   （+flymake のエラー）
+  ;; ├─ e    エラー   （flymake のショートカット）
+  ;; ├─ t    トグル   （+line-numbers, visual-line）
+  ;; ├─ o    org/roam （+todo, schedule, deadline, roam）
+  ;; ├─ m    ローカルリーダー（モード固有）
+  ;; ├─ a    アプリ   （vterm, music, docker）
+  ;; ├─ q    終了 / セッション
+  ;; └─ h    ヘルプ   （describe-*）
+  ;;
+  ;; 他のモジュールが、これらのマップにコマンドをバインドすることを想定している。
+
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup ui-leader nil
+    "Leader key infrastructure."
+    :group 'convenience)
+
+  (defcustom ui-leader-key "M-SPC"
+    "Root key sequence used for the global leader key.
+  Changed from \"C-c SPC\" (3 keystrokes) to \"M-SPC\" (2 keystrokes)
+  to reduce keystroke overhead for all leader-prefixed commands."
+    :type 'string
+    :group 'ui-leader)
+
+  (defcustom ui-leader-local-suffix "m"
+    "Suffix key used for the local leader prefix."
+    :type 'string
+    :group 'ui-leader)
+
+  (defcustom ui-leader-enable-p t
+    "If non-nil, install the global leader key."
+    :type 'boolean
+    :group 'ui-leader)
+
+  (defvar ui-leader-map nil
+    "Root leader keymap.")
+
+  (defvar ui-leader-b-map nil
+    "Leader keymap for buffer commands.")
+
+  (defvar ui-leader-w-map nil
+    "Leader keymap for window commands.")
+
+  (defvar ui-leader-p-map nil
+    "Leader keymap for project commands.")
+
+  (defvar ui-leader-s-map nil
+    "Leader keymap for search commands.")
+
+  (defvar ui-leader-g-map nil
+    "Leader keymap for Git commands.")
+
+  (defvar ui-leader-c-map nil
+    "Leader keymap for code commands.")
+
+  (defvar ui-leader-e-map nil
+    "Leader keymap for error and evaluation commands.")
+
+  (defvar ui-leader-t-map nil
+    "Leader keymap for toggle commands.")
+
+  (defvar ui-leader-o-map nil
+    "Leader keymap for open and Org-related commands.")
+
+  (defvar ui-leader-m-map nil
+    "Leader keymap for local leader commands.")
+
+  (defvar ui-leader-a-map nil
+    "Leader keymap for application commands.")
+
+  (defvar ui-leader-q-map nil
+    "Leader keymap for quit and session commands.")
+
+  (defvar ui-leader-h-map nil
+    "Leader keymap for help commands.")
+
+  (defun ui-leader--ensure-prefix-map (symbol)
+    "Ensure SYMBOL names a prefix keymap and return it."
+    (unless (and (boundp symbol) (keymapp (symbol-value symbol)))
+      (define-prefix-command symbol))
+    (symbol-value symbol))
+
+  (defun ui-leader--define-maps ()
+    "Create leader maps and install the fixed prefix hierarchy."
+    (ui-leader--ensure-prefix-map 'ui-leader-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-b-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-w-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-p-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-s-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-g-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-c-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-e-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-t-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-o-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-m-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-a-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-q-map)
+    (ui-leader--ensure-prefix-map 'ui-leader-h-map)
+
+    (keymap-set ui-leader-map "b" ui-leader-b-map)
+    (keymap-set ui-leader-map "w" ui-leader-w-map)
+    (keymap-set ui-leader-map "p" ui-leader-p-map)
+    (keymap-set ui-leader-map "s" ui-leader-s-map)
+    (keymap-set ui-leader-map "g" ui-leader-g-map)
+    (keymap-set ui-leader-map "c" ui-leader-c-map)
+    (keymap-set ui-leader-map "e" ui-leader-e-map)
+    (keymap-set ui-leader-map "t" ui-leader-t-map)
+    (keymap-set ui-leader-map "o" ui-leader-o-map)
+    (keymap-set ui-leader-map ui-leader-local-suffix ui-leader-m-map)
+    (keymap-set ui-leader-map "a" ui-leader-a-map)
+    (keymap-set ui-leader-map "q" ui-leader-q-map)
+    (keymap-set ui-leader-map "h" ui-leader-h-map))
+  (defun ui-leader--bind-root ()
+    "Bind the root leader key globally."
+    (when ui-leader-enable-p
+      (ui-leader--define-maps)
+      (if (fboundp 'keymap-global-set)
+          (keymap-global-set ui-leader-key ui-leader-map)
+        (global-set-key (kbd ui-leader-key) ui-leader-map))))
+
+  ;; after-init-hook に遅延させず、ロード時に即座に実行する。
+  ;; ui-keymap.el が (require 'ui-leader) で事前ロードを保証しているため、その時点で
+  ;; すべてのマップが完全に定義されていなければならない。
+  (ui-leader--bind-root)
+
+  (provide 'ui-leader)
+
+  ;;; ui/ui-leader.el ends here
+#+end_src
+
+* ui/ui-hydra.el
+:PROPERTIES:
+:CUSTOM_ID: ui-hydra
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-hydra.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-hydra.el --- UI 用の Hydra（オプション） -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; UI 層が用いるオプションの Hydra ヘルパー。
+  ;;
+  ;; Hydra は、テキストの拡大縮小などの対話的な調整のために、小さな一時キーマップを
+  ;; 提供する。
+  ;;
+  ;; 本モジュールは Hydra を初回呼び出し時にのみ遅延定義するため、`hydra' パッケージが
+  ;; インストールされていない環境でも設定は正しく動作する。
+  ;;
+
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+
+  (defgroup ui-hydra nil
+    "Hydra helpers for UI."
+    :group 'convenience)
+
+  (defcustom ui-hydra-enable-p t
+    "If non-nil, enable optional Hydra helpers."
+    :type 'boolean
+    :group 'ui-hydra)
+
+  (defvar ui-hydra-text-scale--defined nil
+    "Non-nil once the text scale hydra has been defined.")
+
+  (defun ui-hydra-define-text-scale ()
+    "Define the text scale hydra if Hydra is available.
+
+  The hydra provides quick access to:
+
+  - increase text scale
+  - decrease text scale
+  - reset scaling"
+    (when (and ui-hydra-enable-p
+               (not ui-hydra-text-scale--defined)
+               (require 'hydra nil t))
+      (setq ui-hydra-text-scale--defined t)
+      (defhydra ui-hydra-text-scale (:hint nil :color red)
+  	      "
+  ^Text Scaling^
+  [_+_] increase   [_-_] decrease   [_0_] reset   [_q_] quit
+  "
+  	      ("+" text-scale-increase)
+  	      ("-" text-scale-decrease)
+  	      ("0" (text-scale-set 0) :color blue)
+  	      ("q" nil "quit" :color blue))))
+
+  (defun ui-hydra-text-scale/body ()
+    "Activate the text scaling hydra.
+
+  If Hydra is not installed, signal a user error."
+    (interactive)
+    (ui-hydra-define-text-scale)
+    (if (fboundp 'ui-hydra-text-scale/body)
+        (call-interactively 'ui-hydra-text-scale/body)
+      (user-error "Hydra is not available")))
+
+  (provide 'ui-hydra)
+
+  ;;; ui-hydra.el ends here
+#+end_src
+
+* ui/ui-which-key.el
+:PROPERTIES:
+:CUSTOM_ID: ui-which-key
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-which-key.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-which-key.el --- リーダーマップ向け which-key 統合 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; リーダーキー基盤のための which-key 統合。
+  ;;
+  ;; Emacs 30 以降は which-key を組み込みパッケージとして同梱している。それ以前の
+  ;; バージョンでは単体パッケージを導入する。
+  ;;
+  ;; 本モジュールが設定するもの:
+  ;;
+  ;; - which-key の有効化
+  ;; - リーダーキー接頭辞のラベル
+  ;; - アイドル遅延の設定
+  ;;
+  ;; 本モジュールはリーダーのバインドを定義しない。ミニバッファのポップアップにおける
+  ;; 発見容易性を高めるだけである。
+
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+
+  (defgroup ui-which-key nil
+    "which-key integration."
+    :group 'convenience)
+
+  (defcustom ui-which-key-enable-p t
+    "If non-nil, enable which-key integration."
+    :type 'boolean
+    :group 'ui-which-key)
+
+  (defcustom ui-which-key-idle-delay 0.4
+    "Idle delay in seconds before which-key popup appears."
+    :type 'number
+    :group 'ui-which-key)
+
+  ;; Emacs 30 未満のみ MELPA から単体パッケージを導入する。Emacs 30 以降は組み込みの
+  ;; ため何もしない（straight には一切触れさせない）。有効化（which-key-mode 1）と設定は
+  ;; 両バージョンとも下記の `ui-which-key--startup-init' が一元的に行う。
+  ;;
+  ;; version<= による文字列比較ではなく整数の emacs-major-version を使う。
+  ;; "30.0.90"（プレリリース）のようなバージョン文字列は固定文字列 "30.0" との比較結果が
+  ;; 予測しにくいのに対し、整数比較は曖昧さがない。
+  ;;
+  ;; `(leaf which-key :straight nil/t :if (...))' という2つの leaf 宣言に分ける方式は使えない。
+  ;; Emacs 30 環境（which-key が組み込みの場合）で実機検証したところ
+  ;; "Symbol's value as variable is void: which-key" というエラーで ui-which-key.el
+  ;; 自体の読み込みが失敗することが判明した。leaf-keywords.el の :straight 拡張と
+  ;; :if の組み合わせ方に起因すると見られるが、正確な内部要因までは特定できていない。
+  ;; leaf マクロを経由せず素の elisp でバージョン分岐すれば、この問題自体を回避できる。
+  (when (< emacs-major-version 30)
+    (straight-use-package 'which-key))
+
+  (defun ui-which-key--label-leader-groups ()
+    "Attach descriptive labels to leader key prefixes for which-key."
+    (when (and (featurep 'which-key)
+               (fboundp 'which-key-add-key-based-replacements)
+               (boundp 'ui-leader-key)
+               (stringp ui-leader-key))
+      (let ((p ui-leader-key))
+        (dolist (it `((,p . "leader")
+                      (,(concat p " b") . "buffers")
+                      (,(concat p " w") . "windows")
+                      (,(concat p " p") . "project")
+                      (,(concat p " s") . "search")
+                      (,(concat p " g") . "git")
+                      (,(concat p " c") . "code")
+                      (,(concat p " e") . "errors")
+                      (,(concat p " t") . "toggles")
+                      (,(concat p " o") . "org/roam")
+                      (,(concat p " m") . "mode/local")
+                      (,(concat p " a") . "apps")
+                      (,(concat p " q") . "quit/session")
+                      (,(concat p " h") . "help/describe")))
+          (which-key-add-key-based-replacements (car it) (cdr it))))))
+
+  (defun ui-which-key--startup-init ()
+    "Initialize which-key integration at startup."
+    (when (and ui-which-key-enable-p
+               (require 'which-key nil t))
+      (setopt which-key-idle-delay ui-which-key-idle-delay)
+      (which-key-mode 1)
+      (ui-which-key--label-leader-groups)))
+
+  (add-hook 'after-init-hook #'ui-which-key--startup-init)
+
+  (provide 'ui-which-key)
+
+  ;;; ui-which-key.el ends here
+#+end_src
+
+* ui/ui-keyboard.el
+:PROPERTIES:
+:CUSTOM_ID: ui-keyboard
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-keyboard.el
+:END:
+
+キーボード変換（ =C-h= を =DEL= に読み替える）のモジュールです。 =ui-keymap.el= から分離しました。
+
+変数と関数の接頭辞は最初から =ui-keyboard-= でしたが、ファイルが =ui-keymap.el= だったため、
+モジュール名と接頭辞が食い違っていました（コーディング規則 7）。リーダーキーの割り当てとは
+無関係な話題なので、独立したモジュールにしています。処理内容は変えていません。
+
+ =my:modules= では =ui-keymap= の直前に置いています。分離前は =ui-keymap= のロード時に
+ =ui-keyboard--apply= が実行されていたので、実行のタイミングを変えないためです。
+
+#+NAME: ui-keyboard-el
+#+begin_src emacs-lisp
+  ;;; ui/ui-keyboard.el --- キーボード変換（C-h → DEL） -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 任意のキーボード変換。`ui-keyboard-map-c-h-to-del' が非 nil のとき、
+  ;; `key-translation-map' で C-h を DEL に読み替える。オプションを変更すると
+  ;; 変数ウォッチャーが再適用する。
+  ;;; Code:
+
+  (defgroup ui-keyboard nil
+    "Keyboard translation helpers."
+    :group 'ui)
+
+  (defcustom ui-keyboard-map-c-h-to-del t
+    "If non-nil, translate C-h to DEL (Backspace)."
+    :type 'boolean
+    :group 'ui-keyboard)
+
+  (defvar ui-keyboard--translation-active-p nil
+    "Non-nil when the C-h → DEL translation is currently active.")
+
+  (defun ui-keyboard--apply ()
+    "Apply or remove keyboard translations according to configuration."
+    (cond
+     ((and ui-keyboard-map-c-h-to-del
+           (not ui-keyboard--translation-active-p))
+      ;; define-key + kbd → keymap-set（Emacs 29 以降の API）
+      ;; key-translation-map は通常のキーマップであり、keymap-set に対応している。
+      (keymap-set key-translation-map "C-h" "DEL")
+      (setq ui-keyboard--translation-active-p t))
+     ((and (not ui-keyboard-map-c-h-to-del)
+           ui-keyboard--translation-active-p)
+      (keymap-set key-translation-map "C-h" nil)
+      (setq ui-keyboard--translation-active-p nil))))
+
+  (ui-keyboard--apply)
+
+  ;; watcher は無名 lambda ではなく名前付き defun にする。
+  ;; add-variable-watcher に渡した無名 lambda は remove-variable-watcher で除去できず、
+  ;; describe-function で検査もできず、eval-buffer をまたいだ重複登録に対しても安全でない。
+  ;; 副作用を伴う登録は名前付き関数で行う、というプロジェクト全体の規約でもある。
+  ;;
+  (defun ui-keyboard--watcher (_sym _newval _op _where)
+    "Variable watcher: re-apply keyboard translation when the option changes."
+    (ui-keyboard--apply))
+
+  (add-variable-watcher 'ui-keyboard-map-c-h-to-del #'ui-keyboard--watcher)
+
+  (provide 'ui-keyboard)
+  ;;; ui/ui-keyboard.el ends here
+#+end_src
+
+* ui/ui-keymap.el
+:PROPERTIES:
+:CUSTOM_ID: ui-keymap
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-keymap.el
+:END:
+
+** ui-keymap.el — Binding Strategy
+
+キーバインドの設計では、「よく使うものほど短く」を徹底しています。方針は次の 3 つです。
+
+| 方針 | 例 |
+|----------+-----|
+| リーダーを短縮する | =C-c SPC= → =M-SPC= （−1 打鍵） |
+| 高頻度コマンドを最上位に昇格する | =M-SPC RET= = consult-buffer（5→3 打鍵） |
+| より短い全体キーが存在する場合はバインドを削除する | =next-buffer= は =s-→= （2 打鍵）の方が短い |
+
+3 つ目が見落とされがちです。バインドは増やすほど良いわけではありません。既に短い経路がある
+コマンドをリーダー配下にも置くと、覚えることが増えるだけで、実際には使われません。
+
+なぜ =ui-keymap-bind= がシンボルを受け取るのか
+
+=ui-keymap-bind= は =map= をキーマップそのものではなく、シンボルとして受け取ります。そして
+=keymap-set= を呼ぶ前に、 =keymapp= で本当にキーマップかどうかを確認します。
+
+この一手間のおかげで、 =ui-leader.el= がまだロードされていない状況でも、エラーで停止せずに
+安全に動きます。削除安全性の考え方を、キーバインドの層でも守っている形です。
+#+NAME: ui-keymap
+#+begin_src emacs-lisp
+  ;;; ui/ui-keymap.el --- リーダーおよびローカルリーダーのバインド -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; リーダーキーへのコマンド割り当て。
+  ;;
+  ;; 本モジュールが定義するもの:
+  ;;
+  ;; - グローバルなリーダーのバインド
+  ;; - メジャーモード向けのローカルリーダーのバインド
+  ;;
+  ;; dirvish 専用のキー割り当ては ui-dirvish-keys.el が受け持つ。
+  ;;
+  ;; キーボード変換（C-h → DEL）は ui-keyboard.el が受け持つ。
+  ;; 接頭辞が `ui-keyboard-' で、リーダーとは無関係なためである。
+  ;;
+  ;; リーダーキーの基盤そのものは `ui-leader.el' で定義される。
+  ;; 本モジュールは、それらのマップにコマンドを割り当てるだけである。
+
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function flymake-goto-next-error "flymake")
+  (declare-function flymake-goto-prev-error "flymake")
+  (declare-function org-deadline "org")
+  (declare-function org-schedule "org")
+  (declare-function org-todo "org")
+
+  (eval-when-compile (require 'subr-x))
+  (require 'ui-leader nil t)
+
+  (defun ui-keymap-bind (map key cmd)
+    "Bind KEY to CMD inside MAP when MAP exists."
+    (when (and (symbolp map)
+               (boundp map)
+               (keymapp (symbol-value map)))
+      (keymap-set (symbol-value map) key cmd)))
+
+  (defun ui-keymap--leader-bind (key cmd)
+    "Bind KEY to CMD in the root leader map."
+    (when (and (boundp 'ui-leader-map)
+               (keymapp ui-leader-map))
+      (keymap-set ui-leader-map key cmd)))
+
+  (defun ui-keymap--leader-binds ()
+    "Install global leader key bindings.
+  Leader key is M-SPC (2 keystrokes), replacing the former C-c SPC (3 keystrokes).
+  High-frequency commands are bound directly at leader level (3 keystrokes total).
+  Submap commands reach 4 keystrokes.
+  Redundant paths via global keys are removed."
+    ;; ── リーダー直下（3 打鍵）: 最も頻繁に使うコマンド ────────────────────────
+    (ui-keymap--leader-bind "SPC" #'execute-extended-command)   ; M-SPC SPC = M-x
+    (ui-keymap--leader-bind "RET" #'consult-buffer)             ; fastest buffer switch
+    (ui-keymap--leader-bind "/"   #'consult-line)               ; C-s also bound
+    (ui-keymap--leader-bind "."   #'other-window)               ; C-. also bound
+    (ui-keymap--leader-bind "f"   #'find-file)
+    (ui-keymap--leader-bind "F"   #'find-file-other-window)
+    (ui-keymap--leader-bind "O"   #'find-file-other-frame)
+    ;; k (smart-kill-buffer) は utils-buffers.el 側で割り当てる（層の方向のため）。
+    (ui-keymap--leader-bind "u"   #'revert-buffer)              ; was b r (5 keys)
+    (ui-keymap--leader-bind "z"   #'ui-hydra-text-scale/body)
+
+    ;; ── b: バッファ ────────────────────────────────────────────────────────────
+    ;; next/previous-buffer は削除: s-left / s-right（グローバル、2 打鍵）を使う
+    (ui-keymap-bind 'ui-leader-b-map "b" #'consult-buffer)     ; alias for RET
+    (ui-keymap-bind 'ui-leader-b-map "l" #'ibuffer)            ; list all buffers
+    (ui-keymap-bind 'ui-leader-b-map "r" #'revert-buffer)      ; alias for u
+
+    ;; ── w: ウィンドウ ──────────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-w-map "s" #'split-window-below)
+    (ui-keymap-bind 'ui-leader-w-map "v" #'split-window-right)
+    (ui-keymap-bind 'ui-leader-w-map "d" #'delete-window)
+    (ui-keymap-bind 'ui-leader-w-map "o" #'delete-other-windows)
+    (ui-keymap-bind 'ui-leader-w-map "=" #'balance-windows)
+    (ui-keymap-bind 'ui-leader-w-map "w" #'ace-window)  ; pick window
+    (ui-keymap-bind 'ui-leader-w-map "r" #'winner-undo)  ; undo layout
+    (ui-keymap-bind 'ui-leader-w-map "R" #'winner-redo)  ; redo layout
+    (ui-keymap-bind 'ui-leader-w-map "m" #'my/save-window-layout)
+    (ui-keymap-bind 'ui-leader-w-map "M" #'my/restore-window-layout)
+
+    ;; ── p: プロジェクト ────────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-p-map "p" #'project-switch-project)
+    (ui-keymap-bind 'ui-leader-p-map "f" #'project-find-file)
+    (ui-keymap-bind 'ui-leader-p-map "d" #'project-dired)
+    (ui-keymap-bind 'ui-leader-p-map "b" #'project-switch-to-buffer)
+
+    ;; ── s: 検索 ────────────────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-s-map "s" #'consult-line)       ; alias for /
+    (ui-keymap-bind 'ui-leader-s-map "r" #'consult-ripgrep)    ; was C-c r (3 keys)
+    (ui-keymap-bind 'ui-leader-s-map "m" #'consult-imenu)
+    (ui-keymap-bind 'ui-leader-s-map "f" #'consult-find)  ; find files
+    (ui-keymap-bind 'ui-leader-s-map "o" #'consult-outline)  ; outline nav
+    (ui-keymap-bind 'ui-leader-s-map "O" #'consult-org-heading) ; Org 見出しジャンプ
+
+    ;; ── g: git ─────────────────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-g-map "s" #'magit-status)
+    (ui-keymap-bind 'ui-leader-g-map "c" #'magit-commit)
+    (ui-keymap-bind 'ui-leader-g-map "d" #'magit-diff)
+    (ui-keymap-bind 'ui-leader-g-map "l" #'magit-log-current)
+    (ui-keymap-bind 'ui-leader-g-map "b" #'magit-blame)
+
+    ;; ── c: コード ──────────────────────────────────────────────────────────────
+    ;; a / r / f (LSP の code-actions・rename・format) は dev-lsp-bridge.el 側で
+    ;; 割り当てる（ui 層から dev 層を参照しないため）。
+    (ui-keymap-bind 'ui-leader-c-map "d" #'xref-find-definitions)
+    (ui-keymap-bind 'ui-leader-c-map "R" #'xref-find-references)
+    ;; flymake のエラー操作は c-map に集約（発見容易性のため e-map にも残す）
+    (ui-keymap-bind 'ui-leader-c-map "n" #'flymake-goto-next-error)
+    (ui-keymap-bind 'ui-leader-c-map "p" #'flymake-goto-prev-error)
+
+    ;; ── e: エラー（発見容易性のための c-map エントリのエイリアス）──────────────
+    (ui-keymap-bind 'ui-leader-e-map "n" #'flymake-goto-next-error)
+    (ui-keymap-bind 'ui-leader-e-map "p" #'flymake-goto-prev-error)
+
+    ;; ── t: トグル ──────────────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-t-map "w" #'whitespace-mode)
+    (ui-keymap-bind 'ui-leader-t-map "r" #'read-only-mode)
+    (ui-keymap-bind 'ui-leader-t-map "l" #'display-line-numbers-mode)
+    (ui-keymap-bind 'ui-leader-t-map "v" #'visual-line-mode)
+    (ui-keymap-bind 'ui-leader-t-map "t" #'load-theme)
+    (ui-keymap-bind 'ui-leader-t-map "n" #'my/ui-theme-nano-switch)    ; nano light/dark
+
+    ;; ── o: org / roam ──────────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-o-map "a" #'org-agenda)
+    (ui-keymap-bind 'ui-leader-o-map "c" #'org-capture)
+    ;; ローカルリーダー m-map から昇格したタスク系コマンド（旧経路より 1 打鍵短い）
+    (ui-keymap-bind 'ui-leader-o-map "t" #'org-todo)                   ; was m t
+    (ui-keymap-bind 'ui-leader-o-map "s" #'org-schedule)               ; was m s
+    (ui-keymap-bind 'ui-leader-o-map "d" #'org-deadline)               ; was m d
+    ;; org-roam のショートカット
+    (when (fboundp 'org-roam-node-find)
+      (ui-keymap-bind 'ui-leader-o-map "r" #'org-roam-node-find))
+    (when (fboundp 'org-roam-node-insert)
+      (ui-keymap-bind 'ui-leader-o-map "i" #'org-roam-node-insert))
+    (when (fboundp 'org-roam-buffer-toggle)
+      (ui-keymap-bind 'ui-leader-o-map "b" #'org-roam-buffer-toggle))
+    (when (fboundp 'org-roam-capture)
+      (ui-keymap-bind 'ui-leader-o-map "n" #'org-roam-capture))
+
+    ;; ── a: アプリ（旧: 空） ────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-a-map "v"
+                    (if (fboundp 'vterm-toggle) #'vterm-toggle #'eshell))
+    (when (fboundp 'emms)
+      (ui-keymap-bind 'ui-leader-a-map "m" #'emms))
+    (when (fboundp 'docker)
+      (ui-keymap-bind 'ui-leader-a-map "d" #'docker))
+
+    ;; ── h: ヘルプ（旧: 空） ────────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-h-map "h" #'help-command)
+    (ui-keymap-bind 'ui-leader-h-map "f" #'describe-function)
+    (ui-keymap-bind 'ui-leader-h-map "v" #'describe-variable)
+    (ui-keymap-bind 'ui-leader-h-map "k" #'describe-key)
+    (ui-keymap-bind 'ui-leader-h-map "m" #'describe-mode)
+    (ui-keymap-bind 'ui-leader-h-map "p" #'describe-package)
+
+    ;; ── q: 終了 / セッション ───────────────────────────────────────────────────
+    (ui-keymap-bind 'ui-leader-q-map "q" #'save-buffers-kill-emacs))
+
+  (defun ui-keymap--local-leader-binds ()
+    "Install local leader bindings for specific major modes.
+  Org task commands (todo/schedule/deadline) are now bound in the global
+  o-map (M-SPC o t/s/d) and are accessible from any buffer.  The former
+  local-leader path M-SPC m t/s/d is retained as aliases for discoverability."
+    (with-eval-after-load 'org
+      (when (boundp 'org-mode-map)
+        ;; ローカルリーダーのエイリアス: <leader> m t/s/d はグローバルの
+        ;; <leader> o t/s/d と同義。ハードコードの "M-SPC" ではなく
+        ;; ui-leader-key を直接参照することで、personal/device-*.el が
+        ;; リーダーキーを変更した環境（例: WSL の C-c SPC）にも追従する。
+        (keymap-set org-mode-map (concat ui-leader-key " m t") #'org-todo)
+        (keymap-set org-mode-map (concat ui-leader-key " m s") #'org-schedule)
+        (keymap-set org-mode-map (concat ui-leader-key " m d") #'org-deadline))))
+
+  (defun ui-keymap--startup-init ()
+    "Initialize UI key bindings at startup."
+    ;; after-init-hook の順序に依存せず、先にマップが定義されていることを保証する。
+    (ui-leader--define-maps)
+    (ui-keymap--leader-binds)
+    (ui-keymap--local-leader-binds))
+
+  (add-hook 'after-init-hook #'ui-keymap--startup-init)
+
+  (provide 'ui-keymap)
+
+  ;;; ui/ui-keymap.el ends here
+#+end_src
+
+* ui/ui-dirvish-keys.el
+:PROPERTIES:
+:CUSTOM_ID: ui-dirvish-keys
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-dirvish-keys.el
+:END:
+
+dirvish のバッファ内のキー割り当てです。 =ui-keymap.el= から分離しました。
+
+キーの割り当ては ui 層の仕事なので、dirvish の本体の設定（ =core-dired.el= ）ではなく ui 層に置いています。
+=ui-keymap.el= の約 70 行を占めていた、リーダーキーとは関係のない話題です。 =o= 、 =O= 、 =z= 、 =q= などの
+割り当てと、view-mode バッファを右側のサイドウィンドウに出す設定を持ちます。
+
+関数名は =ui-keymap--dirvish-*= から =ui-dirvish-keys--*= に改名しました。登録のタイミングは変えていません。
+分離前と同じく、 =after-init-hook= で =with-eval-after-load 'dirvish= を登録します。
+
+#+NAME: ui-dirvish-keys-el
+#+begin_src emacs-lisp
+  ;;; ui/ui-dirvish-keys.el --- dirvish バッファのキー割り当て -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; dirvish バッファ内のキー割り当て。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `dirvish-mode-map' に TAB、i、o、O、z、q を割り当てる
+  ;; - dirvish 一覧を保ったまま別ウィンドウに RO で開くコマンドを 2 つ定義する
+  ;; - view-mode のバッファを、右側の専用サイドウィンドウに固定する
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function dired-find-file-other-window "dired")
+  (declare-function dired-get-filename "dired")
+  (declare-function dirvish-quit "dirvish")
+
+  (defun ui-dirvish-keys--open-read-only ()
+    "Open file-at-point in another window as read-only.
+  Combines `dired-find-file-other-window' with `read-only-mode'
+  so the dirvish session remains intact for continued browsing."
+    (interactive)
+    (dired-find-file-other-window)
+    (read-only-mode 1))
+
+  ;; `z' — dirvish 一覧を保持したまま file-at-point を別ウィンドウに RO 表示する。
+  ;;
+  ;; 上の `ui-dirvish-keys--open-read-only'（"O" にバインド）は
+  ;; `dired-find-file-other-window' + `read-only-mode' の組み合わせだが、これは
+  ;; 「編集可能なバッファを開いてから明示的に read-only にする」経路であり、
+  ;; view-mode 特有の挙動（"q" で閉じてウィンドウ配置ごと元に戻る、末尾に
+  ;; カーソルを置いても編集は一切できない、等）を持たない。
+  ;;
+  ;; `view-file-other-window' は最初から view-mode で開くため、「素早く中身を
+  ;; 確認して q で戻る」用途に向いている。dired 標準の "v"（`dired-view-file'）は
+  ;; カレントウィンドウを置き換えてしまい、dirvish の一覧が隠れてしまうため、
+  ;; その代替として "z" に別ウィンドウ版を割り当てる。
+  (defun ui-dirvish-keys--view-file-other-window ()
+    "View file-at-point read-only in another window via `view-file-other-window'.
+  Unlike `dired-view-file' (bound to the dired-native \"v\"), this keeps the
+  current dirvish listing window intact instead of replacing it, and opens
+  the target buffer directly in `view-mode' (not merely `read-only-mode'
+  layered on top of a normal buffer)."
+    (interactive)
+    (view-file-other-window (dired-get-filename nil t)))
+
+  ;; view-mode バッファの出現位置を固定する。
+  ;;
+  ;; `view-file-other-window' は内部的に `switch-to-buffer-other-window' →
+  ;; `display-buffer' を通るため、`display-buffer-alist' の対象になる。指定が
+  ;; ないと分割方向がフレームの状態（既存ウィンドウ数・フォーカス位置）に依存して
+  ;; 毎回揺れる。フレーム最大化運用（ウィンドウ分割の目視手がかりが少ない）と
+  ;; 特に相性が悪いため、常に右側の専用サイドウィンドウに固定する。
+  ;;
+  ;; `dedicated . t' により、view-mode を抜けた後（"q" で `view-mode' が
+  ;; バッファを kill/quit する際）にこのサイドウィンドウ自体も片付く。
+  (add-to-list 'display-buffer-alist
+               '((lambda (buf _action)
+                   (with-current-buffer buf (derived-mode-p 'view-mode)))
+                 (display-buffer-reuse-window display-buffer-in-side-window)
+                 (side . right)
+                 (window-width . 0.5)
+                 (dedicated . t)))
+
+  (defun ui-dirvish-keys--startup-init ()
+    "Register the dirvish key bindings once dirvish is loaded."
+    (with-eval-after-load 'dirvish
+      (when (boundp 'dirvish-mode-map)
+        (keymap-set dirvish-mode-map "TAB" #'dirvish-subtree-toggle)
+        (keymap-set dirvish-mode-map "i"   #'dirvish-subtree-toggle)
+        (keymap-set dirvish-mode-map "o"   #'dired-find-file-other-window)
+        (keymap-set dirvish-mode-map "O"   #'ui-dirvish-keys--open-read-only)
+        ;; "z" は dired 標準では `dired-do-compress'（マークしたファイルの圧縮）に
+        ;; 割り当てられている。dirvish セッションでは頻度が低いと判断し、
+        ;; view-mode での別ウィンドウ RO 表示に明示的に上書きする。
+        (keymap-set dirvish-mode-map "z"   #'ui-dirvish-keys--view-file-other-window)
+        (keymap-set dirvish-mode-map "q"   #'dirvish-quit))))
+
+  (add-hook 'after-init-hook #'ui-dirvish-keys--startup-init)
+
+  (provide 'ui-dirvish-keys)
+  ;;; ui/ui-dirvish-keys.el ends here
+#+end_src
+
+* ui/ui-global-keys.el
+:PROPERTIES:
+:CUSTOM_ID: ui-global-keys
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-global-keys.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; lisp/ui/ui-global-keys.el --- グローバルキーバインド（リーダー外） -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; リーダーキー体系の外側で登録するグローバルキーバインド。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 高頻度の単一和音ナビゲーション用に C-s、C-.、s-z、M-x をバインドする
+  ;; - C-g を `my/keyboard-quit-dwim' にバインドする（ミニバッファ等を状況に応じて閉じる）
+  ;; - macOS 風のバッファ移動をバインドする（s-left/right/up/down）
+  ;; - <f1> を `help-command' にバインドする
+  ;; - macOS 風のフレーム／ウィンドウ操作をバインドする（s-o/s-m/s-w/s-./s-j）
+  ;; - 単発ファイル操作（C-c o/v）、置換・行移動（C-c r/M-g g）、
+  ;;   コメント・整列（C-c ;/:/M-a）、スクロール（C-s-up/down、
+  ;;   s-wheel-up/down）、文字サイズ（C-+/C--）をバインドする
+  ;; - すべての登録を `ui-global-keys--startup-init' により
+  ;;   `after-init-hook' に遅延する
+  ;;
+  ;; 方針:
+  ;; グローバルキーは意図的に最小限にしている。接頭辞なしの単一和音の恩恵が大きい
+  ;; 高頻度の操作と、ty07.net の備忘録（Emacsのショートカットキー）にある
+  ;; フレーム／ウィンドウ／編集の操作に限る。
+  ;;
+  ;; バインド一覧:
+  ;;   C-s     → consult-line       （バッファ内検索。isearch の代わり）
+  ;;   C-g     → my/keyboard-quit-dwim （region 解除／*Completions* を閉じる／
+  ;;                                      フォーカス外のミニバッファを閉じる。
+  ;;                                      それ以外は keyboard-quit と同じ）
+  ;;   C-.     → other-window       （ウィンドウ移動。2 打鍵）
+  ;;   s-z     → undo-redo          （macOS 流の undo/redo。C-? の代わり）
+  ;;   M-x     → execute-extended-command
+  ;;   s-←/→   → previous/next-buffer （macOS の Super キー。2 打鍵）
+  ;;   s-↑/↓   → beginning/end-of-buffer
+  ;;   <f1>    → help-command
+  ;;   C-c c   → org-capture        （Org の標準。全バッファで有効）
+  ;;   s-o     → find-file-other-frame
+  ;;   s-m     → make-frame-command
+  ;;   s-w     → delete-frame
+  ;;   s-.     → window-toggle-split-direction （fboundp で防御。Emacs 27 以降）
+  ;;   s-j     → find-file-other-window
+  ;;   C-c o   → find-file          （再導入。単発のファイル操作は M-SPC より直接和音が速い）
+  ;;   C-c v   → find-file-read-only
+  ;;   C-c k   → kill-buffer-and-window （M-SPC k の my/smart-kill-buffer とは別物。
+  ;;                                      あちらは保存確認してバッファだけを kill、
+  ;;                                      こちらはウィンドウも閉じる）
+  ;;   C-c r   → query-replace      （M-SPC s r の consult-ripgrep はプロジェクト横断検索で、
+  ;;                                 こちらはバッファ内の文字列置換。実際には重ならない）
+  ;;   M-g g   → consult-goto-line
+  ;;   C-c ;   → comment-region
+  ;;   C-c :   → uncomment-region
+  ;;   C-c M-a → align-regexp
+  ;;   C-s-↑   → scroll-down-command      （同じウィンドウで上の文章を見る）
+  ;;   C-s-↓   → scroll-up-command        （同じウィンドウで下の文章を見る）
+  ;;   s-<wheel-up>   → scroll-other-window-down
+  ;;   s-<wheel-down> → scroll-other-window
+  ;;   C-+     → text-scale-increase
+  ;;   C--     → text-scale-decrease
+  ;;
+  ;; 経緯:
+  ;; - C-c b は割り当てない。M-SPC 配下（2〜3 打鍵）から届く。
+  ;; - C-c o/v/k/r は 2026-07 に、ty07.net の備忘録と突き合わせたうえで意図的に再導入した。
+  ;;   o と v は、find-file と find-file-read-only に M-SPC 側の割り当てが元々無く、重複しない。
+  ;;   k は別のコマンド（kill-buffer-and-window）で、リーダーの my/smart-kill-buffer とは違う。
+  ;;   r も別のコマンド（query-replace）で、リーダーの consult-ripgrep とは違う。
+  ;;   いずれも、C-c b が避けた「M-SPC 側と重複する」問題を再び作らない。
+  ;; - C-? の undo-redo を s-z に替えた。macOS 全体の Cmd+Z に合わせ、他のアプリとの
+  ;;   筋肉記憶の衝突を減らすためである。C-z も候補だったが（未割り当て。core の init で
+  ;;   `(keymap-global-unset "C-z")' している）、Emacs 内の統一より、Emacs 以外のアプリとの
+  ;;   一貫性を優先して s-z を選んだ。
+  ;; - s-S-z（redo 専用）は意図的にバインドしない。`undo-redo' は、他のコマンドを一度
+  ;;   実行すると向きが自動で反転するので、2 つ目のバインドは実益なく keymap を増やすだけである。
+  ;;; Code:
+
+  (defun my/keyboard-quit-dwim ()
+    "Do-What-I-Mean behaviour for `keyboard-quit'.
+
+    The generic `keyboard-quit' does not close the minibuffer when point is
+    in another window.  This command handles, in order:
+
+    - an active region: deactivate it (via `keyboard-quit');
+    - the *Completions* buffer being selected: close its window;
+    - a minibuffer open but not focused: abort it;
+    - otherwise: behave as `keyboard-quit'."
+    (interactive)
+    (cond
+     ((region-active-p)
+      (keyboard-quit))
+     ((derived-mode-p 'completion-list-mode)
+      (delete-completion-window))
+     ((> (minibuffer-depth) 0)
+      (abort-recursive-edit))
+     (t
+      (keyboard-quit))))
+
+  (defun ui-global-keys--startup-init ()
+    "Register global key bindings after all modules are loaded.
+  The binding list and the rationale are in the Commentary of this file."
+    ;; 基本ナビゲーション — 単一和音
+    ;; global-set-key + kbd → keymap-global-set（Emacs 29 以降の API。規則: keymap-set を優先）
+    (keymap-global-set "C-g"       #'my/keyboard-quit-dwim)
+    (keymap-global-set "C-."       #'other-window)
+    (keymap-global-set "C-s"       #'consult-line)
+    (keymap-global-set "M-x"       #'execute-extended-command)
+    ;; undo/redo は C-?（3 キー和音: Ctrl+Shift+/）ではなく s-z（2 キー和音: Cmd+Z）に
+    ;; 割り当てる。macOS 全体の undo 規約に合わせるため。
+    (keymap-global-set "s-z"       #'undo-redo)
+    ;; macOS の Super キーによるバッファ／バッファ内位置の移動
+    (keymap-global-set "s-<left>"  #'previous-buffer)
+    (keymap-global-set "s-<right>" #'next-buffer)
+    (keymap-global-set "s-<up>"    #'beginning-of-buffer)
+    (keymap-global-set "s-<down>"  #'end-of-buffer)
+    ;; ヘルプ（どの文脈でも見つけやすいよう F キーに割り当て）
+    (keymap-global-set "<f1>"      #'help-command)
+    ;; Org キャプチャ — コミュニティ標準の C-c c を全バッファで有効化。
+    ;; org-capture は任意のバッファから起動できる必要があるため
+    ;; orgx-core.el ではなくここ（グローバルキー）に置く。
+    (keymap-global-set "C-c c"     #'org-capture)
+
+    ;; macOS 風のフレーム／ウィンドウ操作（ty07.net 備忘録より）
+    (keymap-global-set "s-o"       #'find-file-other-frame)
+    (keymap-global-set "s-m"       #'make-frame-command)
+    (keymap-global-set "s-w"       #'delete-frame)
+    ;; window-toggle-split-direction は Emacs 27 以降の同梱コマンド。
+    ;; 古いバージョンでも起動時エラーにならないよう fboundp で防御する。
+    (when (fboundp 'window-toggle-split-direction)
+      (keymap-global-set "s-." #'window-toggle-split-direction))
+    (keymap-global-set "s-j"       #'find-file-other-window)
+
+    ;; ファイル操作 — 高頻度な単発操作のため直接和音を再導入。
+    ;; consult-find（M-SPC s f）はプロジェクト内あいまい検索用であり、
+    ;; パスが分かっている単発オープンには find-file の直接和音が速い。
+    (keymap-global-set "C-c o"     #'find-file)
+    (keymap-global-set "C-c v"     #'find-file-read-only)
+    ;; M-SPC k の my/smart-kill-buffer（保存確認してから kill、ウィンドウは残す）
+    ;; とは別物。こちらはウィンドウごと閉じる kill-buffer-and-window。
+    (keymap-global-set "C-c k"     #'kill-buffer-and-window)
+
+    ;; 置換・行移動
+    ;; C-c r は query-replace（バッファ内文字列置換）。
+    ;; M-SPC s r の consult-ripgrep（プロジェクト横断検索）とは役割が異なる。
+    (keymap-global-set "C-c r"     #'query-replace)
+    (keymap-global-set "M-g g"     #'consult-goto-line)
+
+    ;; コメント・整列
+    (keymap-global-set "C-c ;"     #'comment-region)
+    (keymap-global-set "C-c :"     #'uncomment-region)
+    (keymap-global-set "C-c M-a"   #'align-regexp)
+
+    ;; スクロール — 現在のウィンドウ（C-s-↑/↓）と他のウィンドウ（s-wheel-up/down）
+    (keymap-global-set "C-s-<up>"        #'scroll-down-command)
+    (keymap-global-set "C-s-<down>"      #'scroll-up-command)
+    (keymap-global-set "s-<wheel-up>"    #'scroll-other-window-down)
+    (keymap-global-set "s-<wheel-down>"  #'scroll-other-window)
+
+    ;; 文字サイズ調整
+    (keymap-global-set "C-+"       #'text-scale-increase)
+    (keymap-global-set "C--"       #'text-scale-decrease))
+
+  (add-hook 'after-init-hook #'ui-global-keys--startup-init)
+
+  (provide 'ui-global-keys)
+  ;;; ui-global-keys.el ends here
+#+end_src
+
+* ui/ui-visual-aids.el
+:PROPERTIES:
+:CUSTOM_ID: ui-visual-aids
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-visual-aids.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-visual-aids.el --- 控えめな視覚補助 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 控えめな視覚補助: パルス、TODO ハイライト、括弧の色分け、インデントガイド。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - ナビゲーション系コマンドで一時的にカーソル位置を示す pulsar を設定する
+  ;;   （起動時間短縮のため、有効化自体は emacs-startup-hook 経由でアイドル
+  ;;   タイマーに遅延させる）
+  ;; - 色分けフェイス付きの hl-todo を有効化する（TODO、FIXME、NOTE、HACK）
+  ;; - 括弧の深さを色分けする rainbow-delimiters を `prog-mode' で有効化する
+  ;; - インデントの視覚ガイドとして indent-bars を `prog-mode' で有効化する
+  ;;
+  ;; ロード経路:
+  ;;
+  ;;   本モジュールは `my:modules' に含まれない。表示に関する任意の選択として扱われ、
+  ;;   personal/user.el が `my:modules-extra' に追加する。personal/user.el が無い場合
+  ;;   （personal オーバーレイの無い新規チェックアウトなど）、本モジュールはロードされず、
+  ;;   その他の設定は完全に機能したままとなる。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar pulsar-pulse-functions)
+
+  (eval-when-compile (require 'leaf))
+
+  ;; pulsar は起動プロファイル計測で 16〜22ms を占めていた。leaf の :custom /
+  ;; :config は暗黙に :require t を伴うため、モジュールのロード時に pulsar が
+  ;; 即時 require されていたことが原因である。pulsar はナビゲーション系
+  ;; コマンドの後にカーソル位置を一瞬光らせるだけの視覚効果であり、起動完了の
+  ;; 一瞬後に有効化されても体感差が無い。`emacs-startup-hook' からアイドル
+  ;; タイマー経由で遅延有効化する（org-roam の autosync などで既に使っている
+  ;; パターンと同じ）。パッケージの導入自体は `:straight t' がここで保証する
+  ;; ので、`:require nil' で「導入はするがロードはしない」状態にする。
+  (leaf pulsar
+    :straight t
+    :require nil)
+
+  (defun ui-visual-aids--activate-pulsar ()
+    "pulsar を require し、`pulsar-global-mode' を有効化する。
+  `pulsar-delay' 等は defcustom であり、require 前に setopt すると void-variable
+  になるため、設定は require の直後に行う。"
+    (require 'pulsar)
+    (setopt pulsar-delay 0.04
+            pulsar-pulse t
+            pulsar-face  'pulsar-generic)
+    (pulsar-global-mode 1)
+    (dolist (cmd '(recenter-top-bottom other-window next-buffer previous-buffer))
+      (add-to-list 'pulsar-pulse-functions cmd)))
+
+  (defun ui-visual-aids--schedule-pulsar ()
+    "起動完了後、アイドルタイマーで `ui-visual-aids--activate-pulsar' を呼ぶ。"
+    (run-with-idle-timer 0 nil #'ui-visual-aids--activate-pulsar))
+
+  (add-hook 'emacs-startup-hook #'ui-visual-aids--schedule-pulsar)
+
+  ;; hl-todo-keyword-faces は defcustom であり、:custom で設定する。
+  (leaf hl-todo
+    :straight t
+    :custom
+    ((hl-todo-keyword-faces
+      . '(("TODO"  . "#d97706") ("FIXME" . "#dc2626")
+          ("NOTE"  . "#2563eb") ("HACK"  . "#9333ea"))))
+    :hook ((prog-mode-hook text-mode-hook) . hl-todo-mode))
+
+  (leaf rainbow-delimiters :straight t
+    :hook (prog-mode-hook . rainbow-delimiters-mode))
+
+  ;; indent-bars-prefer-character と indent-bars-spacing-override は
+  ;; defcustom であり、:custom で設定する。
+  (leaf indent-bars :straight t
+    :custom ((indent-bars-prefer-character  . t)
+             (indent-bars-spacing-override  . 2)
+             ;; tree-sitter 版モードでは、構文木から深さを補正し、文字列内の空行に
+             ;; バーを描かない（indent-bars-ts）。
+             (indent-bars-treesit-support   . t))
+    :hook (prog-mode-hook . indent-bars-mode))
+
+  (provide 'ui-visual-aids)
+  ;;; ui/ui-visual-aids.el ends here
+#+end_src
+
+* ui/ui-macos.el
+:PROPERTIES:
+:CUSTOM_ID: ui-macos
+:header-args:emacs-lisp: :tangle ../lisp/ui/ui-macos.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; ui/ui-macos.el --- macOS 固有の UI 調整 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: ui
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; グラフィカルフレーム向けの macOS 固有 UI 調整。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - macOS で透過タイトルバー（`ns-transparent-titlebar'）を有効化する
+  ;; - ネイティブな macOS タイトルバー描画のため `use-title-bar' を設定する
+  ;; - Emacs 31 の `system-taskbar-mode'（Dock）を有効化する
+  ;; - コンパイル中のアイドルスリープを抑止し、スリープ前に TRAMP の接続を切る
+  ;; - すべての設定を `(eq system-type 'darwin)' でガードする
+  ;;
+  ;; ロード経路:
+  ;;
+  ;;   本モジュールは `my:modules' に含まれない。macOS 専用の任意の表示モジュールであり、
+  ;;   personal/user.el が `my:modules-extra' に追加する。
+  ;;   macOS 以外のホストでも、これが無いまま設定は機能する。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (when (eq system-type 'darwin)
+    (add-to-list 'default-frame-alist '(ns-transparent-titlebar . t))
+    (add-to-list 'default-frame-alist '(use-title-bar . t)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: システム統合（macOS 10.9 以降）
+  ;; ---------------------------------------------------------------------------
+  ;; `system-taskbar-mode' は Dock アイコンを制御する。バッジ数、プログレスバーの重ね表示、
+  ;; 「要注意」のバウンドなど。`system-sleep' は長時間ジョブの実行中にアイドルスリープを
+  ;; 抑止し、スリープ前／復帰後のフックを提供する。
+  ;;
+  ;; いずれも、本設定が想定するコンパイル負荷の高い作業（ネイティブコンパイル、Emacs の
+  ;; ソースビルド）で有用である。ビルド途中でマシンがスリープしなくなり、リモート（TRAMP）
+  ;; 接続はスリープ前に切断されるため、復帰時にハングしない。
+  ;;
+  ;; system-taskbar-mode のバックエンド判定（system-taskbar--set-back-end）は
+  ;; (boundp 'ns-version-string) というビルド種別のチェックであり、実行時の
+  ;; フレーム有無とは無関係。'ns バックエンドの system-taskbar--enable は
+  ;; フレームの存在を一切確認せず無条件に t を返す実装になっている
+  ;; （system-taskbar.el 本体で確認済み）。そのため display-graphic-p による
+  ;; daemon 向けの遅延ガードは不要と判断し、単純な無条件呼び出しに戻した。
+  (when (and (eq system-type 'darwin) (fboundp 'system-taskbar-mode))
+    (system-taskbar-mode 1))
+
+  (defvar ui-macos--sleep-block-token nil
+    "Token returned by `system-sleep-block-sleep', or nil when not blocking.")
+
+  (defun ui-macos--block-sleep-during-compile (_proc)
+    "Inhibit system idle sleep while a compilation is running.
+  Called from `compilation-start-hook'.  The display is allowed to sleep."
+    (when (and (fboundp 'system-sleep-block-sleep)
+               (null ui-macos--sleep-block-token))
+      (setq ui-macos--sleep-block-token
+            (system-sleep-block-sleep "Emacs: compiling" t))))
+
+  (defun ui-macos--unblock-sleep-after-compile (_buffer _status)
+    "Release the sleep block once compilation finishes.
+  Called from `compilation-finish-functions'."
+    (when (and ui-macos--sleep-block-token
+               (fboundp 'system-sleep-unblock-sleep))
+      (system-sleep-unblock-sleep ui-macos--sleep-block-token)
+      (setq ui-macos--sleep-block-token nil)))
+
+  ;; Emacs 31 の `tramp-cleanup-bufferless-connections' は、対応するバッファが無い
+  ;; 接続だけを破棄する。スリープ前に必要なのは、リモートバッファを開いたままの接続も
+  ;; 含めて切ることなので、ここでは従来どおり `tramp-cleanup-all-connections' を使う。
+  (defun ui-macos--handle-sleep-event (event)
+    "Close remote connections on EVENT when the system is about to sleep.
+  Pre-sleep handlers get only a few seconds and must not signal, hence the
+  `condition-case'.  Connections are re-established lazily on next access."
+    (condition-case nil
+        (when (and (fboundp 'sleep-event-state)
+                   (eq (sleep-event-state event) 'pre-sleep)
+                   (fboundp 'tramp-cleanup-all-connections))
+          (tramp-cleanup-all-connections))
+      (error nil)))
+
+  (when (and (eq system-type 'darwin) (require 'system-sleep nil t))
+    (add-hook 'compilation-start-hook     #'ui-macos--block-sleep-during-compile)
+    (add-hook 'compilation-finish-functions #'ui-macos--unblock-sleep-after-compile)
+    (add-hook 'system-sleep-event-functions #'ui-macos--handle-sleep-event))
+
+  (provide 'ui-macos)
+  ;;; ui/ui-macos.el ends here
+#+end_src

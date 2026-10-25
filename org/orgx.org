@@ -1,0 +1,1977 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: orgx 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+orgx 層（Org エコシステム）のモジュールの正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* orgx/
+:PROPERTIES:
+:CUSTOM_ID: orgx-modules
+:END:
+
+* orgx/orgx-core.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-core
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-core.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-core.el --- Org Mode のコア設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;; Org Mode のコア設定とディレクトリ構成。
+  ;;
+  ;; モジュールのロード時に直接 `directory-files-recursively' で走査することはしない。
+  ;; org-agenda-files は 2 段階で設定される。
+  ;;
+  ;;   1. after-init-hook が走る前に org-agenda-files を読むコードに備え、最小限の
+  ;;      フォールバック（inbox.org）を即座に設定する。
+  ;;
+  ;;   2. init 後に（利用可能なら）`orgx-agenda-build' を呼び、フォールバックを
+  ;;      キャッシュ済みの完全なリストで置き換える。これにより、ロード時の走査を避け、
+  ;;      キャッシュを無意味にする二重走査も避けている。
+  ;;
+  ;; my/org-buffer-files 内の cl-loop は（バイトコンパイル時だけでなく）インタプリタ
+  ;; 実行時にも使うため、実行時の (require 'cl-lib) を置いている。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar org-emphasis-regexp-components)
+  (declare-function org-persist-load-all "org-persist")
+
+  (eval-when-compile
+    (require 'leaf)
+    (require 'cl-lib))
+
+  ;; cl-loop は my/org-buffer-files 内で実行時に使用する。
+  (require 'cl-lib)
+
+  ;; Org のディレクトリパス変数。
+  ;;
+  ;; 上書きの契約: personal/<user>.el は init.el のステップ 9 により modules.el より
+  ;; 前にロードされる。その時点で personal 側が (setq my:d:org ...) を呼んでいれば、
+  ;; 下の defvar は何もしない（defvar は既存の束縛を上書きしない）ため、personal の
+  ;; パスがセッション全体で保たれる。派生変数（my:d:org-journal など）は orgx-core の
+  ;; ロード時に評価されるため、これらも personal のベースパスを正しく受け取る。
+  ;; ただし personal 側が派生変数を個別に設定している場合は、その値が使われる
+  ;; （現在の personal/ac1965.el は my:d:org だけを設定し、journal と roam は導出に任せている）。
+  ;; この順序は意図的なものであり、維持しなければならない。
+  ;;
+  (defvar my:d:org (expand-file-name "org" my:d:var))
+  (defvar my:d:org-journal (expand-file-name "journal" my:d:org))
+  (defvar my:d:org-roam (expand-file-name "org-roam" my:d:org))
+  (defvar my:d:org-pictures (expand-file-name "pictures" my:d:org))
+  (defvar my:d:org-biblio (expand-file-name "biblio" my:d:org))
+  (defvar my:f:capture-blog-file (expand-file-name "blog.org" my:d:org))
+
+  (my/ensure-directory-exists my:d:org)
+  (my/ensure-directory-exists my:d:org-journal)
+  (my/ensure-directory-exists my:d:org-roam)
+  (my/ensure-directory-exists my:d:org-pictures)
+  (my/ensure-directory-exists my:d:org-biblio)
+
+  (defun my/org-buffer-files ()
+    "Return a list of *.org files currently visited in live buffers."
+    (cl-loop for buf in (buffer-list)
+             for file = (buffer-file-name buf)
+             when (and file (string-match-p "\\.org\\'" file))
+             collect file))
+
+  ;; org-agenda-files のフェーズ 1（フォールバック）。
+  ;;
+  ;; Org を遅延ロードするため、この設定は leaf org の :config に置いてはならない。
+  ;; :config は (with-eval-after-load 'org ...) へ包まれるため、org が実際にロード
+  ;; されるのは after-init より後（.org を開いた時点など）になる。そこでフォールバックを
+  ;; 代入すると、after-init-hook のフェーズ 2 が構築した完全な一覧を、後から
+  ;; inbox.org 1 件で上書きしてしまう。
+  ;;
+  ;; したがってフェーズ 1 はトップレベルに置き、org-directory ではなく my:d:org を
+  ;; 参照する（org 未ロードでも評価できる）。順序は次のとおりである。
+  ;;
+  ;;   1. モジュールのロード時（ここ）      : inbox.org のみ
+  ;;   2. after-init-hook（フェーズ 2）     : orgx-agenda-build の完全な一覧で置換
+  ;;   3. org.el のロード時                 : (defcustom org-agenda-files ...) は
+  ;;                                          束縛済みの値を上書きしない
+  (setq org-agenda-files
+        (list (expand-file-name "inbox.org" my:d:org)))
+
+  ;; Org は Emacs 組み込みを使う（Emacs 32.0.50 同梱: Org 9.8.10）。
+  ;; したがって :straight nil はコーディング規則 3 のとおり「組み込み」の宣言であり、
+  ;; 実態と一致する。init.el が straight 版 Org を導入していた頃は、この宣言が
+  ;; 実態と食い違っていた（実際には straight 版がロードされていた）。
+  ;;
+  ;; :require t は付けない（Org を遅延ロードするため）。
+  ;; - :custom は Custom が値を先行登録するため、org.el がロードされる前に宣言しても
+  ;;   defcustom の評価時に正しく反映される。
+  ;; - :config は leaf により (with-eval-after-load 'org ...) へ包まれるため、
+  ;;   org-directory を参照するフォールバックやキャプチャテンプレートの設定は、
+  ;;   org が実際にロードされた時点で確実に実行される。
+  ;; - フェーズ 2 の orgx-core--rebuild-agenda-files は after-init-hook で走り、
+  ;;   orgx-agenda-build（my:d:org を見る。org-directory には依存しない）から
+  ;;   完全な一覧を得て org-agenda-files を setq する。org が未ロードでも動作し、
+  ;;   後から org.el が (defcustom org-agenda-files ...) を評価しても、既に束縛済みの
+  ;;   値は上書きされない。
+  ;; このリポジトリの Org 文書（README.org と org/*.org）でだけ、ソースブロックの字下げを保つ。
+  ;;
+  ;; 既定（org-src-preserve-indentation が nil）では、C-c ' (org-edit-special) は
+  ;; 開くときにブロックの最小の字下げを取り除き、戻るときに
+  ;; org-edit-src-content-indentation（既定 2）桁を全行へ足し直す。このため
+  ;; 桁 0 の行（dot ブロック、docstring の継続行）は戻るたびに 2 桁ずれる。
+  ;; t にすると開閉とも字下げに触れないので、往復しても変わらない。
+  ;;
+  ;; グローバルには設定しない。他の Org ファイルの編集まで変わるため。
+  ;; make tangle は init を読まないバッチで走るので影響を受けない（字下げの除去は
+  ;; 従来どおり働く）。一方、対話的な tangle（C-c C-v t）はこのバッファローカル値を
+  ;; 見て字下げを除去せず、書き出した .el 全体が 2 桁深くなる。そこで下の :around
+  ;; advice が tangle の間だけ nil へ戻し、make tangle と同じ字下げにそろえる。
+  ;; ファイルローカル変数は安全な値として登録されておらず確認を求められるため、
+  ;; フックで束縛する。
+  (defun orgx-core-source-org-p (&optional file)
+    "Return non-nil when FILE is a literate source of this repository.
+  FILE defaults to the current buffer's file.  The sources are README.org,
+  and org/*.org under `user-emacs-directory'."
+    (let ((file (or file buffer-file-name)))
+      (when (and file (string-suffix-p ".org" file))
+        (let ((rel (file-relative-name (file-truename file)
+                                       (file-truename user-emacs-directory))))
+          (and (or (equal rel "README.org")
+                   (string-match-p "\\`org/[^/]+\\.org\\'" rel))
+               t)))))
+
+  (defun orgx-core--preserve-readme-src-indentation ()
+    "Preserve source block indentation in this repository's Org sources."
+    (when (orgx-core-source-org-p)
+      (setq-local org-src-preserve-indentation t)))
+
+  ;; 下の let を動的束縛にするため、特殊変数であることをコンパイラへ伝える
+  ;; （Org を読み込まずにコンパイルされても字句的束縛にならない）。
+  (defvar org-src-preserve-indentation)
+
+  (defun orgx-core--tangle-strip-indentation (fn &rest args)
+    "Call FN with ARGS while `org-src-preserve-indentation' is nil.
+  Tangling from the Org sources must strip the block indentation just as
+  `make tangle' does; the buffer-local t is only for editing."
+    (let ((org-src-preserve-indentation nil))
+      (apply fn args)))
+
+  (add-hook 'org-mode-hook #'orgx-core--preserve-readme-src-indentation)
+  (advice-add 'org-babel-tangle :around #'orgx-core--tangle-strip-indentation)
+
+  (leaf org
+    :straight nil
+    :custom
+    ((org-directory . my:d:org)
+     (org-default-notes-file . "notes.org")
+     (org-log-done . 'time)
+     (org-support-shift-select . t)
+     (org-return-follows-link . t))
+    :config
+    ;; （例外）org-todo-keywords、org-refile-targets、org-capture-templates は
+    ;; defcustom だが、その値には実行時評価の式（expand-file-name を伴うバッククォート、
+    ;; (function ...) による関数参照）が含まれる。これらは値が完全に評価される前に
+    ;; setopt の型チェッカが誤った警告を出す原因となる。したがってこの 3 つの代入には
+    ;; setq が正しい。同じ理由により :custom や :pre-setq へ移すこともできない。
+    ;; コーディング規則 6 を参照。
+    ;;
+    (setq org-todo-keywords
+          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
+    (setq org-refile-targets
+          '((nil :maxlevel . 3)
+            (my/org-buffer-files :maxlevel . 1)
+            (org-agenda-files :maxlevel . 3)))
+    ;; ブログ記事のテンプレート "b" は、orgx-hugo.el が org のロード後に追加する。
+    ;; my:f:capture-blog-file（上の defvar）の個人設定による上書きは、
+    ;; orgx-core のロード前に personal/<user>.el で行うこと。
+    (setq org-capture-templates
+          `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
+             "* TODO %?\n %i\n %a")
+            ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
+             "* %?\nEntered on %U\n %i\n %a")
+            ("j" "Journal" entry (function org-journal-find-location)
+             "* %(format-time-string org-journal-time-format)%^{Title}\n%i%?")
+            ("m" "Meeting" entry (file ,(expand-file-name "meetings.org" org-directory))
+             "* MEETING with %? :meeting:\n  %U\n  %a"))))
+
+  ;; org-emphasis-regexp-components の既定値（PRE/POST）は半角の空白・句読点のみを
+  ;; 想定しており、全角の「」『』（）、。・ 等は含まれない。本ドキュメントのような
+  ;; 和文中心の文章では、和文の直後に =code= や *bold* を続け、その直後にまた
+  ;; 全角の閉じ括弧・句読点が続く書き方がごく普通に発生する
+  ;; （例: 「=README.org=（設定の本体）は」）。この全角文字が PRE/POST の集合に
+  ;; 無いため、Org は強調マーカーを強調として認識せず、リテラルの "=" 等の文字が
+  ;; そのまま表示されてしまう（scripts/check_emphasis.py が検出する不具合の実体）。
+  ;;
+  ;; 対処として、和文でよく使う開き括弧類を PRE に、閉じ括弧・読点類を POST に
+  ;; 追加する。org-emphasis-regexp-components の :set 関数は org-set-emph-re
+  ;; であり、setopt はこれを正しく呼び出して org-emphasis-re / org-verbatim-re を
+  ;; 再生成する（手動で org-set-emph-re を呼び直す必要はない）。
+  ;;
+  ;; ここだけ leaf の :config 本体から外し、with-eval-after-load 'org で明示的に
+  ;; 遅延させている。理由: leaf の :config は org.el のロードを待たない
+  ;; （org-todo-keywords 等の setq がここまで問題なく動いていたのは、setq が
+  ;; 未束縛のシンボルにも新規束縛を作れる — defcustom を待つ必要がない — ためで
+  ;; あって、:config 自体が遅延されているわけではない）。この customization は
+  ;; org-emphasis-regexp-components の *既存の値* を nth で読んで拡張するため、
+  ;; org.el が実際にロードされ defcustom の初期値が入った後でなければ
+  ;; 「Symbol's value as variable is void」で失敗する。すぐ下の「アーカイブ先」と
+  ;; 同じ理由・同じパターンである。
+  ;;
+  ;; scripts/check_emphasis.py の PRE_OK / POST_OK もこれと同じ文字集合を
+  ;; 使うよう更新してある。二重管理だが、Python 側は Emacs 本体が無い環境でも
+  ;; 実行できることが目的（Appendix を参照）であり、Elisp の値を実行時に import
+  ;; することはできないため、手作業での同期が必要になる。
+  (with-eval-after-load 'org
+    (setopt org-emphasis-regexp-components
+            (list (concat (nth 0 org-emphasis-regexp-components) "「『（【、。・")
+                  (concat (nth 1 org-emphasis-regexp-components) "」』）】「『（【、。・")
+                  (nth 2 org-emphasis-regexp-components)
+                  (nth 3 org-emphasis-regexp-components)
+                  (nth 4 org-emphasis-regexp-components))))
+
+  ;; アーカイブ先
+  (with-eval-after-load 'org
+    (let* ((central (expand-file-name "archive.org"
+                                      (or (bound-and-true-p org-directory)
+                                          (bound-and-true-p my:d:org)
+                                          (expand-file-name "~/org")))))
+      (setopt org-archive-location (concat central "::"))))
+
+  (defun orgx-core--rebuild-agenda-files ()
+    "Phase 2: replace agenda-files fallback with the full cached list."
+    (when (fboundp 'orgx-agenda-build)
+      (let ((files (orgx-agenda-build)))
+        (when files
+          (setq org-agenda-files files)))))
+
+  (add-hook 'after-init-hook #'orgx-core--rebuild-agenda-files)
+
+  ;; org-persist-load-all は org（正確には org-persist.el）が自身のトップレベルで
+  ;; (add-hook 'after-init-hook #'org-persist-load-all) しており、このリポジトリの
+  ;; README.org 側には元々何の記述もない Org 標準の挙動である。org-persist--index
+  ;; （~/.emacs.d/.var/org/persist/index.eld）に記録された全エントリ（org-element-cache
+  ;; の永続化データ。my:d:org 配下、主に org-roam のノート数百件分が蓄積し得る）に
+  ;; 対応するファイルを起動時に一括で開いて検証する。org-roam 配下のファイルの一部で
+  ;; アクセスが不安定（Read error: Operation timed out / Resource deadlock avoided）に
+  ;; なっていた環境では、この一括検証がデーモンクラッシュの引き金になっていた
+  ;; （org.el が daemon 起動シーケンス中に何らかの理由で早期ロードされると、
+  ;; after-init-hook 実行前に登録が間に合ってしまう）。org-element-cache は各バッファを
+  ;; 実際に開いた時点で遅延生成されるため、起動時の一括ウォームアップを止めても
+  ;; 機能は失われない。org-persist 自体のロードより後に確実に除去されるよう
+  ;; with-eval-after-load 'org-persist の中で remove-hook する。
+  (with-eval-after-load 'org-persist
+    (remove-hook 'after-init-hook #'org-persist-load-all))
+
+  (provide 'orgx-core)
+  ;;; orgx/orgx-core.el ends here
+#+end_src
+
+* orgx/orgx-agenda.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-agenda
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-agenda.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-agenda.el --- キャッシュ付き Org アジェンダ・スキャナ -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: orgx
+  ;;
+  ;;; Commentary:
+  ;; `my:d:org' 配下を走査し、その結果を TTL 付きでキャッシュする `orgx-agenda-build'
+  ;; を提供する。ロード時に走査しないよう、`orgx-core' から after-init-hook 経由で
+  ;; 呼び出される。
+  ;;
+  ;;; Code:
+
+  ;; eval-when-compile には (require 'cl-lib) を置かない。
+  ;; cl-loop は orgx-agenda--scan 内で実行時に使われるため、下のランタイムの
+  ;; require が必要かつ十分である。コンパイル時の require は冗長であり、
+  ;; eval-when-compile にはコンパイル中に必要なマクロ（subr-x）だけを置くという
+  ;; プロジェクト全体の規約とも矛盾する。
+  (eval-when-compile (require 'subr-x))
+  (require 'cl-lib)
+
+  (defvar orgx-agenda--cache nil
+    "Cache of Org agenda file paths. Nil = not yet built.")
+
+  (defvar orgx-agenda--last-scan-time nil
+    "Time of last successful scan.")
+
+  ;; defgroup を追加し、defcustom 変数が外部の 'org-agenda グループではなく
+  ;; 本モジュール自身のカスタマイズグループに属するようにした。
+  ;; defcustom を所有するモジュールは、いずれも自身の defgroup を宣言しなければならない。
+  (defgroup orgx-agenda nil
+    "Cached Org agenda file scanning for the modular configuration."
+    :group 'org)
+
+  (defcustom orgx-agenda-max-depth 3
+    "Maximum directory recursion depth for agenda file scanning."
+    :type 'integer :group 'orgx-agenda)
+
+  (defcustom orgx-agenda-exclude-dirs '("archive" ".git" "node_modules")
+    "Directory names to skip during agenda scanning."
+    :type '(repeat string) :group 'orgx-agenda)
+
+  (defcustom orgx-agenda-cache-ttl 300
+    "Seconds before the cache is considered stale."
+    :type 'integer :group 'orgx-agenda)
+
+  (defun orgx-agenda--should-exclude-p (dir)
+    (let ((name (file-name-nondirectory (directory-file-name dir))))
+      (member name orgx-agenda-exclude-dirs)))
+
+  (defun orgx-agenda--scan (dir depth)
+    ;; ディレクトリごとに directory-files を 1 回だけ呼び、その結果を .org ファイルと
+    ;; 非隠しサブディレクトリに分割する。従来の実装はディレクトリごとに
+    ;; directory-files を 2 回（"\.org\'" 用と "\`[^.]" 用）呼んでおり、訪問する
+    ;; ディレクトリすべてでファイルシステム I/O が倍増していた。
+    (when (and (file-directory-p dir) (> depth 0)
+               (not (orgx-agenda--should-exclude-p dir)))
+      (let* ((all     (directory-files dir t "\\`[^.]"))
+             (files   (seq-filter (lambda (f) (string-match-p "\\.org\\'" f)) all))
+             (subdirs (seq-filter #'file-directory-p all)))
+        (append files
+                (cl-loop for subdir in subdirs
+                         append (orgx-agenda--scan subdir (1- depth)))))))
+
+  (defun orgx-agenda-invalidate-cache ()
+    "Force a rebuild on the next call to `orgx-agenda-build`."
+    (interactive)
+    (setq orgx-agenda--cache nil
+          orgx-agenda--last-scan-time nil)
+    (message "[orgx-agenda] cache invalidated"))
+
+  (defun orgx-agenda-build (&optional force)
+    "Return (and cache) the list of Org agenda files.
+  Uses the cache unless FORCE is non-nil or the cache has expired."
+    (let* ((now (float-time))
+           (stale (or (null orgx-agenda--last-scan-time)
+                      (> (- now orgx-agenda--last-scan-time)
+                         orgx-agenda-cache-ttl))))
+      (when (or force stale (null orgx-agenda--cache))
+        (let* ((dir (or (bound-and-true-p my:d:org)
+                        (expand-file-name "org" user-emacs-directory)))
+               (files (when (file-directory-p dir)
+                        (orgx-agenda--scan dir orgx-agenda-max-depth))))
+          (setq orgx-agenda--cache files
+                orgx-agenda--last-scan-time now))))
+    orgx-agenda--cache)
+
+  (provide 'orgx-agenda)
+  ;;; orgx/orgx-agenda.el ends here
+#+end_src
+
+* orgx/orgx-visual.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-visual
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-visual.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-visual.el --- Org の視覚的強化 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Org の視覚的強化: org-modern、pretty entities、カスタムフェイス。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - ガードフラグにより org-modern の表示変数をちょうど一度だけ設定する
+  ;; - 見出しの星、タグの整列、強調マーカー、pretty entities を設定する
+  ;; - TODO キーワードのカスタムフェイスと、リスト／チェックボックスの記号を定義する
+  ;; - `org-mode-hook' により、バッファごとに `org-modern-mode' を有効化する
+  ;; - `org-modern-indent' で、org-indent 有効時に消える src/example ブロックの
+  ;;   ブラケット（囲み線）を再現する。`org-modern-mode' より後に有効化する必要が
+  ;;   あるため、フックの深さを 90 にする
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (defvar orgx-visual--initialized nil)
+
+  (defun orgx-visual--configure-once ()
+    "Apply the org and org-modern variable configuration exactly once."
+    (unless orgx-visual--initialized
+      (setq orgx-visual--initialized t)
+      (setopt
+       org-startup-indented t
+       org-hide-leading-stars t
+       org-auto-align-tags nil
+       org-tags-column 0
+       org-fold-catch-invisible-edits 'show-and-error
+       org-special-ctrl-a/e t
+       org-insert-heading-respect-content t
+       org-hide-emphasis-markers t
+       org-pretty-entities t
+
+       org-modern-todo-faces
+       '(("TODO"     :background "#673AB7" :foreground "#f8f8f2")
+         ("SOMEDAY"  :background "#6b7280" :foreground "#f8f8f2")
+         ("WAITING"  :background "#6272a4" :foreground "#f8f8f2")
+         ("DONE"     :background "#373844" :foreground "#b0b8d1")
+         ("CANCELED" :background "#4b5563" :foreground "#e5e7eb"))
+
+       org-modern-list '((?+ . "◦") (?- . "–") (?* . "•"))
+       org-modern-checkbox '((?X . "") (?- . "") (?\s . ""))
+       org-modern-priority '((?A . "") (?B . "") (?C . ""))
+       org-modern-replace-stars "")))
+
+  (defun orgx-visual--configure-agenda ()
+    "Apply the org-agenda variable configuration."
+    (setopt
+     org-agenda-tags-column 0
+     org-agenda-block-separator ?─
+     org-agenda-time-grid
+     '((daily today require-timed)
+       (800 1000 1200 1400 1600 1800 2000)
+       " ┄┄┄┄┄ " " ┄┄┄┄┄ ")
+     org-agenda-current-time-string
+     "⭠ now ─────────────────────────────────────────────────"))
+
+  (defun orgx-visual--enable-mode ()
+    "Enable org-modern in the current org-mode buffer."
+    (require 'org-modern)
+    (org-modern-mode 1))
+
+  (leaf org-modern :straight t)
+
+  (leaf org-modern-indent
+    :straight (org-modern-indent :type git :host github
+                                 :repo "jdtsmith/org-modern-indent"))
+
+  ;; 変数の設定は Org が読み込まれた時点で一度だけ実行する（バッファごとではない）。
+  ;; after-init-hook では実行しない: org の defcustom は自動読み込みの対象なので、
+  ;; その時点の setopt が Org（と org-agenda）を起動時に読み込んでしまう（実機で
+  ;; 起動後のフィーチャーが 485 から 566 に増えるのを確認した）。orgx 層は Org を
+  ;; 起動時に読み込まない。
+  (with-eval-after-load 'org
+    (orgx-visual--configure-once))
+  (with-eval-after-load 'org-agenda
+    (orgx-visual--configure-agenda))
+  ;; モードの有効化は org-mode バッファごとに実行する。
+  (add-hook 'org-mode-hook #'orgx-visual--enable-mode)
+
+  (defun orgx-visual--enable-indent ()
+    "Enable `org-modern-indent-mode' in the current org-mode buffer."
+    (require 'org-modern-indent)
+    (org-modern-indent-mode 1))
+
+  ;; org-modern-indent は org-indent と org-modern の後に働く必要がある（深さ 90）。
+  (add-hook 'org-mode-hook #'orgx-visual--enable-indent 90)
+
+  (provide 'orgx-visual)
+  ;;; orgx/orgx-visual.el ends here
+#+end_src
+
+* orgx/orgx-extensions.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-extensions
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-extensions.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-extensions.el --- Org Mode の拡張 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Org の拡張パッケージ: journal、roam、download、toc、cliplink。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - org-journal を設定し、journal ディレクトリを `my:d:org-journal' にする
+  ;; - org-roam を設定し、DB を `my:d:org-roam' 配下に置く。
+  ;;   `org-roam-db-autosync-mode' は起動時に自動起動しない（Org の遅延ロードを保つため）。
+  ;;   有効化は対話コマンド my/org-roam-autosync-enable による
+  ;; - org-roam-capture-templates を設定し、ノード新規作成時にドメイン×種別タグと
+  ;;   :ID:/:ROAM_REFS:/:STATUS: の PROPERTIES drawer を強制する。タグ語彙・命名規則等の
+  ;;   運用ポリシー本体は roam ノート側（meta-knowledge-base-conventions、
+  ;;   id: cba75214-acbb-4b04-ab07-46bd63cb3e36）を正とし、ここにはコードのみを置く。
+  ;; - org-download、toc-org、org-cliplink を導入する
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf org-journal :straight t :custom ((org-journal-dir . my:d:org-journal)))
+
+  (defun orgx--org-roam-file-hash-guard (orig file)
+    "Guard `org-roam-db--file-hash' against errors on ORIG called with FILE.
+  Returns nil on error so the DB sync skips the problematic file instead
+  of aborting the entire autosync run."
+    (condition-case err
+        (funcall orig file)
+      (error
+       (message "[org-roam] skip hash: %s (%s)" file (error-message-string err))
+       nil)))
+
+  (defun my/org-roam-autosync-enable ()
+    "Load org-roam and enable `org-roam-db-autosync-mode'.
+  org-roam is no longer synced automatically at startup.  Enabling autosync
+  requires loading org-roam, which in turn loads Org; doing that on an idle
+  timer defeated Org's deferred loading.  This command performs the same
+  enable step on demand.  Note that `org-roam-node-find' and the other entry
+  points are autoloaded, so they trigger a one-off DB sync on first use even
+  without persistent autosync."
+    (interactive)
+    (condition-case err
+        (progn
+          (require 'org-roam)
+          (when (fboundp 'org-roam-db-autosync-mode)
+            (org-roam-db-autosync-mode 1)
+            (message "[org-roam] autosync enabled")))
+      (error
+       (message "[org-roam] autosync failed: %s"
+                (error-message-string err)))))
+
+  (leaf org-roam
+    :straight t
+    :custom ((org-roam-directory . my:d:org-roam))
+    :config
+    ;; org-roam-db-location は defcustom である。パスは my:d:org-roam から
+    ;; 実行時に評価されるため :custom には直接置けない。setter と型検査の経路を保つため、
+    ;; :config 内で setopt を用いる。
+    (setopt org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
+
+    ;; Emacs 31.0.50: sqlitep の挙動が変わった。コネクタを明示的に固定する。
+    (setopt org-roam-db-connector
+            (if (and (fboundp 'sqlite-available-p)
+                     (sqlite-available-p))
+                'sqlite-builtin
+              'sqlite))
+
+    (with-eval-after-load 'org-roam
+      (when (fboundp 'org-roam-db--file-hash)
+        (advice-add 'org-roam-db--file-hash :around #'orgx--org-roam-file-hash-guard)))
+
+    ;; capture template: ドメイン×種別タグ運用（meta-knowledge-base-conventions 参照）。
+    ;; ファイル名は `<domain>-<slug>.org' 相当になるよう日付プレフィックス+スラッグで生成し、
+    ;; :ID:/:ROAM_REFS:/:STATUS: を PROPERTIES drawer として強制する。
+    ;; タグ語彙（ドメイン一覧・種別一覧）自体はこのファイルでは管理しない — 増減の度に
+    ;; tangle/コミットが発生するのを避けるため、正規リストは roam ノート側に置く。
+    (setopt org-roam-capture-templates
+            '(("d" "domain note" plain
+               "%?"
+               :target
+               (file+head
+                "%<%Y%m%d>-${slug}.org"
+                ":PROPERTIES:\n:ID: %(org-id-uuid)\n:ROAM_REFS: %^{出典URL（複数可、スペース区切り、省略可）}\n:STATUS: n/a\n:END:\n#+TITLE: ${title}\n#+FILETAGS: :%^{ドメインタグ}:%^{種別タグ}:\n#+CATEGORY: %\\1\n#+DATE: %U\n")
+               :unnarrowed t)))
+
+    ;; autosync は起動時に自動では有効化しない（run-with-idle-timer で起動 5 秒後に有効化する
+    ;; ことはしない）。org-roam-db-autosync-mode を有効化するには org-roam のロードが必要で、
+    ;; org-roam は org を require するため、タイマーで有効化すると「起動直後に Org を読み込む」
+    ;; 経路になるからである。代わりに M-x my/org-roam-autosync-enable で対話的に起動する。
+    ;; org-roam-node-find などのエントリポイントは autoload されているため、初回呼び出し
+    ;; 時に一度だけ DB が同期される。常時 autosync が要る場合のみ上記コマンドを使う。
+    )
+
+  (leaf org-download :straight t :custom ((org-download-image-dir . my:d:org-pictures)))
+  (leaf toc-org :straight t :hook ((org-mode . toc-org-enable) (markdown-mode . toc-org-mode)))
+  (leaf org-cliplink :straight t)
+
+  (provide 'orgx-extensions)
+  ;;; orgx/orgx-extensions.el ends here
+#+end_src
+
+* orgx/orgx-fold.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-fold
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-fold.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-fold.el --- Org の折りたたみ補助 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Emacs のバージョン互換性を備えた、追加の Org 折りたたみコマンド。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/org-fold-subtree'、`my/org-unfold-subtree'、`my/org-toggle-fold' を
+  ;;   対話コマンドとして提供する
+  ;; - `org-mode-map' で <leader> m f / m e / m F（`ui-leader-key' に追従）と C-c f / C-c F にバインドする
+  ;; - `org-fold-folded-p' を `fboundp' でガードし、Emacs 29 未満では
+  ;;   `outline-invisible-p' にフォールバックする
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar org-mode-map)
+
+  ;; Org は起動時に読み込まない（orgx 層の規則）。下の関数は org-mode のキーからだけ
+  ;; 呼ばれ、その時点で Org は読み込み済みなので、宣言だけしておく。
+  (declare-function org-fold-subtree "org-fold")
+  (declare-function org-fold-show-subtree "org-fold")
+  (declare-function org-fold-folded-p "org-fold")
+  (declare-function org-back-to-heading "org")
+  (declare-function outline-invisible-p "outline")
+
+  (defun my/org-fold-subtree ()
+    "Fold the subtree at point."
+    (interactive) (org-fold-subtree t))
+
+  (defun my/org-unfold-subtree ()
+    "Unfold (show) the subtree at point."
+    (interactive) (org-fold-show-subtree))
+
+  (defun my/org-toggle-fold ()
+    "Toggle fold state of the subtree at point."
+    (interactive)
+    (save-excursion
+      (org-back-to-heading t)
+      (if (if (fboundp 'org-fold-folded-p)
+              (org-fold-folded-p (point))
+            ;; Emacs 29 未満のフォールバック: outline の可視性を確認する
+            (outline-invisible-p (line-end-position)))
+          (org-fold-show-subtree)
+        (org-fold-subtree t))))
+
+
+
+  (with-eval-after-load 'org
+    (require 'org-fold)
+
+    ;; org-mode 用に、折りたたみコマンドをローカルリーダー（<leader> m）配下に置く。
+    ;; キーは、モード用に予約された標準の C-c バインドと衝突しないよう選んでいる。
+    ;; "M-SPC" を直書きせず `ui-leader-key' を参照する（ui-keymap.el と同じ）。
+    ;; personal/device-*.el がリーダーを変えた環境（例: WSL の C-c SPC）にも追従する。
+    (let ((leader (if (boundp 'ui-leader-key) ui-leader-key "M-SPC")))
+      (keymap-set org-mode-map (concat leader " m f") #'my/org-fold-subtree)
+      (keymap-set org-mode-map (concat leader " m e") #'my/org-unfold-subtree)
+      (keymap-set org-mode-map (concat leader " m F") #'my/org-toggle-fold))
+    ;; 挿入状態から片手で使えるよう、短い C-c エイリアスも残している
+    (keymap-set org-mode-map "C-c f"     #'my/org-fold-subtree)
+    (keymap-set org-mode-map "C-c F"     #'my/org-toggle-fold))
+
+  (provide 'orgx-fold)
+  ;;; orgx/orgx-fold.el ends here
+#+end_src
+
+* orgx/orgx-export.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-export
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-export.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-export.el --- Org のエクスポート設定 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Org のエクスポート・バックエンド: Markdown、Mermaid、Graphviz（dot）、
+  ;; LaTeX/PDF（LuaLaTeX-ja）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - Hugo 向けの ox-hugo の設定は orgx-hugo.el が受け持つ
+  ;; - markdown-mode、markdown-preview-mode、edit-indirect を導入する
+  ;; - ob-mermaid と mmdc CLI により、mermaid を Org Babel の言語として登録する
+  ;; - Org Babel で Graphviz 図を描画するため ob-dot を有効化する（任意）
+  ;; - 日本語 PDF 文書向けに ltjsarticle クラスを org-latex-classes に登録し、
+  ;;   PDF 生成を org 標準の 3 回連続コンパイルではなく latexmk に委ねる
+  ;; - LaTeX バックエンドの *.svg 画像リンクを、事前に rsvg-convert で
+  ;;   生成した同名 *.pdf を指すよう \includegraphics の拡張子を書き換える
+  ;;   （org 標準機能では変換されず、svg パッケージは Inkscape 本体を要求する
+  ;;   ため使わない。経緯は下記の依存注記を参照）
+  ;;
+  ;; ob-mermaid の依存に関する注記:
+  ;;
+  ;;   ob-mermaid は @mermaid-js/mermaid-cli の mmdc CLI を必要とする。
+  ;;   導入方法: npm install -g @mermaid-js/mermaid-cli
+  ;;         または: brew install mermaid-cli  （macOS）
+  ;;   非公開関数 `orgx-export--mermaid-cli-path' が PATH を探索し、フォールバックとして
+  ;;   ~/.npm-global/bin も調べる。mmdc が無い場合でも言語の登録自体は行われ、
+  ;;   :file 出力のブロックだけが失敗する。
+  ;;
+  ;; ob-dot の依存に関する注記:
+  ;;
+  ;;   ob-dot は Org のコアではなく org-contrib の一部であり、独立した straight.el の
+  ;;   レシピが存在しない。したがって Graphviz の Babel 対応は任意である。
+  ;;   ob-dot の leaf ブロックは、`ob-dot' が既に load-path 上にある場合にのみ有効化される
+  ;;   （`locate-library' でガード）。dot 対応を有効にするには、Emacs 起動前に
+  ;;   org-contrib を別途インストールすること:
+  ;;     (straight-use-package 'org-contrib)   ; または OS のパッケージマネージャ経由
+  ;;
+  ;; LaTeX/PDF（LuaLaTeX-ja）の依存に関する注記:
+  ;;
+  ;;   dotfiles 側で ~/.latexmkrc のグローバルデフォルトを LuaLaTeX-ja に切り替え
+  ;;   済み（$pdf_mode = 4、$lualatex 経由で PDF を直接生成。詳細は dotfiles
+  ;;   リポジトリの README.md「MacTeX」節を参照）。これに合わせて、以下の
+  ;;   org-latex-pdf-process は %latex 置換を経由せず常に `latexmk' を呼ぶため、
+  ;;   個々の文書の #+LATEX_COMPILER は PDF 生成段では参照されない。pLaTeX 等
+  ;;   別エンジンへ文書単位で切り替えたい場合は、latexmk の magic comment
+  ;;   （% !TEX program = platex）を .tex 側に置くこと。
+  ;;   mactex-no-gui（TeX Live full scheme）に LuaTeX-ja・原ノ味フォントは
+  ;;   同梱済みのため、追加インストールは不要。
+  ;;
+  ;;   *.svg を図として使う文書（design_spec.org 等）向けの取り扱い:
+  ;;   当初 svg パッケージ + -shell-escape + \includesvg 書き換えを試したが、
+  ;;   svg パッケージは変換手段として常に Inkscape 本体の CLI を要求し、
+  ;;   inkscapelatex=false は「Inkscape に LaTeX テキストを処理させるか」の
+  ;;   切替に過ぎない。mactex-no-gui 環境には Inkscape が無いため、実際に
+  ;;   ビルドすると `Inkscape version not detected' で失敗する（design_spec.org
+  ;;   のビルドログで確認済み）。そのため svg パッケージ／shell-escape は使わず、
+  ;;   SVG を事前に（LaTeX の外側で）rsvg-convert（要: brew install librsvg。
+  ;;   CLI のみで GUI 不要）で同名の *.pdf に変換しておき、通常の graphicx の
+  ;;   \includegraphics で読み込む方式に変更した:
+  ;;     for f in svg/*.svg; do rsvg-convert -f pdf -o "${f%.svg}.pdf" "$f"; done
+  ;;   さらに、org-latex-link（ox-latex.el 本体）が *.svg リンクを検出すると、
+  ;;   フィルタが動く前に自前で \includegraphics{*.svg} を \includesvg{*}
+  ;;   （拡張子も除去済み）へ書き換えることが実機検証で判明したため、
+  ;;   orgx-export--svg-to-pdf-graphics（下記）は \includegraphics{*.svg} では
+  ;;   なく \includesvg{*} をマッチ対象にしている。文書本体の画像リンクは
+  ;;   [[file:foo.svg]] のままでよく、個々のリンクを書き換える必要はないが、
+  ;;   対応する *.pdf を事前に生成しておくこと。
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar org-babel-load-languages)
+  (defvar org-export-filter-link-functions)
+  (defvar org-latex-classes)
+  (declare-function org-export-derived-backend-p "ox")
+
+  (eval-when-compile (require 'leaf))
+
+  ;; Emacs 本体 international/latexenc.el の既知の欠陥への防御。
+  ;;
+  ;; `latexenc-find-file-coding-system'（file-coding-system-alist の
+  ;; *.tex/*.ltx/*.dtx/*.drv エントリ。Emacs 標準機能で AUCTeX 不要）は、バッファ内に
+  ;; \usepackage[...]{inputenc} が見つからない場合、TeX-master ローカル変数などから
+  ;; 主ファイルを推測しようとする。この探索で `TeX-master'（AUCTeX 変数。未インストール
+  ;; なら unbound）と `tex-main-file'（tex-mode.el の defcustom。既定値 nil）の双方が
+  ;; 得られないと、file が nil のまま (decode-coding-string file 'utf-8) を呼んでしまい
+  ;; "Wrong type argument: stringp, nil" で例外になる（Emacs 側 latexenc.el 未修正）。
+  ;;
+  ;; 下記の ltjsarticle（LuaLaTeX-ja）でエクスポートした *.tex はこの条件に確実に合致
+  ;; する: LuaLaTeX-ja は fontspec/luatexja で UTF-8 を扱うため inputenc を使わず、
+  ;; org の LaTeX エクスポートも TeX-master コメントを付与しない。エクスポート結果を
+  ;; デバッグのため Emacs で開くたびに再現するため、TeX-master 探索自体を無効化して
+  ;; 回避する。`latexenc-dont-use-TeX-master-flag' は defcustom ではない素の defvar
+  ;; なので setq が正しい（コーディング規則 §6。personal/user.el の my:locale と同じ
+  ;; 扱い）。org のロード完了を待つ orgx-export--configure-latex 内ではなく、ここ
+  ;; （モジュール先頭のトップレベル）で設定するのは、org 未ロードの時点で *.tex を
+  ;; 開いても latexenc-find-file-coding-system 自体は独立に発火し再現するため。
+  (setq latexenc-dont-use-TeX-master-flag t)
+
+  (leaf markdown-mode :straight t)
+  (leaf markdown-preview-mode :straight t)
+  (leaf edit-indirect :straight t)
+
+  ;; ob-mermaid の前提条件（いずれか）:
+  ;;   npm install -g @mermaid-js/mermaid-cli   ; mmdc を導入
+  ;;   brew install mermaid-cli                 ; macOS の Homebrew
+  ;;
+  ;; 設計上の注記:
+  ;;   leaf は導入（:straight t）のみを担当し、ロードはしない。Babel 言語の登録には
+  ;;   org 本体が必要なため、:require t で ob-mermaid を先にロードすると、それが Org を
+  ;;   起動時に読み込む経路になる。そのため orgx-export--register-mermaid を
+  ;;   with-eval-after-load 'org に置く。org がロードされた瞬間に ob-mermaid を require し、
+  ;;   defcustom を setopt してから言語を登録する。
+  ;;   add-to-list — 冪等。append は再評価のたびに重複を蓄積してしまう。
+  ;;   setopt      — ob-mermaid-cli-path は defcustom である（コーディング規則 6）。
+
+  (defun orgx-export--mermaid-cli-path ()
+    "Return the absolute path to the mmdc CLI executable, or nil.
+  Checks PATH first via `executable-find', then falls back to the
+  npm global bin directory (~/.npm-global/bin/mmdc) for environments
+  where npm global installs are not on PATH."
+    (or (executable-find "mmdc")
+        (let ((npm-bin (expand-file-name "~/.npm-global/bin/mmdc")))
+          (and (file-executable-p npm-bin) npm-bin))))
+
+  (leaf ob-mermaid :straight t)
+
+  (defun orgx-export--register-mermaid ()
+    "Load ob-mermaid, locate the mmdc CLI, and register the mermaid Babel language.
+    Runs on `with-eval-after-load' for org, so `org-babel-load-languages' and
+    `org-babel-do-load-languages' are available."
+    (require 'ob-mermaid)
+    (when-let* ((cli (orgx-export--mermaid-cli-path)))
+      (setopt ob-mermaid-cli-path cli))
+    (add-to-list 'org-babel-load-languages '(mermaid . t))
+    (org-babel-do-load-languages 'org-babel-load-languages
+                                 org-babel-load-languages))
+
+  (with-eval-after-load 'org
+    (orgx-export--register-mermaid))
+
+  ;; ob-dot は独立したパッケージではなく、org-contrib の中の 1 ファイルである。
+  ;; straight.el には、あらゆる環境で機能する org-contrib の信頼できるレシピが無い
+  ;; （上流は git.sr.ht であり、nongnu-elpa 配布版は別途レシピの上書きが必要）。
+  ;; org-contrib を強制インストールしてネットワークや git の失敗を招くリスクを取るより、
+  ;; Graphviz の Babel 対応は任意として扱う。
+  ;; - ob-dot が既に load-path 上にある場合（システムの Org、OS パッケージマネージャの
+  ;;   org-contrib、手動インストール済みなど）、:if のガードが言語を有効化する。
+  ;;
+  ;; - ob-dot が無い場合、このブロックは何もせず、エラーも出ない。
+  ;; dot 対応を望むユーザーは、org-contrib を別途インストールすること:
+  ;;   (straight-use-package 'org-contrib)  ; または OS のパッケージマネージャ経由
+  (leaf ob-dot
+    :straight nil
+    :if (locate-library "ob-dot")
+    :after org
+    :config
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     (append org-babel-load-languages '((dot . t)))))
+
+  ;; ox-latex は Org 同梱（straight 不要）。ob-mermaid と同じ理由（上記参照）で、
+  ;; トップレベルの require は避け、org のロード後に遅延登録する。
+  ;; add-to-list — 冪等。setopt — org-latex-pdf-process は defcustom。
+  ;;
+  ;; SVG 埋め込み方式の変更履歴（2026-07、2 段階の訂正）:
+  ;;
+  ;; (1) 当初 \usepackage[inkscapelatex=false]{svg} + -shell-escape +
+  ;;     \includegraphics{*.svg} を \includesvg{*} へ書き換えるフィルタで試したが、
+  ;;     inkscapelatex=false は Inkscape に LaTeX テキストを処理させるかどうかの
+  ;;     切替に過ぎず、svg パッケージは変換手段として常に Inkscape 本体の CLI を
+  ;;     要求する。mactex-no-gui 環境には Inkscape が無いため `Inkscape version
+  ;;     not detected' で実際に失敗した（design_spec.org のビルドログで確認）。
+  ;;     svg パッケージ／shell-escape を使わない事前変換方式（下記）に変更した。
+  ;;
+  ;; (2) (1) の書き換え後も、design_spec.org の実機ビルドで \includesvg が
+  ;;     \includegraphics に変換されず `Undefined control sequence' で失敗した。
+  ;;     原因は org-latex-link（ox-latex.el）が *.svg リンクに対して、フィルタが
+  ;;     動く前に自前で \includegraphics{*.svg} を \includesvg{*}（拡張子も除去
+  ;;     済み）へ書き換えていたこと — つまりフィルタは常に \includegraphics{*.svg}
+  ;;     ではなく \includesvg{*} を受け取っており、旧フィルタの正規表現が一致対象
+  ;;     を持たず素通りしていた。加えて、replace-regexp-in-string に関数 REP を
+  ;;     渡す場合でも、返り値に含まれる `\' はデフォルトでは literal 扱いされず
+  ;;     `Invalid use of \` in replacement text' で例外になることも判明した
+  ;;     （返り値に \linewidth のような \ を含む文字列が混ざる場合に発生）。
+  ;;     下記は両方を修正済み: \includesvg{*} を直接マッチし、
+  ;;     replace-regexp-in-string の LITERAL 引数を明示的に t にしている。
+
+  (defun orgx-export--svg-to-pdf-graphics (contents backend _info)
+    "Rewrite \\includesvg{FILE} to \\includegraphics{FILE.pdf} for the latex backend.
+  ox-latex natively rewrites *.svg image links from \\includegraphics{FILE.svg}
+  to \\includesvg{FILE} (extension already stripped) before any
+  `org-export-filter-link-functions' filter sees the text — this happens
+  unconditionally for any link matching `org-latex-inline-image-rules', whether
+  or not the svg package (and its Inkscape dependency, deliberately avoided
+  here; see the change history comment above) is actually loaded. Instead,
+  *.svg figures are expected to be pre-rendered to a sibling *.pdf via
+  rsvg-convert (brew install librsvg):
+
+    for f in svg/*.svg; do rsvg-convert -f pdf -o \"${f%.svg}.pdf\" \"$f\"; done
+
+  This filter redirects \\includesvg back to the ordinary graphicx
+  \\includegraphics pipeline (no shell-escape needed) pointing at the
+  pre-rendered PDF. LITERAL is passed as t explicitly: even with a function
+  REP, `replace-regexp-in-string' does not treat the returned string as
+  literal by default, and the replacement here can itself contain backslashes
+  (e.g. \\linewidth carried over from the original options), which would
+  otherwise trigger \"Invalid use of `\\' in replacement text\"."
+    (when (org-export-derived-backend-p backend 'latex)
+      (replace-regexp-in-string
+       "\\\\includesvg\\(\\[[^]]*\\]\\)?{\\([^}]+\\)}"
+       (lambda (whole)
+         (string-match
+          "\\\\includesvg\\(\\[[^]]*\\]\\)?{\\([^}]+\\)}" whole)
+         (concat "\\includegraphics" (or (match-string 1 whole) "")
+                 "{" (match-string 2 whole) ".pdf}"))
+       contents
+       nil t)))
+
+  (defun orgx-export--configure-latex ()
+    "Register the ltjsarticle class, route PDF export through latexmk, and
+  redirect *.svg image links to their pre-rendered *.pdf sibling for the latex
+  backend. `ox-latex' is required lazily here (after `org' loads) rather than
+  at top level, mirroring `orgx-export--register-mermaid' above."
+    (require 'ox-latex)
+    (add-to-list 'org-latex-classes
+                 '("ltjsarticle"
+                   "\\documentclass[ja=standard]{ltjsarticle}"
+                   ("\\section{%s}" . "\\section*{%s}")
+                   ("\\subsection{%s}" . "\\subsection*{%s}")
+                   ("\\subsubsection{%s}" . "\\subsubsection*{%s}")))
+    ;; ~/.latexmkrc（LuaLaTeX-ja がデフォルト、$pdf_mode = 4）に依存関係解決と
+    ;; 再コンパイル回数の判断を一任する。bibtex/makeindex も upbibtex/upmendex
+    ;; として .latexmkrc 側で処理されるため、ここでは何も指定しない。
+    ;; shell-escape は使わない（svg パッケージ運用を撤回したため不要。任意の
+    ;; シェルコマンド実行を許す -shell-escape は使わずに済むなら使わない）。
+    (setopt org-latex-pdf-process
+            '("latexmk -synctex=1 -halt-on-error -output-directory=%o %f"))
+    (add-to-list 'org-export-filter-link-functions
+                 #'orgx-export--svg-to-pdf-graphics))
+
+  (with-eval-after-load 'org
+    (orgx-export--configure-latex))
+
+  (provide 'orgx-export)
+  ;;; orgx/orgx-export.el ends here
+#+end_src
+
+* orgx/orgx-notes-markdown.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-notes-markdown
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-notes-markdown.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-notes-markdown.el --- Org 配下の Markdown ノート -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Org ディレクトリ配下に保存する軽量な Markdown ノートシステム。
+  ;;
+  ;; 本モジュールが提供するもの:
+  ;;
+  ;; - ノートブック形式のディレクトリ構造
+  ;; - タイムスタンプ付き Markdown ノートの作成
+  ;; - Pandoc ベースの Markdown 編集
+  ;; - ノート検索のための consult-ripgrep 統合
+  ;; - 画像のための org-download 統合
+  ;;
+  ;; 本システムは意図的に最小限であり、複雑な知識グラフのフレームワークは避けている。
+  ;;
+
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar markdown-mode-map)
+
+  (eval-when-compile (require 'leaf) (require 'subr-x))
+
+  (defgroup my:notes nil
+    "Prose-oriented Markdown notes stored under the Org directory."
+    :group 'convenience)
+
+  (defcustom my:notes-directory-name "notes"
+    "Name of the notes directory located under `my:d:org'."
+    :type 'string
+    :group 'my:notes)
+
+  (defcustom my:notes-default-notebooks
+    '("inbox" "work" "life" "ideas" "archive")
+    "Default notebook directories created under the notes root."
+    :type '(repeat string)
+    :group 'my:notes)
+
+  (defvar my:d:notes
+    (expand-file-name my:notes-directory-name my:d:org)
+    "Root directory for Markdown notes.")
+
+  (defun orgx-notes--ensure-root ()
+    "Ensure the notes directory and default notebooks exist."
+    (unless (file-directory-p my:d:notes)
+      (make-directory my:d:notes t))
+    (dolist (name my:notes-default-notebooks)
+      (let ((dir (expand-file-name name my:d:notes)))
+        (unless (file-directory-p dir)
+          (make-directory dir t)))))
+
+  (defun orgx-notes--slugify (title)
+    "Convert TITLE into a filesystem-safe slug."
+    (let* ((lower (downcase title))
+           (repl (replace-regexp-in-string "[^[:alnum:]]+" "-" lower)))
+      (string-trim repl "-+" "-+")))
+
+  (defun my/notes-new-note (notebook title)
+    "Create a new Markdown note in NOTEBOOK with TITLE."
+    (interactive
+     (progn
+       (orgx-notes--ensure-root)
+       (let* ((choices (directory-files my:d:notes nil "^[^.]"))
+              (notebook (completing-read "Notebook: " choices nil nil "inbox"))
+              (title (read-string "Title: ")))
+         (list notebook title))))
+    (orgx-notes--ensure-root)
+    (let* ((dir (expand-file-name notebook my:d:notes))
+           (slug (orgx-notes--slugify title))
+           (timestamp (format-time-string "%Y%m%d-%H%M%S"))
+           (filename (format "%s-%s.md" timestamp slug))
+           (path (expand-file-name filename dir)))
+      (unless (file-directory-p dir)
+        (make-directory dir t))
+      (find-file path)
+      (when (= (buffer-size) 0)
+        (insert
+         (format
+          "---\ntitle: %s\nnotebook: %s\ntags: []\ncreated: %s\nupdated: %s\n---\n\n"
+          title notebook
+          (format-time-string "%Y-%m-%d")
+          (format-time-string "%Y-%m-%d")))
+        (save-buffer))))
+
+  (defun my/notes-open-root ()
+    "Open the notes root directory in Dired."
+    (interactive)
+    (orgx-notes--ensure-root)
+    (dired my:d:notes))
+
+  (defun my/markdown-toggle-live-preview ()
+    "Toggle live preview mode in Markdown buffers."
+    (interactive)
+    (if (bound-and-true-p markdown-live-preview-mode)
+        (markdown-live-preview-mode -1)
+      (markdown-live-preview-mode 1)))
+
+  (defun my/notes-markdown-visual-fill ()
+    "Enable centered writing layout for Markdown notes."
+    (setq-local visual-fill-column-width 100)
+    (setq-local visual-fill-column-center-text t)
+    (visual-fill-column-mode 1))
+
+  (defun my/notes-consult-ripgrep ()
+    "Search Markdown notes using consult-ripgrep."
+    (interactive)
+    (orgx-notes--ensure-root)
+    (let ((default-directory my:d:notes))
+      (consult-ripgrep)))
+
+  (leaf markdown-mode
+    :straight t
+    :mode (("\\.md\\'" . gfm-mode)
+           ("README\\.md\\'" . gfm-mode))
+    :custom ((markdown-command . "pandoc")
+             (markdown-fontify-code-blocks-natively . t))
+    :hook ((markdown-mode . visual-line-mode)
+           (markdown-mode . variable-pitch-mode)
+           (markdown-mode . my/notes-markdown-visual-fill))
+    :config
+    (keymap-set markdown-mode-map "C-c C-p" #'my/markdown-toggle-live-preview))
+
+  ;; visual-fill-column は組み込みではなくサードパーティのパッケージである。
+  ;; :straight nil は Emacs 組み込み専用（コーディング規則:「組み込みは :straight nil を
+  ;; 宣言する」）。:straight t に変更した。
+  (leaf visual-fill-column
+    :straight t
+    :commands (visual-fill-column-mode))
+
+  (leaf consult-notes
+    :straight t
+    :after consult
+    :require t
+    :config
+    ;; consult-notes-file-dir-sources は defcustom（consult-notes.el）である。
+    ;; 値は my:d:notes から実行時に導出されるため :custom には置けない。
+    ;; :config 内で setopt を用いる。
+    (setopt consult-notes-file-dir-sources
+            (list (list "Org Notes (MD)" ?m my:d:notes))))
+
+  (defun my/notes-markdown-org-download-setup ()
+    "Configure org-download integration for Markdown notes."
+    (setq-local org-download-link-format "![](%s)")
+    (setq-local org-download-image-dir "./images")
+    (org-download-enable))
+
+  (with-eval-after-load 'org-download
+    (add-hook 'markdown-mode-hook #'my/notes-markdown-org-download-setup))
+
+  (provide 'orgx-notes-markdown)
+
+  ;;; orgx/orgx-notes-markdown.el ends here
+#+end_src
+
+* orgx/orgx-auto-tangle.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-auto-tangle
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-auto-tangle.el
+:END:
+
+保存時の自動 tangle と、=orgx-auto-hugo.el= が担うキャプチャ確定時の自動エクスポートは、
+どちらも Org 本体を遅延ロードしたまま実現している。両者の合流点をまとめて図示する。
+
+[[file:../svg/10_orgtangle_hugo.svg]]
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-auto-tangle.el --- 自動 tangle の補助 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 保存した Org 文書（README.org と org/*.org）を `org-babel-tangle' で自動 tangle する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `orgx-core-source-org-p' が真のファイル（README.org と org/*.org）のみを
+  ;;   対象とする
+  ;; - 再帰的な保存ループを防ぐため、バッファローカルな実行中フラグを用いる
+  ;; - 名前付きフック関数 `orgx-auto-tangle--install-hook' を介して、
+  ;;   `orgx-auto-tangle--maybe' を `after-save-hook' にローカル登録する
+  ;; - org / ob-tangle をトップレベルで require しない（Org の遅延ロードを保つ）
+  ;;; Code:
+
+  ;; org と ob-tangle はトップレベルで require しない（Org を遅延ロードするため）。
+  ;; 本モジュールのフックは org-mode-hook 経由でしか登録されないので、
+  ;; orgx-auto-tangle--maybe が走る時点で org は必ずロード済みである。
+  ;; ob-tangle だけを、実際に tangle する直前に require する。
+  (declare-function org-babel-tangle "ob-tangle" (&optional arg target-file lang-re))
+
+  (declare-function orgx-core-source-org-p "orgx-core" (&optional file))
+  (defvar-local orgx-auto-tangle--in-progress nil)
+
+  (defun orgx-auto-tangle--eligible-p ()
+    "Return non-nil when the current buffer is one of the Org sources."
+    (and (derived-mode-p 'org-mode)
+         (require 'orgx-core nil t)
+         (orgx-core-source-org-p)))
+
+  ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
+  ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、確認の抑止が効かない。
+  (defvar org-confirm-babel-evaluate)
+
+  (defun orgx-auto-tangle--maybe ()
+    (when (and (orgx-auto-tangle--eligible-p)
+               (not orgx-auto-tangle--in-progress))
+      (require 'ob-tangle)
+      (let ((orgx-auto-tangle--in-progress t)
+            (org-confirm-babel-evaluate nil)
+            (inhibit-modification-hooks t))
+        (condition-case err
+            (org-babel-tangle)
+          (error
+           (message "[orgx-auto-tangle] error: %s" (error-message-string err)))))))
+
+  ;; 無名 lambda を名前付き defun に抽出した。
+  ;; 理由: org-mode-hook 上の無名 lambda は remove-hook で除去できず、
+  ;; describe-function で検査もできず、eval-buffer をまたいだ重複登録に対しても
+  ;; 安全でない。
+  (defun orgx-auto-tangle--install-hook ()
+    "Install the auto-tangle after-save hook buffer-locally."
+    (add-hook 'after-save-hook #'orgx-auto-tangle--maybe nil 'local))
+
+  (add-hook 'org-mode-hook #'orgx-auto-tangle--install-hook)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: timeout.el によるスロットリング
+  ;; ---------------------------------------------------------------------------
+  ;; 保存した Org 文書の tangle は、保存が連続すると（auto-save-visited-mode に加えて
+  ;; 明示的な C-x C-s）2 回走る。
+  ;; `timeout-throttle' は advice を設置し、一定間隔内の繰り返し呼び出しを 1 回に
+  ;; まとめる。上記の実行中フラグは維持する。スロットリングは頻度を制限するだけで、
+  ;; 非再入性を保証するものではないためである。
+  (when (and (require 'timeout nil t) (fboundp 'timeout-throttle))
+    (timeout-throttle #'orgx-auto-tangle--maybe 2.0))
+
+  (provide 'orgx-auto-tangle)
+  ;;; orgx/orgx-auto-tangle.el ends here
+#+end_src
+
+* orgx/orgx-hugo.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-hugo
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-hugo.el
+:END:
+
+Hugo ブログ（ox-hugo）に関わる設定を 1 つにまとめたモジュールです。
+
+以前は、ox-hugo の導入が =orgx-export.el= に、ブログ記事の capture テンプレート "b" が =orgx-core.el= に、
+そのテンプレートの上書きが =personal/personal-hugo.el= に分かれていました。 =orgx-export.el= は
+326 行のうち約 45 行だけが Hugo で、残りは Markdown、Mermaid、dot、LaTeX の話題でした。
+=orgx-core.el= と =personal-hugo.el= では、同じテンプレートの本文を二重に持っていました。
+
+このモジュールが持つのは次の 2 つです。
+
+- ox-hugo の導入と、ディスパッチメニュー・エクスポート時の 2 つのアドバイス（ =orgx-export.el= から移した）
+- ブログ記事の capture テンプレート "b"。タグの入力を行うかは =orgx-hugo-capture-prompt-tags-p= で切り替える
+
+タグを capture の確定前に別のコマンドで設定する運用の個人設定は、このオプションを =nil= にするだけです。
+テンプレートを丸ごと上書きする必要はありません。 =orgx-core.el= の =org= の設定のあとに追加するため、
+=my:modules= では =orgx-core= より後（ =orgx-auto-hugo= の直前）に置いています。
+
+#+NAME: orgx-hugo-el
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-hugo.el --- Hugo ブログ（ox-hugo）の設定 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Hugo ブログ（ox-hugo）の設定。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - TOML フロントマターを用いる ox-hugo を導入する
+  ;; - `org-export-dispatch' の前に ox-hugo を require し、メニューに Hugo を出す
+  ;; - `org-hugo-export-wim-to-md' の実行中だけ `org-agenda-files' を絞る
+  ;; - ブログ記事の capture テンプレート "b" を、org のロード後に追加する
+  ;;   （タグの入力を行うかは `orgx-hugo-capture-prompt-tags-p' で切り替える）
+  ;;
+  ;; capture 確定時の自動エクスポートは orgx-auto-hugo.el、個人設定（タグ設定、パス）は
+  ;; personal/personal-hugo.el と personal/<user>.el にある。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  ;; ox（Org のエクスポート基盤）は (leaf ox :straight nil :require t) として無条件に
+  ;; ロードしない。ox は org を require するため、それが Org を起動時に読み込む経路の
+  ;; 1 つになる。ox-hugo が自身で ox を require するので、この宣言は不要である。
+  ;;
+  ;; ox-hugo も :require t を付けない。org-hugo-front-matter-format は defcustom であり、
+  ;; :custom による先行登録は ox-hugo のロード時に反映される。ox-hugo は ox を、ox は org を
+  ;; require するため、:require t を付けると「Org の遅延ロード」の効果がここから漏れて
+  ;; 無に帰す。
+  ;;
+  ;; 落とし穴（実機で踏んだ）: 上の理由で :require t を外したところ、
+  ;; `M-x org-hugo-export-wim-to-md' のような直接呼び出しは autoload 経由で
+  ;; 問題なく動くのに、`C-c C-e' の対話的ディスパッチメニューに Hugo の項目が
+  ;; 出なくなった（`C-c C-e H A' が選べない）。原因は、`org-export-dispatch' が
+  ;; メニューを組み立てる際に `org-export-registered-backends' を直接見るため。
+  ;; この一覧への登録（`org-export-define-derived-backend'）は ox-hugo.el が
+  ;; 実際にロードされた副作用として起きるのであって、個々のコマンドに付いている
+  ;; autoload cookie では発生しない。つまり「関数呼び出しの autoload」と
+  ;; 「バックエンドのメニュー登録」は別物で、後者は :require t を外すと
+  ;; 起動時だけでなく *ずっと* 登録されないままになる。
+  ;;
+  ;; 対処: `org-export-dispatch' そのものに :before advice を付け、メニューを
+  ;; 開く直前にだけ ox-hugo を require する。通常起動時のコストはそのまま避けつつ、
+  ;; 対話的なディスパッチメニューでも Hugo が正しく選べるようにする。
+  (leaf ox-hugo :straight t :custom ((org-hugo-front-matter-format . "toml")))
+
+  (defun orgx-hugo--ensure-ox-hugo-before-dispatch (&rest _)
+    "Require `ox-hugo' before `org-export-dispatch' builds its backend menu.
+    `org-export-dispatch' reads `org-export-registered-backends' directly; the
+    Hugo backend is only added there as a side effect of loading ox-hugo.el
+    itself (via `org-export-define-derived-backend'), not by the autoload
+    cookies on its individual interactive commands. Without this advice,
+    `C-c C-e H A' silently omits the Hugo entry even though calling
+    `org-hugo-export-wim-to-md' directly works fine."
+    (require 'ox-hugo))
+
+  (advice-add 'org-export-dispatch :before #'orgx-hugo--ensure-ox-hugo-before-dispatch)
+
+  ;; org-hugo-export-wim-to-md は内部で org-id-update-id-locations を無条件に
+  ;; 呼び出しており、これが org-agenda-files（my:d:org 配下を再帰スキャンした
+  ;; 数百件、大半が org-roam のノート）とそのアーカイブファイルを一括で開こうと
+  ;; する（org-add-archive-files 経由）。org-roam 配下の一部ファイルへの
+  ;; アクセスが不安定な環境では、この一括アクセスが Read error（Operation
+  ;; timed out / Resource deadlock avoided）を引き起こし、エクスポートそのものが
+  ;; 失敗する。実機のバックトレースで確認した呼び出し連鎖:
+  ;;   org-hugo-export-wim-to-md → org-id-update-id-locations →
+  ;;   org-agenda-files → org-add-archive-files →
+  ;;   org-get-agenda-file-buffer → find-file-noselect
+  ;; エクスポート実行中だけ org-agenda-files をエクスポート対象バッファの
+  ;; ファイル 1 件に絞ることで、この一括スキャンを回避する。ブログ記事内では
+  ;; id: リンクを使っていないため、ID 解決範囲を絞っても実害はない。
+  ;; 特殊変数であることをコンパイラへ伝える（Org を読み込まずにコンパイルされても、
+  ;; 下の let が動的束縛として扱われるようにするため）。宣言が無いと、この let は字句的束縛になり、絞り込みが効かない。
+  (defvar org-agenda-files)
+
+  (defun orgx-hugo--limit-agenda-files-during-export (orig-fn &rest args)
+    "Narrow `org-agenda-files' to the current buffer's file while ORIG-FN runs.
+    Prevents the internal `org-id-update-id-locations' call inside
+    `org-hugo-export-wim-to-md' from scanning the full `org-agenda-files'
+    list (and its archive files), which can hang or error when some of
+    those files are on an unreliable filesystem path (e.g. org-roam notes
+    under iCloud)."
+    (let ((org-agenda-files (list (buffer-file-name (current-buffer)))))
+      (apply orig-fn args)))
+
+  (advice-add 'org-hugo-export-wim-to-md :around
+              #'orgx-hugo--limit-agenda-files-during-export)
+
+  (defgroup orgx-hugo nil
+    "Hugo blog (ox-hugo) settings."
+    :group 'org)
+
+  (defcustom orgx-hugo-capture-prompt-tags-p t
+    "Non-nil means the Blog capture template prompts for the tags.
+  When nil the EXPORT_HUGO_TAGS line is left out of the template.  Set it to nil
+  when the tags are assigned another way, for example by a function on
+  `org-capture-before-finalize-hook', so that they are not asked for twice."
+    :type 'boolean
+    :group 'orgx-hugo)
+
+  ;; ブログ記事のテンプレート。
+  ;; my:f:capture-blog-file は単一ファイルの ox-hugo ソース（all-posts.org または
+  ;; blog.org）を指す。テンプレートは、ox-hugo のサブツリー単位エクスポートが使う
+  ;; file+olp ターゲットに合わせ、"* blog" の下に挿入する。
+  ;; Page Bundle化済み（2026-07-30〜）のため、EXPORT_FILE_NAME は常に "index" 固定。
+  ;; 記事固有のスラッグは org-id-uuid でUUIDから生成する。
+  ;; （一時 format-time-string に置き換えていたことがあるが、原因は org-id-new
+  ;; ではなく org-hugo-export-wim-to-md が内部で無条件に呼ぶ
+  ;; org-id-update-id-locations が org-agenda-files 全体（org-roam 配下含む数百
+  ;; ファイル）を走査してしまうことだった（詳細は git log を参照）。この経路は
+  ;; orgx-hugo--limit-agenda-files-during-export の :around advice で
+  ;; 既に塞いであるため、org-id-uuid を使ってもエクスポート失敗は再発しない。
+  ;; org-id-new ではなく org-id-uuid を使うのは、org-id-method の設定値に
+  ;; 依存せず、org-id-locations に一切触れない純粋なUUID生成のみを行うため。
+  ;; EXPORT_HUGO_COVER という独自プロパティ名は ox-hugo が認識しない（front matter に
+  ;; 変換されない）ため使わない。任意キーをfront matterに追加したい場合、ox-hugo が
+  ;; 唯一受け付ける経路は EXPORT_HUGO_CUSTOM_FRONT_MATTER（plist形式）であるため、
+  ;; ここに :cover "" を空文字のプレースホルダーとして常に挿入しておく。
+  ;; 記事固有のカバー画像を用意した場合は、実ファイルを
+  ;; assets/img/cover/custom/<EXPORT_HUGO_BUNDLE>.jpg に置いた上で、この値を
+  ;; :cover "custom/<EXPORT_HUGO_BUNDLE>.jpg" に書き換える（deploy.sh の Tier1: 明示指定）。
+  ;; 空文字のままなら deploy.sh 側で post_front_matter_cover() が空文字を返し、
+  ;; 従来通り Tier2（タグ）→Tier3（季節）→Tier4（デフォルト）へフォールスルーする
+  ;; ため、既存の自動選択の挙動は変わらない。
+
+  (defun orgx-hugo-capture-template ()
+    "Return the Blog capture template \"b\" as an `org-capture-templates' entry.
+  The target is the \"blog\" heading of `my:f:capture-blog-file', which is
+  looked up when the capture runs.  The tags prompt follows
+  `orgx-hugo-capture-prompt-tags-p'."
+    (list "b" "Blog post" 'entry
+          '(file+olp my:f:capture-blog-file "blog")
+          (concat "* TODO %^{Title}\n"
+                  ":PROPERTIES:\n"
+                  ":EXPORT_HUGO_BUNDLE: %(org-id-uuid)\n"
+                  ":EXPORT_FILE_NAME: index\n"
+                  ":EXPORT_HUGO_CUSTOM_FRONT_MATTER: :cover \"\"\n"
+                  ":EXPORT_DATE: %<%Y-%m-%d %H:%M:%S>\n"
+                  (if orgx-hugo-capture-prompt-tags-p
+                      ":EXPORT_HUGO_TAGS: %^{Tags}\n"
+                    "")
+                  ":EXPORT_HUGO_CATEGORIES: %^{Category}\n"
+                  ":EXPORT_HUGO_LASTMOD:\n"
+                  ":END:\n"
+                  "%?")))
+
+  (defun orgx-hugo--register-capture-template ()
+    "Put the Blog capture template at the end of `org-capture-templates'.
+  Any existing \"b\" entry is replaced, so calling this twice is harmless."
+    (setq org-capture-templates
+          (append (assoc-delete-all "b" org-capture-templates)
+                  (list (orgx-hugo-capture-template)))))
+
+  ;; orgx-core.el の `org-capture-templates' の設定は (leaf org :config ...) にあり、
+  ;; (with-eval-after-load 'org ...) として登録される。本ファイルは my:modules で
+  ;; orgx-core より後にロードされるので、ここで登録する処理はそのあとに走る。
+  (with-eval-after-load 'org
+    (orgx-hugo--register-capture-template))
+
+  (provide 'orgx-hugo)
+  ;;; orgx/orgx-hugo.el ends here
+#+end_src
+
+* orgx/orgx-auto-hugo.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-auto-hugo
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-auto-hugo.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-auto-hugo.el --- キャプチャ確定時の ox-hugo 自動エクスポート -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; org-capture の確定を契機とする、ox-hugo の全サブツリー自動エクスポート。
+  ;; あわせて、確定前のキャプチャ中に手動で 1 回だけ呼び出す、ブラウザでの
+  ;; 簡易プレビュー（markdown-preview-mode 活用）。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - ブログ記事のキャプチャ項目が C-c C-c で確定されたときにのみエクスポートする
+  ;; - キャプチャ編集中の自動保存や手動保存ではエクスポートしない
+  ;; - C-c C-k でキャプチャが中断された場合はエクスポートしない
+  ;; - 確定時に `my:f:capture-blog-file' で対象ファイルを判定する
+  ;; - 再入的なエクスポート呼び出しを防ぐガードフラグを用いる
+  ;; - ox-hugo はエクスポート直前に require する（トップレベルでは require しない。
+  ;;   Org の遅延ロードを保つため）
+  ;; - キャプチャ中、`org-capture-mode-map' のキー 1 つで現在のエントリを
+  ;;   markdown-preview-mode でブラウザプレビューできるようにする（確定はしない）
+  ;;
+  ;; 設計の根拠:
+  ;;
+  ;; `orgx-auto-hugo--maybe' を `after-save-hook' にバッファローカルに登録すると、
+  ;; キャプチャ編集中の自動保存のたびに ox-hugo のエクスポートが走り、項目が未完成の
+  ;; 段階の一時的な保存でも実行されてしまう。正しい契機はキャプチャの確定である。C-c C-c で項目がコミットされて初めて、ファイルは
+  ;; エクスポートに耐える整合状態になる。
+  ;;
+  ;;
+  ;; `org-capture-after-finalize-hook' は、キャプチャ項目が挿入されキャプチャバッファが
+  ;; 閉じられた後に走る。キャプチャが中断された場合 `org-note-abort' が非 nil になる。
+  ;; フックは中断時にも走るため、中断条件は明示的に確認しなければならない。
+  ;;
+  ;; プレビュー機能の設計根拠:
+  ;;
+  ;; プレビューは「確定（エクスポート）とは独立した、副作用のない下書き確認」でなければ
+  ;; ならない。そのため `org-hugo-export-wim-to-md' のようなファイル書き出し系の
+  ;; コマンドは使わない。`org-hugo-base-dir' はキャプチャ対象ファイル（
+  ;; `my:f:capture-blog-file'）自身の #+HUGO_BASE_DIR キーワードで既に決まっている
+  ;; ことが多く、これを一時ディレクトリへ動的束縛で上書きしようとしても、キーワード側が
+  ;; 優先されて実ファイルへ書き出されてしまう危険がある。
+  ;;
+  ;; 代わりに `org-export-as' を直接呼び、SUBTREEP を指定して現在のエントリだけを
+  ;; 文字列として取り出す。これはディスクに一切触れず、`org-hugo-base-dir' の解決にも
+  ;; 依存しない。得られた文字列は、キャプチャセッションごとに 1 つ用意する使い捨ての
+  ;; スクラッチファイルへ書き出し、そのバッファ上で `markdown-preview-mode' を有効化する。
+  ;; 実ブログの content ディレクトリは常に無傷のままになる。
+  ;;
+  ;; スクラッチファイルの置き場所はキャプチャセッションのプロパティリストに
+  ;; `org-capture-put'/`org-capture-get' で保持する。バッファローカル変数ではなく
+  ;; セッションプロパティを使うのは、キャプチャバッファが確定・中断のどちらでも
+  ;; `org-capture-after-finalize-hook' の実行前後で kill される可能性があり、
+  ;; バッファローカル変数だけでは後始末のタイミングで参照できない場合があるため。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar org-capture-last-stored-marker)
+  (defvar org-capture-mode-map)
+  (defvar org-note-abort)
+  (declare-function org-capture-get "org-capture")
+  (declare-function org-capture-put "org-capture")
+  (declare-function org-export-as "ox")
+
+  (eval-when-compile (require 'leaf))
+
+  ;; ox-hugo はトップレベルで require しない（ox-hugo は ox を、ox は org を require
+  ;; するため、これが Org を起動時に読み込む経路になっていた）。本モジュールのフックは
+  ;; org-capture-after-finalize-hook であり、発火時には org と org-capture が必ず
+  ;; ロード済みである。ox-hugo はエクスポート直前に require する。
+  (declare-function org-hugo-export-wim-to-md "ox-hugo"
+                    (&optional all-subtrees async visible-only))
+
+  (defvar orgx-auto-hugo--in-progress nil
+    "Non-nil while an ox-hugo export triggered by capture finalization is running.
+  Prevents re-entrant export calls if ox-hugo causes a secondary finalize event.")
+
+  ;; ブログ記事の capture かどうかの判定は、ここの 1 か所にまとめる。
+  ;; 判定の基準は「保存先のバッファが `my:f:capture-blog-file' を訪問しているか」で、
+  ;; テンプレートのキー（"b" など）には依存しない。キーを変えても壊れない。
+  ;; 確定の前（`org-capture-before-finalize-hook'）は `org-capture-get' の :buffer、
+  ;; 確定の後（`org-capture-after-finalize-hook'）は `org-capture-last-stored-marker'
+  ;; から、保存先のバッファを得る。personal/personal-hugo.el も確定前の判定にこれを使う。
+  (defun orgx-auto-hugo-blog-buffer-p (buffer)
+    "Return non-nil when BUFFER visits the blog source file `my:f:capture-blog-file'.
+  An indirect buffer is resolved to its base buffer first."
+    (and (bound-and-true-p my:f:capture-blog-file)
+         (buffer-live-p buffer)
+         (let ((file (buffer-file-name (or (buffer-base-buffer buffer) buffer))))
+           (and file
+                (string= (file-truename file)
+                         (file-truename my:f:capture-blog-file))))))
+
+  (defun orgx-auto-hugo-blog-capture-p ()
+    "Return non-nil while a capture that targets the blog source file is in progress.
+  Call it from `org-capture-before-finalize-hook' or inside the capture buffer."
+    (orgx-auto-hugo-blog-buffer-p (org-capture-get :buffer)))
+
+  (defun orgx-auto-hugo--blog-capture-p ()
+    "Return non-nil when the just-finalized capture targeted the blog source file.
+  Reads `org-capture-last-stored-marker' to determine the destination file."
+    (and (markerp org-capture-last-stored-marker)
+         (orgx-auto-hugo-blog-buffer-p (marker-buffer org-capture-last-stored-marker))))
+
+  (defun orgx-auto-hugo--on-capture-finalize ()
+    "Export all Hugo subtrees after a blog post capture entry is finalized.
+  Does nothing when capture was aborted or the target is not the blog source file."
+    (when (and (not org-note-abort)
+               (not orgx-auto-hugo--in-progress)
+               (orgx-auto-hugo--blog-capture-p))
+      (require 'ox-hugo)
+      (let ((orgx-auto-hugo--in-progress t))
+        (condition-case err
+            (progn
+              (message "[orgx-auto-hugo] capture finalized — exporting all subtrees...")
+              (with-current-buffer (marker-buffer org-capture-last-stored-marker)
+                (org-hugo-export-wim-to-md :all-subtrees))
+              (message "[orgx-auto-hugo] export complete."))
+          (error
+           (message "[orgx-auto-hugo] error: %s" (error-message-string err)))))))
+
+  (add-hook 'org-capture-after-finalize-hook #'orgx-auto-hugo--on-capture-finalize)
+
+  ;; --- キャプチャ中の手動ブラウザプレビュー -----------------------------
+
+  (declare-function markdown-preview-mode "markdown-preview-mode" (&optional arg))
+
+  (defun orgx-auto-hugo-preview--scratch-file ()
+    "Return this capture session's scratch preview file, creating it on first use.
+  The path (and its containing temp directory) is stashed via `org-capture-put'
+  under :orgx-hugo-preview-file so repeated calls to
+  `orgx-auto-hugo-preview-capture' within the same capture session reuse the
+  same file and `markdown-preview-mode' buffer/server instead of spawning a
+  new one on every keystroke."
+    (or (org-capture-get :orgx-hugo-preview-file)
+        (let* ((dir (file-name-as-directory (make-temp-file "orgx-hugo-preview-" t)))
+               (file (expand-file-name "preview.md" dir)))
+          (org-capture-put :orgx-hugo-preview-file file)
+          file)))
+
+  (defun orgx-auto-hugo-preview-capture ()
+    "Render the entry currently being captured through ox-hugo and show it in
+  `markdown-preview-mode' as a one-shot browser preview. Does not finalize or
+  abort the capture, and never writes into the real Hugo content tree.
+
+  Uses `org-export-as' with the `hugo' backend and SUBTREEP non-nil to export
+  only the current entry to a string, entirely in memory — this deliberately
+  avoids `org-hugo-export-wim-to-md' and `org-hugo-base-dir', since the
+  capture target file may already set #+HUGO_BASE_DIR, which would take
+  precedence over any dynamic let-binding and could export straight into the
+  real content directory. The resulting string is written to a per-session
+  scratch file (see `orgx-auto-hugo-preview--scratch-file') and previewed
+  from there.
+
+  Intended to be bound in `org-capture-mode-map'; signals a `user-error'
+  outside a capture buffer.
+
+  `markdown-preview-mode' reads the preview buffer's *window* when it pushes
+  an update to the browser (`markdown-preview--send-preview-to', used for
+  scroll-sync). Called on a buffer that was never actually displayed — as
+  happens with plain `find-file-noselect' — it errors with \"Wrong type
+  argument: number-or-marker-p, nil\" instead of pushing the update (the
+  scratch file itself still gets written correctly; only the push fails).
+  To avoid that, the scratch buffer is popped into a real window for the
+  duration of the update, then focus is restored to the capture buffer so
+  typing is not interrupted."
+    (interactive)
+    (unless (bound-and-true-p org-capture-mode)
+      (user-error "orgx-auto-hugo-preview-capture: not in an org-capture buffer"))
+    (require 'ox-hugo)
+    (require 'markdown-preview-mode)
+    (let ((md-string
+           (condition-case err
+               (org-export-as 'hugo t nil nil nil)
+             (error
+              (message "[orgx-auto-hugo] preview export failed: %s"
+                       (error-message-string err))
+              nil))))
+      (when md-string
+        (let* ((capture-buf (current-buffer))
+               (file (orgx-auto-hugo-preview--scratch-file))
+               (buf (find-file-noselect file)))
+          (save-selected-window
+            (pop-to-buffer buf)
+            (erase-buffer)
+            (insert md-string)
+            (save-buffer)
+            ;; The mode's own initial "send to browser" can still throw the
+            ;; error above in edge cases (e.g. the websocket client has not
+            ;; connected yet); by that point the server has already started
+            ;; and the buffer-local mode is already on, so it is safe to
+            ;; swallow and let the next save (or a manual browser reload of
+            ;; the printed URL) pick up the content.
+            (ignore-errors
+              (unless (bound-and-true-p markdown-preview-mode)
+                (markdown-preview-mode 1))))
+          (when (buffer-live-p capture-buf)
+            (pop-to-buffer capture-buf))
+          (message "[orgx-auto-hugo] preview updated.")))))
+
+  (with-eval-after-load 'org-capture
+    (keymap-set org-capture-mode-map "C-c C-p" #'orgx-auto-hugo-preview-capture))
+
+  (defun orgx-auto-hugo-preview--cleanup ()
+    "Delete this capture session's scratch preview directory, if one was created.
+  Runs on `org-capture-after-finalize-hook' for both finalize and abort;
+  harmless when no preview was ever requested during the session."
+    (when-let* ((file (org-capture-get :orgx-hugo-preview-file))
+                (dir (file-name-directory file)))
+      (when (file-directory-p dir)
+        (delete-directory dir t))))
+
+  (add-hook 'org-capture-after-finalize-hook #'orgx-auto-hugo-preview--cleanup)
+
+  (provide 'orgx-auto-hugo)
+  ;;; orgx/orgx-auto-hugo.el ends here
+#+end_src
+
+* orgx/orgx-typography.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-typography
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-typography.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-typography.el --- Org のタイポグラフィ強化 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Org のタイポグラフィ: ピクセル精度のテーブル整列と、強調マーカーの自動表示。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - ピクセル精度のテーブル整列のため、Org バッファごとに valign-mode を有効化する
+  ;; - カーソルが入ったときに強調マーカーを自動表示する org-appear-mode を有効化する
+  ;; - 強調・リンク・上下付きのマーカーに対して org-appear を設定する
+  ;; - 30 万文字を超える巨大バッファでは valign-mode を無効にする
+  ;;
+  ;; ロード経路:
+  ;;
+  ;;   本モジュールは `my:modules' に含まれない。任意のタイポグラフィ強化として扱われ、
+  ;;   personal/user.el が `my:modules-extra' に追加する。これが無くても Org の機能は
+  ;;   完全であり、valign と org-appear は純粋に見た目の追加である。
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf valign :straight t :after org :require t :hook (org-mode-hook . valign-mode))
+
+  ;; 巨大バッファ（README.org など）では valign の再描画コストが無視できないため、
+  ;; 一定サイズを超えるバッファでは無効化する。
+  (add-hook 'org-mode-hook
+            (lambda ()
+              (when (> (buffer-size) 300000)
+                (valign-mode -1))))
+  ;; org-appear-autoemphasis、org-appear-autolinks、org-appear-autosubmarkers は
+  ;; defcustom であり、:custom で設定する。
+  (leaf org-appear
+    :straight t
+    :custom ((org-appear-autoemphasis   . t)
+             (org-appear-autolinks      . t)
+             (org-appear-autosubmarkers . t))
+    :hook (org-mode-hook . org-appear-mode))
+
+  (provide 'orgx-typography)
+  ;;; orgx/orgx-typography.el ends here
+#+end_src
+
+* orgx/orgx-roam-ui.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-roam-ui
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-roam-ui.el
+:END:
+
+** orgx-roam-ui.el — simple-httpd の local-repo 衝突
+
+本モジュールは長らく =(require 'simple-httpd)= の失敗に悩まされ、 =(require 'web-server)= と
+=(provide 'simple-httpd)= のシムで回避していた。この回避策は誤診に基づくもので、2026-07 に
+根本原因を特定して撤去した。
+
+*誤診の内容*
+
+「MELPA の =simple-httpd= が provide する feature シンボルは =web-server= である」と結論して
+いたが、これは事実ではない。実際には次のとおりである。
+
+| 事実 | 内容 |
+|------+------|
+| MELPA recipe =simple-httpd= | =(:repo "skeeto/emacs-web-server" :fetcher github)= |
+| MELPA recipe =web-server=   | =(:repo "eschulte/emacs-web-server")= — 別作者・別パッケージ・ *同じリポジトリ名* |
+| =skeeto/emacs-web-server= の中身 | =simple-httpd.el= と =simple-httpd-test.el= の 2 つのみ。 =web-server.el= は存在しない |
+| =simple-httpd.el= | 末尾に =(provide 'simple-httpd)= 。 =defservlet= / =defservlet*= を =httpd-servlet= / =httpd-servlet*= への =defalias= として定義する |
+
+=skeeto/emacs-http-server= は =skeeto/emacs-web-server= にリネームされている。GitHub が
+リダイレクトするため、旧名でも取得できてしまう点が混乱の入口になっていた。
+
+*真の原因: straight の local-repo 名の衝突*
+
+straight の =:local-repo= は既定でリポジトリ名になる。したがって次の衝突が起きる。
+
+#+begin_example
+simple-httpd → skeeto/emacs-web-server   → local-repo "emacs-web-server"
+web-server   → eschulte/emacs-web-server → local-repo "emacs-web-server"   ← 同一
+#+end_example
+
+先に clone された側がディレクトリを占有し、もう一方はそれを使い回す。eschulte 版が居座った
+結果、 =build-XX.Y/simple-httpd/= に =web-server.el= が並ぶ、という観測になっていた。
+
+そこへ =(provide 'simple-httpd)= のシムを足したため、 =require= は通るが =defservlet*= は定義
+されない状態が固定化された。 =defservlet*= は =simple-httpd.el= にしか存在しないためである。
+=org-roam-ui.el= はトップレベルで =(defservlet* node/:id ...)= を呼ぶので、ロード時に
+=void-function defservlet*= で落ちる。
+
+*対処*
+
+=simple-httpd= に明示的な =:local-repo= を与えて分離する。シムと =(require 'web-server)= は
+撤去した。upstream の =org-roam-ui= には欠陥が無く、フォークは不要である。
+
+既に汚染された環境では、ディレクトリの掃除が必要になる。
+
+#+begin_example
+rm -rf ~/.emacs.d/.cache/straight/repos/emacs-web-server
+rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
+#+end_example
+
+*トップレベル require の全廃*
+
+依存の導入（ =straight-use-package= ）だけをトップレベルで行い、 =require= はしない。
+=org-roam-ui-open= には =;;;###autoload= が付いており、呼び出し時に自動でロードされる。
+これにより、本モジュールが =org-roam-ui= → =org-roam= → =org= の連鎖を起動時に引き込むことが
+なくなり、Org の遅延ロードが保たれる。
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-roam-ui.el --- org-roam-ui グラフビジュアライザ -*- lexical-binding: t; -*-
+
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; org-roam ノードの対話的グラフビジュアライザ。ローカルの HTTP + WebSocket サーバ経由で
+  ;; 提供され、ブラウザで閲覧する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - simple-httpd、websocket、org-roam-ui をトップレベルで導入する
+  ;;   （straight-use-package のみ。require はしない）
+  ;; - simple-httpd には明示的な :local-repo を与え、web-server との local-repo 名の
+  ;;   衝突を防ぐ（下記の注記を参照）
+  ;; - setopt による設定は with-eval-after-load 'org-roam に遅延する
+  ;; - org-roam がロードされた後、一度きりのアイドルタイマー（8 秒）で UI を開く
+  ;;   （orgx-extensions は autosync を自動起動しないので、DB の同期は待たない）
+  ;; - セッション中に org-roam が強制再読込された場合の重複タイマー登録を防ぐため、
+  ;;   defvar のガードを用いる
+  ;;
+  ;; require をトップレベルで行わない理由:
+  ;;   org-roam-ui-open には ;;;###autoload が付いている。straight-use-package が
+  ;;   ビルドと autoload 生成を済ませるため、呼び出し時に自動でロードされる。
+  ;;   ここで require すると org-roam-ui -> org-roam -> org の連鎖を起動時に引き込み、
+  ;;   Org の遅延ロードが台無しになる。
+  ;;
+  ;; ロード経路: personal/user.el が my:modules-extra に追加する。
+  ;; 本モジュールは正規の my:modules リストに現れてはならない。
+  ;;
+  ;;; Code:
+
+  ;; simple-httpd の local-repo 衝突を回避する。
+  ;;
+  ;; MELPA のレシピは次のようになっている。
+  ;;   simple-httpd → skeeto/emacs-web-server
+  ;;   web-server   → eschulte/emacs-web-server   (別作者・別パッケージ・同名リポジトリ)
+  ;;
+  ;; straight の :local-repo は既定でリポジトリ名になるため、両者とも
+  ;; "emacs-web-server" を要求して衝突する。先に clone された側がディレクトリを占有し、
+  ;; もう一方はその中身を使い回してしまう。eschulte 版が居座ると
+  ;; build-XX.Y/simple-httpd/ に web-server.el が並び、(require 'simple-httpd) は失敗する。
+  ;;
+  ;; defservlet* は simple-httpd.el にしか存在しない（httpd-servlet* への defalias）。
+  ;; org-roam-ui.el はトップレベルで (defservlet* node/:id ...) を呼ぶため、誤った
+  ;; simple-httpd をロードすると void-function defservlet* で落ちる。
+  ;;
+  ;; 明示的な :local-repo と :files でこれを分離する。
+  (condition-case err
+      (straight-use-package
+       '(simple-httpd :type git :host github
+                      :repo "skeeto/emacs-web-server"
+                      :local-repo "simple-httpd"
+                      :files ("simple-httpd.el")))
+    (error
+     (message "[orgx-roam-ui] simple-httpd install failed: %s"
+              (error-message-string err))))
+
+  (condition-case err
+      (straight-use-package 'websocket)
+    (error
+     (message "[orgx-roam-ui] websocket install failed: %s"
+              (error-message-string err))))
+
+  (condition-case err
+      (straight-use-package
+       '(org-roam-ui
+         :type git
+         :host github
+         :repo "org-roam/org-roam-ui"
+         :branch "main"
+         :files ("*.el" "out")))
+    (error
+     (message "[orgx-roam-ui] org-roam-ui install failed: %s"
+              (error-message-string err))))
+
+  (defvar orgx-roam-ui--timer-registered nil
+    "Non-nil when the idle timer for `orgx-roam-ui--open-deferred' has been
+  registered.  Guards against duplicate timer registration when org-roam is
+  force-reloaded during the same session.")
+
+  (defun orgx-roam-ui--open-deferred ()
+    "Open org-roam-ui once, after org-roam has loaded.
+  Scheduled via an 8-second idle timer.  Note that orgx-extensions no
+  longer starts the org-roam autosync by itself.
+  `org-roam-ui-open' is autoloaded, so org-roam-ui is loaded here on demand."
+    (condition-case err
+        (when (fboundp 'org-roam-ui-open)
+          (org-roam-ui-open)
+          (message "[org-roam-ui] graph opened"))
+      (error
+       (message "[org-roam-ui] open failed: %s"
+                (error-message-string err)))))
+
+  (with-eval-after-load 'org-roam
+    ;; org-roam-ui-* は org-roam-ui.el の defcustom である。setopt は未ロードの
+    ;; defcustom に対しても値を設定でき、後から defcustom が評価されても束縛済みの値は
+    ;; 上書きされない。
+    (setopt org-roam-ui-sync-theme     t
+            org-roam-ui-follow         t
+            org-roam-ui-update-on-save t)
+    (unless orgx-roam-ui--timer-registered
+      (run-with-idle-timer 8 nil #'orgx-roam-ui--open-deferred)
+      (setq orgx-roam-ui--timer-registered t)))
+
+  (provide 'orgx-roam-ui)
+  ;;; orgx/orgx-roam-ui.el ends here
+#+end_src
+
+
+* orgx/orgx-brain.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-brain
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-brain.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-brain.el --- org-brain 知識グラフ -*- lexical-binding: t; -*-
+
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; org-brain は Org ファイルを相互に結びついた項目として、マインドマップ／Wiki 風に
+  ;; 表示する。org-roam のバックリンク中心のグラフを補完する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - org-brain-path を my:d:org-roam に設定し、両ツールが重複なく同じノート
+  ;;   ディレクトリを共有できるようにする
+  ;; - `my/brain-visualize' を提供する（キーは割り当てない。M-x で呼ぶ）
+  ;; - 視覚化バッファで j / k を `forward-button' / `backward-button' にする
+  ;;
+  ;; ロード経路: personal/user.el が `my:modules-extra' に追加する。
+  ;; 本モジュールは正規の `my:modules' リストに現れてはならない。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar org-brain-visualize-mode-map)
+  (declare-function org-brain-entry-at-pt "org-brain")
+
+  (eval-when-compile (require 'leaf))
+
+  (defgroup orgx-brain nil
+    "org-brain knowledge graph integration."
+    :group 'org
+    :prefix "orgx-brain-")
+
+  (defun my/brain-visualize ()
+    "Open org-brain visualisation for the entry at point or prompt."
+    (interactive)
+    (condition-case nil
+        (org-brain-visualize (org-brain-entry-at-pt))
+      (error
+       (call-interactively #'org-brain-visualize))))
+
+  (leaf org-brain
+    :straight t
+    :after org
+    :config
+    ;; org-brain-path は defcustom である。値は my:d:org-roam から実行時に評価されるため、
+    ;; :custom ではなく setopt を用いる。
+    (setopt org-brain-path my:d:org-roam)
+
+    (with-eval-after-load 'org-brain
+      (keymap-set org-brain-visualize-mode-map "j" #'forward-button)
+      (keymap-set org-brain-visualize-mode-map "k" #'backward-button)))
+
+  (provide 'orgx-brain)
+  ;;; orgx/orgx-brain.el ends here
+#+end_src
+
+
+* orgx/orgx-citar.el
+:PROPERTIES:
+:CUSTOM_ID: orgx-citar
+:header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-citar.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; orgx/orgx-citar.el --- citar / org-cite による文献引用管理 -*- lexical-binding: t; -*-
+
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; Category: org
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; citar は org-cite のバックエンドとして文献データベース（CSL-JSON）を検索・挿入・
+  ;; フォローする UI を提供する。citar-embark はそこに Embark 経由の文脈依存アクション
+  ;; （開く、引用挿入など）を追加する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - citar-bibliography を my:d:org-biblio（orgx-core.el が定義する my:d:org 配下の
+  ;;   ディレクトリ）配下のパスとして解決する。ホームディレクトリを直書きした
+  ;;   固定パスは持たない
+  ;; - org-cite-*-processor をすべて citar に統一する
+  ;; - citar-embark-mode を有効化する
+  ;;
+  ;; ロード経路: personal/user.el が `my:modules-extra' に追加する。
+  ;; 本モジュールは正規の `my:modules' リストに現れてはならない。
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (leaf citar
+    :straight t
+    :custom
+    ((org-cite-insert-processor . 'citar)
+     (org-cite-follow-processor . 'citar)
+     (org-cite-activate-processor . 'citar))
+    :config
+    ;; citar-bibliography と org-cite-global-bibliography は defcustom だが、
+    ;; 値に expand-file-name の実行時評価式（前者）と citar-bibliography への参照
+    ;; （後者）を含む。leaf の :custom はこの種の値を正しく扱えない —
+    ;; leaf-normalize-list-in-list が「(a b c) 形の値は複数変数へ同じ値を配る
+    ;; ための省略記法」とみなして分解してしまい、citar-bibliography・list・
+    ;; expand-file-name・my:d:org-biblio を別々の変数として customize-set-variable
+    ;; してしまう（Attempt modify list エラー付き）。org-todo-keywords 等と同じ
+    ;; コーディング規則 §6 の例外に該当するため setopt を使う。
+    ;; :custom の生成コードは :config より前に展開されるため、org-cite-global-bibliography
+    ;; の代入も citar-bibliography 設定後のここに置く必要がある。
+    (setopt citar-bibliography
+            (list (expand-file-name "gov-standards.json" my:d:org-biblio)))
+    (setopt org-cite-global-bibliography citar-bibliography))
+
+  (leaf citar-embark
+    :straight t
+    :after (citar embark)
+    :config
+    (citar-embark-mode 1))
+
+  (provide 'orgx-citar)
+  ;;; orgx/orgx-citar.el ends here
+#+end_src

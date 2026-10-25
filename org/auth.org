@@ -1,0 +1,625 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: auth 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+auth 層（シークレット、auth-source）のモジュールの正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* auth/
+:PROPERTIES:
+:CUSTOM_ID: authx-modules
+:END:
+
+* auth/auth-core.el
+:PROPERTIES:
+:CUSTOM_ID: auth-core
+:header-args:emacs-lisp: :tangle ../lisp/auth/auth-core.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; auth/auth-core.el --- 認証ポリシー -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: auth
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 本設定における認証基盤。
+  ;;
+  ;; 責務:
+  ;;
+  ;; - 必要な認証関連の環境変数を検証する
+  ;; - EasyPG によるファイル暗号化サポートを有効化する
+  ;; - pass ベースの auth-source バックエンドを有効化する
+  ;;
+  ;; 本設定は任意であり、必要な外部ツールが利用可能な場合にのみ有効化される。
+  ;;
+
+  ;;; Code:
+
+  (defgroup auth-core nil
+    "Authentication policy."
+    :group 'convenience)
+
+  (defcustom auth-core-enable-p t
+    "Enable authentication infrastructure."
+    :type 'boolean
+    :group 'auth-core)
+
+  (defun auth-core-check-env ()
+    "Verify required authentication environment variables.
+
+  Currently checks whether the `GPG_KEY_ID` environment variable
+  is defined and warns if it is missing."
+    (when auth-core-enable-p
+      (unless (getenv "GPG_KEY_ID")
+        (display-warning 'auth-core
+                         "GPG_KEY_ID environment variable is not set."))))
+
+  (defun auth-core--startup-init ()
+    "Initialize authentication infrastructure."
+    (when auth-core-enable-p
+
+      ;; 環境設定の確認
+      (auth-core-check-env)
+
+      ;; EasyPG による暗号化ファイル対応を有効化
+      (when (require 'epa-file nil t)
+        (epa-file-enable))
+
+      ;; auth-source の pass 統合を有効化
+      (when (and (require 'auth-source-pass nil t)
+                 (executable-find "pass"))
+        (auth-source-pass-enable))))
+
+  (add-hook 'after-init-hook #'auth-core--startup-init)
+
+  (provide 'auth-core)
+
+  ;;; auth/auth-core.el ends here
+#+end_src
+
+* auth/auth-gpg.el
+:PROPERTIES:
+:CUSTOM_ID: auth-gpg
+:header-args:emacs-lisp: :tangle ../lisp/auth/auth-gpg.el
+:END:
+
+** auth-gpg.el — Design Notes
+
+=~/.authinfo.gpg= と GPG/EasyPG まわりのポリシーを、ここ一箇所に集約しています。
+
+[[file:../svg/06_auth_resolution.svg]]
+
+責務は 3 つです。
+
+1. 暗号化された資格情報ストアが、平文のフォールバックより先に参照されるよう =auth-source= の
+   バックエンドを設定する
+2. =my/auth-gpg-verify= を提供する — どのキーが存在し、どれが欠けているかを検査し、復号した
+   シークレットの先頭 4 文字だけを表示する診断コマンド
+3. =my/auth-gpg-init-template= を提供する — =~/.authinfo.gpg= の雛形を書き出し、 =GPG_KEY_ID= の鍵で
+   暗号化するコマンド
+
+ロード順は =auth-core= （ =epa-file= を有効化する）の後です。 =auth= より上位のいかなる層にも
+依存してはいけません。
+
+*必要なエントリ*
+
+=~/.authinfo.gpg= には次の形式で書きます。
+
+#+begin_example
+# Anthropic Claude API
+machine api.anthropic.com login apikey password sk-ant-<your-key>
+
+# OpenRouter (for aidermacs — login must match :user "ac1965" in dev-ai.el)
+machine openrouter.ai login ac1965 password <your-openrouter-key>
+
+# OpenAI (aidermacs fallback — login must match :user "org-ai" in dev-ai.el)
+machine api.openai.com login org-ai password sk-proj-<your-openai-key>
+#+end_example
+
+*ハマりどころ — login フィールドの一致*
+
+各エントリの =login= は、 =dev-ai.el= や =auth-gpg-services= 内の =auth-source-search= 呼び出しの
+=:user= 引数と *厳密に* 一致していなければなりません。
+
+厄介なのは、不一致でもエラーにならないことです。 =auth-source-search= は黙って何も返しません。
+「キーは書いたのに認識されない」というときは、まずここを疑ってください。 =my/auth-gpg-verify= が
+役に立つのは、まさにこの場面です。
+
+*ファイル形式*
+
+すべてのエントリは =machine= / =login= / =password= という netrc 形式で、 =auth-source= が
+そのまま解釈できます。ファイルは GPG で暗号化されている必要があり、EasyPG が初回アクセス時に
+透過的に復号します。
+#+begin_src emacs-lisp
+  ;;; auth/auth-gpg.el --- ~/.authinfo.gpg の管理と検証 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: auth
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; ~/.authinfo.gpg と EasyPG/auth-source スタックに関するポリシーの一元管理。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - 暗号化された資格情報ストアを優先するよう auth-source を設定する
+  ;; - auth-gpg-services を定義する。~/.authinfo.gpg に存在すべきサービスエントリの
+  ;;   正式な一覧であり、検証コマンドが使用する
+  ;; - my/auth-gpg-verify を提供する — 診断用: どのエントリが存在するかを検査する
+  ;; - my/auth-gpg-init-template を提供する — authinfo の雛形ファイルを作成する
+  ;;
+  ;; ロード順: auth-core を要求する（先に epa-file が有効化されている必要がある）。
+  ;; ui、completion、orgx、vcs、dev、utils、personal に依存してはならない。
+  ;;
+  ;;; Code:
+
+  (require 'auth-source)
+  (require 'epa-file)
+
+  (defgroup auth-gpg nil
+    "GPG-encrypted auth-source credential management."
+    :group 'auth-core
+    :prefix "auth-gpg-")
+
+  (defcustom auth-gpg-file (expand-file-name "~/.authinfo.gpg")
+    "Path to the primary GPG-encrypted netrc credential store."
+    :type 'file
+    :group 'auth-gpg)
+
+  (defcustom auth-gpg-fallback-file (expand-file-name "~/.authinfo")
+    "Path to the plain-text netrc fallback (consulted after the encrypted store).
+    Never store real secrets in this file; use it only for local/dev credentials."
+    :type 'file
+    :group 'auth-gpg)
+
+  (defcustom auth-gpg-prefer-encrypted t
+    "When non-nil, place the encrypted store first in `auth-sources'.
+    The plain-text fallback is appended after it.  When nil the system
+    default is not modified."
+    :type 'boolean
+    :group 'auth-gpg)
+
+  (defcustom auth-gpg-services
+    '((:label "Anthropic Claude API"
+              :host  "api.anthropic.com"
+              :user  "apikey"
+              :note  "machine api.anthropic.com login apikey password sk-ant-...")
+      (:label "OpenRouter (aidermacs)"
+              :host  "openrouter.ai"
+              :user  "ac1965"
+              :note  "machine openrouter.ai login ac1965 password <key>")
+      (:label "OpenAI direct (aidermacs fallback)"
+              :host  "api.openai.com"
+              :user  "org-ai"
+              :note  "machine api.openai.com login org-ai password sk-proj-..."))
+    "Canonical list of service entries expected in `auth-gpg-file'.
+  Each element is a plist with keys :label :host :user :note.
+  Used by `my/auth-gpg-verify' to report which credentials are present."
+    :type '(repeat (plist :options ((:label string)
+                                    (:host  string)
+                                    (:user  string)
+                                    (:note  string))))
+    :group 'auth-gpg)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 内部ヘルパー
+  ;; ---------------------------------------------------------------------------
+
+  (defun auth-gpg--secret-preview (secret)
+    "Return the first four characters of SECRET followed by an ellipsis.
+  Return \"(empty)\" when SECRET is nil or empty.
+  SECRET may be a string or a zero-argument function (auth-source lazy form)."
+    (let ((s (if (functionp secret) (funcall secret) secret)))
+      (cond
+       ((or (null s) (string-empty-p s)) "(empty)")
+       ((< (length s) 4) (concat s "…"))
+       (t (concat (substring s 0 4) "…")))))
+
+  (defun auth-gpg--lookup-all (services)
+    "Return an alist of (SVC . ENTRY) for SERVICES via a single auth-source-search.
+  ENTRY is nil when no matching entry was found for SVC's :host and :user.
+
+  A single combined search is deliberate: `auth-source-backends' has no
+  cache of its own and rebuilds every backend — including re-decrypting
+  `auth-gpg-file' via epa-file — on every call.  Looking up each service
+  with its own `auth-source-search' call used to trigger one Touch ID
+  prompt per service on macOS (three services, three prompts in immediate
+  succession, later ones prone to fail); see dev-ai.el's :config comment
+  for the same bug diagnosed in a different module."
+    (let ((entries (auth-source-search
+                    :host    (mapcar (lambda (svc) (plist-get svc :host)) services)
+                    :max     (length services)
+                    :require '(:secret))))
+      (mapcar (lambda (svc)
+                (cons svc
+                      (seq-find (lambda (e)
+                                  (and (equal (plist-get e :host) (plist-get svc :host))
+                                       (equal (plist-get e :user) (plist-get svc :user))))
+                                entries)))
+              services)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 公開コマンド
+  ;; ---------------------------------------------------------------------------
+
+  (defun my/auth-gpg-verify ()
+    "Display a credential status report for all entries in `auth-gpg-services'.
+  Opens a *Auth-GPG Status* buffer listing each service entry as:
+    ✓ PRESENT  — entry found; secret preview shown
+    ✗ MISSING  — no matching entry in auth-source
+    → Hint line with the expected netrc format for missing entries.
+  Looks up all services with a single `auth-gpg--lookup-all' call so only
+  one Touch ID prompt (on macOS) is needed, not one per service."
+    (interactive)
+    (let ((buf (get-buffer-create "*Auth-GPG Status*"))
+          (results (auth-gpg--lookup-all auth-gpg-services)))
+      (with-current-buffer buf
+        (read-only-mode -1)
+        (erase-buffer)
+        (insert (format "Auth-GPG credential status — %s
+  "
+                        (format-time-string "%Y-%m-%d %H:%M:%S")))
+        (insert (format "Store: %s
+
+  "
+                        (if (file-exists-p auth-gpg-file)
+                            auth-gpg-file
+                          "(file not found — using fallback or pass)")))
+        (dolist (pair results)
+          (let* ((svc    (car pair))
+                 (entry  (cdr pair))
+                 (label  (plist-get svc :label))
+                 (note   (plist-get svc :note))
+                 (secret (when entry (plist-get entry :secret))))
+            (if entry
+                (insert (format "  ✓ PRESENT  %s
+               secret preview: %s
+  "
+                                label (auth-gpg--secret-preview secret)))
+              (insert (format "  ✗ MISSING  %s
+               add to %s:
+               %s
+  "
+                              label auth-gpg-file note)))
+            (insert "
+  ")))
+        (insert "Run `my/auth-gpg-init-template' to create a starter file.
+  ")
+        (read-only-mode 1)
+        (goto-char (point-min)))
+      (pop-to-buffer buf)))
+
+  (defun my/auth-gpg-init-template ()
+    "Write a starter netrc template to `auth-gpg-file', encrypted by EasyPG.
+  The recipient is the key in the GPG_KEY_ID environment variable when it is set.
+  Aborts without overwriting when `auth-gpg-file' already exists.
+  Opens the encrypted file for editing after creation so you can fill in secrets."
+    (interactive)
+    (when (file-exists-p auth-gpg-file)
+      (user-error "File already exists: %s (delete it first to regenerate)"
+                  auth-gpg-file))
+    (let* ((template
+            (mapconcat
+             (lambda (svc)
+               (format "## %s
+  %s
+  "
+                       (plist-get svc :label)
+                       (plist-get svc :note)))
+             auth-gpg-services
+             "
+  ")))
+      ;; 平文の一時ファイルは作らない。ファイル名が .gpg で終わり epa-file が有効なため、
+      ;; `with-temp-file' の書き込み（write-region）で EasyPG が暗号化する。
+      ;; copy-file は epa-file を通らないので、平文のままコピーされてしまう。
+      ;; 宛先の鍵は、書き込むバッファのローカル値として `epa-file-encrypt-to' に与える。
+      ;; epa-file は、この変数がバッファローカルでないと宛先の選択画面を開く
+      ;; （let による束縛では足りない）。GPG_KEY_ID が無いときは、その選択画面に任せる。
+      (with-temp-file auth-gpg-file
+        (when-let* ((id (getenv "GPG_KEY_ID")))
+          (setq-local epa-file-encrypt-to (list id)))
+        (insert "## ~/.authinfo.gpg — generated by my/auth-gpg-init-template
+  ")
+        (insert "## Replace placeholder values with real secrets before saving.
+
+  ")
+        (insert template))
+      (find-file auth-gpg-file)
+      (message "Template written to %s — fill in secrets and save (C-x C-s)."
+               auth-gpg-file)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 起動時の初期化
+  ;; ---------------------------------------------------------------------------
+
+  (defun auth-gpg--configure-sources ()
+    "Configure auth-source backends to prefer the encrypted credential store."
+    (when auth-gpg-prefer-encrypted
+      (let* ((encrypted (expand-file-name auth-gpg-file))
+             (fallback  (expand-file-name auth-gpg-fallback-file))
+             (current   auth-sources)
+             (new-list  (delete-dups
+                         (append (list encrypted)
+                                 (when (file-exists-p fallback) (list fallback))
+                                 (cl-remove-if
+                                  (lambda (s) (or (equal s encrypted)
+                                                  (equal s fallback)))
+                                  current)))))
+        (setopt auth-sources new-list))))
+
+  (add-hook 'after-init-hook #'auth-gpg--configure-sources)
+
+  (provide 'auth-gpg)
+  ;;; auth/auth-gpg.el ends here
+#+end_src
+
+* auth/auth-keychain.el
+:PROPERTIES:
+:CUSTOM_ID: auth-keychain
+:header-args:emacs-lisp: :tangle ../lisp/auth/auth-keychain.el
+:END:
+
+** auth-keychain.el — Design Notes
+
+macOS Keychain を =auth-source= に統合するモジュールです。これを入れておくと、システム
+キーチェーンに保存した資格情報を、 =auth-source-search= を使うすべてのパッケージから拾える
+ようになります。
+
+純粋な auth 層のモジュールであり、 =ui= 、 =completion= 、 =orgx= 、 =vcs= 、 =dev= 、 =utils= 、
+=personal= のいずれにも依存しません。
+
+*macOS 以外では何もしない*
+
+macOS 以外のホストでは完全に不活性です。有効・無効の制御は personal 層が握っていて、本ファイルの
+ロード前に =auth-keychain-enable= を設定します。
+
+=personal/user.el= は =modules.el= が全モジュールを require するより前に =init.el= が読み込むので、
+=defcustom= の既定値はどのホストでも尊重され、personal 側の上書きもロード順を気にせず効きます。
+
+#+begin_quote
+*落とし穴（実機で踏んだ）— 独自バックエンドの無限再帰:* かつての実装は
+=security(1)= を =call-process= で直接呼ぶ独自の =auth-source-backend= を
+=auth-source-backend-parser-functions= に登録していた。その登録関数
+（ =auth-keychain--make-backend= ）が、実際のバックエンド構築を eieio の
+コンストラクタで直接行う代わりに、ディスパッチャである =auth-source-backend-parse=
+自身を再帰的に呼び出していた。 =auth-source-backend-parse= は
+=auth-source-backend-parser-functions= を先頭から順に試すため、
+=auth-keychain--make-backend= が呼ばれる → 中で再度 =auth-source-backend-parse= を
+呼ぶ → リストの中にまだ =auth-keychain--make-backend= 自身が残っている →
+また呼ばれる、という無限再帰になる。 =M-x my/auth-gpg-verify= を実行して初めて
+=auth-source-search= が呼ばれた際に "excessive-lisp-nesting" で発覚した
+（ =eieio--perform-slot-validation= が延々とスタックに積まれるバックトレースが
+決め手になった）。
+
+調査の過程で、この Emacs（32.0.50、開発版）には *組み込みの* macOS Keychain
+バックエンド =auth-source-backends-parser-macos-keychain= が既に存在すること
+が判明した。 =security(1)= を独自に呼ぶコードは、この組み込み機能が入る前に
+書かれたものだったと見られる。無限再帰バグを個別に直すのではなく、独自実装を
+丸ごと廃止して組み込みバックエンドに委譲する形に置き換えた。
+#+end_quote
+
+*実装方針 — 組み込みの macOS Keychain バックエンドに委譲する*
+
+Emacs 本体の =auth-source.el= が提供する =macos-keychain-internet= /
+=macos-keychain-generic= の2種類のうち、 =macos-keychain-internet= を使う。
+理由は =:host= の意味づけにある。
+
+- =macos-keychain-internet= — =:host= はそのまま =security find-internet-password -s HOST= の
+  =-s= （サービス名）に渡る。 =auth-gpg--lookup-all= や =dev-ai--setup-api-key= など、他の
+  auth-source バックエンドと同じ「 =:host= = 対象ホスト」という素直な意味づけになる。
+- =macos-keychain-generic= — =:host= は =-c HOST= （Keychain の「creator」フィールド）に
+  マップされ、 =-s= （サービス名）には代わりに =:port= を渡さなければならない。
+  他のコードが素直に =:host= を渡すと *サイレントに何も見つからない* 、はまりやすい罠。
+
+このねじれ（ =auth-source-macos-keychain-search-items= 内の
+=(if keychain-generic "-c" "-s")= 分岐）があるため、Keychain エントリは
+Internet Password として保存する必要がある。
+
+*Keychain エントリの形式*
+
+エントリは Internet Password として保存してください。対応関係は次のとおりです。
+
+- =Account= フィールド → =auth-source-search= の =:user=
+- =Server= フィールド → =:host=
+
+Keychain Access.app からでも作れますが、コマンドラインの方が確実です。
+
+#+begin_example
+security add-internet-password \
+  -s "api.anthropic.com" \
+  -a "apikey" \
+  -w "sk-ant-<your-key>"
+#+end_example
+
+確認は次のコマンドで行えます。
+
+#+begin_example
+security find-internet-password -s "api.anthropic.com" -a "apikey" -w
+#+end_example
+
+*auth-gpg との優先順位*
+
+=auth-keychain= は =auth-gpg= の実行後に =auth-sources= の末尾へ =macos-keychain-internet=
+シンボルを追加します。したがって参照される順序は次のとおりです。
+
+1. =~/.authinfo.gpg= （ =auth-gpg= が管理）
+2. =~/.authinfo= の平文フォールバック（存在する場合のみ。 =auth-gpg= が管理）
+3. macOS Keychain（組み込みバックエンド。本モジュールは有効化のみを担う）
+
+つまり GPG 暗号化ストアが常に優先されます。 =~/.authinfo.gpg= に無い資格情報だけが、自動的に
+Keychain から拾われる、という関係です。 =auth-sources= の末尾に追加するため、 =dev-ai.el= の
+=:host= 検索などグローバルな =auth-source-search= 呼び出しからも、GPG に無ければ自動的に
+Keychain へフォールスルーします。
+
+*有効化と無効化*
+
+=modules.el= が require される前に、 =personal/device-darwin.el= （デバイス単位）で設定し、
+必要なら =personal/ac1965.el= （ログイン単位）で上書きします。後から読まれる方が勝ちます。
+
+#+begin_example
+  ;; personal/device-darwin.el — この macOS マシンで有効化する:
+  (setopt auth-keychain-enable t)
+
+  ;; personal/ac1965.el — ログイン単位の上書き（デバイス設定より優先）:
+  (setopt auth-keychain-enable t)   ; 確認、または nil で無効化
+#+end_example
+#+begin_src emacs-lisp
+  ;;; auth/auth-keychain.el --- macOS Keychain の auth-source バックエンド -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: auth
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; auth-source への macOS Keychain 統合。
+  ;;
+  ;; 本モジュールは、Emacs 組み込みの macOS Keychain バックエンド
+  ;; （`auth-source-backends-parser-macos-keychain'、Internet Password 種別）を
+  ;; `auth-sources' に追加するだけの薄いラッパーである。`security(1)' を独自に
+  ;; 呼ぶバックエンドは持たない。
+  ;;
+  ;; 責務:
+  ;;
+  ;; - `auth-keychain-enable' を定義する。personal 層がモジュールのロード前に設定する。
+  ;; - after-init-hook で `macos-keychain-internet' を `auth-sources' の末尾に追加する。
+  ;; - `my/auth-keychain-verify' を提供する（エントリ一覧を出す診断コマンド）。
+  ;; - macOS 以外のホストでは完全に不活性を保つ。
+  ;;
+  ;; ロード順: auth-core と auth-gpg の後。auth より上位のいかなる層にも依存しては
+  ;; ならない。
+  ;;
+  ;;; Code:
+
+  (require 'auth-source)
+
+  (defgroup auth-keychain nil
+    "macOS Keychain auth-source backend."
+    :group 'auth-core
+    :prefix "auth-keychain-")
+
+  (defcustom auth-keychain-enable nil
+    "When non-nil, register the macOS Keychain as an auth-source backend.
+  The default is nil; activation requires an explicit setopt in the personal
+  layer.  The canonical control pattern is:
+
+    ;; personal/device-darwin.el — デバイス単位で macOS 上で有効化する:
+    (setopt auth-keychain-enable t)
+
+    ;; personal/ac1965.el — ログイン単位で上書きする（デバイス設定より優先）:
+    (setopt auth-keychain-enable nil)  ; or t to confirm
+
+  personal/ac1965.el loads after personal/device-darwin.el, so the
+  login-level setting always takes final precedence."
+    :type 'boolean
+    :group 'auth-keychain)
+
+  (defcustom auth-keychain-services
+    '((:label "Anthropic Claude API"
+              :host  "api.anthropic.com"
+              :user  "apikey")
+      (:label "OpenRouter (aidermacs)"
+              :host  "openrouter.ai"
+              :user  "ac1965")
+      (:label "OpenAI direct (aidermacs fallback)"
+              :host  "api.openai.com"
+              :user  "org-ai"))
+    "Canonical list of Keychain entries verified by `my/auth-keychain-verify'.
+  Each element is a plist with keys :label :host :user.
+  Mirrors the entries in `auth-gpg-services' so the diagnostic commands
+  report consistent status across both backends."
+    :type '(repeat (plist :options ((:label string)
+                                    (:host  string)
+                                    (:user  string))))
+    :group 'auth-keychain)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 内部ヘルパー
+  ;; ---------------------------------------------------------------------------
+
+  (defun auth-keychain--lookup (host user)
+    "Look up an Internet Password for HOST and USER via the built-in macOS
+  Keychain auth-source backend.  Returns the secret string, or nil when no
+  matching entry exists.  Scoped to the Keychain only (via a let-bound
+  `auth-sources') so the result reflects the Keychain alone, independent of
+  whichever entries `auth-gpg' may also have registered."
+    (let* ((auth-sources '(macos-keychain-internet))
+           (entry (car (auth-source-search
+                        :host host :user user
+                        :require '(:secret) :max 1))))
+      (when entry
+        (let ((s (plist-get entry :secret)))
+          (if (functionp s) (funcall s) s)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 公開コマンド
+  ;; ---------------------------------------------------------------------------
+
+  (defun my/auth-keychain-verify ()
+    "Display a Keychain credential status report for `auth-keychain-services'.
+  Opens a *Auth-Keychain Status* buffer listing each service entry as:
+    ✓ PRESENT  — Internet Password found; first four characters of secret shown.
+    ✗ MISSING  — No matching Internet Password in the Keychain.
+    → Hint line with the `security add-internet-password' command to add it."
+    (interactive)
+    (unless (eq system-type 'darwin)
+      (user-error "auth-keychain-verify is available on macOS only"))
+    (let ((buf (get-buffer-create "*Auth-Keychain Status*")))
+      (with-current-buffer buf
+        (read-only-mode -1)
+        (erase-buffer)
+        (insert (format "Auth-Keychain credential status — %s\n"
+                        (format-time-string "%Y-%m-%d %H:%M:%S")))
+        (insert "Backend: built-in auth-source-macos-keychain (Internet Password items)\n\n")
+        (dolist (svc auth-keychain-services)
+          (let* ((label  (plist-get svc :label))
+                 (host   (plist-get svc :host))
+                 (user   (plist-get svc :user))
+                 (secret (auth-keychain--lookup host user)))
+            (if secret
+                (insert (format "  ✓ PRESENT  %s\n             secret preview: %s…\n"
+                                label
+                                (if (>= (length secret) 4)
+                                    (substring secret 0 4)
+                                  secret)))
+              (insert (format "  ✗ MISSING  %s\n             add with:\n             security add-internet-password -s \"%s\" -a \"%s\" -w \"<secret>\"\n"
+                              label host user)))
+            (insert "\n")))
+        (read-only-mode 1)
+        (goto-char (point-min)))
+      (pop-to-buffer buf)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 起動時の初期化
+  ;; ---------------------------------------------------------------------------
+
+  (defun auth-keychain--startup-init ()
+    "Conditionally register the built-in macOS Keychain auth-source backend.
+  Runs on `after-init-hook'.  Skips registration when `auth-keychain-enable'
+  is nil (personal layer opt-out) or `system-type' is not darwin."
+    (when (and auth-keychain-enable
+               (eq system-type 'darwin))
+      (add-to-list 'auth-sources 'macos-keychain-internet t)
+      (message "auth-keychain: macOS Keychain backend registered (built-in).")))
+
+  (add-hook 'after-init-hook #'auth-keychain--startup-init)
+
+  (provide 'auth-keychain)
+  ;;; auth/auth-keychain.el ends here
+#+end_src

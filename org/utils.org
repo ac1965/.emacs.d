@@ -1,0 +1,1029 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: utils 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+utils 層（ユーティリティ）のモジュールの正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* utils/
+:PROPERTIES:
+:CUSTOM_ID: utils-modules
+:END:
+
+* utils/utils-buffers.el
+:PROPERTIES:
+:CUSTOM_ID: utils-buffers
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-buffers.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-buffers.el --- バッファ管理の補助 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; バッファ管理: 保存確認を伴うスマートな kill。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/smart-kill-buffer': 変更済みファイルバッファを kill する前に保存を確認し、
+  ;;   ユーザーの回答にかかわらず kill する
+  ;; - 上記を `ui-leader-map' の k （M-SPC k）へ自分で割り当てる
+  ;;   （`utils-buffers--bind-keys'）
+  ;;
+  ;; キー割り当てに関する注記:
+  ;; ui-keymap.el が `my/smart-kill-buffer' を直接参照すると、ui 層が utils 層に依存する
+  ;; ことになり層の方向に反する。そのため割り当ては本モジュールが行う。
+  ;; `ui-leader-map' は ui-keymap の `after-init-hook' で作られるので、hook は depth 90
+  ;; で登録する。マップが無ければ何もしない。
+  ;;; Code:
+
+  (defun my/smart-kill-buffer (&optional buffer-or-name)
+    "Kill BUFFER-OR-NAME after saving if needed."
+    (interactive)
+    (let ((buf (or (and buffer-or-name (get-buffer buffer-or-name)) (current-buffer))))
+      (when (buffer-live-p buf)
+        (when (and (buffer-modified-p buf) (buffer-file-name buf))
+          (when (y-or-n-p (format "Save buffer %s? " (buffer-name buf)))
+            (with-current-buffer buf (save-buffer))))
+        (kill-buffer buf))))
+
+  (defvar ui-leader-map)
+
+  (defun utils-buffers--bind-keys ()
+    "Bind `my/smart-kill-buffer' in `ui-leader-map' when the map exists."
+    (when (and (boundp 'ui-leader-map) (keymapp ui-leader-map))
+      (keymap-set ui-leader-map "k" #'my/smart-kill-buffer)))
+
+  ;; depth 90: ui-keymap--startup-init （depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'utils-buffers--bind-keys 90)
+
+  (provide 'utils-buffers)
+  ;;; utils/utils-buffers.el ends here
+#+end_src
+
+* utils/utils-edit.el
+:PROPERTIES:
+:CUSTOM_ID: utils-edit
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-edit.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-edit.el --- テキスト編集の補助 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; テキスト編集の便利コマンド。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/indent-buffer': バッファ全体を再インデントする
+  ;; - `my/copy-whole-buffer': バッファ全体を kill-ring にコピーする
+  ;; - `my/join-next-line': 次の行を現在行に連結する
+  ;;; Code:
+
+  (defun my/indent-buffer ()
+    "Re-indent the entire buffer using `indent-region'."
+    (interactive)
+    (indent-region (point-min) (point-max)))
+
+  (defun my/copy-whole-buffer ()
+    "Copy all buffer contents to the kill ring."
+    (interactive)
+    (kill-ring-save (point-min) (point-max))
+    (message "Buffer copied."))
+
+  (defun my/join-next-line ()
+    "Join the following line onto the end of the current line."
+    (interactive)
+    (join-line 1))
+
+  (provide 'utils-edit)
+  ;;; utils/utils-edit.el ends here
+#+end_src
+
+* utils/utils-dired.el
+:PROPERTIES:
+:CUSTOM_ID: utils-dired
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-dired.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-dired.el --- Dired ユーティリティ -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Dired のユーティリティ: ファイル／ディレクトリ移動のためのスマートな RET。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/dired-get-file-or-dir': `dirvish-find-file' により既存の dirvish セッション内で
+  ;;   ディレクトリを移動し、ファイルなら `find-file' で開く。
+  ;;   dirvish が未ロードの場合は `dired-find-file' にフォールバックする。
+  ;;
+  ;; ディレクトリ移動に `(dirvish file)' は使わない。
+  ;; `dirvish' は全画面の新規セッションを作るため、現在のセッションの履歴とレイアウトを
+  ;; 破棄してしまう。`dirvish-find-file' は既存セッション内で移動する — セッション内の
+  ;; ディレクトリ進入にはこちらが正しい API である。
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar dired-mode-map)
+  (declare-function dired-find-file "dired")
+  (declare-function dired-get-file-for-visit "dired")
+
+  (defun my/dired-get-file-or-dir ()
+    "Visit file at point, or enter the directory in the current dirvish session."
+    (interactive)
+    (let ((file (dired-get-file-for-visit)))
+      (if (file-directory-p file)
+          (if (fboundp 'dirvish-find-file)
+              (dirvish-find-file)
+            (dired-find-file))
+        (find-file file))))
+
+  (with-eval-after-load 'dired
+    (keymap-set dired-mode-map "RET" #'my/dired-get-file-or-dir))
+
+  (provide 'utils-dired)
+  ;;; utils/utils-dired.el ends here
+#+end_src
+
+* utils/utils-ime.el
+:PROPERTIES:
+:CUSTOM_ID: utils-ime
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-ime.el
+:END:
+
+** utils-ime.el — 入力ソース（IME）制御
+
+日本語 IME をかな入力にしたままだと、リーダーキー =M-SPC= の後続打鍵
+（ =b l= など）や =dired= / =magit-status= /ターミナル系バッファでのナビゲーション・
+操作キー（ =RET= / =g= / =d= / =s= など）が IME に composed されて誤動作する。
+本モジュールは =macism= を同期呼び出しして、次の契機で OS の入力ソースを
+ASCII（英字）へ切り替える。
+
+- *リーダーキー押下時* — =ui-leader-key= を =menu-item= の =:filter= で包み、
+  キー押下の瞬間に ASCII 化してから =ui-leader-map= を返す。プレフィックスキーの
+  性質は保たれるため、 which-key と =describe-key= は従来どおり機能する。単発の
+  ディスパッチ用途のため、復帰処理は行わない。
+- *対象メジャーモード進入／離脱時* — =utils-ime-target-modes= （既定:
+  =dired-mode= =magit-status-mode= =vterm-mode= =eshell-mode= =term-mode=
+  =comint-mode= =prog-mode= 。 =prog-mode= は次の項目で説明する）に該当するバッファがカレントになった瞬間に ASCII へ切り替え、
+  そのモードから離れて対象外のバッファへ戻った瞬間に、入る直前の入力ソースへ
+  自動復帰する。 =buffer-list-update-hook= でカレントバッファの遷移を監視し、
+  対象／非対象の境界をまたいだときだけ切替・復帰を行う。 =wdired-mode= は
+  =dired-mode= 上のマイナーモードなので、 =dired-mode= を対象化するだけで
+  wdired 編集中も自動的にカバーされる（個別フック不要）。dirvish も同様に
+  =dired-mode= 土台のため自動的に対象になる。
+- *プログラミング言語バッファ進入／離脱時*（追加分） — =utils-ime-target-modes=
+  に =prog-mode= を加えることで、Python／Elisp／JS など、ほとんどの
+  プログラミング言語メジャーモードが =derived-mode-p= 経由で自動的に対象になる。
+  =org-edit-special=（ =C-c '= ）で開く Org Babel のソース編集バッファも、
+  その言語自身のメジャーモード（ =python-mode= 等）を持つ独立バッファであるため、
+  この一行追加だけで =buffer-list-update-hook= が既存の仕組みのまま検知し、
+  新規フックなしに自動的にカバーされる。 =org-mode= 自体は =prog-mode= の
+  派生ではないため、本文（日本語散文）側は影響を受けない。なおコード中に
+  日本語コメントを書く場合は、その間だけ手動で IME に切り替える必要がある。
+- *ミニバッファ使用時* — =M-x= や =find-file= などでミニバッファに入った瞬間に
+  ASCII へ切り替え、抜けた瞬間に入る直前の入力ソースへ復帰する
+  （ =minibuffer-setup-hook= / =minibuffer-exit-hook= ）。
+- *範囲選択中* — リージョンが有効になった瞬間に、日本語入力なら ASCII へ切り替え、解除したら
+  元の入力ソースへ戻す（ =activate-mark-hook= / =deactivate-mark-hook= 。 =utils-ime-enable-region-p= ）。
+
+フックの登録は =emacs-startup-hook= まで遅らせている。起動中のバッファの出入りで =macism= を同期で呼ぶと
+（1 回約 40ms）、起動が約 80ms 遅くなるためである。
+
+=macism= が見つからない環境（非 macOS ／未インストール）では全て no-op になる。
+ASCII のソース ID は =utils-ime-ascii-source= で変更でき、既定は
+=com.apple.keylayout.ABC= （ =macism= を引数なしで実行すると現在値を確認できる）。
+復帰先は固定値ではなく、対象コンテキストに入る直前に =macism= で取得した実際の
+入力ソースを保存しておき、離脱時にそこへ戻す。
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-ime.el --- IME（入力ソース）制御ユーティリティ -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; macism を用いて OS の入力ソースを ASCII（英字）へ切り替え、対象コンテキストを
+  ;; 離れたら元の入力ソースへ復帰するユーティリティ。
+  ;;
+  ;; 目的:
+  ;; - リーダーキー（`ui-leader-key'）を押した瞬間に ASCII へ切り替え、後続の
+  ;;   1 打鍵（`b l' など）が日本語 IME に composed されず、確実に届くようにする。
+  ;;   （単発ディスパッチのため復帰は行わない）
+  ;; - `utils-ime-target-modes' に列挙したメジャーモード（dired/dirvish、
+  ;;   magit-status、vterm/eshell/term/comint、`prog-mode' 派生の全言語モード）
+  ;;   に入ったら ASCII へ切り替え、`RET'/`g'/`d'/`s' などの操作キーの誤爆や、
+  ;;   コード入力時の意図しない日本語 composition を防ぐ。そのバッファから
+  ;;   離れたら、入る直前の入力ソースへ自動復帰する。`prog-mode' を含めたことで、
+  ;;   Org Babel のソース編集バッファ（`org-edit-special' が開く独立バッファ、
+  ;;   実体は言語自身のメジャーモード）も同じ仕組みで自動的にカバーされる。
+  ;; - ミニバッファ（`M-x'、`find-file' など）に入ったら ASCII へ切り替え、抜けたら
+  ;;   入る直前の入力ソースへ自動復帰する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `utils-ime-to-ascii': macism を同期呼び出しして ASCII 入力ソースへ切り替える。
+  ;; - `utils-ime--install-leader': リーダーキーを `menu-item' の `:filter' で包み、
+  ;;   キー押下時に ASCII 化してから `ui-leader-map' を返す。これにより which-key と
+  ;;   `describe-key' の挙動はプレフィックスキーとして従来どおり維持される。
+  ;; - `utils-ime--startup-init': 下の 4 種類のフックを `emacs-startup-hook' で登録する
+  ;;   （起動中は macism を呼ばないため。起動時間を約 80ms 縮める）
+  ;; - `utils-ime--track-buffer-change': `buffer-list-update-hook' 上で、カレント
+  ;;   バッファが `utils-ime-target-modes' の境界をまたいだときに ASCII 化／復帰する。
+  ;; - `utils-ime--minibuffer-setup' / `utils-ime--minibuffer-exit':
+  ;;   `minibuffer-setup-hook' / `minibuffer-exit-hook' でミニバッファの
+  ;;   ASCII 化／復帰を行う。
+  ;; - `utils-ime--region-activate' / `utils-ime--region-deactivate':
+  ;;   `activate-mark-hook' / `deactivate-mark-hook' で、範囲選択中だけ ASCII にし、
+  ;;   選択を解除したら元の入力ソースへ戻す。
+  ;;
+  ;; 設計上の注意:
+  ;; - macism は同期呼び出し（`call-process' の DESTINATION を nil とし待機）とする。
+  ;;   非同期（DESTINATION 0）だと、切替完了前にユーザーが次を打鍵し IME に取られる
+  ;;   競合が起きうるため。macism は数十 ms で完了するため実用上の遅延は無視できる。
+  ;; - macism が見つからない環境（非 macOS／未インストール）では全て no-op。
+  ;;   `utils-ime-available-p' で存在を確認し、なければ何もしない。
+  ;; - `ui-leader' 未ロードでも安全なよう `with-eval-after-load' と `boundp' で防御する。
+  ;; - `buffer-list-update-hook' は高頻度で発火するが、`utils-ime--in-target-p' で
+  ;;   ガードし、対象／非対象の境界をまたいだ瞬間だけ macism を呼ぶため実用上のコスト
+  ;;   は無視できる。
+  ;; - `wdired-mode' はマイナーモードで、有効化してもバッファのメジャーモードは
+  ;;   `dired-mode' のまま変わらない。よって `dired-mode' を対象に含めておくだけで
+  ;;   wdired 編集中も自動的に ASCII のままになり、個別のフックは不要である。
+  ;;
+  ;;; Code:
+
+  (defgroup utils-ime nil
+    "Input-source (IME) control via the macism CLI."
+    :group 'utils)
+
+  (defcustom utils-ime-macism-executable (executable-find "macism")
+    "Absolute path to the `macism' executable, or nil if unavailable.
+    When nil, every command in this module is a no-op."
+    :type '(choice (const :tag "Disabled" nil) file)
+    :group 'utils-ime)
+
+  (defcustom utils-ime-ascii-source "com.apple.keylayout.ABC"
+    "Input-source ID used for ASCII (English) input.
+    Common values: \"com.apple.keylayout.ABC\" or \"com.apple.keylayout.US\".
+    Run `macism' with no arguments in a shell to print the current source ID."
+    :type 'string
+    :group 'utils-ime)
+
+  (defcustom utils-ime-enable-leader-p t
+    "If non-nil, switch to ASCII when the leader key is pressed."
+    :type 'boolean
+    :group 'utils-ime)
+
+  (defcustom utils-ime-target-modes
+    '(dired-mode magit-status-mode vterm-mode eshell-mode term-mode comint-mode
+                 prog-mode)
+    "Major modes that force ASCII input on entry and restore the previous
+    input source on exit.  Matched via `derived-mode-p', so modes derived from
+    any of these (e.g. `shell-mode' or `sql-interactive-mode' via `comint-mode',
+    or `python-mode'/`emacs-lisp-mode'/etc. via `prog-mode') are covered too.
+    Dirvish and `wdired-mode' need no separate entry: both are built on top of
+    `dired-mode' and are therefore already covered.  Including `prog-mode' also
+    covers Org Babel source-edit buffers opened via `org-edit-special' (C-c '),
+    since each such buffer's major mode is the source language's own mode;
+    `org-mode' itself does not derive from `prog-mode', so ordinary prose
+    buffers are unaffected.  Typing Japanese comments inside a covered buffer
+    still requires switching the OS input source back manually for that span."
+    :type '(repeat symbol)
+    :group 'utils-ime)
+
+  (defcustom utils-ime-enable-mode-tracking-p t
+    "If non-nil, switch to ASCII on entering a buffer whose major mode is in
+    `utils-ime-target-modes', and restore the previous input source when the
+    selected buffer leaves that set."
+    :type 'boolean
+    :group 'utils-ime)
+
+  (defcustom utils-ime-enable-minibuffer-p t
+    "If non-nil, switch to ASCII while the minibuffer is active (`M-x',
+    `find-file', etc.) and restore the previous input source on exit."
+    :type 'boolean
+    :group 'utils-ime)
+
+  (defcustom utils-ime-enable-region-p t
+    "If non-nil, switch to ASCII while the region is active.
+  範囲選択中の `M-w' / `C-w' などが日本語 IME に取られて Emacs に届かないのを防ぐ。
+  選択を解除したら、切り替える直前の入力ソースへ戻す。"
+    :type 'boolean
+    :group 'utils-ime)
+
+  (defvar utils-ime--in-target-p nil
+    "Non-nil while the selected buffer is considered inside a target context.")
+
+  (defvar utils-ime--saved-source nil
+    "Input source captured immediately before entering a target-mode context.
+    Nil when not currently inside one.")
+
+  (defvar utils-ime--minibuffer-saved-source nil
+    "Input source captured immediately before the minibuffer was activated.")
+
+  (defvar utils-ime--region-saved-source nil
+    "Input source captured immediately before the region became active.
+  Nil when the source was already ASCII or the region is inactive.")
+
+  (defun utils-ime-available-p ()
+    "Return non-nil when macism can be used on this system."
+    (and (eq system-type 'darwin)
+         (stringp utils-ime-macism-executable)
+         (file-executable-p utils-ime-macism-executable)))
+
+  (defun utils-ime--current-source ()
+    "Return the current OS input-source ID via macism, or nil on failure.
+    Also nil when macism is unavailable."
+    (when (utils-ime-available-p)
+      (ignore-errors
+        (with-temp-buffer
+          (when (zerop (call-process utils-ime-macism-executable nil t nil))
+            (string-trim (buffer-string)))))))
+
+  (defun utils-ime--switch-to (source)
+    "Switch the OS input source to SOURCE via macism.
+    No-op when SOURCE is nil or macism is unavailable.  Synchronous by design
+    (see Commentary)."
+    (when (and source (utils-ime-available-p))
+      (ignore-errors
+        (call-process utils-ime-macism-executable nil nil nil source))))
+
+  (defun utils-ime-to-ascii ()
+    "Switch the OS input source to `utils-ime-ascii-source' via macism.
+    No-op when macism is unavailable.  Errors are trapped so a failure never
+    blocks command dispatch.  Synchronous by design (see Commentary)."
+    (interactive)
+    (utils-ime--switch-to utils-ime-ascii-source))
+
+  (defun utils-ime--install-leader ()
+    "Wrap the leader key so a keypress first switches to ASCII input.
+    The leader map stays a real prefix (which-key/`describe-key' keep working)
+    because the `menu-item' `:filter' returns `ui-leader-map' after the switch.
+    This is a one-shot dispatch aid, so the previous input source is not saved
+    or restored afterwards."
+    (when (and utils-ime-enable-leader-p
+               (boundp 'ui-leader-key) (stringp ui-leader-key)
+               (boundp 'ui-leader-map) (keymapp ui-leader-map))
+      (define-key global-map (kbd ui-leader-key)
+                  `(menu-item "leader+ascii" ,ui-leader-map
+                              :filter ,(lambda (_)
+                                         (utils-ime-to-ascii)
+                                         ui-leader-map)))))
+
+  (defun utils-ime--target-buffer-p ()
+    "Return non-nil if the current buffer's major mode is in
+    `utils-ime-target-modes'."
+    (apply #'derived-mode-p utils-ime-target-modes))
+
+  (defun utils-ime--track-buffer-change ()
+    "Switch to/from ASCII when the selected buffer crosses a target-mode
+    boundary.  Installed on `buffer-list-update-hook', which fires on every
+    buffer-selection change regardless of how it happened (`find-file',
+    `quit-window', `other-window', `dirvish-quit', jumping from dired into
+    `magit-status', ...).  Guarded by `utils-ime--in-target-p' so macism is only
+    invoked exactly on entry/exit transitions, not on every command."
+    (when (and utils-ime-enable-mode-tracking-p
+               (not (minibufferp)))
+      (let ((target (utils-ime--target-buffer-p)))
+        (cond
+         ((and target (not utils-ime--in-target-p))
+          (setq utils-ime--saved-source (utils-ime--current-source))
+          (setq utils-ime--in-target-p t)
+          (utils-ime-to-ascii))
+         ((and (not target) utils-ime--in-target-p)
+          (setq utils-ime--in-target-p nil)
+          (utils-ime--switch-to utils-ime--saved-source)
+          (setq utils-ime--saved-source nil))))))
+
+  (defun utils-ime--minibuffer-setup ()
+    "Switch to ASCII when the minibuffer is activated, saving the prior source."
+    (when utils-ime-enable-minibuffer-p
+      (setq utils-ime--minibuffer-saved-source (utils-ime--current-source))
+      (utils-ime-to-ascii)))
+
+  (defun utils-ime--minibuffer-exit ()
+    "Restore the input source saved by `utils-ime--minibuffer-setup'."
+    (when (and utils-ime-enable-minibuffer-p utils-ime--minibuffer-saved-source)
+      (utils-ime--switch-to utils-ime--minibuffer-saved-source)
+      (setq utils-ime--minibuffer-saved-source nil)))
+
+  (defun utils-ime--region-activate ()
+    "範囲選択が始まったとき、日本語入力なら ASCII に切り替えて元の入力ソースを保存する。
+  すでに ASCII のとき、ミニバッファ内、保存済みのときは何もしない。"
+    (when (and utils-ime-enable-region-p
+               (not (minibufferp))
+               (not utils-ime--region-saved-source))
+      (let ((source (utils-ime--current-source)))
+        (when (and source (not (equal source utils-ime-ascii-source)))
+          (setq utils-ime--region-saved-source source)
+          (utils-ime-to-ascii)))))
+
+  (defun utils-ime--region-deactivate ()
+    "範囲選択が終わったとき、保存した入力ソースへ戻す。"
+    (when utils-ime--region-saved-source
+      (utils-ime--switch-to utils-ime--region-saved-source)
+      (setq utils-ime--region-saved-source nil)))
+
+  ;; リーダー基盤のロード後にキーを包む。ui-leader が既に provide 済みなら即時実行。
+  (with-eval-after-load 'ui-leader
+    (utils-ime--install-leader))
+
+  ;; フックの登録は起動完了後（`emacs-startup-hook'）に遅らせる。
+  ;; 起動中はバッファの出入りが多く、メジャーモード境界の追跡がそのたびに macism を
+  ;; 同期で呼ぶ（1 回約 40ms。入力ソースの取得と切替で 2 回、起動で約 80ms）。
+  ;; 起動中に ASCII 化しても使われないので、登録は起動後でよい。
+  (defun utils-ime--startup-init ()
+    "Register the hooks that switch the input source, after startup.
+  Tracks major-mode boundaries, the minibuffer and the active region."
+    ;; メジャーモード境界の追跡。dirvish・wdired は dired-mode 上に成り立つため、
+    ;; `utils-ime-target-modes' に `dired-mode' を含めるだけで自動的にカバーされる。
+    (add-hook 'buffer-list-update-hook #'utils-ime--track-buffer-change)
+    ;; ミニバッファの ASCII 化／復帰。
+    (add-hook 'minibuffer-setup-hook #'utils-ime--minibuffer-setup)
+    (add-hook 'minibuffer-exit-hook #'utils-ime--minibuffer-exit)
+    ;; 範囲選択中の ASCII 化／復帰。
+    (add-hook 'activate-mark-hook #'utils-ime--region-activate)
+    (add-hook 'deactivate-mark-hook #'utils-ime--region-deactivate))
+
+  (add-hook 'emacs-startup-hook #'utils-ime--startup-init)
+
+  (provide 'utils-ime)
+  ;;; utils/utils-ime.el ends here
+#+end_src
+
+
+* utils/utils-functions.el
+:PROPERTIES:
+:CUSTOM_ID: utils-functions
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-functions.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-functions.el --- 雑多なユーティリティ関数 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 雑多な対話的ユーティリティ・コマンド。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/reload-config': init.el を対話的に再読込する
+  ;; - `my/open-emacs-config': 編集のため README.org を開く
+  ;; - `my/show-full-path': 現在のバッファの絶対パスを表示する
+  ;; - `my/toggle-debug-on-error': `debug-on-error' を切り替え、状態を報告する
+  ;;; Code:
+
+  (defun my/reload-config ()
+    "Reload init.el without restarting Emacs."
+    (interactive)
+    (load-file (expand-file-name "init.el" user-emacs-directory))
+    (message "Configuration reloaded."))
+
+  (defun my/open-emacs-config ()
+    "Open README.org (the Literate source) for editing."
+    (interactive)
+    (find-file (expand-file-name "README.org" user-emacs-directory)))
+
+  (defun my/show-full-path ()
+    "Display the absolute file path of the current buffer in the echo area."
+    (interactive)
+    (message "%s" (or (buffer-file-name) "Not a file buffer.")))
+
+  (defun my/toggle-debug-on-error ()
+    "Toggle `debug-on-error' and report the new state."
+    (interactive)
+    ;; debug-on-error は defcustom である。setopt を用いる。
+    (setopt debug-on-error (not debug-on-error))
+    (message "debug-on-error: %s" debug-on-error))
+
+  (provide 'utils-functions)
+  ;;; utils/utils-functions.el ends here
+#+end_src
+
+* utils/utils-lint.el
+:PROPERTIES:
+:CUSTOM_ID: utils-lint
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-lint.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-lint.el --- Flycheck/Flymake の補助 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Flycheck と Flymake の診断表示。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - オンデマンド検査のため flycheck を導入する
+  ;; - ファイルを訪問している `prog-mode' バッファで flymake を有効化する
+  ;;   （*scratch* 等の非ファイルバッファは除外する。理由は下記）
+  ;; - 診断メッセージを行末に表示するよう設定する
+  ;; - Python では、eglot が管理するバッファなら python-flymake を外し、外部チェッカー
+  ;;   （pyflakes / flake8 / ruff / pylint）が無ければ `python-flymake-command' を nil にする
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar flymake-mode-map)
+  (declare-function flymake-goto-next-error "flymake")
+  (declare-function flymake-goto-prev-error "flymake")
+  (declare-function flymake-show-buffer-diagnostics "flymake")
+  (declare-function flymake-show-project-diagnostics "flymake")
+  (declare-function python-flymake "python")
+
+  (eval-when-compile (require 'leaf))
+
+  ;; Emacs 31 は診断を行末にネイティブ表示でき
+  ;; （`flymake-show-diagnostics-at-end-of-line'。値: short / t / fancy）、
+  ;; フリンジとマージンのどちらを使うかも自動選択する
+  ;; （`flymake-indicator-type' = auto。TTY フレームでも機能する）。
+  ;; したがって sideline のスタック（sideline + sideline-flymake + sideline-flycheck）は
+  ;; 使わない。3 つのパッケージを、2 つの組み込みユーザーオプションで置き換えている。
+  ;; flymake はファイルを訪問しているバッファでのみ有効化する。
+  ;;
+  ;; 理由: `lisp-interaction-mode'（*scratch*）は `prog-mode' 派生なので、
+  ;; prog-mode-hook に flymake-mode を直接繋ぐと *scratch* でも有効になる。しかし
+  ;; `elisp-flymake-byte-compile' は Emacs 30.1 以降 `trusted-content-p' を確認し、
+  ;; buffer-file-truename が nil のバッファ（= ファイルを訪問していないバッファ）を
+  ;; 決して信頼しない。結果として起動のたびに次の警告が出る:
+  ;;
+  ;;   Disabling backend elisp-flymake-byte-compile because
+  ;;   (user-error "Disabling elisp-flymake-byte-compile in *scratch* (untrusted content)")
+  ;;
+  ;; これは Emacs の設計どおりの動作である。バイトコンパイルはマクロを展開し
+  ;; `eval-when-compile' を評価する（= コードを実行する）ため、貼り付けたばかりの
+  ;; スニペットに対して自動実行するのは危険だからである。
+  ;;
+  ;; 対処として `trusted-content' に `:all' を設定する方法があるが、docstring が
+  ;; 「gaping security hole」と明記しており採用しない。*scratch* で flymake を
+  ;; 有効化しなければ済む話である。診断は C-x C-e / C-j での評価時に得られる。
+  ;;
+  ;; 信頼するディレクトリ（lisp/ と personal/）の宣言は core-policy.el にある。
+  (defun utils-lint--enable-flymake-maybe ()
+    "Enable `flymake-mode' in `prog-mode' buffers that visit a file.
+    Buffers without a file (notably *scratch*) can never satisfy
+    `trusted-content-p', so `elisp-flymake-byte-compile' would only disable
+    itself with a warning."
+    (when buffer-file-name
+      (flymake-mode 1)))
+
+  (leaf flymake
+    :straight nil
+    :custom
+    ((flymake-indicator-type                  . 'auto)
+     (flymake-show-diagnostics-at-end-of-line . 'short)
+     (flymake-no-changes-timeout              . 0.5)
+     (flymake-fringe-indicator-position       . 'left-fringe))
+    :hook ((prog-mode-hook . utils-lint--enable-flymake-maybe))
+    :config
+    ;; Emacs 29 以降のキーマップ API（コーディング規則: define-key ではなく keymap-set）。
+    (keymap-set flymake-mode-map "M-n" #'flymake-goto-next-error)
+    (keymap-set flymake-mode-map "M-p" #'flymake-goto-prev-error)
+    (keymap-set flymake-mode-map "C-c ! l" #'flymake-show-buffer-diagnostics)
+    (keymap-set flymake-mode-map "C-c ! p" #'flymake-show-project-diagnostics))
+
+  ;; flycheck は、`my:use-lsp' が lsp-mode バックエンドを選択したときに lsp-mode が
+  ;; 期待する診断バックエンドとしてのみ残している。グローバルに有効化することは無い。
+  ;; eglot バックエンド（既定）では flymake が唯一のチェッカーである。
+  (leaf flycheck :straight t)
+
+  ;; python-flymake は pyflakes / flake8 / ruff / pylint のいずれかが PATH に
+  ;; 存在することを要求する。見つからない場合は Python バッファを開くたびに
+  ;; "Cannot find a suitable checker" 警告を出して無効化される。
+  ;; eglot が有効なバッファでは LSP が診断を担当するため python-flymake は
+  ;; 不要かつ重複になる。以下のフックで両方のケースを処理する。
+  (defun utils-lint--python-flymake-setup ()
+    "Configure python-flymake backend for the current Python buffer.
+  When eglot is managing the buffer, removes python-flymake from
+  `flymake-diagnostic-functions' (LSP already provides diagnostics).
+  When eglot is absent and no external checker is on PATH, sets
+  `python-flymake-command' to nil to suppress the warning silently."
+    (when (and (derived-mode-p 'python-mode 'python-ts-mode)
+               (boundp 'flymake-diagnostic-functions))
+      (if (and (fboundp 'eglot-managed-p) (eglot-managed-p))
+          ;; eglot がバックエンドを提供するので python-flymake を除去
+          (remove-hook 'flymake-diagnostic-functions #'python-flymake t)
+        ;; LSP なし: 外部チェッカーが PATH になければ警告なしで無効化
+        (unless (or (executable-find "pyflakes")
+                    (executable-find "flake8")
+                    (executable-find "ruff")
+                    (executable-find "pylint"))
+          (setq-local python-flymake-command nil)))))
+
+  (add-hook 'python-mode-hook    #'utils-lint--python-flymake-setup)
+  (add-hook 'python-ts-mode-hook #'utils-lint--python-flymake-setup)
+
+  (provide 'utils-lint)
+  ;;; utils/utils-lint.el ends here
+#+end_src
+
+* utils/utils-diagnostics.el
+:PROPERTIES:
+:CUSTOM_ID: utils-diagnostics
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-diagnostics.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-diagnostics.el --- 設定の診断補助 -*- lexical-binding: t; -*-
+  ;;
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 環境のトラブルシュートのための設定診断コマンド。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my/print-load-path': `load-path' を専用の view バッファに表示する
+  ;; - `my/print-feature-list': ロード済みの全 feature をアルファベット順に列挙する
+  ;; - `my/check-missing-executables': 不足している外部ツールを報告する
+  ;;   （rg、git、make、aspell、gpg、pass）
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+
+  (defun my/print-load-path ()
+    "Display `load-path' entries in a *Load Path* view buffer."
+    (interactive)
+    (with-current-buffer (get-buffer-create "*Load Path*")
+      (erase-buffer)
+      (dolist (p load-path) (insert p "\n"))
+      (view-mode 1)
+      (switch-to-buffer (current-buffer))))
+
+  (defun my/print-feature-list ()
+    "Display all loaded features alphabetically in a *Features* view buffer."
+    (interactive)
+    (with-current-buffer (get-buffer-create "*Features*")
+      (erase-buffer)
+      (dolist (f (sort (copy-sequence features) #'string-lessp))
+        (insert (format "%s\n" f)))
+      (view-mode 1)
+      (switch-to-buffer (current-buffer))))
+
+  (defun my/check-missing-executables ()
+    "Report which external tools (rg, git, make, aspell, gpg, pass) are missing."
+    (interactive)
+    ;; ループ変数は t ではなく tool にする。
+    ;; `t' は Emacs の真値の定数である。dolist の変数として使うと定数を隠蔽し、
+    ;; バイトコンパイル警告 "variable t cannot be bound" を引き起こす。
+    ;;
+    (let ((tools '("rg" "git" "make" "aspell" "gpg" "pass")))
+      (message "Executable check:")
+      (dolist (tool tools)
+        (message "  %s: %s" tool (if (executable-find tool) "ok" "MISSING")))))
+
+  (provide 'utils-diagnostics)
+  ;;; utils/utils-diagnostics.el ends here
+#+end_src
+
+* utils/utils-scratch.el
+:PROPERTIES:
+:CUSTOM_ID: utils-scratch
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-scratch.el
+:END:
+
+=*scratch*= バッファのライフサイクルを管理し、追加の scratch バッファを作るコマンドを提供します。
+
+以前は =*scratch*= の再生成が 2 か所にありました。 =core/core-buffers.el= は =kill-buffer-hook= とアイドルタイマーで、
+本モジュールは =buffer-list-update-hook= で、同じことをしていました。どちらも冪等で害はありませんでしたが、
+仕事が重複していたため、2026-10-18 に本モジュールへ統合し、 =core-buffers= を廃止しました。
+
+機能は 2 つです。
+
+1. *自動再生成* — =scratch--ensure-exists= を =buffer-list-update-hook= に登録しています。
+   このフックはバッファリストが変わるたびに発火するので、 =*scratch*= を kill しても、後続の
+   コマンドがその不在に気づく前に =lisp-interaction-mode= で作り直されます。
+   =unless (get-buffer "*scratch*")= のガードがあるため、通常時のホットパスはハッシュ参照
+   1 回で済みます。
+
+2. *複数 scratch* — =my/scratch-new= が 2 から順に空いている名前を探し、 =*scratch-N*=
+   （N = 2, 3, …）を作ります。各バッファは =lisp-interaction-mode= で初期化され、内容として
+   =scratch-initial-message= が挿入されます。
+
+なぜ =kill-buffer-hook= ではないのか
+
+=kill-buffer-hook= は、kill されようとしているバッファのコンテキストの中で走ります。そこから
+同名のバッファを作ろうとすると、順序上の危険が生じます。 =buffer-list-update-hook= なら kill が
+完全に終わった後に走るので、この問題を避けられます。
+
+*コーディング規則との対応*
+
+- フック関数 =scratch--ensure-exists= はトップレベルの名前付き =defun= です
+  （トップレベルの名前付き defun にする — 規則 8）
+- =scratch-initial-message= は =defcustom= で、その =defgroup= は本モジュールが宣言しています
+  （規則 9）
+- =defcustom= への代入は =setopt= 、 =defvar= への代入は =setq= です（規則 6）
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-scratch.el --- scratch バッファの管理 -*- lexical-binding: t -*-
+
+  ;; Copyright (C) 2024  YAMASHITA, Takao
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+
+  ;;; Commentary:
+
+  ;; 提供する機能は 2 つ:
+  ;;
+  ;; 1. 自動再生成: `scratch--ensure-exists' を `buffer-list-update-hook' に登録する。
+  ;;    *scratch* が kill されると、後続のコマンドに制御が戻る前に
+  ;;    `lisp-interaction-mode' で再生成される。
+  ;;
+  ;;
+  ;; 2. 複数 scratch: `my/scratch-new' が *scratch-N*（N >= 2）を作成し、そこへ切り替える。
+  ;;
+
+  ;;; Code:
+
+  (defgroup scratch nil
+    "Scratch buffer management."
+    :group 'convenience
+    :prefix "scratch-")
+
+  (defcustom scratch-initial-message
+    ";; This buffer is for text that is not saved.\n\n"
+    "Initial content inserted into a newly created scratch buffer."
+    :type 'string
+    :group 'scratch)
+
+  ;;; 内部ヘルパー
+
+  (defun scratch--ensure-exists ()
+    "Recreate *scratch* if it does not currently exist.
+  Registered on `buffer-list-update-hook'.  The guard keeps the common
+  case to a single hash lookup so repeated hook invocations are cheap."
+    (unless (get-buffer "*scratch*")
+      (with-current-buffer (get-buffer-create "*scratch*")
+        (lisp-interaction-mode)
+        (when (zerop (buffer-size))
+          (insert scratch-initial-message)))))
+
+  ;;; 公開コマンド
+
+  (defun my/scratch-new ()
+    "Create and switch to a new scratch buffer named *scratch-N*.
+  N is the smallest integer >= 2 for which the name is not already in
+  use.  The buffer is initialised in `lisp-interaction-mode'."
+    (interactive)
+    (let* ((n 2)
+           (name (format "*scratch-%d*" n)))
+      (while (get-buffer name)
+        (setq n (1+ n))
+        (setq name (format "*scratch-%d*" n)))
+      (switch-to-buffer (get-buffer-create name))
+      (lisp-interaction-mode)
+      (when (zerop (buffer-size))
+        (insert scratch-initial-message))
+      (message "Created %s" name)))
+
+  ;;; セットアップ
+
+  (defun scratch--setup ()
+    "Register the scratch auto-recreation hook."
+    (add-hook 'buffer-list-update-hook #'scratch--ensure-exists))
+
+  (scratch--setup)
+
+  (provide 'utils-scratch)
+  ;;; utils/utils-scratch.el ends here
+#+end_src
+
+* utils/utils-claude.el
+:PROPERTIES:
+:CUSTOM_ID: utils-claude
+:header-args:emacs-lisp: :tangle ../lisp/utils/utils-claude.el
+:END:
+
+Claude API（=api.anthropic.com/v1/messages=）への同期・非同期 HTTP クライアントです。
+
+[[file:../svg/09_utils_claude.svg]]
+
+#+begin_src emacs-lisp
+  ;;; utils/utils-claude.el --- Claude API の HTTP クライアント -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: utils
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Anthropic Claude Messages API のための低レベル HTTP クライアント。
+  ;; 本モジュールは UI、Org、および utils より上位のいかなる層にも依存しない。
+  ;;
+  ;; 公開 API:
+  ;;   `utils-claude-get-api-key'  — auth-source（.authinfo.gpg）からキーを取得する
+  ;;   `utils-claude-request-sync' — 同期 POST。応答テキストを返す
+  ;;   `utils-claude-request'      — コールバックを伴う非同期 POST
+  ;;
+  ;; auth-source のエントリ形式（~/.authinfo または ~/.authinfo.gpg）:
+  ;;   machine api.anthropic.com login apikey password sk-ant-...
+  ;;
+  ;; 既定のモデルは `utils-claude-default-model' で変更できる。
+  ;; 既定の max-tokens は `utils-claude-max-tokens' で変更できる。
+  ;;
+  ;; エラー処理:
+  ;;   同期版は、HTTP レベルの失敗（200 以外のステータス）、JSON のパースエラー、
+  ;;   API キーの欠落で `utils-claude-error' をシグナルする。呼び出し側は
+  ;;   `condition-case' で包むこと。非同期版はシグナルせず、同じ失敗を
+  ;;   "ERROR:" で始まる文字列としてコールバックへ渡す。
+  ;;
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'cl-lib)
+    (require 'subr-x))
+
+  (require 'url)
+  (require 'url-http)
+  (require 'json)
+  (require 'auth-source)
+
+  (defgroup utils-claude nil
+    "Claude API HTTP client for Emacs."
+    :group 'tools
+    :prefix "utils-claude-")
+
+  (defcustom utils-claude-default-model "claude-sonnet-4-5"
+    "Default Anthropic model identifier used when no model is specified."
+    :type 'string
+    :group 'utils-claude)
+
+  (defcustom utils-claude-max-tokens 4096
+    "Default maximum tokens in the completion response."
+    :type 'natnum
+    :group 'utils-claude)
+
+  (defcustom utils-claude-api-version "2023-06-01"
+    "Anthropic API version header value."
+    :type 'string
+    :group 'utils-claude)
+
+  (defcustom utils-claude-endpoint "https://api.anthropic.com/v1/messages"
+    "Endpoint URL for the Anthropic Messages API."
+    :type 'string
+    :group 'utils-claude)
+
+  (define-error 'utils-claude-error "Claude API error" 'error)
+
+  (defun utils-claude-get-api-key ()
+    "Return the Anthropic API key from auth-source, or nil if absent.
+  Searches for machine=api.anthropic.com login=apikey in the
+  auth-source backend (typically ~/.authinfo.gpg)."
+    (when-let* ((entry (car (auth-source-search
+                             :host "api.anthropic.com"
+                             :user "apikey"
+                             :require '(:secret)
+                             :max 1)))
+                (secret (plist-get entry :secret)))
+      (if (functionp secret) (funcall secret) secret)))
+
+  (defun utils-claude--build-headers (api-key)
+    "Return the alist of HTTP headers required by the Anthropic API.
+  API-KEY is the raw secret string."
+    `(("Content-Type"      . "application/json")
+      ("x-api-key"         . ,api-key)
+      ("anthropic-version" . ,utils-claude-api-version)))
+
+  (defun utils-claude--build-body (messages &optional model max-tokens system)
+    "Return a JSON string representing the Messages API request body.
+  MESSAGES is a list of plists with :role and :content keys.
+  MODEL defaults to `utils-claude-default-model'.
+  MAX-TOKENS defaults to `utils-claude-max-tokens'.
+  SYSTEM, when non-nil, is inserted as the system prompt string."
+    (let ((payload
+           `((model      . ,(or model utils-claude-default-model))
+             (max_tokens . ,(or max-tokens utils-claude-max-tokens))
+             (messages   . ,(apply #'vector
+                                   (mapcar (lambda (m)
+                                             `((role    . ,(plist-get m :role))
+                                               (content . ,(plist-get m :content))))
+                                           messages))))))
+      (when system
+        (push `(system . ,system) payload))
+      (encode-coding-string (json-encode payload) 'utf-8)))
+
+  (defun utils-claude--parse-response (buffer)
+    "Extract the assistant text content from the HTTP response in BUFFER.
+  Returns the text string on success.
+  Signals `utils-claude-error' on HTTP error or unexpected JSON shape."
+    (with-current-buffer buffer
+      (goto-char (point-min))
+      (let ((status (url-http-parse-response)))
+        (unless (= status 200)
+          (signal 'utils-claude-error
+                  (list (format "HTTP %d from Anthropic API" status)))))
+      (re-search-forward "\r?\n\r?\n" nil t)
+      (let* ((json-object-type 'plist)
+             (json-array-type  'list)
+             (json-key-type    'keyword)
+             (data (condition-case err
+                       (json-read)
+                     (json-error
+                      (signal 'utils-claude-error
+                              (list (format "JSON parse error: %s"
+                                            (error-message-string err)))))))
+             (content (plist-get data :content)))
+        (or (plist-get (car content) :text)
+            (signal 'utils-claude-error
+                    (list "Unexpected response shape: no :content[0]:text"))))))
+
+  (defun utils-claude-request-sync (messages &optional model max-tokens system)
+    "Send MESSAGES to the Claude API synchronously and return the response text.
+  MESSAGES is a list of plists with :role and :content string values.
+  MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'.
+  Signals `utils-claude-error' on failure."
+    (let* ((api-key (or (utils-claude-get-api-key)
+                        (signal 'utils-claude-error
+                                '("No API key found in auth-source"))))
+           (url-request-method "POST")
+           (url-request-extra-headers (utils-claude--build-headers api-key))
+           (url-request-data (utils-claude--build-body
+                              messages model max-tokens system))
+           (response-buffer (url-retrieve-synchronously
+                             utils-claude-endpoint t nil 30)))
+      (unwind-protect
+          (utils-claude--parse-response response-buffer)
+        (when (buffer-live-p response-buffer)
+          (kill-buffer response-buffer)))))
+
+  (defun utils-claude-request (messages callback &optional model max-tokens system)
+    "Send MESSAGES to the Claude API asynchronously and call CALLBACK.
+  CALLBACK receives the response text string on success, or a string
+  beginning with \"ERROR:\" on failure.
+  MODEL, MAX-TOKENS, and SYSTEM are forwarded to `utils-claude--build-body'."
+    (let* ((api-key (utils-claude-get-api-key))
+           (url-request-method "POST")
+           (url-request-extra-headers
+            (if api-key
+                (utils-claude--build-headers api-key)
+              (funcall callback "ERROR: No API key found in auth-source")
+              nil))
+           (url-request-data
+            (when url-request-extra-headers
+              (utils-claude--build-body messages model max-tokens system))))
+      (when url-request-extra-headers
+        (url-retrieve
+         utils-claude-endpoint
+         (lambda (status)
+           (if (plist-get status :error)
+               (funcall callback
+                        (format "ERROR: %s"
+                                (error-message-string (plist-get status :error))))
+             (condition-case err
+                 (funcall callback (utils-claude--parse-response (current-buffer)))
+               (utils-claude-error
+                (funcall callback (format "ERROR: %s" (cadr err)))))))
+         nil t))))
+
+  (provide 'utils-claude)
+  ;;; utils/utils-claude.el ends here
+#+end_src

@@ -1,0 +1,1678 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: core 層
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+core 層（ランタイムの不変条件、基盤、ポリシー）のモジュールの正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* core/
+:PROPERTIES:
+:CUSTOM_ID: core-modules
+:END:
+
+* core/core-policy.el
+:PROPERTIES:
+:CUSTOM_ID: core-policy
+:header-args:emacs-lisp: :tangle ../lisp/core/core-policy.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; core/core-policy.el --- グローバル編集ポリシー -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; グローバル編集ポリシー: 設定ファイルに lexical-binding を強制する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `core-policy' カスタマイズグループを定義する
+  ;; - `find-file-hook' で、`no-littering-var-directory' 配下の Emacs Lisp ファイルに
+  ;;   `;;; -*- lexical-binding: t; -*-' ヘッダを自動挿入する
+  ;; - `trusted-content' に lisp/、personal/、early-init.el を宣言し、flymake の
+  ;;   バイトコンパイル・バックエンドが無効化されないようにする
+  ;;; Code:
+
+  (defgroup core-policy nil
+    "Global editing policy for internal configuration."
+    :group 'convenience)
+
+  (defun my/auto-insert-lexical-binding ()
+    "Insert lexical-binding header in internal configuration files."
+    (when (and buffer-file-name
+               (derived-mode-p 'emacs-lisp-mode)
+               (string-prefix-p
+                (expand-file-name no-littering-var-directory)
+                (expand-file-name buffer-file-name)))
+      (save-excursion
+        (goto-char (point-min))
+        (unless (search-forward "lexical-binding:" nil t)
+          (insert ";;; -*- lexical-binding: t; -*-\n\n")))))
+
+  (add-hook 'find-file-hook #'my/auto-insert-lexical-binding)
+
+  ;;;; 信頼するコンテンツ（Emacs 30.1 以降）----------------------------------
+
+  ;; Emacs 30.1 は `trusted-content' を導入した。バッファの内容を「実行してよい」と
+  ;; みなすかどうかを判定する仕組みである。`flymake-mode' が有効な Emacs Lisp バッファでは
+  ;; `elisp-flymake-byte-compile' がバイトコンパイルを走らせるが、バイトコンパイルは
+  ;; マクロ展開と `eval-when-compile' を評価する。つまり *コードを実行する*。
+  ;; 信頼できない内容に対してこれを行うのは危険なため、Emacs は `trusted-content-p' が
+  ;; nil のバッファでバックエンドを無効化し、警告を出す。
+  ;;
+  ;; 自分で管理している設定ファイルは信頼してよい。これを宣言しないと、lisp/ や personal/
+  ;; 配下の .el を編集するたびに flymake のバイトコンパイル・バックエンドが無効化される。
+  ;;
+  ;; 仕様上の注意:
+  ;; - ディレクトリを指定する要素は末尾が "/" でなければならない。
+  ;; - 値は abbreviate-file-name 形式で与える。
+  ;; - `trusted-content-p' は `buffer-file-truename'（シンボリックリンク解決後）と比較する。
+  ;;   ~/.emacs.d がリンクの場合、リンク経由のパスを列挙しても一致せず、信頼されない。
+  ;;   そのため `file-truename' で実体パスに解決してから登録する。
+  ;; - init.el（`user-init-file'）は Emacs が無条件に信頼するため、列挙する必要はない。
+  ;; - `trusted-content-p' は buffer-file-truename が nil のバッファを決して信頼しない。
+  ;;   したがって *scratch* はここに何を書いても信頼されない（`:all' のみが例外だが、
+  ;;   docstring が「gaping security hole」と明記しており採用しない）。
+  ;;   *scratch* で flymake を有効化しない方針については utils-lint.el を参照。
+
+  (defun core-policy--trusted-dir (dir)
+    "Return DIR as an abbreviated directory name suitable for `trusted-content'."
+    (abbreviate-file-name (file-name-as-directory (file-truename dir))))
+
+  ;; personal/ は modules.el より前にロードされるため、personal/<user>.el が先に
+  ;; `trusted-content' へ追加した要素がここで消えないよう、既存の値を残して合流させる。
+  (when (boundp 'trusted-content)
+    (setopt trusted-content
+            (delete-dups
+             (append (list (core-policy--trusted-dir my:d:lisp)
+                           (core-policy--trusted-dir
+                            (expand-file-name "personal" user-emacs-directory))
+                           (abbreviate-file-name
+                            (file-truename
+                             (expand-file-name "early-init.el" user-emacs-directory))))
+                     (and (listp trusted-content) trusted-content)))))
+
+  (provide 'core-policy)
+  ;;; core/core-policy.el ends here
+#+end_src
+
+* core/core-native.el
+:PROPERTIES:
+:CUSTOM_ID: core-native
+:header-args:emacs-lisp: :tangle ../lisp/core/core-native.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; core/core-native.el --- ネイティブコンパイルの診断とレポート -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; ネイティブコンパイルの診断、警告の収集、レポート。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `core-native-comp-report-mode'（silent | collect | verbose）を定義する
+  ;; - native-comp の警告を `core-native-comp-collect-limit' まで収集する
+  ;; - 件数が `core-native-comp-warn-threshold' を超えたら通知する
+  ;; - `core-native-comp-ci-force-verbose' が設定されている場合、CI では verbose を強制する
+  ;; - 収集した警告を、終了時に任意でファイルへ自動保存する
+  ;;
+  ;; ロード順に関する注記:
+  ;; core/ セクションの最後にロードされ、コア基盤がすべて利用可能な状態になっている。
+  ;; ネイティブコンパイルは非同期であり、初期化は after-init-hook に遅延されるため、
+  ;; 遅いロード順でも安全である。
+  ;;; Code:
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  (defgroup core-native nil
+    "Native compilation diagnostics and reporting policy."
+    :group 'convenience)
+
+  (defcustom core-native-comp-report-mode 'collect
+    "Native compilation reporting mode: silent, collect, or verbose."
+    :type '(choice (const silent) (const collect) (const verbose))
+    :group 'core-native)
+
+  (defcustom core-native-comp-ci-force-verbose t
+    "If non-nil, force verbose mode under CI."
+    :type 'boolean
+    :group 'core-native)
+
+  (defcustom core-native-comp-collect-limit 2000
+    "Maximum number of collected native-comp warning entries."
+    :type 'integer
+    :group 'core-native)
+
+  (defcustom core-native-comp-warn-threshold 25
+    "Emit a notice when collected warnings exceed this number."
+    :type 'integer
+    :group 'core-native)
+
+  (defcustom core-native-comp-auto-save-file nil
+    "If non-nil, auto-save collected warnings to this file at Emacs exit."
+    :type '(choice (const :tag "Disabled" nil) (file :tag "Path"))
+    :group 'core-native)
+
+  (defvar core-native--warnings nil)
+  (defvar core-native--warned-threshold nil)
+  (defvar core-native--installed-hook nil)
+  (defvar core-native--last-collect-at 0.0)
+  ;; (length core-native--warnings) と同期して維持する。
+  ;; 収集のホットパスにおける O(n) の length 走査の繰り返しを排除するため。
+  (defvar core-native--count 0)
+
+  (defcustom core-native-comp-collect-min-interval 0.0
+    "Minimum interval in seconds between successive collection runs."
+    :type 'number
+    :group 'core-native)
+
+  (defun core-native--ci-p ()
+    (and core-native-comp-ci-force-verbose
+         (let ((v (getenv "CI")))
+           (and (stringp v) (not (string-empty-p v))))))
+
+  (defun core-native--mode-effective ()
+    (if (core-native--ci-p) 'verbose core-native-comp-report-mode))
+
+  (defun core-native--cap-collect ()
+    ;; O(n) の走査を避けるため、(length ...) ではなく core-native--count を使う。
+    ;; nthcdr は依然として limit-1 の位置まで走査するが、実際に切り詰めが必要なとき
+    ;; （count > limit）にのみ実行され、毎回走るわけではない。
+    (when (and (integerp core-native-comp-collect-limit)
+               (> core-native-comp-collect-limit 0)
+               (> core-native--count core-native-comp-collect-limit))
+      (setcdr (nthcdr (1- core-native-comp-collect-limit) core-native--warnings) nil)
+      (setq core-native--count core-native-comp-collect-limit)))
+
+  (defun core-native--maybe-notice-threshold ()
+    ;; (length ...) ではなく core-native--count を使う。
+    (when (and (not core-native--warned-threshold)
+               (integerp core-native-comp-warn-threshold)
+               (> core-native-comp-warn-threshold 0)
+               (>= core-native--count core-native-comp-warn-threshold))
+      (setq core-native--warned-threshold t)
+      (message "[core-native] collected %d native-comp warnings; use M-x core-native-show-warnings"
+               core-native--count)))
+
+  (defun core-native--normalize-entry (x)
+    (cond ((stringp x) x)
+          ((and (consp x) (stringp (car x))) (format "%S" x))
+          (t (format "%S" x))))
+
+  (defun core-native--collect (warnings)
+    "Collect native-comp WARNINGS into the internal warning list.
+  Respects `core-native-comp-collect-min-interval' to avoid flooding the list.
+  WARNINGS may be a single warning entry or a list of entries.
+  Called from `core-native--display-warning-a'."
+    (condition-case _err
+        (let* ((now (float-time))
+               (min-iv core-native-comp-collect-min-interval))
+          (when (or (<= min-iv 0.0)
+                    (>= (- now core-native--last-collect-at) min-iv))
+            (setq core-native--last-collect-at now)
+            (cond
+             ((null warnings) nil)
+             ((listp warnings)
+              (dolist (w warnings)
+                (push (core-native--normalize-entry w) core-native--warnings)
+                (cl-incf core-native--count)))
+             (t
+              (push (core-native--normalize-entry warnings) core-native--warnings)
+              (cl-incf core-native--count)))
+            (core-native--cap-collect)
+            (core-native--maybe-notice-threshold)))
+      (error nil)))
+
+  (defun core-native--display-warning-a (orig type message &rest args)
+    "Around advice for `display-warning': collect `native-compiler' warnings.
+  TYPE が `native-compiler' のとき、MESSAGE を `core-native--collect' へ渡し、
+  *Warnings* には出さない。それ以外は ORIG（ARGS つき）へそのまま渡す。"
+    (if (eq (if (consp type) (car type) type) 'native-compiler)
+        (core-native--collect message)
+      (apply orig type message args)))
+
+  (defun core-native--install-collector ()
+    ;; `comp-async-report-warnings-errors-hook' は Emacs 31 に存在しない。
+    ;; 非同期ネイティブコンパイルの警告は `comp--accept-and-process-async-output' が
+    ;; `display-warning' で出すので、そこに助言を掛けて集める。
+    (unless core-native--installed-hook
+      (setq core-native--installed-hook t)
+      (advice-add 'display-warning :around #'core-native--display-warning-a)))
+
+  (defun core-native--apply-report-setting (mode)
+    "Apply native-comp warning reporting MODE to the live Emacs session.
+  MODE is one of `silent', `collect', `verbose', or any other value
+  (treated as verbose with collector installed).
+  native-comp-async-report-warnings-errors is a defcustom; setopt
+  is used to respect its setter and type validation."
+    ;; ステップ 1: 変数を設定する。silent なら 'silent、それ以外は t。
+    ;; 4 つの pcase 節に共通の (when (boundp ...) (setopt ...)) をここへまとめている。
+    (when (boundp 'native-comp-async-report-warnings-errors)
+      (setopt native-comp-async-report-warnings-errors
+              (if (eq mode 'silent) 'silent t)))
+    ;; ステップ 2: 警告を集約するモードに対してコレクタを設置する。
+    (when (memq mode '(collect))
+      (core-native--install-collector))
+    ;; 未知のモード（catch-all）でもコレクタを設置する。
+    (unless (memq mode '(silent collect verbose))
+      (core-native--install-collector)))
+
+  (defun core-native--save-to-file (path)
+    (when (and (stringp path) (not (string-empty-p path)))
+      (let ((dir (file-name-directory path)))
+        (when (and dir (not (file-directory-p dir)))
+          (make-directory dir t)))
+      (with-temp-file path
+        (insert ";; Native compilation warnings (collected)\n\n")
+        (if core-native--warnings
+            (dolist (w (reverse core-native--warnings))
+              (insert w "\n\n"))
+          (insert "No warnings collected.\n")))))
+
+  (defun core-native--maybe-auto-save ()
+    "Save collected native-comp warnings to file if auto-save is configured.
+  Checks `core-native-comp-auto-save-file'; logs errors on failure rather than
+  raising them.  Registered on `kill-emacs-hook' by `core-native--startup-init'."
+    (when (and core-native-comp-auto-save-file
+               (stringp core-native-comp-auto-save-file))
+      (condition-case err
+          (core-native--save-to-file core-native-comp-auto-save-file)
+        (error
+         (message "[core-native] failed to save warnings: %s"
+                  (error-message-string err))))))
+
+  ;;;###autoload
+  (defun core-native-clear-warnings ()
+    "Clear all collected native-comp warnings and reset the threshold flag."
+    (interactive)
+    (setq core-native--warnings nil
+          core-native--warned-threshold nil
+          core-native--count 0)
+    (message "[core-native] cleared"))
+
+  ;;;###autoload
+  (defun core-native-warnings-count ()
+    "Return and display the number of collected native-comp warnings."
+    (interactive)
+    (message "[core-native] warnings=%d" core-native--count)
+    core-native--count)
+
+  ;;;###autoload
+  (defun core-native-show-warnings ()
+    "Display collected native-comp warnings in a *native-comp-warnings* buffer."
+    (interactive)
+    (if (null core-native--warnings)
+        (message "[core-native] no native-comp warnings recorded")
+      (with-current-buffer (get-buffer-create "*native-comp-warnings*")
+        (setq buffer-read-only nil)
+        (erase-buffer)
+        (insert (format "Native compilation warnings (count=%d)\n\n"
+                        core-native--count))
+        (dolist (w (reverse core-native--warnings))
+          (insert w "\n\n"))
+        (goto-char (point-min))
+        (view-mode 1)
+        (display-buffer (current-buffer)))))
+
+  ;;;###autoload
+  (defun core-native-save-warnings (path)
+    "Save collected native-comp warnings to PATH."
+    (interactive "FSave native-comp warnings to file: ")
+    (core-native--save-to-file path)
+    (message "[core-native] wrote %d warnings to %s"
+             core-native--count (expand-file-name path)))
+
+  ;;;###autoload
+  (defun core-native-set-mode (mode)
+    "Set the native-comp reporting MODE (silent, collect, or verbose)."
+    (interactive
+     (list (intern (completing-read "core-native mode: "
+                                    '("silent" "collect" "verbose")
+                                    nil t nil nil
+                                    (symbol-name (core-native--mode-effective))))))
+    ;; core-native-comp-report-mode は defcustom である。setter と型検証が
+    ;; 尊重されるよう setopt を用いる。本設定全体で適用している原則と一貫している。
+    ;;
+    (setopt core-native-comp-report-mode mode)
+    (core-native--apply-report-setting (core-native--mode-effective))
+    (message "[core-native] mode=%s (effective=%s)"
+             core-native-comp-report-mode (core-native--mode-effective)))
+
+  (defun core-native--startup-init ()
+    "Initialize native-comp reporting and register the auto-save hook.
+  Applies the effective report mode via `core-native--apply-report-setting'
+  and hooks `core-native--maybe-auto-save' into `kill-emacs-hook'.
+  Runs via `after-init-hook' once all modules are loaded."
+    (core-native--apply-report-setting (core-native--mode-effective))
+    (add-hook 'kill-emacs-hook #'core-native--maybe-auto-save))
+
+  (add-hook 'after-init-hook #'core-native--startup-init)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: バッテリー状態を考慮した非同期ネイティブコンパイル
+  ;; ---------------------------------------------------------------------------
+  ;; Apple Silicon のノートブックでは、パッケージ更新後のバックグラウンド CPU 使用
+  ;; （したがってバッテリー消費）の最大要因は非同期 native-comp である。
+  ;; Emacs 31 ではバッテリー駆動中にこれを停止でき、AC 電源に戻ると待機中のジョブが
+  ;; 再開される。
+  (when (boundp 'native-comp-async-on-battery-power)
+    (setopt native-comp-async-on-battery-power nil))
+
+  (provide 'core-native)
+  ;;; core/core-native.el ends here
+#+end_src
+
+* core/core-gc.el
+:PROPERTIES:
+:CUSTOM_ID: core-gc
+:header-args:emacs-lisp: :tangle ../lisp/core/core-gc.el
+:END:
+
+** core-gc.el — Staged GC Management
+
+*いつ GC するのか*
+
+GC を走らせるタイミングは 2 つです。Emacs からフォーカスが外れたとき（他のアプリに切り替えた
+とき）と、ミニバッファが閉じたとき（コマンドが終わったとき）。
+
+いずれも操作の自然な切れ目です。ユーザーが手を止めている瞬間に GC を寄せることで、体感の
+引っかかりを最小化できます。
+
+ただしミニバッファはほぼ毎コマンドで閉じ、強制 GC は 10〜30ms 以上かかります（ヒープが大きいほど長い）。
+そこでミニバッファ終了時は =garbage-collect-maybe= を使い、前回の GC 以降に =gc-cons-threshold= の
+=core-gc-minibuffer-factor= 倍（既定 0.25）以上が確保されたときだけ GC します。フォーカス喪失時は
+ユーザーが離れているので、従来どおり無条件に GC します。
+
+*gcmh との分担*
+
+GC の管理は 2 段構えになっています。
+
+- =core-gc.el= — 明示的な契機での GC（ =after-focus-change-function= と =minibuffer-exit-hook= ）
+- =gcmh= （ =init.el= §7）— アイドルタイマーによる自動 GC 管理
+
+前者が「切れ目を狙う」担当、後者が「暇なときに片づける」担当だと考えると分かりやすいです。
+実際には 3 層構成です。起動直後は =early-init.el §1= の GC ガードが閾値を一時的に
+512MiB まで緩め、=after-init-hook= で 128MiB に戻します。これが無いと、起動処理の
+大半が既定の閾値（800KB 程度）のまま走ってしまいます（詳細は
+[[file:boot.org::#early-init-el][early-init.el]] を参照）。
+
+[[file:../svg/04_gc_strategy.svg]]
+#+begin_src emacs-lisp
+  ;;; core/core-gc.el --- 安全なガベージコレクション補助 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 長時間稼働する Emacs セッションのための安全な GC フック。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `after-focus-change-function'（フォーカス喪失時）と `minibuffer-exit-hook' で
+  ;;   `garbage-collect' を起動する
+  ;; - `condition-case' で包み、エラーは静かに握りつぶす
+  ;; - ミニバッファ終了時は `garbage-collect-maybe' で、`core-gc-minibuffer-factor' の分だけ
+  ;;   確保された後に限って GC する（強制 GC は 10〜30ms 以上かかり、ほぼ毎コマンドで走るため）
+  ;; - マスタースイッチとして `core-gc-enable-p' を尊重する
+  ;;; Code:
+
+  (defgroup core-gc nil
+    "Garbage collection helpers."
+    :group 'convenience)
+
+  (defcustom core-gc-enable-p t
+    "Enable GC hooks for long-running sessions."
+    :type 'boolean :group 'core-gc)
+
+  (defcustom core-gc-minibuffer-factor 0.25
+    "Fraction of `gc-cons-threshold' allocated before a minibuffer-exit GC.
+  The minibuffer closes after almost every command, and a forced full GC takes
+  10-30 ms (more with a large heap), so it only runs when at least this fraction
+  of `gc-cons-threshold' has been allocated since the last GC.  A smaller value
+  collects more often."
+    :type 'number :group 'core-gc)
+
+  (defun core-gc--collect ()
+    "Run garbage collection safely."
+    (when core-gc-enable-p
+      (condition-case _err (garbage-collect) (error nil))))
+
+  (defun core-gc--collect-maybe ()
+    "Run garbage collection at minibuffer exit only when enough has been allocated.
+  Uses `garbage-collect-maybe' with `core-gc-minibuffer-factor'."
+    (when core-gc-enable-p
+      (condition-case _err
+          (garbage-collect-maybe core-gc-minibuffer-factor)
+        (error nil))))
+
+  ;; focus-out-hook は Emacs 27.1 で廃止された（handle-focus-out は今も実行するが、
+  ;; docstring が「タイミングによっては呼ばれない」と警告している）。後継は
+  ;; after-focus-change-function である。ただしフォーカスの取得時にも呼ばれるため、
+  ;; frame-focus-state で「失った」ことを判定しなければならない。
+  ;;
+  ;; after-focus-change-function は「フック」ではなく単一の関数を保持する変数なので、
+  ;; add-hook ではなく add-function を用いる。設定のリロードをまたいだ重複登録を防ぐため、
+  ;; 追加前に古い登録を除去する。
+  (defun core-gc--on-focus-change ()
+    "Run garbage collection when Emacs loses focus.
+    `after-focus-change-function' fires for both focus-in and focus-out, so the
+    focus state must be checked.  `frame-focus-state' returns nil when the frame
+    has lost focus."
+    (unless (frame-focus-state)
+      (core-gc--collect)))
+
+  (remove-function after-focus-change-function #'core-gc--on-focus-change)
+  (add-function :after after-focus-change-function #'core-gc--on-focus-change)
+
+  (add-hook 'minibuffer-exit-hook #'core-gc--collect-maybe)
+
+  (provide 'core-gc)
+  ;;; core/core-gc.el ends here
+#+end_src
+
+* core/core-persistence.el
+:PROPERTIES:
+:CUSTOM_ID: core-persistence
+:header-args:emacs-lisp: :tangle ../lisp/core/core-persistence.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; core/core-persistence.el --- バックアップと自動保存の補助 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; バックアップファイルの衛生管理: 古いバックアップの自動削除。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - バックアップディレクトリから 7 日より古いバックアップファイルを削除する
+  ;; - ディレクトリは `my:d:var' から解決し、無ければ `no-littering-var-directory'
+  ;;   にフォールバックする
+  ;; - `emacs-startup-hook' で `my/delete-old-backups' を実行する
+  ;;; Code:
+
+  (defun my/delete-old-backups ()
+    "Delete backup files older than 7 days."
+    (interactive)
+    (let ((backup-dir (concat (or (bound-and-true-p my:d:var)
+                                  no-littering-var-directory)
+                              "backup/"))
+          (threshold (- (float-time (current-time)) (* 7 24 60 60))))
+      (when (file-directory-p backup-dir)
+        (dolist (file (directory-files backup-dir t))
+          (when (and (file-regular-p file)
+                     (< (float-time
+                         (file-attribute-modification-time
+                          (file-attributes file)))
+                        threshold))
+            (delete-file file))))))
+
+  (add-hook 'emacs-startup-hook #'my/delete-old-backups)
+
+  (provide 'core-persistence)
+  ;;; core/core-persistence.el ends here
+#+end_src
+
+* core/core-runtime.el
+:PROPERTIES:
+:CUSTOM_ID: core-runtime
+:header-args:emacs-lisp: :tangle ../lisp/core/core-runtime.el
+:END:
+
+*macOS で使用する修飾キー*:
+
+|キー|記号|名称|
+|--|-------|----|
+| Command | ⌘ | Command Sign |
+| Option/Alt | ⌥ | Option Key |
+| Control | ⌃ | Up Arrowhead |
+| Shift | ⇧ | Upwards White Arrow |
+| Caps Lock | ⇪ | Helm Symbol |
+| Delete/Backspace | ⌫ | Erase to the Left |
+| Return | ↩ | Return Symbol |
+| Escape | ⎋ | Broken Circle with Northwest Arrow |
+| Tab | ⇥ | Rightwards Arrow to Bar |
+
+#+NAME: core-runtime
+#+begin_src emacs-lisp
+  ;;; lisp/core/core-runtime.el --- コアのランタイム不変条件（UX なし） -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; コアのランタイム不変条件: OS レベルの変数と起動シーケンス。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - OS ごと（macOS、Windows、その他）に修飾キーの変数を設定する。
+  ;;   キーバインドは一切登録しない — UX は ui/ 層の責務である
+  ;; - `after-init-hook' から呼ばれる `core-runtime--startup-init' を定義する
+  ;; - 一度だけ実行するフック用ヘルパーと、初回のグラフィカルフレーム向けヘルパーを提供する
+  ;;
+  ;; 注意: 本モジュールはユーザーから見える副作用を導入してはならない。
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+
+  (defgroup core-runtime nil
+    "Runtime invariants and OS-level variable configuration."
+    :group 'convenience)
+
+  (defcustom core-runtime-configure-modifiers-p t
+    "If non-nil, configure modifier key variables for the current OS."
+    :type 'boolean :group 'core-runtime)
+
+  (defun core-runtime--configure-modifiers ()
+    "Configure OS-specific modifier variables (variables only, no bindings)."
+    (when core-runtime-configure-modifiers-p
+      (pcase system-type
+        ('darwin
+         (when (boundp 'mac-option-modifier) ;; ⌥
+           (setq mac-option-modifier 'meta))
+         (when (boundp 'mac-command-modifier) ;; ⌘
+           (setq mac-command-modifier 'super))
+         (when (boundp 'mac-control-modifier) ;; ⌃
+           (setq mac-control-modifier 'control)))
+        ('windows-nt
+         (when (boundp 'w32-lwindow-modifier)
+           (setq w32-lwindow-modifier 'super))
+         (when (boundp 'w32-rwindow-modifier)
+           (setq w32-rwindow-modifier 'super)))
+        (_ nil))))
+
+  (defun core-runtime-add-hook-once (hook function)
+    "FUNCTION を HOOK に追加し、最初に実行された時点で自身をフックから外す。
+  「一度だけ初期化する」ための共通の窓口。フラグ変数と `remove-hook' を各モジュールが
+  手で持たずに済む。FUNCTION は HOOK の引数をそのまま受け取る。"
+    (letrec ((wrapper (lambda (&rest args)
+                        (remove-hook hook wrapper)
+                        (apply function args))))
+      (add-hook hook wrapper)))
+
+  (defun core-runtime-run-on-first-graphic-frame (function)
+    "最初のグラフィカルなフレームが実体化した 1 tick 後に FUNCTION を一度だけ呼ぶ。
+  FUNCTION にはそのフレームを渡す。daemon 用の共通の窓口。
+  - `after-make-frame-functions' はフレーム実体化の途中（色がまだ確定していない
+    状態）で同期的に走る。`face-foreground' 等の色の問い合わせは nil を返し、その nil が
+    フェイスに焼き込まれる。そのため `run-with-timer' で 1 tick 遅らせる。
+  - ターミナルのフレームでは呼ばず、次のグラフィカルなフレームを待つ。
+  - 2 枚のフレームが続けて作られても一度しか呼ばない。"
+    (let ((done nil) handler)
+      (setq handler
+            (lambda (frame)
+              (run-with-timer
+               0 nil
+               (lambda ()
+                 (when (and (not done)
+                            (frame-live-p frame)
+                            (display-graphic-p frame))
+                   (setq done t)
+                   (remove-hook 'after-make-frame-functions handler)
+                   (funcall function frame))))))
+      (add-hook 'after-make-frame-functions handler)))
+
+  (defun core-runtime--startup-init ()
+    "Apply runtime configuration that must run after all modules are loaded.
+  Configures modifier key variables via `core-runtime--configure-modifiers'.
+  Runs via `after-init-hook'."
+    (core-runtime--configure-modifiers))
+
+  (add-hook 'after-init-hook #'core-runtime--startup-init)
+
+  (provide 'core-runtime)
+  ;;; core-runtime.el ends here
+#+end_src
+
+* core/core-treesit.el
+:PROPERTIES:
+:CUSTOM_ID: core-treesit
+:header-args:emacs-lisp: :tangle ../lisp/core/core-treesit.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; core/core-treesit.el --- Tree-sitter 基盤層 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Tree-sitter の基盤。Emacs 31 の組み込み機能に委譲する。
+  ;;
+  ;; Emacs 31 は、従来の手書きによる文法管理を置き換える 2 つのユーザーオプションを
+  ;; 提供する。
+  ;;
+  ;; - `treesit-enabled-modes'        ts-mode 系パッケージ自身が公開する
+  ;;                                  `treesit-major-mode-remap-alist' から
+  ;;                                  `major-mode-remap-alist' を導出する。
+  ;; - `treesit-auto-install-grammar' ts-mode が実際に有効化されたとき、欠けている
+  ;;                                  文法をオンデマンドでインストールする。
+  ;;
+  ;; その結果、本モジュールはモード remap テーブルも、一括インストーラも、
+  ;; `emacs-startup-hook' への登録も持たなくなった。宣言するのは次のみである。
+  ;;
+  ;; - 文法の配置先（`treesit-extra-load-path'）
+  ;; - 文法の取得元（`treesit-language-source-alist'。Emacs 31 のキーワード形式:
+  ;;   :revision :source-dir :cc :c++ :commit）
+  ;; - ts-mode の remap テーブルを持たないサードパーティ製レガシーモードの remap
+  ;; - 診断用の `core-treesit-report'
+  ;;
+  ;; Emacs 31 未満では、source alist を除いて実質的に何もしない。
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf))
+
+  (defgroup core-treesit nil
+    "Tree-sitter infrastructure layer."
+    :group 'convenience)
+
+  (defconst core-treesit--sources
+    '((bash       "https://github.com/tree-sitter/tree-sitter-bash")
+      (c          "https://github.com/tree-sitter/tree-sitter-c")
+      (css        "https://github.com/tree-sitter/tree-sitter-css")
+      (dockerfile "https://github.com/camdencheek/tree-sitter-dockerfile")
+      (javascript "https://github.com/tree-sitter/tree-sitter-javascript")
+      (jsdoc      "https://github.com/tree-sitter/tree-sitter-jsdoc")
+      (json       "https://github.com/tree-sitter/tree-sitter-json")
+      (markdown   "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                  :source-dir "tree-sitter-markdown/src")
+      (markdown-inline "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                       :source-dir "tree-sitter-markdown-inline/src")
+      (python     "https://github.com/tree-sitter/tree-sitter-python")
+      (toml       "https://github.com/tree-sitter/tree-sitter-toml")
+      (tsx        "https://github.com/tree-sitter/tree-sitter-typescript"
+                  :source-dir "tsx/src")
+      (typescript "https://github.com/tree-sitter/tree-sitter-typescript"
+                  :source-dir "typescript/src")
+      (yaml       "https://github.com/ikatyang/tree-sitter-yaml"))
+    "Grammar sources in the Emacs 31 keyword form.
+  Recognised keywords: :revision :source-dir :cc :c++ :commit.")
+
+  (defconst core-treesit--legacy-remap
+    '((toml-mode . toml-ts-mode)
+      (json-mode . json-ts-mode)
+      (yaml-mode . yaml-ts-mode)
+      (dockerfile-mode . dockerfile-ts-mode))
+    "Remaps for third-party modes not covered by `treesit-major-mode-remap-alist'.
+  Applied only when the corresponding grammar is actually installed.")
+
+  (defun core-treesit--ready-p (mode)
+    "Return non-nil when the grammar backing ts-mode MODE is installed."
+    (let ((lang (intern (string-remove-suffix "-ts-mode" (symbol-name mode)))))
+      (and (fboundp 'treesit-language-available-p)
+           (treesit-language-available-p lang))))
+
+  (leaf treesit
+    :straight nil
+    :if (and (fboundp 'treesit-available-p) (treesit-available-p))
+    :custom
+    ;; Emacs 31: 文法が存在するすべての tree-sitter モードを有効化する。
+    ((treesit-enabled-modes        . t)
+     ;; Emacs 31: 欠けている文法をオンデマンドでインストールする。確認なしで入れる
+     ;; `always' を指定している。確認したければ `ask'、インストール先を選ばせるなら
+     ;; `ask-dir' にする。
+     (treesit-auto-install-grammar . 'always)
+     (treesit-font-lock-level      . 4))
+    :config
+    ;; Emacs 31: `treesit-extra-load-path' はユーザーオプションであり、その先頭要素が
+    ;; `treesit-auto-install-grammar' の既定インストール先となる。
+    (setopt treesit-extra-load-path
+            (list (expand-file-name "tree-sitter/" no-littering-var-directory)))
+    (my/ensure-directory-exists (car treesit-extra-load-path))
+    (dolist (src core-treesit--sources)
+      (unless (assq (car src) treesit-language-source-alist)
+        (push src treesit-language-source-alist)))
+    (dolist (pair core-treesit--legacy-remap)
+      (when (and (core-treesit--ready-p (cdr pair))
+                 (not (assq (car pair) major-mode-remap-alist)))
+        (push pair major-mode-remap-alist))))
+
+  (defun core-treesit-report ()
+    "Report Tree-sitter grammar availability to the echo area."
+    (interactive)
+    (unless (and (fboundp 'treesit-available-p) (treesit-available-p))
+      (user-error "Tree-sitter is not available in this build"))
+    (message "[treesit] path=%S %s"
+             treesit-extra-load-path
+             (mapconcat
+              (lambda (src)
+                (format "%s:%s" (car src)
+                        (if (treesit-language-available-p (car src)) "ok" "-")))
+              core-treesit--sources " ")))
+
+  (provide 'core-treesit)
+  ;;; core/core-treesit.el ends here
+#+end_src
+
+* core/core-history.el
+:PROPERTIES:
+:CUSTOM_ID: core-history
+:header-args:emacs-lisp: :tangle ../lisp/core/core-history.el
+:END:
+
+** core-history.el — Session Persistence
+
+なぜ =:pre-setq= を使うのか
+
+=:pre-setq= は =leaf= のマクロ展開時、つまりパッケージがロードされる前に評価されます。
+バッククォート + カンマの形式と組み合わせることで、 =no-littering-var-directory= を展開時に
+評価してパスを確定できます。
+
+保存先のパスは、パッケージがファイルを読みにいく前に決まっていなければなりません。ここでも
+やはり順序が本質です。
+
+なぜ =emacs-startup-hook= でまとめて有効化するのか
+
+save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまとめて有効化しています。
+こうすると、各モジュールのパス設定がすべて終わってからファイルが読み込まれます。
+
+代わりに =after-init-hook= を使うと、パスが完全に確立する前にファイルを読みにいく危険が
+あります。「履歴が復元されない」「なぜか別の場所を見ている」という症状は、たいていこの手の
+順序の問題です。
+#+begin_src emacs-lisp
+  ;;; core/core-history.el --- セッション永続化と autorevert -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; セッション永続化: save-place、recentf、savehist。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `saveplace'、`recentf'、`savehist' を `no-littering-var-directory' 配下の
+  ;;   パスで設定する
+  ;; - `savehist-additional-variables' は設定しない（履歴ファイルの外部変更のマージを有効に
+  ;;   保つため。下の注記を参照）
+  ;; - 3 つのモードを `core-history--startup-init' でまとめて有効化する
+  ;;   （`emacs-startup-hook' 経由）
+  ;; - keyfreq でコマンドの使用回数を記録する（保存先は `no-littering-var-directory'
+  ;;   の keyfreq）。使っていない設定を整理する根拠にする。集計は M-x keyfreq-show
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar recentf-exclude)
+
+  (eval-when-compile (require 'leaf))
+
+  ;; save-place-file、recentf-save-file、recentf-max-saved-items は
+  ;; defcustom である。コーディング規則では defcustom に setq ではなく setopt を
+  ;; 要求する。パスは実行時評価が必要なため、ここでは :pre-setq（パッケージのロード前に
+  ;; setq へ展開される）を用いる。これは同じモジュール内で savehist-file を扱う方法と
+  ;; 一貫している。
+  (leaf saveplace :straight nil
+    :pre-setq
+    `((save-place-file . ,(concat no-littering-var-directory "saveplace")))
+    :custom
+    ;; Emacs 31: 位置情報の定期自動保存。このオプションはタイマーを設置するため、
+    ;; 必ず setopt（:custom）で設定し、setq / :pre-setq を使ってはならない。
+    ((save-place-autosave-interval . 300)))
+
+  (leaf recentf :straight nil
+    :pre-setq
+    `((recentf-save-file      . ,(concat no-littering-var-directory "recentf"))
+      (recentf-max-saved-items . 100))
+    :custom
+    ;; Emacs 31: 定期自動保存（タイマーを設置するオプション → setopt）に加え、
+    ;; `recentf-save-list' と `recentf-open-files' の動作を静かにする。
+    ((recentf-autosave-interval       . 300)
+     (recentf-show-messages           . nil)
+     (recentf-suppress-open-file-help . t))
+    :config
+    ;; Emacs 31: 拡張子が `completion-ignored-extensions' にあるファイルを除外する。
+    (when (fboundp 'recentf-exclude-file-by-extension-p)
+      (add-to-list 'recentf-exclude #'recentf-exclude-file-by-extension-p)))
+
+  ;; Emacs 31 の savehist は、履歴ファイルの外部変更をマージする
+  ;; （マルチプロセス安全性: GUI + デーモン + CLI の Emacs が 1 つの履歴ファイルを共有）。
+  ;; このマージは `savehist-additional-variables' が nil のときのみ有効なので、
+  ;; savehist にはユーザー変数を追加しない。
+  (leaf savehist
+    :straight nil
+    :pre-setq
+    `((savehist-file . ,(concat no-littering-var-directory "history")))
+    :init
+    (my/ensure-directory-exists (file-name-directory (concat no-littering-var-directory "history"))))
+
+  ;; コマンドの使用頻度の記録。キー入力ではなくコマンド単位で数えるため、M-x や
+  ;; hydra から呼んだ分も入る。自己挿入や移動など、毎回数える意味のないものは除く。
+  (leaf keyfreq
+    :straight t
+    :pre-setq
+    `((keyfreq-file      . ,(concat no-littering-var-directory "keyfreq"))
+      (keyfreq-file-lock . ,(concat no-littering-var-directory "keyfreq.lock")))
+    :custom
+    ((keyfreq-excluded-commands
+      . '(self-insert-command org-self-insert-command
+  			    next-line previous-line forward-char backward-char
+  			    left-char right-char forward-word backward-word
+  			    mwheel-scroll mouse-set-point mouse-drag-region
+  			    delete-backward-char backward-delete-char-untabify
+  			    newline org-return keyboard-quit
+  			    handle-switch-frame ignore))))
+
+  (defun core-history--startup-init ()
+    "Activate session persistence modes after Emacs startup.
+  Enables `save-place-mode', `recentf-mode', and `savehist-mode', and starts
+  recording command usage with `keyfreq-mode' when keyfreq is installed.
+  Runs via `emacs-startup-hook' so that all module-configured paths are
+  established before the persistence files are loaded."
+    (save-place-mode +1)
+    (recentf-mode +1)
+    (savehist-mode +1)
+    (when (require 'keyfreq nil t)
+      (keyfreq-mode +1)
+      (keyfreq-autosave-mode +1)))
+
+  (add-hook 'emacs-startup-hook #'core-history--startup-init)
+
+  (provide 'core-history)
+  ;;; core/core-history.el ends here
+#+end_src
+
+* core/core-editing.el
+:PROPERTIES:
+:CUSTOM_ID: core-editing
+:header-args:emacs-lisp: :tangle ../lisp/core/core-editing.el
+:END:
+
+編集まわりの設定をまとめたモジュールです。構造的編集（paredit・puni）、undo、ウィンドウ切替、
+Emacs 31 で強化された組み込み機能の設定を持ちます。
+
+以前は自動保存（ =core-autosave= ）と dired の dirvish 置き換え（ =core-dired= ）も同じファイルに
+入っていました。419 行に責務の異なる 3 つの話題が同居して読みにくかったため、2026-10-13 に分割して
+います。分割にあたって公開仕様（ =core-autosave-*= のカスタマイズ変数）と処理内容は変えていません。
+
+#+NAME: core-editing-el
+#+begin_src emacs-lisp
+  ;;; core/core-editing.el --- 編集補助と UX 支援 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 編集補助: 構造的編集、undo、ウィンドウ切替、Emacs 31 の編集系組み込み機能。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - TRAMP を永続化パスとともに設定し、既定メソッドを `scp' にする
+  ;; - paredit（競合回避のため electric-pair を無効化）と puni を設定する
+  ;; - show-paren、undo-fu/vundo、ace-window、visual-line-mode を設定する
+  ;; - 意味単位のテキスト選択のため expreg（構文木。C-= で拡大、C-M-= で縮小）を設定する
+  ;; - autorevert、transient、hl-line、hideshow、eldoc を設定する
+  ;;
+  ;; 別モジュールが受け持つもの:
+  ;; - 自動保存とバックアップのポリシーは core-autosave.el へ
+  ;; - dired の dirvish への置き換えは core-dired.el へ
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar hs-minor-mode-map)
+  (declare-function hs-cycle "hideshow")
+  (declare-function hs-toggle-all "hideshow")
+
+  (leaf tramp
+    :straight nil
+    :pre-setq
+    `((tramp-persistency-file-name . ,(concat no-littering-var-directory "tramp"))
+      (tramp-auto-save-directory   . ,(concat no-littering-var-directory "tramp-autosave")))
+    :custom
+    '((tramp-default-method . "scp")
+      (tramp-verbose        . 3)))
+
+  (defun core-editing--paredit-setup ()
+    "Enable paredit and disable electric-pair locally (they conflict)."
+    (enable-paredit-mode)
+    (electric-pair-local-mode -1))
+
+  (leaf paredit
+    ;; straight の既定レシピは :repo に https://paredit.org/paredit.git を指定して
+    ;; いる。作者個人の git サーバーで、GitHub 等より不安定・到達不能になりやすく、
+    ;; 実際に `git clone` が失敗する事例があったため、GitHub 上のミラー
+    ;; （emacsmirror）を明示的に指定して回避する。
+    :straight (paredit :type git :host github :repo "emacsmirror/paredit")
+    :hook (emacs-lisp-mode . core-editing--paredit-setup))
+
+  (leaf paren :straight nil
+    :custom ((show-paren-delay . 0)
+             (show-paren-style . 'expression)
+             (show-paren-highlight-openparen . t))
+    :global-minor-mode show-paren-mode)
+
+  (defun core-editing--puni-minibuffer-off ()
+    "Disable puni-global-mode inside the minibuffer."
+    (puni-global-mode -1))
+
+  (leaf puni :straight t
+    :global-minor-mode puni-global-mode
+    :hook ((minibuffer-setup . core-editing--puni-minibuffer-off)))
+
+  (leaf undo-fu :straight t
+    :custom ((undo-fu-allow-undo-in-region . t)))
+
+  (leaf vundo :straight t)
+
+  (leaf ace-window :straight t
+    :custom ((aw-keys . '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
+             (aw-scope . 'frame)
+             (aw-background . t))
+    :config (ace-window-display-mode 1))
+
+  (leaf visual-line-mode :straight nil
+    :hook (text-mode . visual-line-mode))
+
+  ;; expreg は tree-sitter が使えるバッファでは構文木、無ければ組み込みの
+  ;; 範囲検出で選択を広げる。機能が重なる expand-region は併用せず、expreg に一本化している。
+  (leaf expreg :straight t
+    :bind (("C-="   . expreg-expand)
+           ("C-M-=" . expreg-contract)))
+  (leaf aggressive-indent :straight t :hook (prog-mode . aggressive-indent-mode))
+  (leaf delsel :straight nil :global-minor-mode delete-selection-mode)
+
+  (leaf autorevert :straight nil
+    :custom ((auto-revert-interval . 2)
+             (auto-revert-verbose . nil))
+    :global-minor-mode global-auto-revert-mode)
+
+  ;; transient-history-file、transient-levels-file、transient-values-file は
+  ;; defcustom（transient.el）である。setopt を用いる。
+  (leaf transient
+    :straight t
+    :config
+    (setopt transient-history-file (concat no-littering-var-directory "transient/history.el")
+            transient-levels-file  (concat no-littering-var-directory "transient/levels.el")
+            transient-values-file  (concat no-littering-var-directory "transient/values.el"))
+    (my/ensure-directory-exists (concat no-littering-var-directory "transient/")))
+
+  ;; 現在行のハイライト。global-hl-line-sticky-flag（下の Emacs 31 ブロック内）
+  ;; はこのモードの「複数ウィンドウでの追従挙動」を調整するだけの設定であり、
+  ;; モード自体を有効化するものではない。モードの有効化は下の leaf hl-line が行う。
+  ;; hl-line-mode は Emacs 31 より前から存在するため、Emacs 31 限定ブロックには含めない。
+  (leaf hl-line
+    :straight nil
+    :global-minor-mode global-hl-line-mode)
+
+  ;; ---------------------------------------------------------------------------
+  ;; Emacs 31: 編集系の組み込み機能
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; Emacs 31 で hideshow はサードパーティの折りたたみパッケージと同等になった。
+  ;; `hs-cycle'（親 → 入れ子 → 全体）、`hs-toggle-all'、マージン／フリンジの
+  ;; インジケータ、省略記号の隣に隠れ行数を表示する機能が加わった。tree-sitter 系の
+  ;; モードも同リリースで `hs-minor-mode' に正式対応したため、*-ts-mode バッファでも
+  ;; 追加設定なしに折りたたみが機能する。
+  ;;
+  ;; 注意: `hs-special-modes-alist' は Emacs 31 で廃止された。また折りたたみコマンドは
+  ;; ポイントを含む最内ブロックに作用するようになった（31 以前の挙動に戻すには
+  ;; `hs-hide-block-behavior' を `after-cursor' に設定する）。
+  (leaf hideshow
+    :straight nil
+    :custom
+    ((hs-show-indicators               . t)
+     (hs-display-lines-hidden          . t)
+     (hs-indicator-maximum-buffer-size . 500000))
+    :hook ((prog-mode-hook . hs-minor-mode))
+    :config
+    (keymap-set hs-minor-mode-map "<backtab>" #'hs-cycle)
+    (keymap-set hs-minor-mode-map "C-c @ a"   #'hs-toggle-all))
+
+  ;; ElDoc: Emacs 31 はポイント位置の `help-echo' テキストプロパティを提示でき、また
+  ;; 引数を入力している最中に、呼び出し先関数の docstring の第 1 文を表示できる —
+  ;; バッファを離れずにドキュメントを参照できる。
+  (leaf eldoc
+    :straight nil
+    :custom
+    ((eldoc-help-at-pt                          . t)
+     (eldoc-echo-area-use-multiline-p           . nil)
+     (elisp-eldoc-funcall-with-docstring-length . 'short))
+    :config
+    (add-hook 'emacs-lisp-mode-hook #'core-editing--elisp-eldoc-setup))
+
+  (defun core-editing--elisp-eldoc-setup ()
+    "Use the Emacs 31 docstring-aware ElDoc function in Emacs Lisp buffers."
+    (when (fboundp 'elisp-eldoc-funcall-with-docstring)
+      (add-hook 'eldoc-documentation-functions
+                #'elisp-eldoc-funcall-with-docstring nil t)))
+
+  ;; Emacs 31 で導入されたスカラー値の編集オプション。Emacs 30 でもモジュールが
+  ;; ロード可能なままとなるようガードしている（削除安全性はバージョンにも適用される）。
+  (when (>= emacs-major-version 31)
+    ;; アクティブなリージョンが無い場合、C-w はエラーではなく直前の単語を kill する。
+    (setopt kill-region-dwim 'emacs-word)
+    ;; `delete-pair' が削除位置にマークを残す。
+    (setopt delete-pair-push-mark t)
+    ;; C-x C-x でリージョンを再ハイライトしない（マークは位置であって UI ではない）。
+    (setopt exchange-point-and-mark-highlight-region nil)
+    ;; show-paren はコメント／文字列内では、対応が取れない括弧だけを非強調にする
+    ;; （'all にすると常に非強調、nil で常に強調）。値はクォートしたシンボルであること。
+    (setopt show-paren-not-in-comments-or-strings 'on-mismatch)
+    ;; hl-line はバッファではなくウィンドウに追従する
+    ;; （global-hl-line-mode 自体の有効化は上の leaf hl-line を参照）。
+    (setopt global-hl-line-sticky-flag 'window)
+    ;; ウィンドウ: help / compilation バッファを quit すると kill され、バッファを kill
+    ;; すると `quit-restore-window' が直前のレイアウトを復元する。
+    (setopt quit-window-kill-buffer '(help-mode compilation-mode messages-buffer-mode))
+    (setopt kill-buffer-quit-windows t)
+    ;; `C-h l' は表示中も内容を更新する。
+    (setopt view-lossage-auto-refresh t)
+    ;; Emacs 31 は `find-function-setup-keys' を本物のマイナーモードに置き換えた。
+    (find-function-mode 1))
+
+  (provide 'core-editing)
+  ;;; core/core-editing.el ends here
+#+end_src
+
+* core/core-autosave.el
+:PROPERTIES:
+:CUSTOM_ID: core-autosave
+:header-args:emacs-lisp: :tangle ../lisp/core/core-autosave.el
+:END:
+
+自動保存サブシステム（3 機構の合流）の詳細は以下のコードの Commentary を参照してください。
+
+[[file:../svg/05_autosave_flow.svg]]
+
+=core-editing.el= から分離したモジュールです。 =core-autosave-*= のカスタマイズ変数と、
+フォーカス喪失時の保存・世代付きバックアップの設定を持ちます。内部関数は =core-autosave--= の
+接頭辞に改名しました（旧 =core-editing--save-on-focus-out= など）。カスタマイズ変数の名前は
+変えていないので、 =personal/user.el= の設定はそのまま有効です。
+
+#+NAME: core-autosave-el
+#+begin_src emacs-lisp
+  ;;; core/core-autosave.el --- 自動保存とバックアップのポリシー -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; 自動保存サブシステム。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - auto-save-visited-mode + フォーカス喪失時の保存 + no-littering-var-directory/backup/
+  ;;   配下の世代付きバックアップを実装する
+  ;; - 除外ルール（拡張子・ファイル名パターン・メジャーモード・述語）を
+  ;;   `core-autosave-exclude-*' で設定可能にする
+  ;;; Code:
+
+  ;; ---------------------------------------------------------------------------
+  ;; 自動保存とバックアップのポリシー
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; 相互に補完する 3 つの機構:
+  ;;
+  ;; 1. auto-save-visited-mode — アイドル時間が `auto-save-visited-interval' 秒に
+  ;;    達するたびに、訪問中のファイル自体を書き出す（Emacs 26.1 以降）。
+  ;;    従来の #file# スクラッチファイル方式を置き換える（early-init で
+  ;;    auto-save-default nil に設定済み）。
+  ;;
+  ;; 2. core-autosave--save-on-focus-out — Emacs がフォーカスを失ったとき
+  ;;    （after-focus-change-function）に、変更済みのファイルバッファをすべて
+  ;;    保存する。アイドルタイマーがまだ発火していない隙間を埋める。
+  ;;
+  ;; 3. 世代付きバックアップ — early-init で有効化する。backup-directory-alist は
+  ;;    （no-littering-var-directory が利用可能になった後の）ここで設定し、
+  ;;    すべてのバックアップを var/backup/ 配下に集約する。
+
+  (defgroup core-autosave nil
+    "Auto-save and backup policy."
+    :group 'convenience
+    :prefix "core-autosave-")
+
+  (defcustom core-autosave-interval 5
+    "Idle seconds before auto-save-visited-mode writes modified buffers to disk.
+  Lower values reduce data loss but increase I/O during editing.
+  Recommended range: 5–30 seconds."
+    :type 'natnum
+    :group 'core-autosave)
+
+  (defcustom core-autosave-save-on-focus-out t
+    "When non-nil, save all modified file-backed buffers when Emacs loses focus."
+    :type 'boolean
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-extensions
+    '("gpg" "age" "enc" "pem" "p12" "pfx")
+    "File extensions that are never auto-saved.
+  Each element is a string without a leading dot (e.g. \"gpg\", not \".gpg\").
+  Encrypted and certificate files are excluded by default because writing them
+  automatically could silently overwrite an encrypted file with plaintext or
+  corrupt a partially-modified binary.
+  Customise in personal/user.el with setopt."
+    :type '(repeat string)
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-name-patterns nil
+    "List of regular expressions matched against buffer file names.
+  Buffers whose file name matches any pattern are excluded from auto-save.
+  Patterns are matched with `string-match-p' against the full file path.
+  Example: (setopt core-autosave-exclude-name-patterns
+                 \='(\"\\.authinfo\" \"secret\" \"/tmp/\"))
+  Customise in personal/user.el with setopt."
+    :type '(repeat regexp)
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-modes nil
+    "List of major-mode symbols whose buffers are never auto-saved.
+  Example: (setopt core-autosave-exclude-modes
+                 \='(erc-mode circe-mode term-mode vterm-mode))
+  Customise in personal/user.el with setopt."
+    :type '(repeat symbol)
+    :group 'core-autosave)
+
+  (defcustom core-autosave-exclude-predicates nil
+    "List of single-argument functions called with the buffer as argument.
+  If any predicate returns non-nil the buffer is excluded from auto-save.
+  Each function must be side-effect-free and accept one argument (a buffer).
+  Example: (setopt core-autosave-exclude-predicates
+                 \='(my/tramp-buffer-p))
+  Customise in personal/user.el with setopt."
+    :type '(repeat function)
+    :group 'core-autosave)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 内部述語
+  ;; ---------------------------------------------------------------------------
+
+  (defun core-autosave--extension-excluded-p (ext)
+    "Return non-nil when EXT (downcased) is in `core-autosave-exclude-extensions'."
+    (and ext (member (downcase ext) core-autosave-exclude-extensions)))
+
+  (defun core-autosave--name-pattern-excluded-p (fname)
+    "Return non-nil when FNAME matches an autosave exclusion pattern.
+  See `core-autosave-exclude-name-patterns'."
+    (cl-some (lambda (pat) (string-match-p pat fname))
+             core-autosave-exclude-name-patterns))
+
+  (defun core-autosave--predicate-excluded-p (buf)
+    "Return non-nil when BUF matches an autosave exclusion predicate.
+  See `core-autosave-exclude-predicates'."
+    (cl-some (lambda (fn) (funcall fn buf))
+             core-autosave-exclude-predicates))
+
+  (defun core-autosave--save-buffer-p ()
+    "Return non-nil when the current buffer should be auto-saved.
+  Called by `save-some-buffers' with no arguments; the buffer under
+  test is `current-buffer'.
+  A buffer is eligible when ALL of the following hold:
+  1. It is backed by a file (`buffer-file-name').
+  2. Its file extension is not in `core-autosave-exclude-extensions'.
+  3. Its file name does not match any pattern in
+     `core-autosave-exclude-name-patterns'.
+  4. Its major mode is not in `core-autosave-exclude-modes'.
+  5. No predicate in `core-autosave-exclude-predicates' returns non-nil."
+    (when-let* ((fname (buffer-file-name)))
+      (let* ((ext  (file-name-extension fname))
+             (mode major-mode))
+        (and
+         ;; 1. 拡張子が除外対象でない
+         (not (core-autosave--extension-excluded-p ext))
+         ;; 2. ファイル名パターンが除外対象でない
+         (not (core-autosave--name-pattern-excluded-p fname))
+         ;; 3. メジャーモードが除外対象でない
+         (not (memq mode core-autosave-exclude-modes))
+         ;; 4. ユーザー定義の述語
+         (not (core-autosave--predicate-excluded-p (current-buffer)))))))
+
+  (defun core-autosave--save-all-buffers ()
+    "Save all modified file-backed buffers that pass the auto-save exclusion rules.
+  Exclusion is controlled by `core-autosave-exclude-extensions',
+  `core-autosave-exclude-name-patterns', `core-autosave-exclude-modes', and
+  `core-autosave-exclude-predicates'.  All four are customisable in
+  personal/user.el via setopt."
+    (save-some-buffers t #'core-autosave--save-buffer-p))
+
+  (defun core-autosave--save-on-focus-out ()
+    "Save all file-backed buffers when Emacs loses focus.
+  Called from `after-focus-change-function', which uses a zero-argument calling
+  convention and fires for both focus-in and focus-out.  `frame-focus-state'
+  returns nil when the frame has lost focus, so saving is restricted to that
+  case."
+    (when (and core-autosave-save-on-focus-out
+               (not (frame-focus-state)))
+      (core-autosave--save-all-buffers)))
+
+  (defun core-autosave--init ()
+    "Configure and activate the auto-save subsystem.
+  Idempotent: repeated calls do not register duplicate hooks because
+  `add-hook' and `add-function' check for existing entries."
+    ;; 1. バックアップディレクトリ — no-littering-var-directory が利用可能なここで設定する。
+    (setopt backup-directory-alist
+            `(("." . ,(expand-file-name "backup/" no-littering-var-directory))))
+    ;; 2. auto-save-visited-mode: スクラッチファイルではなく実ファイルに書き出す。
+    (setopt auto-save-visited-interval core-autosave-interval
+            auto-save-default          nil)
+    (auto-save-visited-mode 1)
+    ;; 3. after-focus-change-function — フォーカス変化時の唯一の登録先。
+    ;;    focus-out-hook は Emacs 27.1 で廃止されている。しかも両方に登録すると、
+    ;;    フォーカスを失うたびに保存が二重に走る（handle-focus-out は focus-out-hook を
+    ;;    実行したうえで after-focus-change-function も呼ぶ）ため、こちらだけに登録する。
+    ;;
+    ;;    after-focus-change-function はフォーカスの取得時にも呼ばれる。
+    ;;    core-autosave--save-on-focus-out は frame-focus-state で「失った」ことを
+    ;;    確認してから保存する。
+    ;;
+    ;;    これは「フック」ではなく単一の関数を保持する変数なので add-function を用いる。
+    ;;    重複登録を防ぐため、追加前に古い登録を除去する。
+    (remove-function after-focus-change-function
+                     #'core-autosave--save-on-focus-out)
+    (add-function :after after-focus-change-function
+                  #'core-autosave--save-on-focus-out))
+
+  (add-hook 'emacs-startup-hook #'core-autosave--init)
+
+  (provide 'core-autosave)
+  ;;; core/core-autosave.el ends here
+#+end_src
+
+* core/core-dired.el
+:PROPERTIES:
+:CUSTOM_ID: core-dired
+:header-args:emacs-lisp: :tangle ../lisp/core/core-dired.el
+:END:
+
+dired を dirvish に置き換えるモジュールです。 =core-editing.el= から分離しました。
+
+dirvish の有効化は、起動時間を縮めるため、最初に dired が呼ばれる瞬間まで遅延させています。その仕組み
+（ =dired-noselect= への自己解除型 =:around= アドバイス）は以下のコードのコメントを参照してください。
+内部関数は =core-dired--activate= 、 =core-dired--ensure= に改名しました（旧
+=core-editing--activate-dirvish= 、 =core-editing--ensure-dirvish= ）。
+
+#+NAME: core-dired-el
+#+begin_src emacs-lisp
+  ;;; core/core-dired.el --- dired の dirvish への置き換え -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; dired を dirvish に置き換える。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - dired を dirvish に置き換える（dirvish-override-dired-mode）。
+  ;;   起動時間短縮のため、有効化自体は `dired-noselect' への自己解除型
+  ;;   :around advice で、最初に dired が呼ばれた瞬間まで遅延させる
+  ;; - dirvish の属性を設定する（subtree-state、vc-state、git-msg、file-size）
+  ;; - macOS では GNU coreutils の gls が使えれば dired の ls に用いる
+  ;;; Code:
+
+  (leaf dirvish
+    :straight t
+    :require nil)
+
+  ;; dirvish は leaf の :global-minor-mode が :require t を伴うため、
+  ;; core-dired のロード時に即時 require されていた（起動プロファイル
+  ;; 計測で core-editing（分割前）全体の 25〜30ms の主要因の一つ）。
+  ;;
+  ;; pulsar/apheleia/project.el と違い、dirvish は単純な emacs-startup-hook +
+  ;; アイドルタイマーでは遅延できない。`dirvish-override-dired-mode' は
+  ;; 「dired を呼んだら代わりに dirvish を開く」という置き換えそのものなので、
+  ;; ユーザーが最初に dired を開く *前* に有効化されていなければならない。
+  ;; 固定秒数のアイドルタイマーでは、起動直後に dired を呼ばれた場合に
+  ;; 間に合わない。
+  ;;
+  ;; そこで `dired-noselect' に自己解除型の :around advice を仕込む。
+  ;; `dired'、`dired-jump'、`project-dired'、`find-file' のディレクトリ分岐など、
+  ;; dired を呼ぶほぼ全ての経路は最終的に `dired-noselect' を通るため、
+  ;; ここ一箇所へのアドバイスで束ねられる。
+  (defun core-dired--activate ()
+    "dirvish を require し、override モードと表示設定を適用する。
+  `core-dired--ensure' から一度だけ呼ばれる。"
+    (require 'dirvish)
+    ;; leaf :custom は暗黙に require するため、dirvish-attributes 等は
+    ;; require 後にここで setopt する。
+    (setopt
+     dirvish-attributes '(subtree-state vc-state git-msg file-size)
+     ;; dirvish は自前の mode-line パイプラインを持ち、編集バッファの
+     ;; nano-modeline（M-SPC 経由ではなく起動時にグローバル適用される方）を
+     ;; 経由しない。そのため IME（sis）状態がウィンドウ最大化時に判別できなくなる
+     ;; 問題があった。:right に `ime' セグメントを追加することで、dirvish 自身の
+     ;; mode-line 上に IME 表示を出す。セグメント本体（`ime'）の定義は
+     ;; personal/personal-ime.el 側（sis-change-hook のキャッシュ `ac1965--sis-indicator'
+     ;; の定義箇所）に置く — `dirvish-mode-line-format' はセグメント名のリストに
+     ;; すぎず、実際に mode-line が描画されるタイミング（dirvish バッファを開いた
+     ;; とき、= init 完了よりずっと後）までにセグメント関数が登録されていれば
+     ;; よいため、この setopt の位置とセグメント定義の位置の前後関係は問わない。
+     dirvish-mode-line-format '(:left (sort symlink) :right (omit yank index ime)))
+    (dirvish-override-dired-mode 1)
+    (setopt dirvish-cache-dir
+            (expand-file-name "dirvish/" my:d:cache))
+    ;; ミニバッファで候補を絞り込む間、ファイルのプレビューを表示する。
+    (dirvish-peek-mode 1)
+    ;; ls のスイッチ設定 — 旧 leaf dired ブロックから統合したもの。
+    ;; macOS には BSD 版 ls が同梱される。利用できる場合は GNU coreutils の gls を使う。
+    ;; insert-directory-program、dired-use-ls-dired、dired-listing-switches は
+    ;; いずれも defcustom（dired.el）である。setopt を用いる。
+    (if (and (eq system-type 'darwin) (executable-find "gls"))
+        (progn
+          (setopt insert-directory-program "gls")
+          (setopt dired-use-ls-dired t)
+          (setopt dired-listing-switches "-aBhl --group-directories-first"))
+      (setopt dired-use-ls-dired nil)
+      (setopt dired-listing-switches "-alh")))
+
+  (defun core-dired--ensure (_orig-fn &rest args)
+    "`dired-noselect' の初回呼び出し時に dirvish を有効化してから呼び直す。
+
+  `:around' アドバイスとして一度だけ動作する自己解除型のブートストラップである。
+  _ORIG-FN（このアドバイスを追加した時点の `dired-noselect'）を直接呼ぶのではなく、
+  自分自身のアドバイスを除去したうえで `core-dired--activate' を実行し、
+  シンボル `dired-noselect' を改めて `apply' で呼び直している。
+
+  理由: `dirvish-override-dired-mode' 自身も `dired-noselect' に advice を
+  追加する。_ORIG-FN はこのアドバイスを追加した時点のスナップショットであり、
+  それをそのまま呼ぶと、今まさに処理している最初の呼び出しだけ dirvish の
+  advice を素通りしてしまう（2 回目以降の呼び出しからしか dirvish の UI に
+  ならない）。シンボル経由で呼び直せば、その時点の最新の advice チェーンを
+  確実に通る。"
+    (advice-remove 'dired-noselect #'core-dired--ensure)
+    (core-dired--activate)
+    (apply #'dired-noselect args))
+
+  (advice-add 'dired-noselect :around #'core-dired--ensure)
+
+  (provide 'core-dired)
+  ;;; core/core-dired.el ends here
+#+end_src
+
+* core/core-switches.el
+:PROPERTIES:
+:CUSTOM_ID: core-switches
+:header-args:emacs-lisp: :tangle ../lisp/core/core-switches.el
+:END:
+
+** core-switches.el — LSP/UI Backend Selection
+
+このモジュールは、層の原則を破らずにバックエンドを切り替える、という少し曲芸的なことを
+しています。
+
+*下位層から上位層を呼ぶ、という矛盾をどう解くか*
+
+=core-switches= は core 層（layer 2）にいます。一方、切り替えたい eglot / lsp-mode は dev 層
+（layer 8）です。素直に =require= すれば、下位層が上位層に依存することになり、層の原則に
+反します。
+
+ここで使うのが、登録簿と =autoload= です。 =core-switches= は登録簿と登録関数
+=core-switches-register= だけを持ちます。名前を知っている上位層の側（ =dev-lsp-bridge= と =ui-bundles= ）が、
+「この選択肢は、このファイルのこの関数で有効化する」と登録し、同時に =autoload= を宣言します。
+=dev-lsp-eglot.el= のロードは「実際にその関数が呼ばれた瞬間」まで遅延されます。 =core-switches= は
+モジュールの名前を知らないまま、条件付きロードを起動できるわけです。
+
+なぜ =after-init-hook= なのか
+
+有効化を =after-init-hook= まで待つのは、 =personal/<user>.el= で設定された =my:use-lsp= の値が、
+バックエンド選択が走る前に確実に適用されているようにするためです。順序を間違えると、常に
+既定のバックエンドが選ばれてしまいます。
+#+begin_src emacs-lisp
+  ;;; core/core-switches.el --- オプション機能のブリッジ層 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; ランタイムスイッチ: 起動時に UI バンドルと LSP バックエンドを選択する。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - `my:use-lsp'（eglot | lsp）と `my:use-ui'（none | doom | nano | doom-nano）を定義する
+  ;; - バックエンドの登録簿と登録関数 `core-switches-register' を提供する（登録は上位層のモジュールが行う）
+  ;; - `after-init-hook' の発火後に、選択された UI と LSP を有効化する
+  ;;
+  ;; 注意: personal のオーバーレイ（例: personal/ac1965.el）は、本モジュールが走る前に
+  ;; `my:use-ui' と `my:use-lsp' を設定しなければならない。ロード順が重要である。
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+
+  (defgroup my:switches nil
+    "Unified switches for UI bundles and LSP backends."
+    :group 'convenience)
+
+  (defcustom my:use-lsp 'eglot
+    "Which LSP client to use.  One of: `none', `eglot', `lsp'.
+  Set to `none' to disable LSP activation entirely."
+    :type '(choice (const none) (const eglot) (const lsp)) :group 'my:switches)
+
+  (defcustom my:use-ui 'none
+    "Which UI bundle to use. One of: `none`, `doom`, `nano`, `doom-nano`."
+    :type '(choice (const none) (const doom) (const nano) (const doom-nano))
+    :group 'my:switches)
+
+  (defconst core-switches--kinds
+    '((ui  "UI bundle"   "UI")
+      (lsp "LSP backend" "LSP"))
+    "Alist of (KIND NOUN SHORT).  NOUN and SHORT are used in messages.")
+
+  ;; 登録簿。上位層のモジュール（ui-bundles、dev-lsp-bridge）が `core-switches-register' で
+  ;; 自分を登録する。本モジュールは、登録されるモジュールの名前を一切知らない。
+  (defvar core-switches--registry nil
+    "Alist mapping (KIND . CHOICE) to a plist describing the backend.
+  KIND is `ui' or `lsp'.  The plist holds :enable (the entry-point function),
+  :library (where to load it from), :label (the name used in messages) and
+  :package (the third-party library, used only to tell if it is installed).")
+
+  (defun core-switches-register (kind choice enable-fn library label &optional package)
+    "Register CHOICE of KIND, enabled by ENABLE-FN defined in LIBRARY.
+  KIND is `ui' or `lsp'.  LABEL names the backend in messages.  PACKAGE, when
+  given, is the third-party library the backend wraps.  An autoload for
+  ENABLE-FN is declared, so LIBRARY is loaded only when it is called."
+    (setf (alist-get (cons kind choice) core-switches--registry nil nil #'equal)
+          (list :enable enable-fn :library library :label label :package package))
+    (autoload enable-fn library (format "Enable %s." label) t))
+
+  (defun core-switches--entry (kind choice)
+    "Return the registered plist for CHOICE of KIND, or nil."
+    (alist-get (cons kind choice) core-switches--registry nil nil #'equal))
+
+  (defun core-switches--present-p (kind choice)
+    "Return non-nil when the backend registered for CHOICE of KIND looks installed."
+    (let ((entry (core-switches--entry kind choice)))
+      (and entry
+           (or (fboundp (plist-get entry :enable))
+               (locate-library (plist-get entry :library))
+               (and (plist-get entry :package)
+                    (locate-library (plist-get entry :package))))
+           t)))
+
+  (defun core-switches--load-and-call (enable-fn library not-found-msg)
+    "Try to invoke ENABLE-FN, loading LIBRARY first if needed.
+  Returns t on success.  Prints NOT-FOUND-MSG and returns nil if neither
+  ENABLE-FN nor LIBRARY is available."
+    (cond
+     ((fboundp enable-fn)
+      (funcall enable-fn) t)
+     ((locate-library library)
+      (load (locate-library library) nil 'nomessage)
+      (when (fboundp enable-fn) (funcall enable-fn) t))
+     (t (message "%s" not-found-msg) nil)))
+
+  (defun core-switches--enable (kind choice)
+    "Activate CHOICE of KIND (`ui' or `lsp').  Return non-nil on success."
+    (let ((entry (core-switches--entry kind choice)))
+      (cond
+       ((eq choice 'none) t)
+       ((null entry)
+        (message "[switches] Unknown %s choice: %s"
+                 (nth 1 (alist-get kind core-switches--kinds)) choice)
+        nil)
+       (t (core-switches--load-and-call
+           (plist-get entry :enable) (plist-get entry :library)
+           (format "[switches] %s not found." (plist-get entry :label)))))))
+
+
+  ;; UI と LSP の有効化は名前付き関数で包み、after-init-hook に遅延させる。
+  ;; モジュールのロード時（modules.el の反復処理中）に有効化すると、「after-init-hook の
+  ;; 発火後に選択された UI と LSP を有効化する」という Commentary の記述と矛盾する。
+  ;; さらに順序上の危険もある。LSP バックエンドが prog-mode にフックしようとする時点で、
+  ;; 後続のモジュール（utils-*）がまだロードされていない可能性があるためである。
+  ;;
+  ;; 名前付き関数を用いることは、副作用を伴う有効化は常に名前付きフック関数で行う
+  ;; （デバッグ可能、除去可能、重複登録に対して安全）というプロジェクト全体の規約にも
+  ;; 合致する。
+  (defun core-switches--activate-kind (kind choice)
+    "Activate CHOICE of KIND and report the outcome.  Do nothing for `none'."
+    (unless (eq choice 'none)
+      (let ((noun  (nth 0 (alist-get kind core-switches--kinds)))
+            (short (nth 1 (alist-get kind core-switches--kinds))))
+        (cond
+         ((core-switches--enable kind choice)
+          (message "[switches] %s: %s" noun choice))
+         ((core-switches--present-p kind choice)
+          (message "[switches] %s seems present but could not enable: %s" short choice))
+         (t
+          (message "[switches] %s unavailable: %s" noun choice))))))
+
+  (defun core-switches--activate ()
+    "Activate the configured UI bundle and LSP backend.
+  Runs via `after-init-hook' so all modules are loaded before activation."
+    (core-switches--activate-kind 'ui my:use-ui)
+    (core-switches--activate-kind 'lsp my:use-lsp))
+
+  (add-hook 'after-init-hook #'core-switches--activate)
+
+  (provide 'core-switches)
+  ;;; core/core-switches.el ends here
+#+end_src
+
+* core/core-custom.el
+:PROPERTIES:
+:CUSTOM_ID: custom-file
+:header-args:emacs-lisp: :tangle ../lisp/core/core-custom.el
+:END:
+
+#+begin_src emacs-lisp
+  ;;; core/core-custom.el --- custom-file の補助 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; custom-file のパス管理と安全なロード。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - ロード時に `custom-file' を `my:d:etc/custom.el' に解決する
+  ;; - ディレクトリまたは custom.el が無ければ、空の custom.el ごと作成する
+  ;; - custom.el を静かにロードする。エラーは警告として報告し、起動は止めない
+  ;; - 対話的にファイルを開く `my/custom-open' を提供する
+  ;; - 主要な設定値とフェイスのスナップショットを custom-file へ書き出す `my/custom-dump-current' を提供する
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+
+  (defconst my:f:custom
+    (or (bound-and-true-p my:f:custom)
+        (expand-file-name "custom.el"
+                          (or (bound-and-true-p my:d:etc)
+                              (expand-file-name ".etc" user-emacs-directory)))))
+
+  (defun core-custom--ensure-file ()
+    (let* ((dir (file-name-directory my:f:custom)))
+      (unless (file-directory-p dir)
+        (condition-case err
+            (make-directory dir t)
+          (error (warn "[custom] failed to create %s: %s"
+                       dir (error-message-string err)))))
+      (unless (file-exists-p my:f:custom)
+        (with-temp-file my:f:custom
+          (insert ";;; custom.el --- Customize output -*- lexical-binding: t; -*-\n"
+                  ";; This file is generated by Customize. Edit with care.\n\n")))))
+
+  (setq custom-file my:f:custom)
+  (core-custom--ensure-file)
+
+  (when (file-readable-p custom-file)
+    (condition-case err
+        (load custom-file nil 'nomessage)
+      (error (warn "[custom] failed to load %s: %s"
+                   custom-file (error-message-string err)))))
+
+  ;;;###autoload
+  (defun my/custom-open ()
+    "Open the custom-file for editing."
+    (interactive)
+    (core-custom--ensure-file)
+    (find-file my:f:custom))
+
+  ;;;###autoload
+  (defun my/custom-dump-current ()
+    "Save a snapshot of key customisation variables to custom-file."
+    (interactive)
+    (core-custom--ensure-file)
+    (dolist (pair
+             `((inhibit-startup-screen        . ,inhibit-startup-screen)
+               (frame-resize-pixelwise        . ,(bound-and-true-p frame-resize-pixelwise))
+               (completion-styles             . ,(and (boundp 'completion-styles) completion-styles))
+               (org-startup-indented           . ,(and (boundp 'org-startup-indented) org-startup-indented))
+               (org-hide-leading-stars         . ,(and (boundp 'org-hide-leading-stars) org-hide-leading-stars))
+               (org-tags-column                . ,(and (boundp 'org-tags-column) org-tags-column))
+               (org-agenda-tags-column         . ,(and (boundp 'org-agenda-tags-column) org-agenda-tags-column))))
+      (when (car (last pair))
+        (customize-save-variable (car pair) (cdr pair))))
+    (let ((faces
+           '((org-modern-date-active
+              ((t (:background "#373844" :foreground "#f8f8f2" :height 0.75 :weight light :width condensed))))
+             (org-modern-time-active
+              ((t (:background "#44475a" :foreground "#f8f8f2" :height 0.75 :weight light :width condensed))))
+             (org-modern-tag
+              ((t (:background "#44475a" :foreground "#b0b8d1" :height 0.75 :weight light :width condensed)))))))
+      (dolist (f faces)
+        (custom-set-faces `(,(car f) ,(cadr f)))))
+    (custom-save-all)
+    (message "[custom] Wrote snapshot to %s" my:f:custom))
+
+  (provide 'core-custom)
+  ;;; core/core-custom.el ends here
+#+end_src

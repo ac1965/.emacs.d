@@ -1,0 +1,1320 @@
+# -*- mode: org; coding: utf-8; -*-
+#+TITLE: Boot — early-init.el・init.el・modules.el
+#+AUTHOR: YAMASHITA, Takao
+#+EMAIL: tjy1965@gmail.com
+#+LANGUAGE: ja
+#+OPTIONS: toc:3 num:t
+#+STARTUP: show2levels
+#+PROPERTY: header-args :results silent :exports code :mkdirp yes :padline no :tangle no
+#+PROPERTY: header-args:emacs-lisp :lexical t :noweb no-export :mkdirp yes :comments no
+
+起動の入口（ =early-init.el= 、 =init.el= 、 =lisp/modules.el= ）の正本です。
+tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 付き）です。
+全体の設計と索引は =../README.org= にあります。説明とコードは、各節の中に同居させています。
+
+* Core Bootstrap — early-init.el & init.el
+:PROPERTIES:
+:CUSTOM_ID: core-bootstrap
+:END:
+
+** Overview
+
+** Purpose
+
+ブートストラップの目的は一つです。「機能を有効にする前に、Emacs を整えること」。
+
+そのために初期化を 2 段階に分けています。
+
+- =early-init.el= — パッケージ以前のブートストラップ（ディレクトリ、性能ガード、初期 UI）
+- =init.el= — パッケージのブートストラップ（ *straight.el + leaf* ）、ランタイム設定、
+  モジュールのエントリポイント
+
+まず土台を固め、それから機能を載せる。順序を逆にすると、パスが確定する前にパッケージが
+ファイルを作り始める、といった事故が起きます。
+
+** Responsibilities
+
+ブートストラップ層が引き受けているのは次の仕事です。
+
+- =package.el= を無効化し、 *straight.el* のみを使う
+- 起動を最適化する（GC とファイルハンドラを一時的に緩め、後で安全に戻す）
+- 状態を =my:d:cache= （リポジトリの外のキャッシュ）、 =.etc/= 、 =.var/= 配下に正規化する（native-comp の生成物を含む）
+- macOS では、ネイティブコンパイルに先立って Homebrew のツールチェーン変数を準備する
+- ちらつきを避けるため、UI の初期値を早い段階で適用する
+- =url.el= のロード前に URL 状態のパスを設定する
+- *leaf* と、控えめなランタイムヘルパー（GCMH、IO バッファ）を初期化する
+- 2 つのエントリポイントを用意する
+  - =personal/<login-name>.el=
+  - =lisp/modules.el=
+
+** Reproducibility
+
+共有される層は再現可能です。
+
+- =early-init.el=
+- =init.el=
+- =lisp/=
+
+一方で、personal のオーバーレイは意図的にユーザー固有のままにしてあります。
+
+: personal/<login-name>.el
+
+*再現性を捨てている理由*
+
+すべてを再現可能にするなら、personal も共有すべきです。しかしそうすると、あるマシンの
+フォント設定や API キーの参照先が、別のマシンにまで漏れ出します。ここではバイト単位の
+再現性よりも、隔離性とマルチユーザー安全性を優先しました。
+
+** Module Map
+
+| ファイル        | 役割 |
+|-----------------+--------------------------------------------|
+| =early-init.el= | init 前の基盤整備と性能ガード |
+| =init.el=       | パッケージのブートストラップとモジュールの起動 |
+
+** Boot Flow
+
+起動時に何がどの順で走るかは、次のとおりです。
+
+1. =early-init.el=
+   - GC／ファイルハンドラの緩和（最初）
+   - =package.el= の無効化
+   - ディレクトリの確立
+   - *straight.el* のベース設定、macOS ツールチェーンの準備（該当時）
+   - ネイティブコンパイル、no-littering 互換、バックアップ設定
+   - UI 初期値の適用
+
+2. =init.el=
+   - URL 状態の設定
+   - *straight.el* のブートストラップ
+   - *leaf* の初期化
+   - no-littering と Org（組み込み）の扱い
+   - macOS のログイン環境変数の取り込み（GUI／デーモン）
+   - ランタイム性能パラメータの適用（gcmh を含む）
+   - コア組み込み機能のポリシー
+   - =my:modules-extra= の宣言（personal オーバーレイのロード前）
+   - personal オーバーレイのロード（personal/user.el が =my:modules-extra= に追記する）
+   - =modules.el= の require
+
+3. 起動後
+   - 所要時間と GC 回数を表示する
+
+ここで注目してほしいのは 2 の後半です。 =my:modules-extra= を *宣言してから* personal を
+読み、 *その後で* =modules.el= を読む。この順序には理由があり、詳細は modules.el の設計ノートで
+説明します。
+
+[[file:../svg/01_boot_flow.svg]]
+
+** Key Configuration Values
+
+- =package-enable-at-startup= :: =nil=
+- =straight-base-dir= :: =my:d:cache= 配下（ =$XDG_CACHE_HOME/emacs/= 、なければ =~/.cache/emacs/= ）
+- =native-comp-eln-load-path= :: =my:d:eln-cache= （ =my:d:cache= の =eln-cache/= ）
+- =read-process-output-max= :: 4 MiB
+- =gcmh-high-cons-threshold= :: 128 MiB
+
+** Usage Guidelines
+
+- =early-init.el= は基盤設定だけに留めること
+- 共有したい挙動は =modules.el= 経由でモジュールに置くこと
+- ユーザー／デバイス固有のつなぎ込みは =personal/= に置くこと
+- ツールチェーンを更新したら Emacs を再起動すること
+- 設定のルートディレクトリは移動しても構いません。状態ディレクトリは自動的に再生成されます
+
+** Troubleshooting
+
+よくある詰まりどころを 3 つ挙げておきます。
+
+- *macOS でネイティブコンパイルが失敗する* →
+  Homebrew の =libgccjit= がインストールされ、参照可能になっているか確認してください。
+
+- *straight のブートストラップが失敗する* →
+  多くは一時的なネットワーク障害です。まず再試行してください。
+
+- *起動時にエコーエリアの警告が出る* →
+  =inhibit-startup-echo-area-message= は文字列でなければなりません。
+
+** early-init.el
+:PROPERTIES:
+:CUSTOM_ID: early-init-el
+:header-args:emacs-lisp: :tangle ../early-init.el
+:END:
+
+*** early-init.el Design Notes
+
+=early-init.el= は =package.el= の初期化より前、しかもフレームが描画される前に実行されます。
+だからこそ、ちらつきを防げます。起動シーケンスの第 1 段階として、ここでは基盤を整えるだけで、
+機能は一切ロードしません。
+
+*ディレクトリ基盤の確立*
+
+=file-chase-links= でシンボリックリンクを解決しているので、 =~/.emacs.d= 自体がシンボリック
+リンクであっても、設定はそのまま持ち運べます。
+
+=XDG_CACHE_HOME= を尊重するのは Linux の XDG 仕様に従うためです。未設定時のフォールバックは
+=$HOME/.cache/emacs/= です。GUI（Finder/Dock/Spotlight）から起動した =Emacs.app= には
+=XDG_CACHE_HOME= が渡らないため、フォールバックが =.zshenv= の既定値（=$HOME/.cache=）と
+食い違うとターミナル起動時と異なるキャッシュ場所を見てしまいます。かつてはリポジトリ内の
+=user-emacs-directory/.cache/= にフォールバックしていましたが、それが原因で GUI 起動時だけ
+straight のパッケージ群が見つからず再ブートストラップが走る不具合があったため、
+=$HOME/.cache/= に揃えています。
+
+これらの値は初期化後に変わってはいけないので、 =defvar= ではなく =defconst= を使っています。
+
+*straight.el のベースディレクトリ設定*
+
+=straight-build-dir= には Emacs のバージョンを含めています（例: =build-31.0= ）。こうしないと、
+異なる Emacs バージョンでビルドされたパッケージが同じディレクトリに混ざり、原因の分かりにくい
+不具合を招きます。
+
+設定を =early-init.el= に置く必要があるのは、 =straight.el= が自身のブートストラップより前に
+この変数を読むためです。
+
+*GC チューニング戦略*
+
+起動時に =file-name-handler-alist= を空にし、 =gc-cons-threshold= を引き上げるのは、地味ですが
+効果の大きい最適化です。すべての =require= と =load= が =file-name-handler-alist= を参照するので、
+モジュール数が増えるほどオーバーヘッドが積み上がります。
+
+この 2 つの設定は、 =early-init.el= の *最初*（ディレクトリ作成より前）に置いてください。
+以前は末尾寄りの「8) 起動性能」に置いていましたが、起動プロファイル計測で、
+起動時に発生する GC がすべて early-init.el の実行中（ディレクトリ作成や straight/native-comp の
+設定の最中、つまり閾値引き上げより *前*）に起きていることが判明しました。閾値を早い位置に
+移したことで、以降の起動シーケンス全体がこの恩恵を受けます。
+
+このリストには TRAMP のハンドラが入っています。 =after-init-hook= で
+=core--orig-file-name-handler-alist= から必ず復元してください。忘れると TRAMP が動かなく
+なります。
+
+なお GC 管理には第 2 段階があり、アイドル時のガベージコレクションは =init.el= §7 の
+gcmh が担当します。
+
+*no-littering との互換性*
+
+=no-littering.el= は、ロード時にこれらのパス変数を読んで自分のディレクトリを決めます。
+
+=early-init.el= で先に設定しておけば、 =no-littering= はロードされた瞬間から正しいパスを
+使ってくれます。順序が逆になると、ファイルは既定の =~/.emacs.d/= 配下に置かれてしまいます。
+
+*初期 UI 設定（ちらつき防止）*
+
+=default-frame-alist= と =initial-frame-alist= の両方を設定しています。Emacs は最初のフレーム
+（initial）と以降のフレーム（default）に異なるパラメータ集合を適用するため、片方だけでは
+足りません。
+
+ツールバーの無効化を =early-init.el= で行うのも同じ理由です。後から消すと、一瞬表示されてから
+消えるという、目に見えるちらつきが発生します。
+
+#+begin_src emacs-lisp
+  ;;; early-init.el --- 早期ブートストラップとランタイム基盤 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;; 通常の init.el より前に実行される早期初期化。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - package.el と quickstart を無効化する
+  ;; - 起動を最適化する（GC、file-name-handlers）
+  ;; - 基本の設定ディレクトリを定義する（.var / .etc / .cache / lisp）
+  ;; - ネイティブコンパイルのパスと警告の扱いを設定する
+  ;; - Tree-sitter の文法置き場 `my:d:treesit' を定義する（`treesit-extra-load-path' は
+  ;;   core-treesit.el が設定する）
+  ;; - straight.el のベースディレクトリ・ビルドディレクトリ・組み込み扱いの org を設定する
+  ;; - 世代付きバックアップを有効にし、旧式の自動保存を無効にする
+  ;; - フルスクリーン化（daemon では `after-make-frame-functions'）を仕込む
+  ;; - macOS の Homebrew ツールチェーン環境を準備する
+  ;; - 早期 UI の既定値とフレームパラメータを確立する
+  ;;
+  ;;; Code:
+
+  ;;
+  ;; 最適化版（macOS 重視、低 I/O、高速起動）
+
+  (eval-when-compile
+    (require 'subr-x))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 内部ユーティリティ
+  ;; ---------------------------------------------------------------------------
+
+  (defun core--ensure-directory (dir)
+    "Ensure DIR exists, creating it recursively if needed."
+    (unless (file-directory-p dir)
+      (condition-case err
+          (make-directory dir t)
+        (error
+         (warn "early-init: failed to create %s (%s)"
+               dir (error-message-string err))))))
+
+  (defun core--login-username ()
+    "Return login username or nil."
+    (ignore-errors (user-login-name)))
+
+  (defalias 'my/ensure-directory-exists #'core--ensure-directory)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 1) 起動性能（GC / file-name-handler-alist）
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; 起動プロファイル計測で、起動時に発生する 4 回の GC が
+  ;; すべて early-init.el の実行中（ディレクトリ作成やstraight/native-comp設定の
+  ;; 最中）に起きており、以降の起動シーケンス（straight/leaf のブートストラップ、
+  ;; [modules] ループ）では 1 回も GC が起きていないことが判明した。
+  ;;
+  ;; 原因は、この GC 閾値引き上げが従来「8) 起動性能」として、ディレクトリ作成
+  ;; （旧2〜3）や straight/Homebrew/native-comp の設定（旧4〜6）より *後* に
+  ;; 置かれていたことである。それらの処理は Emacs の既定の GC 閾値（通常
+  ;; 800KB 程度）のまま実行されており、GC が走っていた。
+  ;;
+  ;; 閾値の引き上げを early-init.el の最初（ディレクトリ作成より前）に移動し、
+  ;; 以降のセクションすべてがこの恩恵を受けるようにした。
+  (defvar core--orig-file-name-handler-alist file-name-handler-alist)
+
+  (defun core--restore-startup-state ()
+    "Restore GC and file handler settings after startup."
+    (setq file-name-handler-alist core--orig-file-name-handler-alist
+          gc-cons-threshold (* 128 1024 1024)
+          gc-cons-percentage 0.1))
+
+  (setq file-name-handler-alist nil
+        gc-cons-threshold (* 512 1024 1024)
+        gc-cons-percentage 0.6)
+
+  (add-hook 'after-init-hook #'core--restore-startup-state)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 2) package.el の無効化
+  ;; ---------------------------------------------------------------------------
+
+  ;; この 2 変数だけは setq のままにする。setopt は変数の属するライブラリを読み込む
+  ;; ことがあり、実機で package.el が起動時に読み込まれる（featurep が t になる）のを
+  ;; 確認した。package.el を使わない設計なので、早期に読み込ませない。
+  (setq package-enable-at-startup nil
+        package-quickstart nil)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 3) 基本ディレクトリ
+  ;; ---------------------------------------------------------------------------
+
+  (defvar my:d
+    (file-name-as-directory
+     (or (and load-file-name
+              (file-name-directory (file-chase-links load-file-name)))
+         user-emacs-directory))
+    "Root directory of this Emacs configuration.")
+
+  (setq user-emacs-directory my:d)
+
+  (defconst my:d:var  (expand-file-name ".var/" my:d))
+  (defconst my:d:etc  (expand-file-name ".etc/" my:d))
+  (defconst my:d:lisp (expand-file-name "lisp/" my:d))
+
+  (when (file-directory-p my:d:lisp)
+    (add-to-list 'load-path my:d:lisp)
+    (let ((default-directory my:d:lisp))
+      (normal-top-level-add-subdirs-to-load-path)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 4) 状態ディレクトリ
+  ;; ---------------------------------------------------------------------------
+
+  (defconst my:d:cache
+    (expand-file-name
+     "emacs/"
+     (or (getenv "XDG_CACHE_HOME")
+         (expand-file-name ".cache/" (getenv "HOME")))))
+  (defconst my:d:eln-cache
+    (expand-file-name "eln-cache/" my:d:cache))
+
+  (defconst my:d:treesit
+    (expand-file-name "tree-sitter/" my:d:var))
+
+  (defconst my:d:url (expand-file-name "url/" my:d:var))
+  (defconst my:d:eww (expand-file-name "eww/" my:d:var))
+
+  (dolist (dir (list my:d:var my:d:etc my:d:lisp my:d:cache
+                     my:d:eln-cache my:d:treesit my:d:url my:d:eww))
+    (core--ensure-directory dir))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 5) straight.el のベース
+  ;; ---------------------------------------------------------------------------
+  ;;
+  ;; `straight-check-for-modifications' の既定値は
+  ;; `(find-at-startup find-when-checking)' であり、`find-at-startup' は起動の
+  ;; たびに管理下の全パッケージへ `find' によるファイル変更チェックを走らせる。
+  ;; 起動プロファイル計測で、straight のブートストラップだけで
+  ;; 620ms（起動全体の約半分）を占めることが判明した。管理下のパッケージを
+  ;; エディタの外から手動編集する運用ではないため、起動時の全件スキャンは
+  ;; 実質的に無駄である。
+  ;;
+  ;; `find-at-startup' を外し、ファイル保存時のみチェックする `check-on-save'
+  ;; に絞る。手動で clone 先を直接編集した場合は自動検出されなくなるが、
+  ;; その場合は `M-x straight-rebuild-package' または `straight-pull-all' で
+  ;; 明示的にリビルドすればよい。
+  ;;
+  ;; `straight-check-dependency-versions' の既定値 `warn' は、Package-Requires
+  ;; に書かれたバージョン文字列を `version<' で単純比較するだけである。MELPA
+  ;; 経由なら Package-Version は commit 日時から自動生成されるため意味を持つが、
+  ;; straight.el は git からソースをそのまま使うため、パッケージが static な
+  ;; `;; Version:' ヘッダー（例: restclient.el の "1.0"）を持っていると、依存側の
+  ;; 宣言（restclient-jq.el の "20200502.831" など）と噛み合わずに誤検知する。
+  ;; 個別パッケージ単位で無視する仕組みは straight.el に存在しないため、
+  ;; 全体を `nil'（旧来の既定動作）にして無効化する。
+
+  (setopt straight-base-dir my:d:cache
+          straight-use-package-by-default t
+          straight-vc-git-default-clone-depth 1
+          straight-check-for-modifications '(check-on-save find-when-checking)
+          straight-check-dependency-versions nil
+          straight-build-dir
+          (format "build-%d.%d" emacs-major-version emacs-minor-version)
+          straight-profiles '((nil . "default.el")))
+
+  ;; Org は Emacs 同梱である（Emacs 32.0.50: Org 9.8.10）。しかし straight はそれを知らない。
+  ;; org-modern / org-roam / ox-hugo / org-journal などは Package-Requires に
+  ;; (org "9.x") を宣言しているため、straight はその依存を解決しようとして org の
+  ;; レシピを探し、git から clone しはじめる:
+  ;;
+  ;;   Building org-modern...
+  ;;   Building org-modern → Cloning org...
+  ;;
+  ;; straight-built-in-pseudo-packages に載っているパッケージは、依存として現れても
+  ;; レシピ探索の対象外となり、単にスキップされる。既定値は
+  ;; '(emacs nadvice python image-mode) で org を含まないため、ここで追加する。
+  ;;
+  ;; 設定場所が early-init.el でなければならない理由:
+  ;;   本変数は「org に依存するパッケージが straight に登録されるより前」に設定する
+  ;;   必要がある（straight.el の docstring が明記している）。straight のブートストラップ
+  ;;   自体が init.el のセクション 2 で走るため、その前に値を確定できるのは early-init.el
+  ;;   だけである。straight.el がロードされた時点で defcustom が評価されるが、defcustom は
+  ;;   束縛済みの値を上書きしないため、ここでの設定が生き残る。
+  ;;
+  ;; 既定値のリストは維持したうえで org を足す（既定値を落とすと emacs / nadvice などが
+  ;; 再び clone 対象になる）。
+  (setopt straight-built-in-pseudo-packages
+          '(emacs nadvice python image-mode org))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 6) macOS Homebrew ツールチェーン
+  ;; ---------------------------------------------------------------------------
+
+  (when-let* ((brew (or (getenv "HOMEBREW_PREFIX")
+                        (and (file-directory-p "/opt/homebrew") "/opt/homebrew")
+                        (and (file-directory-p "/usr/local")   "/usr/local")))
+              (bin  (expand-file-name "bin" brew)))
+    (when (file-directory-p bin)
+      (let ((path (or (getenv "PATH") "")))
+        (unless (string-prefix-p bin path)
+          (setenv "PATH" (concat bin ":" path))))
+      (let ((gcc (car (directory-files bin t "^gcc-[0-9]+$" t))))
+        (when gcc (setenv "CC" gcc)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 7) ネイティブコンパイル
+  ;; ---------------------------------------------------------------------------
+
+  ;; eln の保存先が 2 か所ある理由と、~/.emacs.d/eln-cache の扱い（2026-10-12 に実機で確認）:
+  ;;
+  ;; - Emacs の既定の `native-comp-eln-load-path' は、先頭が
+  ;;   `<user-emacs-directory>/eln-cache/'（起動の最初は ~/.emacs.d/eln-cache/）である。
+  ;; - 下のブロックは `my:d:eln-cache'（~/.cache/emacs/eln-cache/）を先頭に足すだけで、
+  ;;   既定の ~/.emacs.d/eln-cache/ は 2 番目に残る。そのため、設定のモジュールの eln は
+  ;;   ~/.cache/emacs/eln-cache に作られる（設計どおり）。
+  ;; - ~/.emacs.d/eln-cache に書かれるのは、この設定が効く前（起動の最初期）、または
+  ;;   この設定を読み込まない Emacs（`emacs -Q' など）が動いたとき。中身は
+  ;;   `subr--trampoline-*.eln'（組み込み関数に advice を付けるときに自動で作られる
+  ;;   中継用の小さなファイル、各 約 34KB）だけである。
+  ;; - このトランポリンは削除してよい。advice を付けた時点で自動的に作り直される
+  ;;   （実機で確認済み）。動いている Emacs には影響せず、気になる場合は再起動する。
+  ;;   削除するときは、設定のモジュールの eln を巻き込まないよう次のようにする:
+  ;;     rm -f ~/.emacs.d/eln-cache/*/subr--trampoline-*.eln
+  ;; - ~/.emacs.d/eln-cache への書き込み自体を無くしたい場合は、
+  ;;   `startup-redirect-eln-cache' を使う方法がある（未適用。必要なら別途検討する）。
+
+  (when (and (boundp 'native-comp-eln-load-path)
+             (listp native-comp-eln-load-path))
+    (setopt native-comp-eln-load-path
+            (cons my:d:eln-cache
+                  (delq my:d:eln-cache native-comp-eln-load-path))
+            native-comp-async-report-warnings-errors 'silent))
+
+  ;; native-comp-deferred-compilation は Emacs 29.1 で廃止され、
+  ;; native-comp-jit-compilation に改名された（旧名を参照すると obsolete 警告が出る）。
+  ;; JIT コンパイルは既定で有効だが、意図を明示するために設定する。
+  (when (boundp 'native-comp-jit-compilation)
+    (setopt native-comp-jit-compilation t))
+
+  ;; 上の native-comp-eln-load-path のブロックとは独立に、非同期ネイティブコンパイルの
+  ;; 警告/エラー通知を抑制する（eln-load-path が未束縛の環境でも確実に適用するため）。
+  (when (boundp 'native-comp-async-report-warnings-errors)
+    (setopt native-comp-async-report-warnings-errors 'silent))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 8) no-littering との互換性
+  ;; ---------------------------------------------------------------------------
+
+  (defvar no-littering-etc-directory (file-name-as-directory my:d:etc))
+  (defvar no-littering-var-directory (file-name-as-directory my:d:var))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 9) バックアップ / 自動保存
+  ;; ---------------------------------------------------------------------------
+
+  ;; バックアップは var/backup/ 配下に保存する（backup-directory-alist は core-autosave.el で設定）。
+  ;; early-init では世代付きバックアップを有効化する。パスは no-littering のロード後に上書きされる。
+  (setopt make-backup-files     t
+          version-control       t        ; keep numbered backups
+          kept-new-versions     6
+          kept-old-versions     2
+          delete-old-versions   t        ; delete excess backups silently
+          backup-by-copying     t        ; preserve symlinks
+          auto-save-default     nil      ; disable legacy #file# auto-save
+          auto-save-list-file-prefix nil)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 10) 早期 UI の既定値
+  ;; ---------------------------------------------------------------------------
+
+  (setopt frame-resize-pixelwise t
+          frame-inhibit-implied-resize t
+          cursor-in-non-selected-windows nil
+          x-underline-at-descent-line t
+          window-divider-default-right-width 16
+          window-divider-default-places 'right-only)
+
+  ;; ユーザーオプションではない（cus-start に無い）ため setq のまま。
+  (setq inhibit-compacting-font-caches t)
+
+  (dolist (it '((internal-border-width . 8)
+                (tool-bar-lines . 0)))
+    (add-to-list 'default-frame-alist it)
+    (add-to-list 'initial-frame-alist it))
+
+  (setopt default-frame-alist
+          (assq-delete-all 'fullscreen default-frame-alist))
+  (setopt initial-frame-alist
+          (assq-delete-all 'fullscreen initial-frame-alist))
+
+  (defvar core--did-fullscreen nil
+    "非 daemon 起動時、フルスクリーンを適用済みかどうか。")
+
+  (defun core--fullscreen-frame (frame)
+    "FRAME がグラフィカルなら、それをフルスクリーンにする。"
+    (when (display-graphic-p frame)
+      (set-frame-parameter frame 'fullscreen 'fullboth)))
+
+  ;; window-setup-hook は --daemon 起動時、実フレームが無い状態で走ってしまう
+  ;; （デーモンはクライアント接続を待つだけで、起動時にフレームを作らない）。
+  ;; そのため非 daemon 時のみこの関数を使い、初回のグラフィカルフレームに
+  ;; 限って（core--did-fullscreen で）適用する。
+  (defun core--fullscreen-once ()
+    "非 daemon 起動時、初回のグラフィカルフレームをフルスクリーンにする。"
+    (unless core--did-fullscreen
+      (let ((f (selected-frame)))
+        (when (display-graphic-p f)
+          (setq core--did-fullscreen t)
+          (core--fullscreen-frame f)))))
+
+  ;; daemon 起動時は core--fullscreen-once ではなく core--fullscreen-frame を
+  ;; 直接 after-make-frame-functions に繋ぐ。初回のみに限定すると、2 枚目以降の
+  ;; `emacsclient -c` で作られるフレームが最大化されないままになってしまうため、
+  ;; daemon が生きている限り、新しいグラフィカルフレームが繋がるたびに毎回適用する。
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'core--fullscreen-frame)
+    (add-hook 'window-setup-hook #'core--fullscreen-once))
+
+  (when (fboundp 'menu-bar-mode)   (menu-bar-mode -1))
+  (when (fboundp 'tool-bar-mode)   (tool-bar-mode -1))
+  (when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 11) 起動時エコー
+  ;; ---------------------------------------------------------------------------
+
+  (when-let* ((u (core--login-username)))
+    (setopt inhibit-startup-echo-area-message u))
+
+  (provide 'early-init)
+  ;;; early-init.el ends here
+#+end_src
+
+** init.el
+:PROPERTIES:
+:CUSTOM_ID: init-el
+:header-args:emacs-lisp: :tangle ../init.el
+:END:
+
+*** init.el Design Notes
+
+=early-init.el= が土台を固めた後、機能ロジックを有効化するのが =init.el= の役目です。
+責務ははっきり分かれていて、このファイルはブートストラップだけを行い、実際の設定は
+=modules.el= に委譲します。
+
+URL 状態ディレクトリ — =url.el= より前でなければならない理由
+
+=url.el= は初回ロード時に、変数の既定値を使ってファイルを作りにいきます。つまり
+=(require 'url)= より前に設定しておかないと、ファイルは =~/.emacs.d/url/= 配下に作られて
+しまいます。一度作られてしまえば後から変数を変えても手遅れなので、ここはロード順が決定的に
+重要です。
+
+*straight.el のブートストラップ*
+
+=(bound-and-true-p straight-base-dir)= は =early-init.el= で設定された値を尊重します。素の
+=boundp= を使わないのは、 =nil= に束縛された変数に対しても =t= を返してしまうためです。
+「束縛されていて、かつ値が非 nil」を確かめたいので、正しい述語は =bound-and-true-p= に
+なります。
+
+ネットワークアクセスが発生するのは初回起動時だけで、2 回目以降はローカルの =bootstrap.el= を
+直接ロードします。
+
+*macOS の環境変数取り込み*
+
+macOS の GUI アプリケーションはシェルのプロファイルを読みません。そのため =PATH= は
+=/usr/bin:/bin= 程度に限られてしまい、Homebrew で入れたコマンドが軒並み見つからない、という
+状態になります。これを埋めるのが =exec-path-from-shell= で、ログインシェルを起動して環境変数を
+取ってきます。
+
+=(daemonp)= の条件が入っているのは重要です。Emacs をデーモンとして起動する場合にも、同じ
+取り込みが必要になるためです。
+
+取り込む変数は =("PATH" "LANG")= に絞ってあります。API キー（ =OPENAI_API_KEY= 、
+=OPENROUTER_API_KEY= ）は、 =utils-claude.el= と =dev-ai.el= の内部で、必要になった時点で
+=auth-source= 経由で =~/.authinfo.gpg= から取得します。
+
+こうすると、それらのキーを export しているログインプロファイルを読み込む理由がそもそも
+無くなります。結果として起動時のオーバーヘッドは約 513 ms から、 =/etc/paths.d/= から
+=exec-path= を組み立てるという、どうしても避けられない部分だけになりました。
+
+*Org は組み込みを使う — straight では入れない*
+
+以前はここで =(straight-use-package 'org)= と =(require 'org)= を実行し、straight 版の Org を
+使っていました。2026-07 にこれを削除し、Emacs 同梱の Org を使うようにしています。
+
+判断の根拠は 3 つです。
+
+まず、必要がありません。Emacs 32.0.50 は Org 9.8.10 を同梱しており、本設定が使う Org 関連
+パッケージ（ox-hugo、org-roam、org-modern、org-journal、org-appear、valign、ob-mermaid、
+org-fold）は、どれも組み込み Org で動きます。bleeding-edge な Org を要求するものは一つも
+ありません。
+
+次に、コストがあります。straight 版の Org はいわゆる "mixed Org version" 問題を抱えていて、
+組み込み Org の autoload が straight 版より先に一度でも触られると壊れます。つまり「Org より
+前に、何一つ Org に触ってはならない」という恒久的なブートストラップ制約を背負うことになり、
+これは決定論的起動という原則に対する明確な負債です。加えて =straight-build-dir= は Emacs の
+バージョンごとに分かれるため（ =build-32.0= など）、Emacs を上げるたびに Org 全体の再ビルドと
+native-comp が走ります。
+
+最後に、証拠があります。 =Makefile= の tangle は =emacs -Q= 、つまり組み込み Org で走ります。
+組み込み Org で tangle が通っている時点で、この設定が straight 版を必要としていないことは
+実証済みです。
+
+=org-contrib= （ =ob-dot= / Graphviz Babel）だけが必要な場合は、Org 本体ではなく =org-contrib=
+のみを straight で導入してください。
+
+*起動時間の計測*
+
+=before-init-time= が Emacs の起動時刻、 =after-init-time= が =after-init-hook= の完了時刻を
+記録しています。
+
+=gcs-done= はガベージコレクションの実行回数です。この値が大きいときは、 =early-init.el= の GC
+閾値が低すぎる可能性を疑ってください。
+
+#+begin_src emacs-lisp
+  ;;; init.el --- 初期化のメインエントリポイント -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao <tjy1965@gmail.com>
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; Emacs 30 以降を対象とする主要な初期化シーケンス。
+  ;;
+  ;; 本ファイルの責務:
+  ;;   1. URL 状態ディレクトリの構成（`url' のロードより前に行うこと）
+  ;;   2. straight.el のブートストラップ
+  ;;   3. leaf のブートストラップ
+  ;;   4. no-littering のロード
+  ;;   5. Org の扱い（組み込みを使う）
+  ;;   6. GUI／デーモンのセッションで macOS のログイン環境を取り込む
+  ;;   7. サブプロセス I/O の読み取りサイズを拡大し、アイドル時の GC を gcmh に任せる
+  ;;   8. コア組み込み機能をポリシーレベルで設定する
+  ;;   9. personal オーバーレイを安全にロードする
+  ;;  10. 機能の有効化を modules.el に委譲する
+  ;;  11. 起動メトリクスを報告する
+  ;;
+  ;; 内部ヘルパーには `utils--' ではなく `bootstrap--' の接頭辞を付ける。utils 層が
+  ;; 存在するより前に定義されるためである。`bootstrap--safe-load-file' は他層の
+  ;; 呼び出し側向けに `my/safe-load-file' としてエイリアスされる。
+  ;;
+  ;;; Code:
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (declare-function exec-path-from-shell-initialize "exec-path-from-shell")
+
+  (eval-when-compile
+    (require 'subr-x)
+    (require 'seq)
+    (require 'cl-lib))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 内部ヘルパー
+  ;;; -------------------------------------------------------------------------
+
+  (defun bootstrap--safe-load-file (file &optional noerror)
+    "Safely load FILE.  Signal `user-error' on failure unless NOERROR is non-nil.
+  When NOERROR is non-nil, only report the failure with `message'."
+    (when (and (stringp file) (file-exists-p file))
+      (condition-case err
+          (load file nil 'nomessage)
+        (error
+         (funcall (if noerror #'message #'user-error)
+                  "[load] failed: %s (%s)"
+                  file (error-message-string err))))))
+
+  (defalias 'my/safe-load-file #'bootstrap--safe-load-file)
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 1. URL 状態ディレクトリ（url のロードより前に設定すること）
+  ;;; -------------------------------------------------------------------------
+
+  (defvar core--url-state-dir
+    (file-name-as-directory
+     (or (bound-and-true-p my:d:url)
+         (expand-file-name "url/" user-emacs-directory))))
+
+  (setopt url-configuration-directory core--url-state-dir
+          url-cookie-file              (expand-file-name "cookies" core--url-state-dir)
+          url-history-file             (expand-file-name "history" core--url-state-dir)
+          url-cache-directory          (expand-file-name "cache/" core--url-state-dir)
+          url-queue-timeout            5
+          url-request-timeout          5)
+
+  (dolist (d (list url-configuration-directory url-cache-directory))
+    (make-directory d t))
+
+  (require 'url)
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 2. straight.el のブートストラップ
+  ;;; -------------------------------------------------------------------------
+
+  (defvar bootstrap-version 7)
+
+  (let* ((base (or (bound-and-true-p straight-base-dir)
+                   user-emacs-directory))
+         (repo-dir
+          (expand-file-name "straight/repos/straight.el" base))
+         (bootstrap-file
+          (expand-file-name "bootstrap.el" repo-dir)))
+    (unless (file-exists-p bootstrap-file)
+      ;; ネットワークアクセスは初回のみ。raw.githubusercontent.com の単一ファイル
+      ;; 取得は CDN 側のレート制限（429）で頻繁に失敗し、その本文をそのまま Lisp
+      ;; として読もうとして invalid-read-syntax で落ちていた。git clone は別の
+      ;; レート制限系統かつ成功/失敗が明確なため、こちらに一本化する。
+      (unless (executable-find "git")
+        (user-error "[straight] bootstrap failed: git not found"))
+      (make-directory (file-name-directory repo-dir) t)
+      (unless (zerop (call-process "git" nil "*straight-bootstrap*" t
+                                   "clone" "--depth" "1" "--branch" "develop"
+                                   "https://github.com/radian-software/straight.el.git"
+                                   repo-dir))
+        (user-error "[straight] bootstrap failed: git clone error (see *straight-bootstrap* buffer)")))
+    (load bootstrap-file nil 'nomessage))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 3. leaf のブートストラップ
+  ;;; -------------------------------------------------------------------------
+
+  (dolist (pkg '(leaf leaf-keywords))
+    (straight-use-package pkg))
+
+  (eval-and-compile
+    (require 'leaf))
+
+  (eval-when-compile
+    (require 'leaf-keywords))
+
+  (when (fboundp 'leaf-keywords-init)
+    (leaf-keywords-init))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 4. no-littering のロード
+  ;;; -------------------------------------------------------------------------
+
+  ;; early-init.el 8) で no-littering-etc-directory / no-littering-var-directory を
+  ;; defvar 済みだが、それだけでは no-littering.el 本体は一切ロードされない。
+  ;; save-place / recentf / savehist / tramp / transient / desktop / tree-sitter の
+  ;; ように各モジュールが手作業で no-littering-var-directory を使ってパスを
+  ;; 組み立てている変数はこれで正しく var/ 配下に収まるが、それ以外の
+  ;; 100 以上の変数（bookmark-default-file、project-list-file、
+  ;; url-configuration-directory、forge-database-file、treemacs-persist-file 等）は
+  ;; no-littering 本体が持つ既知変数の自動リダイレクト表に頼っており、本体が
+  ;; ロードされていなければ一切効かない。各パッケージ自身の既定値のまま、
+  ;; ~/.emacs.d/ 直下や、パッケージによっては .emacs.d の外（XDG 系ディレクトリ等）
+  ;; に書き出されてしまう。
+  ;;
+  ;; straight/leaf のブートストラップ直後、他のどのパッケージよりも先にロードする。
+  ;; no-littering 本体は自身が持つ既知変数のデフォルト値を setq で直接上書きする
+  ;; 実装なので、対象パッケージ自体がまだロードされていなくても問題ない
+  ;; （対象パッケージが後でロードされたとき、上書き済みの defcustom 値を読む）。
+  (leaf no-littering
+    :straight t
+    :require t
+    :init
+    ;; no-littering.el は require 時に no-littering-etc-directory /
+    ;; no-littering-var-directory を参照してディレクトリを決定する。
+    ;; early-init.el 8) で先に defvar 済みであることが前提。
+    (unless (and (boundp 'no-littering-etc-directory)
+                 (boundp 'no-littering-var-directory))
+      (error "no-littering: etc/var directory vars must be set in early-init.el before this loads")))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 5. Org（組み込みを使用。straight では導入しない）
+  ;;; -------------------------------------------------------------------------
+
+  ;; ここでは (straight-use-package 'org) も (require 'org) も実行しない。
+  ;;
+  ;; 理由:
+  ;; - Emacs 32.0.50 は Org 9.8.10 を同梱する。本設定が使う Org 関連パッケージ
+  ;;   （ox-hugo、org-roam、org-modern、org-journal、org-appear、valign、
+  ;;   ob-mermaid、org-fold）は、いずれも組み込み Org で動作する。
+  ;;   bleeding-edge Org を要求するものは 1 つも無い。
+  ;; - straight 版 Org は "mixed Org version" 問題を持ち込む。組み込み Org の
+  ;;   autoload が straight 版より先に一度でも触られると壊れるため、
+  ;;   「Org より前に何も Org に触ってはならない」という恒久的なブートストラップ
+  ;;   制約を負う。決定論的起動という原則に対する負債である。
+  ;; - straight 版は org-version.el と autoload の生成を伴い、
+  ;;   straight-build-dir は Emacs のバージョンごとに分かれる（build-32.0 等）。
+  ;;   Emacs を上げるたびに Org 全体の再ビルドと native-comp が走る。
+  ;; - Makefile の tangle は emacs -Q（= 組み込み Org）で走る。組み込み Org で
+  ;;   tangle が通っている時点で、straight 版を必要としていない証拠になる。
+  ;;
+  ;; Org 本体は orgx-core.el が (leaf org :straight nil) として宣言する。
+  ;; org-contrib（ob-dot / Graphviz Babel）だけが必要な場合は、Org 本体ではなく
+  ;; org-contrib のみを straight で導入すること。orgx-export.el を参照。
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 6. macOS 環境変数の取り込み
+  ;;; -------------------------------------------------------------------------
+
+  ;; 取り込む変数を PATH と LANG のみに削減した。
+  ;; OPENAI_API_KEY と OPENROUTER_API_KEY はログインシェル経由で取り込まなくなった。
+  ;; これらは utils-claude.el が呼び出し時に auth-source（~/.authinfo.gpg）から取得する。
+  ;; これらを外したことで、環境変数 2 つを export するためだけに対話的ログインシェルを
+  ;; 起動する必要がなくなった。これが macOS における約 513 ms の起動オーバーヘッドの
+  ;; 主因であった。
+  ;; exec-path-from-shell-arguments の '("-l") はログインシェルのフラグを保持している
+  ;; （/etc/paths.d から PATH を構築するため macOS では必須）が、変数リストが短くなった
+  ;; ぶんシェルの作業量は減る。
+  (leaf exec-path-from-shell
+    :straight t
+    :when (and (eq system-type 'darwin)
+               (or (daemonp) (memq window-system '(mac ns))))
+    :config
+    (setopt exec-path-from-shell-check-startup-files nil
+            exec-path-from-shell-arguments '("-l")
+            exec-path-from-shell-variables '("PATH" "LANG"))
+    (exec-path-from-shell-initialize))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 7. 起動性能のパラメータ
+  ;;; -------------------------------------------------------------------------
+
+  ;; LSP とサブプロセスの最適化
+  (setq read-process-output-max (* 4 1024 1024))
+  (setq process-adaptive-read-buffering nil)
+
+  ;; GCMH
+  ;; 注意: `gcmh-high-cons-threshold' は実行時に評価される式 `(* 128 1024 1024)' を
+  ;; 必要とする。`leaf :custom' は cdr 位置をそのままクォートするため、そこに S 式を
+  ;; 置くとリストのリテラルとして代入され、`gcmh-mode' の内部で
+  ;;   Wrong type argument: integerp, nil
+  ;; を引き起こす。代わりに `:config' 内で `setopt' により設定する。
+  (leaf gcmh
+    :straight t
+    :config
+    (setopt gcmh-idle-delay 5)
+    (setopt gcmh-high-cons-threshold (* 128 1024 1024))
+    (gcmh-mode 1))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 8. コア組み込み機能のポリシー
+  ;;; -------------------------------------------------------------------------
+
+  (leaf emacs
+    :straight nil
+    :custom
+    ((inhibit-startup-screen    . t)
+     (inhibit-startup-message   . t)
+     (initial-scratch-message   . nil)
+     (initial-major-mode        . 'fundamental-mode)
+     (use-short-answers         . t)
+     (create-lockfiles          . nil)
+     (ring-bell-function        . #'ignore)
+     (display-line-numbers-type . 'relative)
+     (frame-title-format        . t)
+     (confirm-kill-emacs        . #'y-or-n-p))
+    :hook
+    ((prog-mode-hook . display-line-numbers-mode))
+    :config
+    (when (fboundp 'window-divider-mode)
+      (window-divider-mode 1))
+    (when (fboundp 'pixel-scroll-precision-mode)
+      (pixel-scroll-precision-mode 1))
+    (when (fboundp 'electric-pair-mode)
+      (electric-pair-mode 1))
+    (dolist (k '("C-z" "C-x C-z" "C-x C-c"))
+      (keymap-global-unset k)))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 9. personal オーバーレイ
+  ;;; -------------------------------------------------------------------------
+
+  (defvar my:modules-extra nil)
+
+  (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
+         (personal (expand-file-name "personal/" root))
+         (user     (ignore-errors (user-login-name))))
+    (when (file-directory-p personal)
+      (add-to-list 'load-path personal))
+    (my/safe-load-file (expand-file-name "user.el" personal) t)
+    (when user
+      (my/safe-load-file
+       (expand-file-name (concat user ".el") personal) t)))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 10. modules のエントリポイント
+  ;;; -------------------------------------------------------------------------
+
+  (let* ((root     (or (bound-and-true-p my:d) user-emacs-directory))
+         (lisp-dir (expand-file-name "lisp/" root)))
+    (when (file-directory-p lisp-dir)
+      (add-to-list 'load-path lisp-dir))
+    (require 'modules nil t))
+
+  ;;; -------------------------------------------------------------------------
+  ;;; 11. 起動メトリクス
+  ;;; -------------------------------------------------------------------------
+
+  (defvar core--announce-startup-done nil
+    "Non-nil once the startup-ready message has been shown (daemon mode only).")
+
+  (defun core--announce-startup ()
+    "Report Emacs startup time and GC count to *Messages*."
+    (message "Emacs ready in %.2f seconds with %d GCs."
+             (float-time (time-subtract after-init-time before-init-time))
+             gcs-done))
+
+  ;; run-with-idle-timer をここで直接呼ぶと、init.el の実行中（emacs-startup-hook が
+  ;; 発火する *前*）にアイドルタイマーキューへ即座に登録されてしまう。一方、
+  ;; ui-visual-aids.el（pulsar）等の遅延ロードモジュールは emacs-startup-hook から
+  ;; 自分自身のアイドルタイマー（run-with-idle-timer 0 nil #'<module>--activate-*）を
+  ;; 登録する。同じ遅延0秒のアイドルタイマーは登録順に発火するため、ここで直接
+  ;; 登録すると「Emacs ready...」がそれらの有効化処理より *先* に出てしまう
+  ;; （起動完了サマリのつもりが、実際には最初に出力される）。
+  ;;
+  ;; 対策として、タイマーの登録自体を emacs-startup-hook の末尾（depth 100）へ回す。
+  ;; こうすることで、他のモジュールが emacs-startup-hook 内で自分のアイドルタイマーを
+  ;; 登録し終えた *後に* このタイマーが登録されるため、同じアイドルタイマーキューの
+  ;; 中でも最後に発火するようになる。これは非 daemon 起動（通常の `emacs' 起動）に
+  ;; 対する対策である。
+  (defun core--schedule-announce-startup ()
+    "Schedule `core--announce-startup' after other emacs-startup-hook timers.
+  Registering the idle timer directly at init.el load time would queue it
+  before the deferred-loading modules (ui-visual-aids, etc.) register
+  their own zero-delay idle timers from
+  `emacs-startup-hook', causing the ready message to print first instead
+  of last.  Deferring the registration itself to the tail of
+  `emacs-startup-hook' (depth 100) ensures those modules queue their
+  timers first."
+    (run-with-idle-timer 0 nil #'core--announce-startup))
+
+  ;; daemon モードでは上記の emacs-startup-hook 対策は無意味である。daemon 自体は
+  ;; 最初のクライアントが繋がるずっと前に初期化を終えるため、その時点で
+  ;; 「Emacs ready...」を出しても、まだ誰も見ていない *Messages* に記録されるだけで、
+  ;; Fonts applied: / [ui] nano-modeline initialized. / When done with this frame,
+  ;; type C-x 5 0（`emacsclient -c' の実接続時にのみ出る）はすべて、実際にクライアント
+  ;; フレームが接続した *ずっと後* に出る。つまり「起動完了」を報告するタイミングとして
+  ;; 意味があるのは daemon 初期化完了時ではなく、人間が実際にフレームを見られるように
+  ;; なった瞬間である。
+  ;;
+  ;; そこで daemon モードでは、メッセージの登録先を after-make-frame-functions に
+  ;; 切り替え、最初のクライアントフレームが接続した時点まで表示自体を遅らせる。
+  ;; after-init-time / gcs-done は daemon 初期化完了時点で既に確定した値なので、
+  ;; 「N.NN 秒」が指す内容（起動所要時間）そのものは変わらない。変わるのは
+  ;; メッセージを *出すタイミング* だけである。
+  ;;
+  ;; ui-font.el / ui-nano-modeline.el の daemon 分岐と同じ after-make-frame-functions
+  ;; に乗るが、それらより後に発火するよう depth 100 を指定する。さらに
+  ;; nano-modeline 側は `run-with-timer 0 nil' で 1 ティック遅らせてから
+  ;; 「[ui] nano-modeline initialized.」を出す（`core-runtime-run-on-first-graphic-frame'
+  ;; を参照。色の問い合わせにはフレーム実体化後のもう 1 ティックが必要なため）ので、
+  ;; こちらも同じだけ遅らせないと、depth 100 でも nano-modeline より先に出てしまう
+  ;; 可能性がある。複数フレームで繰り返し表示されないよう、初回発火時に自分自身を
+  ;; フックから取り除く（dirvish の自己解除型 advice と同じパターン）。
+  (defun core--announce-startup-on-first-frame (&optional _frame)
+    "Show the startup-ready message once the first client frame connects.
+  In daemon mode the daemon itself becomes ready long before any
+  `emacsclient -c' connects, so printing immediately at init time lands
+  in a log nobody is watching.  `after-init-time' and `gcs-done' are
+  already fixed at that point, so the reported duration is unaffected;
+  only the timing of the print is deferred, to when a human can actually
+  see the frame.  Runs once only (removes itself from
+  `after-make-frame-functions' on first invocation)."
+    (unless core--announce-startup-done
+      (setq core--announce-startup-done t)
+      (remove-hook 'after-make-frame-functions #'core--announce-startup-on-first-frame)
+      (run-with-timer 0 nil #'core--announce-startup)))
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'core--announce-startup-on-first-frame 100)
+    (add-hook 'emacs-startup-hook #'core--schedule-announce-startup 100))
+
+  (provide 'init)
+  ;;; init.el ends here
+#+end_src
+
+* Modular Loader & Core Module Suite
+:PROPERTIES:
+:CUSTOM_ID: modular-loader-and-core-suite
+:END:
+
+** Overview
+
+このセットアップの中心にあるのは、「厳格に層化され、順序が明示されたモジュールロード」という
+考え方です。
+
+共有される挙動は、集中管理されたエントリポイントからしか有効になりません。モジュールが暗黙に
+発見されたり、ディレクトリ走査で拾われたりすることはありません。目指しているのは、決定論的で、
+再現可能で、そして点検可能な起動です。
+
+** Authoritative Entry Point
+
+=modules.el= が定義するのは次の 4 つです。
+
+- 順序付きのモジュールリスト
+- エラーを隔離したロード
+- スキップと拡張の機構
+- ロード時間の計測診断
+
+含まれるのはオーケストレーションだけで、機能ロジックは個々のモジュール側にあります。
+
+** Module Constraints
+
+決定論性を保つため、ローダは次のことを *しません* 。
+
+- ディレクトリ走査
+- ワイルドカード展開
+- 環境依存の条件分岐
+- 個人・ホスト固有のロジック
+
+そして各モジュールの側には、次の 4 つを求めます。
+
+- feature をちょうど 1 つ provide する
+- 冪等である
+- 制御されないグローバルな副作用を持たない
+- バッチ、バイトコンパイル、native-comp、デーモンのいずれの文脈でも安全である
+
+** Loader Non-Responsibilities
+
+逆に、ローダが引き受けないものも明示しておきます。
+
+- ブートストラップやパッケージの初期化
+- ランタイム基盤の確立
+- フック、advice、キーバインド、UI 挙動の定義
+- ユーザー・ホスト固有のポリシー
+
+ローダの役割はオーケストレーション、ただ一つです。ここに機能を足したくなったら、それは
+たいてい別の層に置くべきものです。
+
+** Benefits
+
+この方式の見返りは次のとおりです。
+
+- 起動が点検可能になる
+- 依存関係の流れが予測可能になる
+- 診断出力が制御可能になる
+- コンパイルが安定する
+- 層を安全に削除できる（利便性は失われても、正しさは保たれる）
+
+** modules.el
+:PROPERTIES:
+:CUSTOM_ID: modules-el
+:header-args:emacs-lisp: :tangle ../lisp/modules.el
+:END:
+
+*** modules.el Design Notes
+
+=modules.el= は中央のオーケストレーション層です。削除安全性と決定論的な起動という 2 つの
+柱を、実際に実装しているのがこのファイルです。
+
+*モジュール定義とスキップ機構*
+
+=my:modules-skip= と =my:modules-extra= は =defcustom= として宣言してあります。したがって
+=customize= UI からも設定できますし、 =personal/<user>.el= で =setopt= により上書きすることも
+できます。
+
+たとえば =my:modules-skip= に ='(dev-docker dev-music)= を加えれば、それらは静かにスキップ
+されます。逆に =my:modules-extra= は、ロードシーケンスの末尾に個人用モジュールを足すための
+枠です。
+
+*ロード順に関する例外 — なぜ personal 側では setq なのか*
+
+ここは少し込み入っているので、順を追って説明します。
+
+=personal/user.el= は =my:modules-extra= を =setopt= ではなく =setq= で代入しています。
+「 =defcustom= には =setopt= 」というコーディング規則の例外に見えますが、これは正しい実装です。
+
+理由はロード順にあります。personal オーバーレイは =init.el= のセクション 9 で読み込まれ、
+これは =modules.el= を require するセクション 10 より *前* です。つまりオーバーレイが走る
+時点では、上記の =defcustom= はまだ評価されていません。有効な束縛は =init.el= 内の素の
+=(defvar my:modules-extra nil)= だけ、という状態です。
+
+したがってこの =defvar= はロード順に対して決定的に重要であり、「重複しているように見える」
+という理由で削除してはいけません。 =defcustom= は後からシンボルを再宣言しますが、
+オーバーレイが既に追記した値を上書きすることはないので、両者は共存します。
+
+*エラーを隔離したロード（削除安全性の実装）*
+
+ローダは =condition-case= で =error= シグナルを捕捉します。そのため、あるモジュールの読み込みが
+失敗しても、後続のロードが止まることはありません。「削除しても壊れない」という設計原則は、
+ここで実際に担保されています。
+
+一点だけ注意があります。 =condition-case= が捕捉するのは =error= シグナルだけで、 =quit=
+（ =C-g= ）はそのまま伝播します。ユーザーが起動を中断したいときに、それを握りつぶさないため
+です。
+
+[[file:../svg/02_condition_case.svg]]
+
+*ロード計測と診断*
+
+=my:modules-verbose= が非 nil のとき、各モジュールのロード時間がミリ秒単位で報告されます。
+どのモジュールが重いのかが一目で分かるので、起動が遅くなったと感じたらまずここを見てください。
+
+出力の =%-24s= はモジュール名を 24 文字幅で左寄せするための指定です。
+=(current-time)= 、 =float-time= 、 =time-subtract= を組み合わせることで、ミリ秒未満の精度が
+得られます。
+#+begin_src emacs-lisp
+  ;;; lisp/modules.el --- モジュール構成のローダ -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: core
+  ;;
+  ;;; Commentary:
+  ;; lisp/ 配下のモジュール構成をロードするための中央エントリポイント。
+  ;;
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+  (require 'seq)
+
+  (defgroup my:modules nil
+    "Loader options for modular Emacs configuration."
+    :group 'convenience)
+
+  (defcustom my:modules-verbose t
+    "If non-nil, print per-module load time and a summary."
+    :type 'boolean
+    :group 'my:modules)
+
+  (defcustom my:modules-skip nil
+    "List of module features to skip during loading."
+    :type '(repeat symbol)
+    :group 'my:modules)
+
+  (defcustom my:modules-extra nil
+    "List of extra module features to append after `my:modules`."
+    :type '(repeat symbol)
+    :group 'my:modules)
+
+  (defconst my:modules
+    '(
+      ;; -----------------------------------------------------------------------
+      ;; Core（ランタイム不変条件、基盤、ポリシー）
+      ;; -----------------------------------------------------------------------
+      core-policy
+      core-gc
+      core-persistence
+      core-runtime
+      core-treesit
+      core-history
+      core-editing
+      core-autosave
+      core-dired
+      core-switches
+      core-custom
+      core-native
+
+      ;; -----------------------------------------------------------------------
+      ;; UI（UX のみ。削除安全）
+      ;; -----------------------------------------------------------------------
+      ui-font
+      ui-bundles
+      ui-theme-variant
+      ui-theme
+      ui-window
+      ui-utils
+      ui-health-modeline
+      ui-imenu
+      ui-leader
+      ui-hydra
+      ui-which-key
+      ui-keyboard
+      ui-keymap
+      ui-dirvish-keys
+      ui-global-keys
+
+      ;; -----------------------------------------------------------------------
+      ;; Auth（シークレット、auth-source。削除安全）
+      ;; -----------------------------------------------------------------------
+      auth-core
+      auth-gpg
+      auth-keychain
+
+      ;; -----------------------------------------------------------------------
+      ;; Completion（補完）
+      ;; -----------------------------------------------------------------------
+      completion-core
+      completion-vertico
+      completion-consult
+      completion-embark
+      completion-corfu
+      completion-icons
+      completion-capf
+      completion-org-src
+      completion-lsp
+
+      ;; -----------------------------------------------------------------------
+      ;; Org エコシステム
+      ;; -----------------------------------------------------------------------
+      orgx-core
+      orgx-agenda
+      orgx-visual
+      orgx-extensions
+      orgx-fold
+      orgx-export
+      orgx-notes-markdown
+      orgx-auto-tangle
+      orgx-hugo
+      orgx-auto-hugo
+
+      ;; -----------------------------------------------------------------------
+      ;; VCS（バージョン管理）
+      ;; -----------------------------------------------------------------------
+      vcs-core
+      vcs-magit
+      vcs-gutter
+      vcs-forge
+
+      ;; -----------------------------------------------------------------------
+      ;; Dev（開発ツール）
+      ;; -----------------------------------------------------------------------
+      ;; dev-lsp-bridge は LSP 抽象化のファサードである（code-actions、rename、format の
+      ;; バックエンド非依存なディスパッチ・ラッパー）。最初にロードすることで、
+      ;; personal オーバーレイが特定のバックエンド（dev-lsp-eglot、dev-lsp-mode）に依存せずに
+      ;; dev-lsp-* コマンドをバインドできる。M-SPC c a/r/f への割り当ては本モジュール自身が行う。
+      ;; 具体的なバックエンドは core-switches が after-init-hook で遅延的に有効化する。
+      dev-lsp-bridge
+      dev-ai
+      dev-term
+      dev-web-core
+      dev-build
+      dev-format
+      dev-infra-modes
+      dev-docker
+      dev-music
+      dev-sql
+      dev-rest
+      dev-radare2
+      dev-navigation
+      dev-tools
+
+      ;; -----------------------------------------------------------------------
+      ;; Utils（ユーティリティ）
+      ;; -----------------------------------------------------------------------
+      utils-buffers
+      utils-edit
+      utils-dired
+      utils-ime
+      utils-functions
+      utils-lint
+      utils-diagnostics
+      utils-scratch
+      )
+    "Default set of modules to load in order.")
+
+  (defun modules--should-load-p (feature)
+    "Return non-nil if FEATURE should be loaded."
+    (not (memq feature my:modules-skip)))
+
+  (defun modules--require-safe (feature)
+    "Require FEATURE with error trapping."
+    (condition-case err
+        (progn (require feature) t)
+      (error
+       (message "[modules] Failed to load %s: %s"
+                feature (error-message-string err))
+       nil)))
+
+  ;; my:modules--format-seconds → modules--format-seconds に改名した。
+  ;; 理由: `my:' 接頭辞はディレクトリ／パス変数（my:d、my:d:var 等）に予約されている。
+  ;; 公開コマンドは `my/'、非公開関数は `モジュール名--' の接頭辞を用いる。命名を一貫させる
+  ;; ことで、どちらの規約で grep しても混乱しなくなる。
+  (defun modules--format-seconds (sec)
+    "Format SEC in a compact human-readable form."
+    (cond
+     ((< sec 0.001) (format "%.3fms" (* sec 1000.0)))
+     ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
+     (t             (format "%.2fs"   sec))))
+
+  (defun my/modules-load ()
+    "Load all modules defined by `my:modules`, respecting options."
+    (let* ((all (append my:modules my:modules-extra))
+           (final (seq-remove (lambda (m) (not (modules--should-load-p m))) all))
+           (skipped (seq-remove (lambda (m) (memq m final)) all))
+           (ok 0) (ng 0)
+           (failed '())
+           (t0 (and my:modules-verbose (current-time))))
+      (dolist (mod final)
+        (let ((m0 (and my:modules-verbose (current-time))))
+          (if (modules--require-safe mod)
+              (setq ok (1+ ok))
+            (setq ng (1+ ng))
+            (push mod failed))
+          (when my:modules-verbose
+            (message "[modules] %-24s %s"
+                     mod
+                     (modules--format-seconds
+                      (float-time (time-subtract (current-time) m0)))))))
+      (when my:modules-verbose
+        (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
+                 ok (length skipped) ng
+                 (modules--format-seconds
+                  (float-time (time-subtract (current-time) t0))))
+        (when skipped
+          (message "[modules] skipped (%d): %s"
+                   (length skipped)
+                   (mapconcat #'symbol-name (nreverse skipped) " ")))
+        (when failed
+          (message "[modules] failed  (%d): %s"
+                   (length failed)
+                   (mapconcat #'symbol-name (nreverse failed) " "))))
+      ok))
+
+  (my/modules-load)
+
+  (provide 'modules)
+  ;;; modules.el ends here
+#+end_src
