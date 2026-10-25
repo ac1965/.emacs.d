@@ -230,6 +230,7 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
   は core 層にあり、これらのモジュール名を知らない）。`ui-nano-palette` は `ui-theme` 経由
 - LSP バックエンド（`eglot` / `lsp-mode`。切り替えを吸収するファサードが `dev-lsp-bridge`）は
   `core-switches` で選択する。コードはバックエンド非依存を保つこと
+- キー操作のモジュール（`ui-keyboard` / `ui-keymap` / `ui-leader` / `ui-global-keys` / `ui-dirvish-keys` / `ui-hydra` / `ui-which-key`）は、2026-10-13 に接頭辞との食い違いを解消するため意図して分割した。**集約しない**（2026-10-25 に検討して見送った。`ui-keymap-bind` や `ui-leader-*-map` などの公開 API と、`after-init-hook` の depth の順序という暗黙の契約があり、得られるのはファイル数の減少だけで、キーが静かに消えるリスクが上回るため）
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
   このリポジトリには存在しない。存在すると仮定しないこと。
   ただし mu4e だけは `personal/ac1965.el` の leaf で設定している（モジュールではない）
@@ -447,12 +448,13 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 | `make check-fboundp-guards` | `(fboundp 'X)` でガードされた呼び出しを、実際には解決できないシンボルの `#'X` 参照と照合（Python 製。事前の tangle が必要） |
 | `make check-modules` | `lisp/modules.el` の一覧と `lisp/` 配下の整合性（実在・`provide`・層の順序・上位層への `require`・どちらにも載らない `.el`）を、Emacs なしで検査（Python 製） |
 | `make check-orphans` / `make clean-orphans` | `lisp/`・`personal/`・`scripts/` の `.el`・`.elc`・`.py`・`.sh` のうち、どの Org 文書も tangle しないもの（孤立した生成物）を一覧する（あれば失敗）／削除する。本体は `scripts/orphans.el`。tangle 先を 20 件未満しか取れないときは何も消さない |
+| `make verify` | `lint` + `check-bytecomp` + `check-cheatsheet` をまとめて実行する、コミット前の確認用。後の 2 つは約 40 秒ずつかかるため `lint` には含めず、ここでまとめる |
 | `make stats` | 層ごとのファイル数・行数・コメント率を表示。本書の数値を更新するときの根拠にする（Python 製） |
 | `make checkdoc` | Elisp の docstring/スタイルチェック |
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |
 | `make cheatsheet` / `make check-cheatsheet` | キーバインド一覧 `svg/emacs_keybindings_cheatsheet.svg` を、init を読み込んだ Emacs の実際のキーマップから書き直す / 書き出さずに、コミット済みの SVG が今のキーマップと同じかを調べる（違えば終了コード 1）。約 40 秒かかるため `lint` には含めない。本体は `scripts/cheatsheet.el` |
 | `make check-bytecomp` | `early-init.el` と `init.el` を読み込んだ Emacs で、`lisp/`・`personal/`・`early-init.el`・`init.el` をすべてバイトコンパイルし、警告があれば一覧して終了コード 1 で終わる。読み込めずコンパイルに失敗したファイルと、init の後でロードされていないモジュールも警告に数える（出力は一時ディレクトリで `.elc` は作らない。約 40 秒かかるため `lint` には含めない。本体は `scripts/check-bytecomp.el`） |
-| `make stage` | `TRACKED`（`README.org`, `org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す |
+| `make stage` | `TRACKED`（`README.org`, `org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す。`TRACKED` の外にある追跡済みファイルの**削除**（名前変更の旧パスを含む）は、中止の対象にしない |
 
 `make help` の `make lint` の説明行は、`check-fboundp-guards` を含む形に直した
 （2026-10-12）。それでも、実際の `lint` の依存は上の表と

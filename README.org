@@ -1243,6 +1243,10 @@ git diff README.org   # 差分を確認してコミットする
    fi
 
   # ---- stage : 追跡対象だけを stage する ------------------------------------------
+  # 中止の判定には、削除（--diff-filter=d で除外）を含めない。TRACKED の外にあるファイルの削除は、
+  # 以前追跡していたファイルを消した意図の変更である（例: tools.org を org/tools.org へ移したときの、
+  # 旧パスの削除）。除外パターンを付けると Git が名前変更の対応を組めず、旧パスが「外のファイルの
+  # ステージ」に見えてしまうため、削除は見ない。追加・変更が TRACKED の外にあれば、従来どおり中止する。
   # このリポジトリで git が追跡するのは README.org などの少数のファイルだけで、
   # それ以外（lisp/ personal/ scripts/ Makefile ChangeLog など）は tangle の生成物として
   # .gitignore されている。`git add .` は .gitignore にまだ書いていない新規ファイルまで
@@ -1255,7 +1259,7 @@ git diff README.org   # 差分を確認してコミットする
   .PHONY: stage
   stage:
 	@git add -A -- $(TRACKED)
-	@bad=$$(git diff --cached --name-only -- . $(foreach f,$(TRACKED),':(exclude)$(f)')); \
+	@bad=$$(git diff --cached --name-only --diff-filter=d -- . $(foreach f,$(TRACKED),':(exclude)$(f)')); \
   	if [ -n "$$bad" ]; then \
   	  echo "[stage] TRACKED の外のファイルがステージされています:"; echo "$$bad"; exit 1; \
   	fi
@@ -1296,6 +1300,7 @@ git diff README.org   # 差分を確認してコミットする
 	@echo "  make check-fboundp-guards     # (fboundp 'X) ガードと #'X 参照の整合性を検査"
 	@echo "  make check-modules            # modules.el の一覧・層の順序・provide・未登録 .el を検査"
 	@echo "  make check-orphans            # tangle 先から外れた生成物（古い .el など）を一覧"
+	@echo "  make verify                   # lint + check-bytecomp + check-cheatsheet（コミット前の確認）"
 	@echo "  make clean-orphans            # 上の生成物を削除（reload の最後の段で自動実行）"
 	@echo "  make stats                    # 層ごとのファイル数・行数・コメント率を表示"
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
@@ -1550,10 +1555,19 @@ git diff README.org   # 差分を確認してコミットする
   stats:
 	@python3 scripts/stats.py "$(ROOT)"
 
+  # Emacs の標準エラーは、通常は雑音（Batch mode does not support ... の警告や、[modules] の行）なので捨てる。
+  # ただし終了コードが 2 以上（Lisp のエラーは 255）のときは、雑音を除いて末尾を表示する。
+  # 終了コード 1 は通常の結果である（check-bytecomp は警告あり、check-cheatsheet は差分あり）。
+  EMACS_NOISE_RE := ^\[modules\]\|^Loading\|Batch mode does not support
+
   .PHONY: check-bytecomp
   check-bytecomp:
 	@echo "[check-bytecomp] byte-compiling (init を読み込むため約 40 秒かかる) ..."
-	@ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/check-bytecomp.el" 2>/dev/null
+	@err=$$(mktemp); \
+  	  ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/check-bytecomp.el" 2>"$$err"; rc=$$?; \
+  	  if [ $$rc -gt 1 ]; then echo "[check-bytecomp] Emacs が異常終了しました (終了コード $${rc})。標準エラーの末尾:" >&2; \
+  	    grep -v '$(EMACS_NOISE_RE)' "$$err" | tail -20 >&2; fi; \
+  	  rm -f "$$err"; exit $$rc
 
   # ---- cheatsheet : キーバインド一覧の SVG を、実際のキーマップから作る ---------------
   # init を読み込んだ Emacs でキーマップを読み、svg/emacs_keybindings_cheatsheet.svg を
@@ -1562,9 +1576,25 @@ git diff README.org   # 差分を確認してコミットする
   # 本体は scripts/cheatsheet.el（org/tools.org の Appendix: cheatsheet.el を参照）。
   .PHONY: cheatsheet check-cheatsheet
   cheatsheet:
-	@ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/cheatsheet.el" 2>/dev/null
+	@err=$$(mktemp); \
+  	  ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/cheatsheet.el" 2>"$$err"; rc=$$?; \
+  	  if [ $$rc -gt 1 ]; then echo "[cheatsheet] Emacs が異常終了しました (終了コード $${rc})。標準エラーの末尾:" >&2; \
+  	    grep -v '$(EMACS_NOISE_RE)' "$$err" | tail -20 >&2; fi; \
+  	  rm -f "$$err"; exit $$rc
   check-cheatsheet:
-	@ROOT="$(ROOT)" CHEATSHEET_CHECK=1 $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/cheatsheet.el" 2>/dev/null
+	@err=$$(mktemp); \
+  	  ROOT="$(ROOT)" CHEATSHEET_CHECK=1 $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/cheatsheet.el" 2>"$$err"; rc=$$?; \
+  	  if [ $$rc -gt 1 ]; then echo "[check-cheatsheet] Emacs が異常終了しました (終了コード $${rc})。標準エラーの末尾:" >&2; \
+  	    grep -v '$(EMACS_NOISE_RE)' "$$err" | tail -20 >&2; fi; \
+  	  rm -f "$$err"; exit $$rc
+
+  # ---- verify : コミット前の確認をまとめて実行する -------------------------------------
+  # lint（静的チェック）、check-bytecomp（バイトコンパイル警告）、check-cheatsheet（キーバインド一覧 SVG が
+  # 実際のキーマップと同じか）。後の 2 つは約 40 秒ずつかかるため lint には入れず、ここでまとめる。
+  # キーを入れる関数を足したのに一覧 SVG を作り直していない、といった食い違いを、コミット前に見つける。
+  .PHONY: verify
+  verify: lint check-bytecomp check-cheatsheet
+	@echo "[verify] all checks passed"
 
   # ---- lint : check-tangle + check-emphasis + check-cookies + check-fboundp-guards + check-modules + check-orphans +
   # checkdoc をまとめて実行 -----------------------------------------------------------
@@ -2117,6 +2147,13 @@ digraph personal_override_contract {
 	* org/tools.org (Appendix: demo.png) (demo-scene-layout, demo-scene-vertico, compose.py): 分割で README.org が小さくなったため、
 	layout 場面の左パネルを org/ui.org、vertico 場面の背景を org/completion.org に改め、合成画像の見出しも
 	org/ui.org → lisp/*.el → make lint にした。demo.png を撮り直した。パネルは 4 枚のまま。
+	* README.org (Makefile) (stage): 中止の判定から削除を除いた（git diff --diff-filter=d）。TRACKED の外のファイルの削除は、以前追跡していた
+	ファイルを消した意図の変更で、tools.org を org/tools.org へ移したときのように、名前変更の旧パスが「外のファイルのステージ」に見えて
+	中止していた。追加・変更が TRACKED の外にあれば、従来どおり中止する。
+	* README.org (Makefile) (check-bytecomp, cheatsheet, check-cheatsheet): Emacs の標準エラーを捨てていて、失敗しても理由が見えなかったため、
+	終了コードが 2 以上（Lisp のエラーは 255）のときだけ、雑音を除いた末尾を表示するようにした。終了コード 1 は通常の結果として扱う。
+	* README.org (Makefile) (verify): lint、check-bytecomp、check-cheatsheet をまとめたコミット前の確認用ターゲットを追加した。
+	* AGENTS.md: キー操作のモジュールを集約しない、という決定（2026-10-25 に検討して見送り）を §3 に残した。make verify を §8 の表に加えた。
 	* org/tools.org (Appendix: cheatsheet.el) (cheatsheet--install, cheatsheet--binder-functions): キーを入れる関数を ui-keymap--startup-init と
 	ac1965--bind-leader-keys の 2 つだけ呼んでいたため、後から別のモジュールへ移した M-SPC k（utils-buffers）、M-SPC c a / r / f（dev-lsp-bridge）、
 	M-SPC a a（dev-apple-music）が、実際のキーマップにあるのに一覧から消えていた。after-init-hook でキーを入れる関数を一覧にして呼ぶようにし、
