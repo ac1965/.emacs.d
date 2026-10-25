@@ -40,9 +40,9 @@
 
 これは、Org Mode と Babel を使ったリテラルプログラミング方式の Emacs 設定です。
 
-普通の Emacs 設定は =.el= ファイルの集まりですが、この設定では =README.org= 一枚がすべての
-出発点になります。ここに書いたソースブロックが tangle され、 =.el= ファイルとして書き出される
-という仕組みです。
+普通の Emacs 設定は =.el= ファイルの集まりですが、この設定では =README.org= と =org/= 配下の
+Org 文書がすべての出発点になります。ここに書いたソースブロックが tangle され、 =.el= ファイルとして
+書き出されるという仕組みです。
 
 [[file:svg/tangle-flow.svg]]
 
@@ -66,7 +66,7 @@
 - *削除しても壊れない構成* — どのモジュールを消しても、残りは動き続けること
 - *組み込み優先* — Emacs 31 の組み込み機能があるなら、自作の等価物より必ずそちらを使う
 - *長期的な保守性* — 数年単位で育て続けられること
-- *LSP バックエンド非依存* — eglot / lsp-mode / lsp-bridge を差し替え可能にすること
+- *LSP バックエンド非依存* — eglot / lsp-mode を差し替え可能にすること（呼び出しは =dev-lsp-bridge= のファサードを通す）
 
 [[file:demo.png]]
 
@@ -76,9 +76,9 @@
 :END:
 
 リポジトリは https://github.com/ac1965/.emacs.d です。 =git clone= した直後は
-=README.org= しか設定の実体がありません。 =early-init.el= 、 =init.el= 、 =lisp/= 、
-=personal/= 、 =Makefile= はすべて README.org からの tangle 生成物で、 =.gitignore=
-対象だからです。そのため、clone のあとに *tangle する* 作業が必須になります。
+Org 文書（ =README.org= と =org/*.org= ）しか設定の実体がありません。 =early-init.el= 、
+=init.el= 、 =lisp/= 、 =personal/= 、 =scripts/= 、 =Makefile= はすべてこれらからの tangle 生成物で、
+=.gitignore= 対象だからです。そのため、clone のあとに *tangle する* 作業が必須になります。
 
 1. 既存の =~/.emacs.d= があれば退避し、clone する。
 
@@ -203,7 +203,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 - 下位層は上位層に依存してはならない
 - 依存関係の自動探索は行わない
 - すべての副作用は明示的である
-- LSP バックエンド（eglot / lsp-mode / lsp-bridge）は =core-switches= で選択する
+- LSP バックエンド（eglot / lsp-mode）は =core-switches= で選択する
 
 最後の一つは、この不変条件の効き目がよく分かる例です。 =core= 層にいる =core-switches= は
 登録簿だけを持ち、バックエンドの名前を知りません。 =dev= 層の =dev-lsp-bridge= と =ui= 層の
@@ -274,10 +274,10 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 
 責務:
 
-- ネイティブコンパイルの診断と =eln-cache= 設定（ =core-native= ）
+- ネイティブコンパイルの警告の収集・診断・報告（ =core-native= 。 =eln-cache= の配置は =early-init.el= ）
 - Tree-sitter 文法の管理（ =core-treesit= ）
-- セッション永続化、履歴、バックアップ、自動保存ポリシー
-  （ =core-history= 、 =core-persistence= 、 =core-autosave= 、 =core-editing= ）
+- 履歴とセッション（ =core-history= ）、古いバックアップの削除（ =core-persistence= ）、
+  自動保存とバックアップ（ =core-autosave= ）、編集まわりの既定（ =core-editing= ）
 - dired の dirvish への置き換え（ =core-dired= ）
 - 明示的な契機での GC（ =core-gc= ）と OS ごとの修飾キー変数・初回フレーム用ヘルパー（ =core-runtime= ）
 - custom-file の管理（ =core-custom= ）と LSP/UI バックエンドの選択（ =core-switches= ）
@@ -312,6 +312,7 @@ policy は「どう書くか」を決めるだけの層なので、UI やパッ�
   doom-themes のテーマ、 =none= なら Emacs の既定）
 - ウィンドウ挙動
 - UI ヘルパーとリーダーキー基盤
+- UI バンドル（doom / nano / doom-nano）を =core-switches= の登録簿へ登録する（ =ui-bundles= ）
 
 [[file:svg/emacs_keybindings_cheatsheet.svg]]
 
@@ -339,17 +340,18 @@ orderless フィルタの適用を、 =org-src-mode-hook= に登録する 4 つ�
 
 責務:
 
-- =auth-source= バックエンドの設定
-- EasyPG によるファイル暗号化サポート
-- =pass= ベースの資格情報参照
-- 環境変数の検証
+- =auth-source= バックエンドの設定（ =auth-gpg= ）。暗号化された =~/.authinfo.gpg= を先頭に置く
+- EasyPG によるファイル暗号化サポート（ =auth-core= ）
+- =pass= ベースの資格情報参照（ =auth-core= 。 =pass= が実行ファイルとして存在するときだけ有効）
+- 環境変数の検証（ =auth-core= 。確かめるのは =GPG_KEY_ID= だけで、無ければ警告する）
+- 診断コマンド（ =my/auth-gpg-verify= 、 =my/auth-gpg-init-template= 、 =my/auth-keychain-verify= ）
 
 auth も ui 層に依存してはいけません。
 
 *Keychain バックエンドの扱い*
 
 macOS では Keychain バックエンド（ =auth-keychain= ）を、 =personal/device-darwin.el= が有効化します
-（=auth-keychain-enable= 自体の既定値は =nil= ）。無効にしたい場合は、モジュールのロード前に personal 層で
+（=auth-keychain-enable= 自体の既定値は =nil= ）。macOS 以外では、このモジュールは何もしません。無効にしたい場合は、モジュールのロード前に personal 層で
 =auth-keychain-enable= を上書きしてください。
 
 *** orgx
@@ -357,7 +359,7 @@ macOS では Keychain バックエンド（ =auth-keychain= ）を、 =personal/
 Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 =auth= 、 =completion= のみに
 依存し、 =vcs= や =dev= には依存しません。
 
-本層は 13 モジュールで構成されます。 =my:modules= に含まれる正規モジュールは 9 つです。
+本層は 14 モジュールで構成されます。 =my:modules= に含まれる正規モジュールは 10 です。
 残る 4 つ（ =orgx-typography= 、 =orgx-brain= 、 =orgx-roam-ui= 、 =orgx-citar= ）はオプション
 拡張です。このうち =orgx-typography= 、 =orgx-brain= 、 =orgx-citar= は =personal/user.el= が
 =my:modules-extra= に宣言します。 =orgx-roam-ui= は tangle されますが、既定では
@@ -372,7 +374,8 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
   アーカイブ先、 =after-init-hook= によるアジェンダ再構築（フェーズ 2）
 - =orgx-agenda= — キャッシュ付き再帰スキャンによる =org-agenda-files= の生成（ =orgx-core= が after-init で呼ぶ）
 - =orgx-extensions= — =org-journal= （journal ディレクトリ）、 =org-roam= （DB の
-  配置、コネクタ、5 秒アイドルタイマーによる autosync、file-hash ガードの advice）、
+  配置、コネクタ、 =M-x my/org-roam-autosync-enable= で有効にする autosync（起動時には自動で有効にしない）、
+  file-hash ガードの advice）、
   =org-download= （画像ディレクトリ）、 =toc-org= 、 =org-cliplink=
 - =orgx-visual= — =org-modern= の表示変数（TODO フェイス、リスト／チェックボックス／
   優先度の記号、見出しの星）、アジェンダのグリッド、カスタムフェイス、
@@ -394,7 +397,7 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
   =consult-notes= 統合（ =consult-notes-file-dir-sources= を =:config= 内の =setopt=
   で設定）、画像用の  =org-download= 統合。コマンドは =my/notes-new-note= 、
   =my/notes-open-root= 、 =my/notes-consult-ripgrep=
-- =orgx-auto-tangle= — =README.org= に限り、 =after-save-hook= で =org-babel-tangle=
+- =orgx-auto-tangle= — このリポジトリの Org 文書（ =README.org= と =org/*.org= ）に限り、 =after-save-hook= で =org-babel-tangle=
   を自動実行する。サードパーティの =org-auto-tangle= パッケージは使用せず、
   =ob-tangle= を直接呼ぶ独自実装。再帰ループ防止のためバッファローカルな
   実行中フラグでガードしている
@@ -445,8 +448,10 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
 責務:
 
 - 組み込み =vc= のポリシー（ =vcs-core= ）: 非同期チェックイン、公開済み履歴の保護、
-  =vc-auto-revert-mode= 、VC Directory の整理、smerge の自動有効化
-- Magit の設定
+  =vc-auto-revert-mode= 、VC Directory の整理（ =vc= の設定は Emacs 31 以降のみ）。
+  衝突マーカーを含むファイルでの smerge の自動有効化は、バージョンによらず働く
+- Magit の設定（ =vcs-magit= ）: ステータスの全画面表示、 =bury= 時のウィンドウ構成の復元、
+  Ediff の制御パネルを別フレームにしない設定
 - ガター差分表示（diff-hl）
 - GitHub/GitLab の Forge 統合
 
@@ -458,8 +463,8 @@ vcs は dev 層に依存してはいけません。
 
 責務:
 
-- LSP バックエンド（eglot、lsp-mode、lsp-bridge）
-- AI 支援編集（aidermacs、gptel）
+- LSP バックエンド（eglot、lsp-mode）と、その切り替えを吸収するファサード（ =dev-lsp-bridge= ）
+- AI 支援編集（aidermacs。 =dev-ai= ）
 - ターミナル統合（vterm）
 - コード整形（apheleia）
 - ビルド・Docker・SQL・REST・インフラ系ファイルのモード・プロジェクト基盤・検索／ナビゲーション
@@ -467,6 +472,8 @@ vcs は dev 層に依存してはいけません。
   =dev-web-core= 、 =dev-navigation= 、 =dev-tools= ）
 - radare2 によるバイナリ解析（ =dev-radare2= ）
 - EMMS による音楽プレイヤー統合（ =dev-music= ）
+- osascript による Apple Music の操作（ =dev-apple-music= 。macOS のみ。 =personal/device-darwin.el= が =my:modules-extra= に加える）
+- LSP バックエンドを =core-switches= の登録簿へ登録する（ =dev-lsp-bridge= ）
 
 なお、Org Babel と Claude API を組み合わせたワークフローは =personal/personal-ai.el= にあり、
 HTTP 通信は =utils/utils-claude.el= に依存します。AI 関連がすべて dev 層にあるわけではない
@@ -499,8 +506,10 @@ HTTP クライアントを介さずプロセス起動のみで完結するため
 ユーザー固有のカスタマイズです。
 
 - 任意（無くてもシステムは動く）
-- 依存の向きでは最上位。ただし =user.el= と =<ユーザー名>.el= は =modules.el= より前に読み込まれ、変数の上書きだけを行う
+- 依存の向きでは最上位。ただし =user.el= と =<ユーザー名>.el= は =modules.el= より前に読み込まれ、変数の上書きと =my:modules-extra= への追加を行う
 - 下位層の関数やモジュールを書き換えてはならない（上書きしてよいのは =defvar= / =defcustom= の値だけ）
+- 利用者固有の機能（ =personal-llm= のコマンド、 =personal-messages= の定期実行、 =device-wsl= のクリップボード連携など）は、
+  自前のコマンドやフックを持ってよい。下位層の関数を置き換えるのではなく、足すだけにする
 
 ** Module Structure
 :PROPERTIES:
@@ -2103,6 +2112,20 @@ digraph personal_override_contract {
 	* org/tools.org (Appendix: demo.png) (demo-scene-layout, demo-scene-vertico, compose.py): 分割で README.org が小さくなったため、
 	layout 場面の左パネルを org/ui.org、vertico 場面の背景を org/completion.org に改め、合成画像の見出しも
 	org/ui.org → lisp/*.el → make lint にした。demo.png を撮り直した。パネルは 4 枚のまま。
+	* README.org (Layer Definitions: core, auth, vcs, dev, orgx, personal): 散文の説明を、コードの挙動に合わせて直した。core-native は
+	eln-cache を設定せず警告の収集・報告をする（eln-cache の配置は early-init.el）、core-persistence は古いバックアップの削除、
+	orgx-extensions の org-roam autosync は 5 秒タイマーではなく M-x my/org-roam-autosync-enable で有効にする、dev 層に gptel は無い、
+	LSP バックエンドは eglot と lsp-mode の 2 つで lsp-bridge パッケージは使っていない（dev-lsp-bridge は切り替えを吸収するファサード）、
+	auth の pass は実行ファイルがあるときだけ有効で環境変数の検証は GPG_KEY_ID のみ、vcs の vc 設定は Emacs 31 以降のみ、personal 層は
+	変数の上書きだけでなく自前のコマンドやフックも持つ、と直した。AGENTS.md の LSP バックエンドの記述も同様に直した。
+	* org/personal.org (Overview): <login>.el の目的に GPG_KEY_ID の export、my:d:org の上書き、mu4e を、device-wsl.el にリーダーキー切替を加えた。
+	* README.org (Overview, Installation, Layer Definitions): README.org 1 枚を出発点とする記述を、README.org と org/*.org に改めた。orgx 層を
+	14 モジュール（my:modules は 10）、ui 層に ui-bundles、dev 層に dev-apple-music と dev-lsp-bridge の登録を、説明に加えた。
+	orgx-auto-tangle の対象も README.org だけではなく org/*.org を含むと直した。
+	* org/tools.org (Appendix: check_emphasis.py, reload.py, update_build_info.py): make check-emphasis が README.org と org/*.org の
+	すべてを渡すこと、reload.py が org/*.org と孤立した生成物の削除も行うこと、dev-tools.el の生成元が org/dev.org であることを直した。
+	* org/orgx.org, org/ui.org, org/utils.org (orgx-auto-hugo, ui-nano-modeline, orgx-typography, my/open-emacs-config): 存在しない関数名を
+	挙げていたコメント、巨大バッファの例が README.org だった記述、docstring を現状に合わせた。
 	* org/tools.org (Appendix: orphans.el): tangle 先から外れた生成物（lisp/、personal/、scripts/ の .el .elc .py .sh）を
 	検出・削除する scripts/orphans.el を追加。tangle は書き出すファイルを上書きするだけで古い生成物を消さず、設定の新旧を
 	行き来したりモジュールを統合・改名したりすると残っていた。tangle 先を 20 件未満しか取れないときは何も消さない。

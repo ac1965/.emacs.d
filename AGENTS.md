@@ -25,10 +25,10 @@ Org 文書とソースコードを一体として管理する literate program �
 106 個の `.el` ターゲット（`lisp/` 配下 91 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 9 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`）が生成される。
-（`scripts/` の 4 個の `.el` は `org/tools.org` から、残りは `README.org` から tangle される。）
+（`scripts/` の 4 個の `.el` は `org/tools.org` から、`early-init.el`・`init.el` は `org/boot.org` から、`lisp/` と `personal/` の `.el` は上の表の各 Org 文書から tangle される。）
 
 ```
-README.org (正本)
+Org 文書 (README.org / org/*.org が正本)
     ↓
 Org-Babel tangle
     ↓
@@ -180,7 +180,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 （`native-comp-eln-load-path` の 2 番目に残している）に、この設定が効く前、
 または設定を読み込まない Emacs が書いたもので、削除してよい（`advice` を付けた
 時点で自動的に作り直される）。設定のモジュールの eln は `my:d:cache` 側にある。
-詳細は `README.org` の `early-init.el` の「7) ネイティブコンパイル」節を参照。
+詳細は `org/boot.org` の `early-init.el` の「7) ネイティブコンパイル」節を参照。
 ディレクトリ作成の標準ヘルパーは
 `early-init.el` の `my/ensure-directory-exists` である。
 
@@ -228,7 +228,7 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
   オンデマンドにロードされ、どちらのリストにも現れない。UI バンドルは `ui-bundles`、
   LSP バックエンドは `dev-lsp-bridge` が `core-switches-register` で登録する（`core-switches`
   は core 層にあり、これらのモジュール名を知らない）。`ui-nano-palette` は `ui-theme` 経由
-- LSP バックエンド（`eglot` / `lsp-mode` / `lsp-bridge`）は
+- LSP バックエンド（`eglot` / `lsp-mode`。切り替えを吸収するファサードが `dev-lsp-bridge`）は
   `core-switches` で選択する。コードはバックエンド非依存を保つこと
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
   このリポジトリには存在しない。存在すると仮定しないこと。
@@ -509,8 +509,8 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 
 ## 10. Keeping AGENTS.md in Sync with README.org
 
-**恒久ルール。** `README.org` が唯一の正本（§1）であり、`AGENTS.md` は
-その派生的な要約である。README.org が変わると、AGENTS.md は気づかない
+**恒久ルール。** `README.org` と `org/*.org`（§1 の表）が正本であり、`AGENTS.md` は
+その派生的な要約である。これらの Org 文書が変わると、AGENTS.md は気づかない
 うちに乖離する。実際に乖離が起きた（2026-09-13 の同期: 古いモジュール数、
 フラットな木から移動した `lisp/` 配置、誰も削除しなかった廃止済み
 `DESIGN_SPEC` ガード、`setopt` になっていた `setq` 例外）。黙って
