@@ -391,43 +391,45 @@ macOS 以外のホストでは完全に不活性です。有効・無効の制�
 =defcustom= の既定値はどのホストでも尊重され、personal 側の上書きもロード順を気にせず効きます。
 
 #+begin_quote
-*落とし穴（実機で踏んだ）— 独自バックエンドの無限再帰:* かつての実装は
+*落とし穴（実機で踏んだ）— 独自バックエンドの無限再帰:* かつての実装は、
 =security(1)= を =call-process= で直接呼ぶ独自の =auth-source-backend= を
-=auth-source-backend-parser-functions= に登録していた。その登録関数
-（ =auth-keychain--make-backend= ）が、実際のバックエンド構築を eieio の
-コンストラクタで直接行う代わりに、ディスパッチャである =auth-source-backend-parse=
-自身を再帰的に呼び出していた。 =auth-source-backend-parse= は
-=auth-source-backend-parser-functions= を先頭から順に試すため、
+=auth-source-backend-parser-functions= に登録していました。その登録関数
+（ =auth-keychain--make-backend= ）は、実際のバックエンドを eieio の
+コンストラクタで作る代わりに、ディスパッチャの =auth-source-backend-parse=
+自身を再帰的に呼んでいました。 =auth-source-backend-parse= は
+=auth-source-backend-parser-functions= を先頭から順に試します。そのため、
 =auth-keychain--make-backend= が呼ばれる → 中で再度 =auth-source-backend-parse= を
 呼ぶ → リストの中にまだ =auth-keychain--make-backend= 自身が残っている →
-また呼ばれる、という無限再帰になる。 =M-x my/auth-gpg-verify= を実行して初めて
-=auth-source-search= が呼ばれた際に "excessive-lisp-nesting" で発覚した
-（ =eieio--perform-slot-validation= が延々とスタックに積まれるバックトレースが
-決め手になった）。
+また呼ばれる、という無限再帰になりました。
 
-調査の過程で、この Emacs（32.0.50、開発版）には *組み込みの* macOS Keychain
-バックエンド =auth-source-backends-parser-macos-keychain= が既に存在すること
-が判明した。 =security(1)= を独自に呼ぶコードは、この組み込み機能が入る前に
-書かれたものだったと見られる。無限再帰バグを個別に直すのではなく、独自実装を
-丸ごと廃止して組み込みバックエンドに委譲する形に置き換えた。
+発覚したのは、 =M-x my/auth-gpg-verify= を実行して初めて =auth-source-search= が
+呼ばれたときです。"excessive-lisp-nesting" が出ました
+（ =eieio--perform-slot-validation= が延々とスタックに積まれるバックトレースが
+決め手になりました）。
+
+調べるうちに、この Emacs（32.0.50、開発版）には *組み込みの* macOS Keychain
+バックエンド =auth-source-backends-parser-macos-keychain= が、すでにあると分かりました。
+=security(1)= を独自に呼ぶコードは、この組み込み機能が入る前に書かれたものだったようです。
+そこで、無限再帰バグを個別に直すのをやめて、独自実装を丸ごと廃止し、
+組み込みバックエンドに委譲する形に置き換えました。
 #+end_quote
 
 *実装方針 — 組み込みの macOS Keychain バックエンドに委譲する*
 
-Emacs 本体の =auth-source.el= が提供する =macos-keychain-internet= /
-=macos-keychain-generic= の2種類のうち、 =macos-keychain-internet= を使う。
-理由は =:host= の意味づけにある。
+Emacs 本体の =auth-source.el= には、 =macos-keychain-internet= と
+=macos-keychain-generic= の 2 種類があります。ここでは =macos-keychain-internet= を使います。
+理由は =:host= の意味づけにあります。
 
-- =macos-keychain-internet= — =:host= はそのまま =security find-internet-password -s HOST= の
-  =-s= （サービス名）に渡る。 =auth-gpg--lookup-all= や =dev-ai--setup-api-key= など、他の
-  auth-source バックエンドと同じ「 =:host= = 対象ホスト」という素直な意味づけになる。
+- =macos-keychain-internet= — =:host= が、そのまま =security find-internet-password -s HOST= の
+  =-s= （サービス名）に渡ります。 =auth-gpg--lookup-all= や =dev-ai--setup-api-key= など、他の
+  auth-source バックエンドと同じ「 =:host= = 対象ホスト」という素直な意味づけです
 - =macos-keychain-generic= — =:host= は =-c HOST= （Keychain の「creator」フィールド）に
-  マップされ、 =-s= （サービス名）には代わりに =:port= を渡さなければならない。
-  他のコードが素直に =:host= を渡すと *サイレントに何も見つからない* 、はまりやすい罠。
+  マップされ、 =-s= （サービス名）には代わりに =:port= を渡す必要があります。
+  他のコードが素直に =:host= を渡すと、 *サイレントに何も見つからない* 、はまりやすい罠です
 
 このねじれ（ =auth-source-macos-keychain-search-items= 内の
-=(if keychain-generic "-c" "-s")= 分岐）があるため、Keychain エントリは
-Internet Password として保存する必要がある。
+=(if keychain-generic "-c" "-s")= 分岐）があるので、Keychain エントリは
+Internet Password として保存する必要があります。
 
 *Keychain エントリの形式*
 
