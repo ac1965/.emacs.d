@@ -440,7 +440,7 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 | Target | Purpose |
 |---|---|
 | `make tangle` | `README.org` と `org/*.org` を `.el` ターゲット・`scripts/` へ tangle |
-| `make reload` | `clean` + `tangle` + `check-cookies` + `clean-orphans`。古い `.elc` と、tangle 先から外れた古い生成物（統合・改名・ブランチ切替で残る `.el` など）を避けるため、単独の `tangle` より推奨。途中で `Makefile` が書き換わったら、新しい `Makefile` でもう一度 `reload` を実行する |
+| `make reload` | `clean` + `tangle` + `check-cookies` + `clean-orphans`。古い `.elc` と、tangle 先から外れた古い生成物（統合・改名・ブランチ切替で残る `.el` など）を避けるため、単独の `tangle` より推奨。途中で `Makefile` が書き換わったら、新しい `Makefile` でもう一度 `reload` を実行する（pull などで `Makefile` が更新されたときだけ。初回は `emacs -Q --batch` の tangle のあと 1 回で足りる） |
 | `make lint` | `check-tangle` + `check-emphasis` + `check-cookies` + `check-fboundp-guards` + `check-modules` + `check-orphans` + `checkdoc` を実行 |
 | `make check-tangle` | 見出しレベルの誤りで `:tangle` を継承できない src ブロックを検出 |
 | `make check-emphasis` | 太字が verbatim を囲む場合を含む、無効な Org 強調記法を検出（Elisp ではなく Python 製） |
