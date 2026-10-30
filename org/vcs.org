@@ -59,10 +59,49 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;;   VC Directory 内:  V  vc-dir-root-next-action
   ;;                     z d / D  Git の stash を削除
   ;;
+  ;; leader（M-SPC g）の git キー割り当て:
+  ;;
+  ;;   s status   c commit   d diff   l log   b blame      （ui-keys.el 側の既存の割り当て）
+  ;;   f fetch    F pull     P push   B branch  z stash    （本モジュール）
+  ;;   h ファイルの履歴（magit-log-buffer-file）
+  ;;   ] / [ 次 / 前の hunk   H hunk を表示                  （diff-hl）
+  ;;   i Issue 一覧   r Pull Request 一覧   N forge-dispatch  （forge）
+  ;;   m 競合の解決（n 次 p 前 u 上 l 下 b ベース a 両方 e ediff r 細分）
+  ;;   w ワークツリーへ切り替え   W ワークツリーを追加   X ワークツリーを削除   （vcs-magit.el）
+  ;;
+  ;; 本ファイルの責務に、上のキー割り当てと、競合解決のキーマップ `vcs-core-smerge-map' が
+  ;; 含まれる。キーは `after-init-hook'（depth 90）で割り当てる。leader のマップは
+  ;; ui-keymap の `after-init-hook'（depth 0）で作られるため、その後に走らせる必要がある。
+  ;;
   ;; 本モジュールは dev 層に依存してはならない（層の不変条件）。
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ側にある）。
+  (defvar ui-leader-g-map)
+  (declare-function magit-fetch "magit-fetch")
+  (declare-function magit-pull "magit-pull")
+  (declare-function magit-push "magit-push")
+  (declare-function magit-branch "magit-branch")
+  (declare-function magit-stash "magit-stash")
+  (declare-function magit-log-buffer-file "magit-log")
+  (declare-function diff-hl-next-hunk "diff-hl")
+  (declare-function diff-hl-previous-hunk "diff-hl")
+  (declare-function diff-hl-show-hunk "diff-hl-show-hunk")
+  (declare-function forge-list-issues "forge-list")
+  (declare-function forge-list-pullreqs "forge-list")
+  (declare-function forge-dispatch "forge-commands")
+  (declare-function vcs-magit-worktree-add "vcs-magit")
+  (declare-function vcs-magit-worktree-switch "vcs-magit")
+  (declare-function vcs-magit-worktree-remove "vcs-magit")
+  (declare-function smerge-next "smerge-mode")
+  (declare-function smerge-prev "smerge-mode")
+  (declare-function smerge-keep-upper "smerge-mode")
+  (declare-function smerge-keep-lower "smerge-mode")
+  (declare-function smerge-keep-base "smerge-mode")
+  (declare-function smerge-keep-all "smerge-mode")
+  (declare-function smerge-refine "smerge-mode")
 
   (leaf vc
     :straight nil
@@ -101,9 +140,49 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;; defun は leaf より前に置く。:hook に関数名を書くと leaf は、その関数が未定義なら
   ;; パッケージ名への autoload と declare-function を出すため、後ろに置くと
   ;; 「defined multiple times」の警告になり、誤った autoload も一瞬登録される。
+  ;; :commands は、競合のないバッファから M-SPC g m を押しても未定義にならないための autoload。
   (leaf smerge-mode
     :straight nil
+    :commands (smerge-next smerge-prev smerge-keep-upper smerge-keep-lower
+               smerge-keep-base smerge-keep-all smerge-ediff smerge-refine)
     :hook ((find-file-hook . vcs-core--maybe-enable-smerge)))
+
+  ;; 競合の解決。最初の 1 回だけ M-SPC g m を押せば、あとは接頭辞なしで n / p / u / l を
+  ;; 続けて押せる（`:repeat t' により、`repeat-mode' が有効なときに繰り返しになる）。
+  (defvar-keymap vcs-core-smerge-map
+    :doc "Conflict resolution keys under M-SPC g m."
+    :repeat t
+    "n" #'smerge-next
+    "p" #'smerge-prev
+    "u" #'smerge-keep-upper
+    "l" #'smerge-keep-lower
+    "b" #'smerge-keep-base
+    "a" #'smerge-keep-all
+    "e" #'smerge-ediff
+    "r" #'smerge-refine)
+
+  (defun vcs-core--bind-keys ()
+    "Bind the git commands that ui-keys.el does not know about under M-SPC g."
+    (when (and (boundp 'ui-leader-g-map) (keymapp ui-leader-g-map))
+      (keymap-set ui-leader-g-map "f" #'magit-fetch)
+      (keymap-set ui-leader-g-map "F" #'magit-pull)
+      (keymap-set ui-leader-g-map "P" #'magit-push)
+      (keymap-set ui-leader-g-map "B" #'magit-branch)
+      (keymap-set ui-leader-g-map "z" #'magit-stash)
+      (keymap-set ui-leader-g-map "h" #'magit-log-buffer-file)
+      (keymap-set ui-leader-g-map "]" #'diff-hl-next-hunk)
+      (keymap-set ui-leader-g-map "[" #'diff-hl-previous-hunk)
+      (keymap-set ui-leader-g-map "H" #'diff-hl-show-hunk)
+      (keymap-set ui-leader-g-map "i" #'forge-list-issues)
+      (keymap-set ui-leader-g-map "r" #'forge-list-pullreqs)
+      (keymap-set ui-leader-g-map "N" #'forge-dispatch)
+      (keymap-set ui-leader-g-map "w" #'vcs-magit-worktree-switch)
+      (keymap-set ui-leader-g-map "W" #'vcs-magit-worktree-add)
+      (keymap-set ui-leader-g-map "X" #'vcs-magit-worktree-remove)
+      (keymap-set ui-leader-g-map "m" vcs-core-smerge-map)))
+
+  ;; depth 90: ui-keymap--startup-init（depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'vcs-core--bind-keys 90)
 
   (provide 'vcs-core)
   ;;; vcs/vcs-core.el ends here
@@ -135,18 +214,150 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;;
   ;; - magit バッファを bury するとき、直前のウィンドウ構成を復元する
   ;; - Ediff の制御パネルを別フレームにせず、同一フレームで開く
+  ;; - 変更された hunk の中の、変わった単語を強調する（`magit-diff-refine-hunk'）
+  ;; - コミットメッセージの 1 行目の目安を 72 桁にする（`git-commit-summary-max-length'）
+  ;; - コミットメッセージの補助: 1 行目で `type(scope): 要約' の type と scope を補完し
+  ;;   （`vcs-magit--commit-capf'）、この形でない件名のコミットは、確認してから通す
+  ;;   （`vcs-magit--commit-check'）。scope は、直近 200 件のコミットから集める
+  ;; - ワークツリー管理: 追加（`vcs-magit-worktree-add'）、切り替え
+  ;;   （`vcs-magit-worktree-switch'）、削除（`vcs-magit-worktree-remove'）。
+  ;;   追加先は `<リポジトリ>.worktrees/<ブランチ>' で、リポジトリの隣に作る
+  ;;   （`/' は `-' に置き換える）。キーは `M-SPC g w / W / X'（vcs-core.el で割り当てる）
+  ;;
+  ;; ワークツリーの操作は git を直接呼ぶ。Magit のトランジェント（`magit-worktree'）は
+  ;; ディレクトリを毎回尋ねるため、置き場所の規約を持てないからである。削除は `--force' を
+  ;; 付けない。未コミットの変更があるワークツリーは、git が拒否する。
   ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
   (declare-function ediff-setup-windows-plain "ediff-wind")
   (declare-function magit-display-buffer-fullframe-status-v1 "magit-mode")
   (declare-function magit-restore-window-configuration "magit-mode")
+  (declare-function magit-status "magit-status")
 
   (eval-when-compile (require 'leaf))
 
+  (defgroup vcs-magit nil
+    "Magit helpers: commit message assist and worktree management."
+    :group 'tools)
+
+  (defcustom vcs-magit-commit-types
+    '("feat" "fix" "docs" "style" "refactor" "perf" "test" "build" "ci" "chore" "revert")
+    "Conventional-commit types offered when completing the subject line."
+    :type '(repeat string)
+    :group 'vcs-magit)
+
+  (defcustom vcs-magit-commit-check t
+    "When non-nil, ask before committing an off-form subject.
+  The form is `type(scope): summary'."
+    :type 'boolean
+    :group 'vcs-magit)
+
+  (defconst vcs-magit--commit-subject-re
+    "\\`\\(?:[a-z]+\\(?:([^()\n]+)\\)?!?: .+\\|Merge \\|Revert \\|\\(?:fixup\\|squash\\|amend\\)! \\)"
+    "Subjects the commit check accepts without asking.")
+
+  (defun vcs-magit--recent-scopes ()
+    "Return the scopes used in the last 200 commit subjects of this repository."
+    (ignore-errors
+      (let (scopes)
+        (dolist (subject (process-lines "git" "log" "-n" "200" "--format=%s"))
+          (when (string-match "\\`[a-z]+(\\([^()]+\\))" subject)
+            (push (match-string 1 subject) scopes)))
+        (delete-dups (nreverse scopes)))))
+
+  (defun vcs-magit--commit-capf ()
+    "Complete the conventional-commit type, then the scope, on the first line."
+    (when (= (line-number-at-pos) 1)
+      (let* ((bol (line-beginning-position))
+             (text (buffer-substring-no-properties bol (point))))
+        (cond
+         ((string-match-p "\\`[a-z]*\\'" text)
+          (list bol (point) vcs-magit-commit-types :exclusive 'no))
+         ((string-match "\\`[a-z]+(\\([^()]*\\)\\'" text)
+          (list (+ bol (match-beginning 1)) (point)
+                (vcs-magit--recent-scopes) :exclusive 'no))))))
+
+  (defun vcs-magit--commit-setup ()
+    "Put the commit-message completion first in this buffer's CAPFs."
+    (add-hook 'completion-at-point-functions #'vcs-magit--commit-capf -50 t))
+
+  (defun vcs-magit--commit-check (&optional _force)
+    "Return non-nil to let the commit go ahead; ask when the subject is off-form."
+    (or (not vcs-magit-commit-check)
+        (let ((subject (save-excursion
+                         (goto-char (point-min))
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position)))))
+          (or (string-match-p vcs-magit--commit-subject-re subject)
+              (y-or-n-p (format "件名が type(scope): 要約 の形ではありません（%s）。このままコミットしますか？ "
+                                subject))))))
+
+  (add-hook 'git-commit-setup-hook #'vcs-magit--commit-setup)
+  (add-hook 'git-commit-finish-query-functions #'vcs-magit--commit-check)
+
+  (defun vcs-magit--git-lines (&rest args)
+    "Run git with ARGS in `default-directory' and return its output lines."
+    (apply #'process-lines "git" args))
+
+  (defun vcs-magit-worktree-list ()
+    "Return the paths of all worktrees of the current repository, main one first."
+    (delq nil
+          (mapcar (lambda (line)
+                    (when (string-prefix-p "worktree " line)
+                      (file-name-as-directory (substring line (length "worktree ")))))
+                  (vcs-magit--git-lines "worktree" "list" "--porcelain"))))
+
+  (defun vcs-magit--worktree-dir (branch)
+    "Return the directory a new worktree for BRANCH goes into."
+    (let* ((main (directory-file-name (car (vcs-magit-worktree-list)))))
+      (file-name-as-directory
+       (expand-file-name (concat (file-name-nondirectory main) ".worktrees/"
+                                 (replace-regexp-in-string "/" "-" branch))
+                         (file-name-directory main)))))
+
+  (defun vcs-magit--branches ()
+    "Return the local branch names of the current repository."
+    (vcs-magit--git-lines "for-each-ref" "--format=%(refname:short)" "refs/heads"))
+
+  ;;;###autoload
+  (defun vcs-magit-worktree-add (branch)
+    "Add a worktree for BRANCH next to the repository and return its directory.
+  BRANCH is created from HEAD when it does not exist yet.  Interactively, open
+  Magit in the new worktree."
+    (interactive (list (completing-read "ワークツリーのブランチ（新規可）: "
+                                        (vcs-magit--branches))))
+    (let ((dir (vcs-magit--worktree-dir branch)))
+      (make-directory (file-name-directory (directory-file-name dir)) t)
+      (if (member branch (vcs-magit--branches))
+          (vcs-magit--git-lines "worktree" "add" dir branch)
+        (vcs-magit--git-lines "worktree" "add" "-b" branch dir))
+      (when (called-interactively-p 'any)
+        (magit-status dir))
+      dir))
+
+  ;;;###autoload
+  (defun vcs-magit-worktree-switch (dir)
+    "Open Magit in the worktree DIR, chosen among the repository's worktrees."
+    (interactive (list (completing-read "ワークツリー: " (vcs-magit-worktree-list) nil t)))
+    (magit-status dir))
+
+  ;;;###autoload
+  (defun vcs-magit-worktree-remove (dir)
+    "Remove the worktree DIR after confirmation; git refuses a dirty one."
+    (interactive (list (completing-read "削除するワークツリー: "
+                                        (cdr (vcs-magit-worktree-list)) nil t)))
+    (when (or (not (called-interactively-p 'any))
+              (y-or-n-p (format "ワークツリー %s を削除しますか？ " dir)))
+      (vcs-magit--git-lines "worktree" "remove" dir)
+      (message "ワークツリーを削除しました: %s" dir)))
+
   (leaf magit :straight t
     :custom ((magit-display-buffer-function . #'magit-display-buffer-fullframe-status-v1)
-             (magit-bury-buffer-function . #'magit-restore-window-configuration)))
+             (magit-bury-buffer-function . #'magit-restore-window-configuration)
+             ;; hunk の中で変わった単語を強調する。行全体の差分より、何が変わったかが読みやすい。
+             (magit-diff-refine-hunk . t)
+             (git-commit-summary-max-length . 72)))
 
   ;; Ediff: 制御パネルを別フレームにせず同一フレームで開く（nano-modeline /
   ;; posframe 環境でフレーム管理を増やさないため）。
@@ -180,15 +391,28 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;; diff-hl による VCS のガター表示。
   ;;
   ;; 本ファイルの責務:
-  ;; - 初期化後に `global-diff-hl-mode' を有効化する
+  ;; - 初期化後に `global-diff-hl-mode' と `diff-hl-flydiff-mode' を有効化する
+  ;;   （後者は、保存前の編集もガターに反映する）
+  ;; - Dired でも変更のあるファイルを示す（`diff-hl-dired-mode'）
   ;; - magit の pre/post-refresh フックでフリンジ表示を更新する
+  ;; - hunk の移動と表示は `M-SPC g ] / [ / H' （vcs-core.el で割り当てる）
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
+  (declare-function global-diff-hl-mode "diff-hl")
+  (declare-function diff-hl-flydiff-mode "diff-hl-flydiff")
+
+  ;; defun は leaf より前に置く（:hook に関数名を書くと leaf が autoload を出すため）。
+  (defun vcs-gutter--enable ()
+    "Enable diff-hl everywhere, with fly-diff so unsaved edits show up too."
+    (global-diff-hl-mode 1)
+    (diff-hl-flydiff-mode 1))
+
   (leaf diff-hl
     :straight t
-    :hook ((after-init-hook . global-diff-hl-mode)
+    :hook ((after-init-hook . vcs-gutter--enable)
+           (dired-mode-hook . diff-hl-dired-mode)
            (magit-pre-refresh . diff-hl-magit-pre-refresh)
            (magit-post-refresh . diff-hl-magit-post-refresh)))
 
@@ -218,9 +442,49 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;;
   ;; 本ファイルの責務:
   ;; - magit が利用可能になった後に forge をロードする
+  ;; - GitHub の認証を `gh' （GitHub CLI）に任せる
+  ;;
+  ;; 認証の経路:
+  ;; forge が使う ghub は、トークンを auth-source から「ホスト api.github.com、ユーザー
+  ;; <github.user>^forge」で探す。通常は ~/.authinfo や pass にトークンを書いて用意するが、
+  ;; ここでは `gh auth token' が出す、ログイン済みのトークンを返す。トークンを別の場所に
+  ;; 複製せず、`gh auth login' / `gh auth refresh' だけで更新できる。`gh' が使えない、
+  ;; または未ログインのときは、通常の auth-source の結果へ戻す。
+  ;; トークンの文字列は、ログにもメッセージにも出さない。
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
+
+  (defvar vcs-forge--gh-token nil
+    "Cached output of `gh auth token' for this session, or nil.")
+
+  (defun vcs-forge--gh-token ()
+    "Return the token printed by `gh auth token', or nil when unavailable."
+    (or vcs-forge--gh-token
+        (when (executable-find "gh")
+          (let ((token (string-trim
+                        (with-output-to-string
+                          (with-current-buffer standard-output
+                            (call-process "gh" nil '(t nil) nil "auth" "token"))))))
+            (unless (string-empty-p token)
+              (setq vcs-forge--gh-token token))))))
+
+  (defun vcs-forge--auth-source-via-gh (orig &rest spec)
+    "Around advice for `auth-source-search': answer GitHub forge lookups from gh.
+  Only lookups for host api.github.com or github.com whose user ends in ^forge or
+  ^ghub are handled.  Everything else, and every lookup when gh has no token,
+  goes to ORIG with SPEC."
+    (let ((host (plist-get spec :host))
+          (user (plist-get spec :user)))
+      (if (and (stringp host) (stringp user)
+               (member host '("api.github.com" "github.com"))
+               (string-match-p "\\^\\(forge\\|ghub\\)\\'" user)
+               (vcs-forge--gh-token))
+          (list (list :host host :user user
+                      :secret (lambda () (vcs-forge--gh-token))))
+        (apply orig spec))))
+
+  (advice-add 'auth-source-search :around #'vcs-forge--auth-source-via-gh)
 
   (leaf forge :straight t :after magit)
 

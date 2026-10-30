@@ -1528,6 +1528,82 @@ make smoketest
         (smoketest--check (format "%s -> %S" k b)
           (and b (commandp b))))))
 
+  (defun smoketest--git (dir &rest args)
+    "Run git ARGS in DIR with a fixed identity; signal an error on failure."
+    (let ((default-directory dir)
+          (process-environment (append '("GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@example.com"
+                                         "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@example.com")
+                                       process-environment)))
+      (apply #'process-lines "git" args)))
+
+  (defun smoketest--vcs-b ()
+    "Check the commit-message assist and the worktree commands in a real git repo."
+    (let* ((root (file-name-as-directory (make-temp-file "smoketest-vcs-" t)))
+           (repo (expand-file-name "repo/" root)))
+      (unwind-protect
+          (progn
+            (make-directory repo)
+            (smoketest--git repo "init" "-q" "-b" "main")
+            (smoketest--git repo "commit" "-q" "--allow-empty" "-m" "feat(zz): first")
+            (let ((default-directory repo))
+              (smoketest--check "コミット補助: type の補完（fe → feat）"
+                (with-temp-buffer
+                  (insert "fe")
+                  (let ((res (vcs-magit--commit-capf)))
+                    (and res (member "feat" (all-completions "fe" (nth 2 res)))))))
+              (smoketest--check "コミット補助: scope の補完（feat( → zz）"
+                (with-temp-buffer
+                  (insert "feat(")
+                  (let ((res (vcs-magit--commit-capf)))
+                    (and res (member "zz" (nth 2 res))))))
+              (smoketest--check "コミット補助: 2 行目では補完しない"
+                (with-temp-buffer (insert "feat: a\nfe") (null (vcs-magit--commit-capf))))
+              (smoketest--check "コミット検査: 形に合う件名は黙って通す"
+                (with-temp-buffer (insert "fix(a): b") (vcs-magit--commit-check)))
+              (smoketest--check "コミット検査: Merge と fixup! は通す"
+                (and (with-temp-buffer (insert "Merge branch 'x'") (vcs-magit--commit-check))
+                     (with-temp-buffer (insert "fixup! a") (vcs-magit--commit-check))))
+              (smoketest--check "コミット検査: 形が違う件名は確認し、断ると止める"
+                (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil)))
+                  (with-temp-buffer (insert "なんとなく直した") (null (vcs-magit--commit-check)))))
+              (smoketest--check "ワークツリー: 追加（feat/x → repo.worktrees/feat-x）"
+                (let ((dir (vcs-magit-worktree-add "feat/x")))
+                  (and (file-directory-p dir)
+                       (string-suffix-p "repo.worktrees/feat-x/" dir))))
+              (smoketest--check "ワークツリー: 一覧に 2 つ（主と追加分）"
+                (= 2 (length (vcs-magit-worktree-list))))
+              (smoketest--check "ワークツリー: 既存ブランチでも追加できる"
+                (progn (smoketest--git repo "branch" "old")
+                       (file-directory-p (vcs-magit-worktree-add "old"))))
+              (smoketest--check "ワークツリー: 削除"
+                (progn (vcs-magit-worktree-remove (vcs-magit--worktree-dir "feat/x"))
+                       (vcs-magit-worktree-remove (vcs-magit--worktree-dir "old"))
+                       (= 1 (length (vcs-magit-worktree-list)))))))
+        (delete-directory root t))))
+
+  (defun smoketest--vcs ()
+    "Check the vcs layer: leader keys, diff-hl and the gh-backed forge token."
+    (smoketest--section "VCS: キー・diff-hl・forge")
+    (dolist (k '("f" "F" "P" "B" "z" "h" "]" "[" "H" "i" "r" "N" "w" "W" "X"))
+      (let ((b (lookup-key ui-leader-g-map (kbd k))))
+        (smoketest--check (format "M-SPC g %s -> %S" k b)
+          (and b (commandp b)))))
+    (smoketest--check "M-SPC g m が競合解決のキーマップ"
+      (eq (lookup-key ui-leader-g-map (kbd "m")) vcs-core-smerge-map))
+    (smoketest--check "競合解決: n / p / u / l がコマンド"
+      (cl-every (lambda (k) (commandp (lookup-key vcs-core-smerge-map (kbd k))))
+                '("n" "p" "u" "l")))
+    (smoketest--check "diff-hl と flydiff が有効"
+      (and global-diff-hl-mode diff-hl-flydiff-mode))
+    (smoketest--check "magit-diff-refine-hunk が有効" magit-diff-refine-hunk)
+    (smoketest--vcs-b)
+    (if (not (executable-find "gh"))
+        (smoketest--say "SKIP forge: gh が無い")
+      (smoketest--check "forge: gh のトークンが auth-source 経由で返る"
+        (let* ((res (auth-source-search :host "api.github.com" :user "smoketest^forge"))
+               (secret (plist-get (car res) :secret)))
+          (and (functionp secret) (> (length (funcall secret)) 10))))))
+
   (defun smoketest--completion ()
     "Actually complete in scratch buffers."
     (smoketest--section "補完の実動作")
@@ -1580,6 +1656,7 @@ make smoketest
     (smoketest--minibuffer)
     (smoketest--corfu)
     (smoketest--keys)
+    (smoketest--vcs)
     (smoketest--completion)
     (smoketest--eglot-merge)
     (smoketest--say "== 結果 PASS=%d FAIL=%d" smoketest--pass smoketest--fail)
