@@ -20,7 +20,7 @@
 - =scripts/claude_org_roam_export.py= 、 =scripts/update_build_info.py=
 - =scripts/check-bytecomp.el= 、 =scripts/cheatsheet.el= 、 =scripts/check_modules.py= 、 =scripts/stats.py=
 - =scripts/compose.py= 、 =scripts/shot.sh= 、 =scripts/demo-layout.el=
-- =scripts/orphans.el=
+- =scripts/orphans.el= 、 =scripts/smoketest.el=
 
 tangle は =make tangle= が、 =README.org= や =org/*.org= とあわせて行います。tangle 先は =../scripts/= です。
 
@@ -1323,6 +1323,269 @@ CHECK_BYTECOMP_FILES="lisp/ui/ui-theme.el personal/ac1965.el" make check-bytecom
       (kill-emacs (if (zerop total) 0 1))))
 
   (check-bytecomp-run)
+#+end_src
+
+* Appendix: smoketest.el — 起動と動作のスモークテスト
+:PROPERTIES:
+:CUSTOM_ID: appendix-smoketest-el
+:header-args:emacs-lisp: :tangle ../scripts/smoketest.el :mkdirp yes
+:END:
+
+=make smoketest= が呼び出す、設定を変えたあとの起動テストと動作テストです。
+=make lint= と =make check-bytecomp= は、コードを *読んで* 検査します。
+このテストは、設定を *実際に読み込んだ Emacs* で、キーや補完が動くかを確かめます。
+たとえば、キーに割り当てたコマンドが未定義になっている不具合は、静的な検査では見つかりません。
+
+*何を確認するか*
+
+| 区分 | 確認すること |
+|---+---|
+| 起動 | init を読み込んで警告が出ないこと、 =my:modules= と =my:modules-extra= が全てロードされること |
+| ミニバッファ | vertico、vertico-directory、consult、consult-dir、embark、wgrep のキーと設定値 |
+| バッファ内補完 | corfu と、その拡張（popupinfo、history、terminal）の有効化と設定値 |
+| キー割り当て | =C-s= 、 =M-SPC /= などの主要なキーが、 =commandp= を満たすコマンドへ結びついていること |
+| 補完の実動作 | 一時バッファで、elisp のシンボルと dabbrev の単語が実際に補完されること |
+| Eglot の合流 | Eglot を代役に差し替え、 =cape-dabbrev= との合流、冪等性、解除を確かめること |
+
+*使い方*
+
+#+begin_example
+make smoketest
+#+end_example
+
+全項目を実行し、 =PASS= または =FAIL= の行を出します。 =FAIL= が 1 件でもあれば、終了コード 1 で終わります。
+最後の行に、 =PASS= と =FAIL= の件数を出します。約 40 秒かかるため、 =make lint= には含めません。
+
+*設定を変えたあとの手順*
+
+1. =make reload= で tangle し直します。
+2. =make lint= で静的に検査します。
+3. =make smoketest= で、起動と動作を確かめます。
+4. Emacs を再起動して、画面表示のような、このテストで確かめられないことを目で確認します。
+
+*なぜ straight のキャッシュを退避するのか*
+
+バッチで動く Emacs は、終了時に straight のビルドキャッシュ（ =build-<版>-cache.el= ）を書き直します。
+バッチではパッケージの設定が一部しか評価されないため、書き直されたキャッシュには autoload の欠けたものが入ります。
+その状態で GUI の Emacs を起動すると、 =consult-line= が未定義になり、
+=Wrong type argument: commandp, consult-line= のエラーが出ます（2026-10-31 に実際に起きました）。
+そのため、このスクリプトは開始時にキャッシュの内容を控え、終了時に元へ戻します。
+キャッシュが無かったときは、次の起動で作り直されるよう、削除します。
+
+=make check-bytecomp= と =make cheatsheet= も同じようにバッチで init を読み込むので、
+同じ書き直しが起きる可能性があります。この退避は、それらには入れていません。
+
+*テストを足すには*
+
+=smoketest--<区分>= という関数に、 =smoketest--check= の呼び出しを足します。
+第 1 引数は結果の行に出る名前、第 2 引数は式です。式が =nil= を返すか、エラーを出すと =FAIL= になります。
+新しい区分を作ったら、 =smoketest-run= の呼び出しの並びにも足します。
+
+*このテストで確かめられないこと*
+
+- 画面の表示（posframe、popupinfo の横表示、アイコン）
+- 端末フレームでの corfu-terminal の実際の描画
+- 実際の LSP サーバとの接続（Eglot は代役で確かめます）
+
+#+NAME: smoketest-el
+#+begin_src emacs-lisp
+  ;;; smoketest.el --- 起動と動作のスモークテスト -*- lexical-binding: t; -*-
+
+  ;; `make smoketest' が、init を読み込んだ Emacs に `-l' で読み込ませる。
+  ;; 全項目を実行し、失敗が 1 件でもあれば終了コード 1 で終わる。
+  ;; 結果は PASS / FAIL の行として標準出力へ出す。
+  ;; 標準エラーには init のメッセージが出るので、Makefile 側で捨てている。
+  ;;
+  ;; 注意: バッチ実行の Emacs は、終了時に straight のビルドキャッシュ
+  ;; （`straight--build-cache-file'）を書き直す。バッチではパッケージの設定が一部しか
+  ;; 評価されないため、書き直されたキャッシュには autoload が欠け、次に GUI で起動すると
+  ;; consult-line などが未定義になる。そこで開始時に内容を控え、終了時に元へ戻す。
+
+  ;;; Code:
+
+  (require 'cl-lib)
+  (require 'subr-x)
+
+  (defun smoketest--say (fmt &rest args)
+    "Print a line to stdout (the Makefile discards stderr, where `message' goes)."
+    (princ (concat (apply #'format fmt args) "\n")))
+
+  (defvar smoketest--pass 0 "Number of passed checks.")
+  (defvar smoketest--fail 0 "Number of failed checks.")
+
+  (defvar smoketest--cache-file
+    (when (fboundp 'straight--build-cache-file)
+      (straight--build-cache-file))
+    "straight のビルドキャッシュのパス。straight が無ければ nil。")
+
+  (defvar smoketest--cache-backup
+    (when (and smoketest--cache-file (file-exists-p smoketest--cache-file))
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally smoketest--cache-file)
+        (buffer-string)))
+    "開始時のキャッシュの内容。キャッシュが無かったときは nil。")
+
+  (defun smoketest--restore-cache ()
+    "Put the straight build cache back to what it was at start-up.
+  Delete it when there was none, so a later session regenerates it."
+    (when smoketest--cache-file
+      (if smoketest--cache-backup
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region smoketest--cache-backup nil smoketest--cache-file nil 0))
+        (when (file-exists-p smoketest--cache-file)
+          (delete-file smoketest--cache-file)))))
+
+  ;; straight が終了時にキャッシュを書く `kill-emacs-hook' より後に走らせる。
+  (add-hook 'kill-emacs-hook #'smoketest--restore-cache 90)
+
+  (defmacro smoketest--check (name form)
+    "Evaluate FORM and report PASS or FAIL under NAME.
+  A nil value or an error counts as a failure."
+    (declare (indent 1))
+    `(let ((r (condition-case e ,form (error (list 'smoketest-error e)))))
+       (if (and r (not (eq (car-safe r) 'smoketest-error)))
+           (progn (cl-incf smoketest--pass) (smoketest--say "PASS %s" ,name))
+         (cl-incf smoketest--fail)
+         (smoketest--say "FAIL %s => %S" ,name r))))
+
+  (defun smoketest--warnings-text ()
+    "Return the *Warnings* text without the batch-only noise, or nil if empty."
+    (when-let* ((buf (get-buffer "*Warnings*")))
+      (let ((text (with-current-buffer buf
+                    (mapconcat #'identity
+                               (cl-remove-if (lambda (l) (string-match-p "Batch mode does not support" l))
+                                             (split-string (buffer-string) "\n" t))
+                               "\n"))))
+        (unless (string-blank-p text) text))))
+
+  (defun smoketest--section (title)
+    "Print a section TITLE."
+    (smoketest--say "== %s" title))
+
+  (defun smoketest--startup ()
+    "Run the start-up hooks and check that init finished cleanly."
+    (smoketest--section "起動")
+    ;; `-l' で init を読むときは `after-init-hook' が既に終わっているので、
+    ;; モジュールが登録したフックをここで実行する。
+    (run-hooks 'after-init-hook 'emacs-startup-hook 'window-setup-hook)
+    (smoketest--check "警告バッファに警告がない"
+      (null (smoketest--warnings-text)))
+    (smoketest--check "my:modules / my:modules-extra が全てロード済み"
+      (let (missing)
+        (dolist (m (append my:modules my:modules-extra))
+          (unless (or (featurep m) (memq m (bound-and-true-p my:modules-skip)))
+            (push m missing)))
+        (when missing (smoketest--say "  未ロード: %S" missing))
+        (null missing))))
+
+  (defun smoketest--minibuffer ()
+    "Check Vertico, Consult and Embark."
+    (smoketest--section "ミニバッファ: vertico / consult / embark")
+    (smoketest--check "vertico-mode が有効" vertico-mode)
+    (smoketest--check "vertico: DEL / RET / M-DEL が vertico-directory"
+      (and (eq (lookup-key vertico-map (kbd "DEL")) 'vertico-directory-delete-char)
+           (eq (lookup-key vertico-map (kbd "RET")) 'vertico-directory-enter)
+           (eq (lookup-key vertico-map (kbd "M-DEL")) 'vertico-directory-delete-word)))
+    (smoketest--check "vertico-directory-tidy がフックにある"
+      (memq 'vertico-directory-tidy rfn-eshadow-update-overlay-hook))
+    (smoketest--check "consult-dir: C-x C-d と C-x C-j"
+      (and (eq (key-binding (kbd "C-x C-d")) 'consult-dir)
+           (eq (lookup-key vertico-map (kbd "C-x C-j")) 'consult-dir-jump-file)))
+    (smoketest--check "consult-line が command として呼べる"
+      (commandp 'consult-line))
+    (smoketest--check "consult の設定値"
+      (and (equal consult-narrow-key "<")
+           (equal consult-preview-key '(:debounce 0.4 any))
+           (eq register-preview-function 'consult-register-format)))
+    (smoketest--check "embark-act が command として呼べる"
+      (commandp 'embark-act))
+    (smoketest--check "wgrep がロードできる"
+      (require 'wgrep nil t)))
+
+  (defun smoketest--corfu ()
+    "Check Corfu and its extensions."
+    (smoketest--section "バッファ内補完: corfu")
+    (smoketest--check "global-corfu-mode が有効" global-corfu-mode)
+    (smoketest--check "corfu-popupinfo と corfu-history が有効"
+      (and corfu-popupinfo-mode corfu-history-mode))
+    (smoketest--check "corfu-popupinfo-delay が (0.5 . 0.2)"
+      (equal corfu-popupinfo-delay '(0.5 . 0.2)))
+    (smoketest--check "corfu-history を savehist に載せていない"
+      (not (memq 'corfu-history savehist-additional-variables)))
+    (smoketest--check "tty-setup-hook に corfu-terminal の有効化がある"
+      (memq 'completion-corfu--enable-terminal tty-setup-hook))
+    (smoketest--check "corfu-terminal-mode を有効化して無効に戻せる"
+      (progn (completion-corfu--enable-terminal)
+             (prog1 corfu-terminal-mode (corfu-terminal-mode -1)))))
+
+  (defun smoketest--keys ()
+    "Check that the main keys reach real commands."
+    (smoketest--section "キー割り当て")
+    (dolist (k '("C-s" "M-SPC /" "M-SPC RET" "M-SPC s r"
+                 "s-/" "s-;" "C-<f2>" "M-g g"))
+      (let ((b (key-binding (kbd k))))
+        (smoketest--check (format "%s -> %S" k b)
+          (and b (commandp b))))))
+
+  (defun smoketest--completion ()
+    "Actually complete in scratch buffers."
+    (smoketest--section "補完の実動作")
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (smoketest--check "elisp の CAPF スタック"
+        (equal completion-at-point-functions
+               '(cape-elisp-symbol cape-file cape-dabbrev)))
+      (insert "(defu")
+      (smoketest--check "elisp: defu から defun が補完される"
+        (let ((res (cape-elisp-symbol)))
+          (and res (member "defun" (all-completions "defu" (nth 2 res))))))
+      (smoketest--check "completion-at-point がエラーなく動く"
+        (progn (completion-at-point) t)))
+    (with-temp-buffer
+      (text-mode)
+      (insert "alphabet alphanumeric\nalph")
+      (smoketest--check "text: dabbrev がバッファ内の単語を補完する"
+        (let ((res (cape-dabbrev)))
+          (and res (member "alphabet" (all-completions "alph" (nth 2 res))))))))
+
+  (defun smoketest--eglot-merge ()
+    "Check the Eglot + dabbrev merge with Eglot itself stubbed out."
+    (smoketest--section "Eglot と dabbrev の合流（Eglot は代役）")
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (insert "(defu")
+      (cl-letf (((symbol-function 'eglot-managed-p) (lambda () t))
+                ((symbol-function 'eglot-completion-at-point) (lambda () nil)))
+        (setq-local completion-at-point-functions
+                    (cons 'eglot-completion-at-point completion-at-point-functions))
+        (completion--eglot-capfs)
+        (smoketest--check "合流した CAPF が先頭にあり、Eglot 単体は消える"
+          (and (functionp (car completion-at-point-functions))
+               (not (memq 'eglot-completion-at-point completion-at-point-functions))))
+        (smoketest--check "2 回呼んでもスタックが増えない"
+          (let ((n (length completion-at-point-functions)))
+            (completion--eglot-capfs)
+            (= n (length completion-at-point-functions))))
+        (smoketest--check "合流した CAPF を呼んでもエラーが出ない"
+          (progn (funcall (car completion-at-point-functions)) t)))
+      (cl-letf (((symbol-function 'eglot-managed-p) (lambda () nil)))
+        (completion--eglot-capfs)
+        (smoketest--check "Eglot の管理が外れると合流した CAPF を除く"
+          (null completion--eglot-super-capf)))))
+
+  (defun smoketest-run ()
+    "Run every smoke test, print the totals, and exit."
+    (smoketest--startup)
+    (smoketest--minibuffer)
+    (smoketest--corfu)
+    (smoketest--keys)
+    (smoketest--completion)
+    (smoketest--eglot-merge)
+    (smoketest--say "== 結果 PASS=%d FAIL=%d" smoketest--pass smoketest--fail)
+    (kill-emacs (if (zerop smoketest--fail) 0 1)))
+
+  (smoketest-run)
 #+end_src
 
 * Appendix: demo.png — デモ画像の撮影スクリプト

@@ -666,6 +666,31 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
 :header-args:emacs-lisp: :tangle ../lisp/utils/utils-diagnostics.el
 :END:
 
+設定を変えたあとの確認のうち、起動中の Emacs でしかできないものを、 =M-x= のコマンドにしています。
+バッチで動く =make smoketest= （ =org/tools.org= の Appendix: smoketest.el）の続きにあたります。
+
+| コマンド | 確認すること |
+|---+---|
+| =M-x my/smoketest-lsp= | 実際の言語サーバ（ =pyright-langserver= か =pylsp= ）に Eglot で接続し、Eglot の候補と dabbrev の合流を確かめる |
+| =M-x my/smoketest-terminal= | 子の =emacs -nw= を疑似端末で動かし、corfu-terminal が候補を文字で描くかを確かめる |
+| =M-x my/smoketest-gui= | posframe、Corfu、popupinfo の子フレームが、実際に見える状態になるかを確かめる |
+| =M-x my/smoketest= | 上の 3 つをまとめて実行する |
+
+結果は =*Smoketest*= バッファに、 =PASS= 、 =FAIL= 、 =SKIP= の行で並びます。
+サーバが無い環境や、グラフィカルでないフレームでは、該当の確認が =SKIP= になります。
+
+*実行中は何も入力しないでください* 。GUI の確認は、キー入力を送ってタイマーとポップアップを待つため、
+手でキーを打つと結果が狂います。
+
+*安全のための作り*
+
+- 端末の確認は、子の Emacs に *キー入力を送りません* 。子は =--eval= で自分専用のバッファを開き、
+  そこで補完を呼びます。以前の実装は、起動後に文字を打ち込んでいたため、子が復元したファイル
+  （ =init.el= ）に文字が入り込みました。復元されるファイルへ打つ作りは、二度と使わないでください。
+- LSP の確認は、一時ファイルを作り、終了時にサーバを止めて消します。
+- 確認できるのは、必要なフレームが作られ、見える状態になったかまでです。色や配置のような
+  *見た目* そのものは、目で見て確かめてください。
+
 #+begin_src emacs-lisp
   ;;; utils/utils-diagnostics.el --- 設定の診断補助 -*- lexical-binding: t; -*-
   ;;
@@ -685,9 +710,13 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   ;; - `my/print-feature-list': ロード済みの全 feature をアルファベット順に列挙する
   ;; - `my/check-missing-executables': 不足している外部ツールを報告する
   ;;   （rg、git、make、aspell、gpg、pass）
+  ;; - `my/smoketest' ほか: 起動中の Emacs で、LSP サーバとの接続（`my/smoketest-lsp'）、
+  ;;   端末フレーム（`my/smoketest-terminal'）、GUI のフレーム（`my/smoketest-gui'）を確かめ、
+  ;;   結果を *Smoketest* バッファに出す
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
+  (require 'cl-lib)
 
   (defun my/print-load-path ()
     "Display `load-path' entries in a *Load Path* view buffer."
@@ -719,6 +748,247 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
       (message "Executable check:")
       (dolist (tool tools)
         (message "  %s: %s" tool (if (executable-find tool) "ok" "MISSING")))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; ライブのスモークテスト（起動中の Emacs で実行する）
+  ;; ---------------------------------------------------------------------------
+  ;; `make smoketest' はバッチの Emacs で、画面を持たない確認だけを行う。
+  ;; 以下は、実際に動いている Emacs で、LSP サーバとの接続・端末フレーム・
+  ;; GUI のフレームを確かめる。結果は *Smoketest* バッファに PASS / FAIL / SKIP で並べる。
+  ;; 画面の「見た目」そのものは確かめられない。ここで見るのは、必要なフレームが
+  ;; 実際に作られて見えている状態になったか、までである。
+
+  (defvar completion--eglot-super-capf)
+  (defvar corfu--frame)
+  (defvar eglot-autoshutdown)
+  (defvar eglot-server-programs)
+  (defvar eglot-sync-connect)
+  (defvar corfu-popupinfo--frame)
+  (defvar nerd-icons-font-family)
+  (defvar vertico-posframe-mode)
+  (declare-function eglot "eglot")
+  (declare-function eglot-current-server "eglot")
+  (declare-function eglot-managed-p "eglot")
+  (declare-function eglot-shutdown "eglot")
+  (declare-function eglot-completion-at-point "eglot")
+  (declare-function corfu-quit "corfu")
+
+  (defvar utils-diagnostics--smoketest-results nil
+    "Results of the running live smoke test, newest first.
+  Each element is (STATUS NAME DETAIL) with STATUS one of PASS, FAIL, SKIP.")
+
+  (defun utils-diagnostics--smoketest-record (name thunk)
+    "Run THUNK and record the outcome under NAME; return non-nil on PASS.
+  THUNK returns non-nil for PASS and nil for FAIL.  A (skip . REASON) cons means
+  the check could not run; an error counts as FAIL and its message is kept."
+    (let* ((value (condition-case err (funcall thunk)
+                    (error (list 'error (error-message-string err)))))
+           (entry (cond ((eq (car-safe value) 'skip) (list 'SKIP name (cdr value)))
+                        ((eq (car-safe value) 'error) (list 'FAIL name (cadr value)))
+                        (value (list 'PASS name nil))
+                        (t (list 'FAIL name nil)))))
+      (push entry utils-diagnostics--smoketest-results)
+      (eq (car entry) 'PASS)))
+
+  (defun utils-diagnostics--smoketest-wait (pred seconds)
+    "Wait up to SECONDS for PRED to return non-nil, letting processes and timers run."
+    (let ((deadline (+ (float-time) seconds)))
+      (while (and (not (funcall pred)) (< (float-time) deadline))
+        (accept-process-output nil 0.2))
+      (funcall pred)))
+
+  (defun utils-diagnostics--smoketest-lsp ()
+    "Check the Eglot + dabbrev merge against a real Python language server."
+    (if (not (or (executable-find "pylsp") (executable-find "pyright-langserver")))
+        (utils-diagnostics--smoketest-record
+         "LSP: 実サーバとの合流" (lambda () '(skip . "pylsp / pyright-langserver が無い")))
+      (let* ((file (make-temp-file "smoketest-" nil ".py"
+                                   "import os\n# zebrafish_marker\nos.pa"))
+             (buf (find-file-noselect file)))
+        (unwind-protect
+            (with-current-buffer buf
+              (python-mode)
+              (goto-char (point-max))
+              (let ((eglot-sync-connect t)
+                    (eglot-autoshutdown t)
+                    (eglot-server-programs
+                     (cons (cons '(python-mode python-ts-mode)
+                                 (if (executable-find "pyright-langserver")
+                                     '("pyright-langserver" "--stdio")
+                                   '("pylsp")))
+                           eglot-server-programs)))
+                (call-interactively #'eglot))
+              (utils-diagnostics--smoketest-record
+               "LSP: Eglot が接続した"
+               (lambda () (utils-diagnostics--smoketest-wait
+                           (lambda () (and (eglot-managed-p) (eglot-current-server))) 20)))
+              (utils-diagnostics--smoketest-record
+               "LSP: 合流した CAPF が先頭にあり、Eglot 単体は消える"
+               (lambda () (and (functionp (car completion-at-point-functions))
+                               (not (memq 'eglot-completion-at-point
+                                          completion-at-point-functions)))))
+              ;; 合流した CAPF の前に、Eglot 単体が補完要求に答えるかを確かめる。答えないなら
+              ;; 合流の不具合ではなくサーバ側の問題なので、以降は SKIP にする。
+              (let ((server-ok
+                     (utils-diagnostics--smoketest-record
+                      "LSP: サーバが補完要求に応答する"
+                      (lambda ()
+                        (let ((res (eglot-completion-at-point)))
+                          (all-completions "pa" (nth 2 res))
+                          t)))))
+                (utils-diagnostics--smoketest-record
+                 "LSP: サーバの候補（os.pa → path）"
+                 (lambda ()
+                   (if (not server-ok)
+                       '(skip . "サーバが補完要求に応答しない")
+                     (utils-diagnostics--smoketest-wait
+                      (lambda ()
+                        (let ((res (funcall (car completion-at-point-functions))))
+                          (and res (member "path" (all-completions "pa" (nth 2 res))))))
+                      10))))
+                (utils-diagnostics--smoketest-record
+                 "LSP: サーバが知らない語の候補（dabbrev: zebra → zebrafish_marker）"
+                 (lambda ()
+                   (if (not server-ok)
+                       '(skip . "サーバが補完要求に応答しない")
+                     (save-excursion
+                       (goto-char (point-max))
+                       (insert "\nzebra")
+                       (let ((res (funcall (car completion-at-point-functions))))
+                         (and res (member "zebrafish_marker"
+                                          (all-completions "zebra" (nth 2 res)))))))))))
+          (when-let* ((server (with-current-buffer buf (eglot-current-server))))
+            (ignore-errors (eglot-shutdown server)))
+          (with-current-buffer buf (set-buffer-modified-p nil))
+          (kill-buffer buf)
+          (delete-file file)))))
+
+  (defun utils-diagnostics--smoketest-terminal ()
+    "Check that `emacs -nw' draws Corfu candidates, by driving it on a pty.
+The child never receives keystrokes meant for a buffer: it is started with an
+--eval form that opens its own scratch buffer and asks for completion there, so
+nothing can be typed into a file the child happens to restore."
+    (let* ((exe (expand-file-name invocation-name invocation-directory))
+           (out (generate-new-buffer " *smoketest-tty*"))
+           (process-environment (append '("TERM=xterm-256color") process-environment))
+           (form (concat "(progn (setq make-backup-files nil auto-save-default nil)"
+                         " (switch-to-buffer (get-buffer-create \"*smoketest-tty*\"))"
+                         " (emacs-lisp-mode) (insert \"(defu\") (completion-at-point))"))
+           (proc (make-process :name "smoketest-tty" :buffer out
+                               :connection-type 'pty :noquery t
+                               :command (list exe "-nw" "--init-directory"
+                                              (directory-file-name user-emacs-directory)
+                                              "--eval" form))))
+      (unwind-protect
+          (progn
+            (set-process-window-size proc 40 120)
+            (utils-diagnostics--smoketest-record
+             "端末: corfu-terminal が候補（defun）を描く"
+             (lambda () (utils-diagnostics--smoketest-wait
+                         (lambda () (with-current-buffer out
+                                      (save-excursion (goto-char (point-min))
+                                                      (search-forward "defun" nil t))))
+                         60))))
+        (when (process-live-p proc)
+          (process-send-string proc "\C-g\C-x\C-c")
+          (utils-diagnostics--smoketest-wait (lambda () (not (process-live-p proc))) 5))
+        (when (process-live-p proc) (kill-process proc))
+        (kill-buffer out))))
+
+  (defun utils-diagnostics--smoketest-gui ()
+    "Check that the posframe, Corfu and popupinfo frames are really shown."
+    (if (not (display-graphic-p))
+        (utils-diagnostics--smoketest-record
+         "GUI: フレームの確認" (lambda () '(skip . "グラフィカルなフレームではない")))
+      (utils-diagnostics--smoketest-record
+       "GUI: nerd-icons のフォントがある"
+       (lambda () (and (fboundp 'nerd-icons-icon-for-file)
+                       (find-font (font-spec :family nerd-icons-font-family)))))
+      (utils-diagnostics--smoketest-record
+       "GUI: vertico-posframe の子フレームが見える"
+       (lambda ()
+         (let (seen)
+           (run-with-timer 0.8 nil
+                           (lambda ()
+                             (setq seen (cl-some (lambda (f) (and (frame-parent f) (frame-visible-p f)))
+                                                 (frame-list)))
+                             (abort-recursive-edit)))
+           (condition-case nil (completing-read "smoketest: " '("alpha" "beta"))
+             (quit nil))
+           seen)))
+      (let ((buf (generate-new-buffer "*smoketest-gui*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer buf)
+              (emacs-lisp-mode)
+              ;; ポップアップは post-command-hook と corfu-auto のタイマーで出るので、
+              ;; 実際にキー入力として打ち、少し待つ。
+              (execute-kbd-macro "(defu")
+              (sit-for 1.0)
+              (utils-diagnostics--smoketest-record
+               "GUI: corfu のポップアップが見える"
+               (lambda () (and (boundp 'corfu--frame) (frame-live-p corfu--frame)
+                               (frame-visible-p corfu--frame))))
+              (execute-kbd-macro (kbd "C-n"))
+              (sit-for 1.5)
+              (utils-diagnostics--smoketest-record
+               "GUI: corfu-popupinfo の横表示が見える"
+               (lambda () (and (boundp 'corfu-popupinfo--frame)
+                               (frame-live-p corfu-popupinfo--frame)
+                               (frame-visible-p corfu-popupinfo--frame)))))
+          (ignore-errors (corfu-quit))
+          (kill-buffer buf)))))
+
+  (defun utils-diagnostics--smoketest-report ()
+    "Show the collected results in *Smoketest* and summarize them in the echo area."
+    (let ((results (reverse utils-diagnostics--smoketest-results))
+          (counts (list (cons 'PASS 0) (cons 'FAIL 0) (cons 'SKIP 0))))
+      (with-current-buffer (get-buffer-create "*Smoketest*")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (dolist (r results)
+            (cl-incf (cdr (assq (car r) counts)))
+            (insert (format "%-5s %s%s\n" (car r) (nth 1 r)
+                            (if (nth 2 r) (format "  (%s)" (nth 2 r)) ""))))
+          (insert (format "\n結果 PASS=%d FAIL=%d SKIP=%d\n"
+                          (cdr (assq 'PASS counts)) (cdr (assq 'FAIL counts))
+                          (cdr (assq 'SKIP counts)))))
+        (special-mode)
+        (goto-char (point-min)))
+      (display-buffer "*Smoketest*")
+      (message "smoketest: PASS=%d FAIL=%d SKIP=%d"
+               (cdr (assq 'PASS counts)) (cdr (assq 'FAIL counts)) (cdr (assq 'SKIP counts)))))
+
+  (defun my/smoketest-lsp ()
+    "Smoke-test the Eglot + dabbrev merge with a real language server."
+    (interactive)
+    (setq utils-diagnostics--smoketest-results nil)
+    (utils-diagnostics--smoketest-lsp)
+    (utils-diagnostics--smoketest-report))
+
+  (defun my/smoketest-terminal ()
+    "Smoke-test Corfu candidates in a real `emacs -nw' on a pty."
+    (interactive)
+    (setq utils-diagnostics--smoketest-results nil)
+    (utils-diagnostics--smoketest-terminal)
+    (utils-diagnostics--smoketest-report))
+
+  (defun my/smoketest-gui ()
+    "Smoke-test the posframe, Corfu and popupinfo frames in this GUI session."
+    (interactive)
+    (setq utils-diagnostics--smoketest-results nil)
+    (utils-diagnostics--smoketest-gui)
+    (utils-diagnostics--smoketest-report))
+
+  (defun my/smoketest ()
+    "Run the LSP, terminal and GUI smoke tests and show *Smoketest*.
+  Do not type while it runs: the GUI check waits on timers and popups."
+    (interactive)
+    (setq utils-diagnostics--smoketest-results nil)
+    (utils-diagnostics--smoketest-lsp)
+    (utils-diagnostics--smoketest-terminal)
+    (utils-diagnostics--smoketest-gui)
+    (utils-diagnostics--smoketest-report))
 
   (provide 'utils-diagnostics)
   ;;; utils/utils-diagnostics.el ends here

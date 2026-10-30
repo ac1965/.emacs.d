@@ -106,6 +106,7 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   ;;   フレームができた時点で一度だけ有効化する（daemon 対応。vertico/
   ;;   marginalia の初期化とは独立に扱う）
   ;; - vertico の候補表示数と posframe の枠幅を設定する
+  ;; - ファイル名補完を `vertico-directory' でディレクトリ単位に操作できるようにする
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -161,6 +162,19 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     :straight t
     :custom ((vertico-count . 15)))
 
+  ;; vertico 同梱の拡張。ファイル名補完で RET がディレクトリへ入り、DEL / M-DEL が
+  ;; パスを 1 階層ずつ戻る。`vertico-directory-tidy' は、~/ や / を打ち直したときに
+  ;; 入力済みのパスを捨てる。
+  (leaf vertico-directory
+    :straight nil
+    :after vertico
+    :bind (:vertico-map
+           :package vertico
+           ("RET"   . vertico-directory-enter)
+           ("DEL"   . vertico-directory-delete-char)
+           ("M-DEL" . vertico-directory-delete-word))
+    :hook (rfn-eshadow-update-overlay-hook . vertico-directory-tidy))
+
   (leaf marginalia
     :straight t
     ;; marginalia-align は defcustom である。どの leaf 宣言にも属させず浮かせるのではなく、
@@ -208,16 +222,34 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   ;; 本ファイルの責務:
   ;; - より豊かな候補表示のため、`xref-show-xrefs-function' と
   ;;   `xref-show-definitions-function' を `consult-xref' 経由にする
+  ;; - プレビューの遅延、絞り込みキー、レジスタのプレビューを設定する
+  ;; - consult-dir で、補完中にプロジェクトやブックマークのディレクトリへ移れるようにする
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
   (declare-function consult-xref "consult-xref")
+  (declare-function consult-register-format "consult")
 
   (leaf consult
     :straight t
     :custom ((xref-show-xrefs-function        . #'consult-xref)
-             (xref-show-definitions-function . #'consult-xref)))
+             (xref-show-definitions-function . #'consult-xref)
+             ;; 候補を移動するたびにプレビューが走らないよう、0.4 秒待つ。
+             (consult-preview-key            . '(:debounce 0.4 any))
+             (consult-narrow-key             . "<")
+             (register-preview-delay         . 0.5)
+             (register-preview-function      . #'consult-register-format)))
+
+  ;; C-x C-d は組み込みの `list-directory' を置き換える。ミニバッファ内では
+  ;; C-x C-d でディレクトリ一覧、C-x C-j でそこからファイルを選べる。
+  (leaf consult-dir
+    :straight t
+    :bind (("C-x C-d" . consult-dir)
+           (:vertico-map
+            :package vertico
+            ("C-x C-d" . consult-dir)
+            ("C-x C-j" . consult-dir-jump-file))))
 
   (provide 'completion-consult)
   ;;; completion/completion-consult.el ends here
@@ -246,6 +278,8 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   ;; - `prefix-help-command' を `embark-prefix-help-command' に設定する
   ;; - `embark-collect' バッファで `consult-preview-at-point-mode' を有効化する
   ;; - Embark 本体のグローバルキーバインドを設定する（s-/、s-;、C-<f2>）
+  ;; - wgrep を導入する。consult-ripgrep などの結果を `embark-export' で grep-mode の
+  ;;   バッファに書き出し、C-c C-p で編集、C-c C-c で全ファイルへ反映できる
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -263,6 +297,10 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     :straight t
     :after (embark consult)
     :hook (embark-collect-mode . consult-preview-at-point-mode))
+
+  (leaf wgrep
+    :straight t
+    :after embark)
 
   (provide 'completion-embark)
   ;;; completion/completion-embark.el ends here
@@ -296,6 +334,17 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   ;; - 補完アイコンのため kind-icon をマージン整形関数として設置する
   ;; - Emacs 31 以降は、prog-mode と org-mode で `completion-preview-mode' を有効化し、
   ;;   ランキングを Corfu に合わせる（ターミナル系のバッファでは抑止する）
+  ;; - `corfu-popupinfo-mode' で、選択中の候補のドキュメントを横に表示する
+  ;; - `corfu-history-mode' で、選んだ候補を次回から上位に出す
+  ;; - 端末フレーム（emacs -nw）では corfu-terminal でポップアップを描く
+  ;;
+  ;; 注意: corfu-history は履歴を `savehist-additional-variables' に載せない。
+  ;; core-history.el が、Emacs 31 の savehist の履歴ファイルのマージ（複数の Emacs
+  ;; が 1 つの履歴ファイルを共有するための機能）を生かすため、ユーザー変数を
+  ;; 追加しない方針だからである。そのため候補の履歴はセッション内だけで効く。
+  ;;
+  ;; 注意: corfu-terminal-mode はフレームごとの切り替えができない大域モードなので、
+  ;; デーモンでは有効化しない（GUI フレームのポップアップを壊さないため）。
   ;;
   ;; 注意: `remove-hook' の対象は `window-setup-hook' であって、
   ;; `completion-at-point-functions' ではない。
@@ -311,15 +360,23 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 
   (declare-function core-runtime-add-hook-once "core-runtime")
   (declare-function global-corfu-mode "corfu")
+  (declare-function corfu-popupinfo-mode "corfu-popupinfo")
+  (declare-function corfu-history-mode "corfu-history")
+  (declare-function corfu-terminal-mode "corfu-terminal")
 
   (defun completion-corfu--init ()
     "Initialize Corfu, kind-icon, and Cape.
-  Activates `global-corfu-mode', registers kind-icon as a margin formatter,
-  and prepends Cape sources (elisp-symbol, file, dabbrev) to the global CAPF list.
+  Activates `global-corfu-mode' with its popupinfo and history extensions,
+  registers kind-icon as a margin formatter, and prepends Cape sources
+  (elisp-symbol, file, dabbrev) to the global CAPF list.
   一度だけ実行する保証は `core-runtime-add-hook-once' が担う（下の登録を参照）。"
     (require 'corfu)
     ;; tab-always-indent は defcustom（indent.el）であり、下の leaf corfu :custom で設定する。
     (global-corfu-mode 1)
+    (require 'corfu-popupinfo)
+    (require 'corfu-history)
+    (corfu-popupinfo-mode 1)
+    (corfu-history-mode 1)
     (require 'kind-icon)
     ;; kind-icon が既に存在する場合の重複登録を避けるため cl-pushnew を使う。
     (cl-pushnew #'kind-icon-margin-formatter corfu-margin-formatters)
@@ -341,9 +398,28 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
              (corfu-cycle       . t)
              ;; tab-always-indent は defcustom であり、:custom に属する。
              (tab-always-indent . 'complete)))
+  ;; corfu 同梱の拡張。モードの有効化は上の `completion-corfu--init' で行う。
+  (leaf corfu-popupinfo
+    :straight nil
+    :after corfu
+    :custom ((corfu-popupinfo-delay . '(0.5 . 0.2))))
+  (leaf corfu-history :straight nil :after corfu)
+
   (leaf kind-icon :straight t :after corfu :require t
     :custom ((kind-icon-default-face . 'corfu-default)))
   (leaf cape :straight t :after corfu)
+
+  ;; 端末（emacs -nw）では Corfu の子フレームが使えないため、corfu-terminal で描く。
+  ;; `tty-setup-hook' は端末フレームの初期化時にだけ走るので、ロード時に
+  ;; (display-graphic-p) で分岐せずに済む。デーモンでは有効化しない（Commentary 参照）。
+  (defun completion-corfu--enable-terminal ()
+    "Enable `corfu-terminal-mode' on a TTY frame, except under a daemon."
+    (unless (daemonp)
+      (require 'corfu-terminal)
+      (corfu-terminal-mode 1)))
+
+  (leaf corfu-terminal :straight t :after corfu :require nil)
+  (add-hook 'tty-setup-hook #'completion-corfu--enable-terminal)
 
   ;; ---------------------------------------------------------------------------
   ;; Emacs 31: Completion Preview（組み込みのインライン「ゴーストテキスト」）
@@ -444,6 +520,12 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   ;; - emacs-lisp、prog、text、org、shell、repl の各 CAPF スタックを定義する
   ;; - 各スタックを対応するモードフックに登録する
   ;; - 正式な `completion-category-overrides' テーブルを所有する
+  ;; - Eglot が管理するバッファでは、Eglot の候補に `cape-dabbrev' を合流させる
+  ;;
+  ;; 注意: 上の静的なスタック（elisp、text、org、shell）を `cape-capf-super' で 1 つに
+  ;; まとめることはしない。`cape-capf-super' は補完の開始位置が違う CAPF を合流できず
+  ;; （file や tex は symbol と開始位置が違う）、file 補完が静かに落ちるためである。
+  ;; Eglot と dabbrev は同じ開始位置で補うので、合流させても失うものがない。
   ;;
   ;; 注意: `completion-category-overrides' はここでのみ設定する。
   ;; completion-core.el は意図的にこれを省いている。本ファイルは（completion-core.el で
@@ -482,6 +564,32 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     "Augment the existing REPL CAPF stack with dabbrev source."
     (completion--set-capfs (append completion-at-point-functions '(cape-dabbrev))))
 
+  (declare-function cape-capf-super "cape")
+  (declare-function eglot-completion-at-point "eglot")
+  (declare-function eglot-managed-p "eglot")
+
+  (defvar-local completion--eglot-super-capf nil
+    "The merged Eglot + dabbrev CAPF installed in this buffer, or nil.")
+
+  (defun completion--eglot-capfs ()
+    "Merge Eglot completion with `cape-dabbrev' while Eglot manages this buffer.
+  Run from `eglot-managed-mode-hook', which fires on both enabling and
+  disabling, so the merged CAPF is removed again when Eglot lets go."
+    (if (eglot-managed-p)
+        (when (and (not completion--eglot-super-capf)
+                   (memq #'eglot-completion-at-point completion-at-point-functions))
+          (require 'cape)
+          (setq completion--eglot-super-capf
+                (cape-capf-super #'eglot-completion-at-point #'cape-dabbrev))
+          (setq-local completion-at-point-functions
+                      (cons completion--eglot-super-capf
+                            (remq #'eglot-completion-at-point
+                                  completion-at-point-functions))))
+      (when completion--eglot-super-capf
+        (setq-local completion-at-point-functions
+                    (remq completion--eglot-super-capf completion-at-point-functions))
+        (setq completion--eglot-super-capf nil))))
+
   (add-hook 'emacs-lisp-mode-hook #'completion--elisp-capfs)
   (add-hook 'lisp-interaction-mode-hook #'completion--elisp-capfs)
   (add-hook 'prog-mode-hook #'completion--prog-capfs)
@@ -491,6 +599,7 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   (add-hook 'eshell-mode-hook #'completion--shell-capfs)
   (add-hook 'ielm-mode-hook #'completion--repl-capfs)
   (add-hook 'comint-mode-hook #'completion--repl-capfs)
+  (add-hook 'eglot-managed-mode-hook #'completion--eglot-capfs)
 
   ;; completion-category-overrides は defcustom（minibuffer.el）である。
   ;; 本ファイルが正式な所有者であり（Commentary 参照）、setter と型検証を尊重するため

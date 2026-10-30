@@ -1313,6 +1313,7 @@ git diff README.org   # 差分を確認してコミットする
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
 	@echo "  make checkdoc                 # 公開 defun の docstring を検証"
 	@echo "  make check-bytecomp           # init を読み込んでバイトコンパイルし警告を一覧（約 40 秒、lint には含めない）"
+	@echo "  make smoketest                # init を読み込んで起動・キー・補完の動作を確かめる（約 40 秒、lint には含めない）"
 	@echo "  make cheatsheet               # キーバインド一覧 SVG を実際のキーマップから作り直す（約 40 秒）"
 	@echo "  make check-cheatsheet         # コミット済みの一覧 SVG が今のキーマップと同じかを調べる（約 40 秒、lint には含めない）"
 	@echo "  make package-lint             # MELPA 形式のパッケージヘッダ検証（要 package-lint）"
@@ -1573,6 +1574,21 @@ git diff README.org   # 差分を確認してコミットする
 	@err=$$(mktemp); \
   	  ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/check-bytecomp.el" 2>"$$err"; rc=$$?; \
   	  if [ $$rc -gt 1 ]; then echo "[check-bytecomp] Emacs が異常終了しました (終了コード $${rc})。標準エラーの末尾:" >&2; \
+  	    grep -v '$(EMACS_NOISE_RE)' "$$err" | tail -20 >&2; fi; \
+  	  rm -f "$$err"; exit $$rc
+
+  # ---- smoketest : 起動と動作のスモークテスト ------------------------------------------
+  # init を読み込んだ Emacs で、キー割り当て・補完・各拡張の設定が実際に動くかを確かめる。
+  # 失敗が 1 件でもあれば終了コード 1 で終わる。約 40 秒かかるので lint には含めない。
+  # バッチの Emacs は straight のビルドキャッシュを書き直して GUI 起動を壊しうるため、
+  # 本体が開始時に退避し、終了時に元へ戻す。
+  # 本体は scripts/smoketest.el（org/tools.org の Appendix: smoketest.el を参照）。
+  .PHONY: smoketest
+  smoketest:
+	@echo "[smoketest] init を読み込んで動作を確かめる (約 40 秒かかる) ..."
+	@err=$$(mktemp); \
+  	  ROOT="$(ROOT)" $(EMACS_BATCH) -l "$(EARLY)" -l "$(INIT)" -l "$(ROOT)/scripts/smoketest.el" 2>"$$err"; rc=$$?; \
+  	  if [ $$rc -gt 1 ]; then echo "[smoketest] Emacs が異常終了しました (終了コード $${rc})。標準エラーの末尾:" >&2; \
   	    grep -v '$(EMACS_NOISE_RE)' "$$err" | tail -20 >&2; fi; \
   	  rm -f "$$err"; exit $$rc
 
@@ -2128,6 +2144,28 @@ digraph personal_override_contract {
 
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
+2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* org/utils.org (utils-diagnostics) (my/smoketest, my/smoketest-lsp, my/smoketest-terminal,
+	my/smoketest-gui): 起動中の Emacs で、実 LSP サーバ・端末フレーム・GUI のフレームを確かめる
+	M-x コマンドを追加した。端末の確認は子の Emacs にキー入力を送らず、--eval で自分専用の
+	バッファに補完させる（キー入力を送る方式は、子が復元した init.el に文字を書き込んだため）。
+
+	* org/tools.org (Appendix: smoketest.el), README.org (Makefile) (smoketest): 設定を変えたあとの
+	起動テストと動作テスト scripts/smoketest.el と make smoketest を追加した。
+	バッチの Emacs が straight のビルドキャッシュを書き直し、GUI の起動で consult-line が
+	未定義になったため、開始時に退避して終了時に元へ戻す。
+
+2026-10-30  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* org/completion.org (completion-vertico, completion-consult,
+	completion-embark, completion-corfu, completion-capf): 補完層を強化した。
+	vertico-directory（ファイル名補完をディレクトリ単位で操作）、
+	corfu-popupinfo、corfu-history、corfu-terminal（端末フレームのみ。デーモンでは無効）、
+	consult のプレビュー遅延・絞り込みキー・レジスタのプレビュー、consult-dir、wgrep を追加。
+	Eglot 管理下のバッファでは、Eglot の候補に cape-dabbrev を cape-capf-super で合流させる
+	（completion--eglot-capfs）。corfu-history は savehist に載せない（core-history の方針）。
+
 2026-10-29  YAMASHITA Takao  <tjy1965@gmail.com>
 
 	* org/ui.org (ui-keys), org/completion.org (completion-consult,
