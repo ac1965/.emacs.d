@@ -671,13 +671,25 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
 
 | コマンド | 確認すること |
 |---+---|
-| =M-x my/smoketest-lsp= | 実際の言語サーバ（ =pyright-langserver= か =pylsp= ）に Eglot で接続し、Eglot の候補と dabbrev の合流を確かめる |
+| =M-x my/smoketest-lsp= | 実際の言語サーバ（Python は =pyright-langserver= 、C は =clangd= 、Go は =gopls= ）に Eglot で接続し、サーバ自身の候補と、Eglot の候補への dabbrev の合流を確かめる |
 | =M-x my/smoketest-terminal= | 子の =emacs -nw= を疑似端末で動かし、corfu-terminal が候補を文字で描くかを確かめる |
 | =M-x my/smoketest-gui= | posframe、Corfu、popupinfo の子フレームが、実際に見える状態になるかを確かめる |
 | =M-x my/smoketest= | 上の 3 つをまとめて実行する |
 
 結果は =*Smoketest*= バッファに、 =PASS= 、 =FAIL= 、 =SKIP= の行で並びます。
 サーバが無い環境や、グラフィカルでないフレームでは、該当の確認が =SKIP= になります。
+
+*LSP の確認の作り*
+
+- 言語ごとに、一時ディレクトリへ小さなファイルを作ります。Go には =go.mod= も置きます。
+  試験用のファイルは専用のディレクトリに入れます。システムの一時ディレクトリ全体がプロジェクトの根になると、
+  サーバがその全体を調べに行くためです。
+- モードは設定せず、ファイルを開いたときに自動で選ばれたものを使います。 =auto-mode-alist= や
+  tree-sitter の remap（ =core-treesit= ）まで含めて確かめるためです。Python は =python-ts-mode= 、
+  C は =c-ts-mode= 、Go は =go-ts-mode= が選ばれるはずです。
+- C の候補は、 =printf(const char * _Nonnull, ...)= のように、名前のあとに型の情報が付きます。
+  このため候補の一致は「期待する名前で始まる」ことで判定します。
+- サーバが補完要求に答えない場合は、合流の不具合と区別するため、以降の確認を =SKIP= にします。
 
 *実行中は何も入力しないでください* 。GUI の確認は、キー入力を送ってタイマーとポップアップを待つため、
 手でキーを打つと結果が狂います。
@@ -797,71 +809,103 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
         (accept-process-output nil 0.2))
       (funcall pred)))
 
+  (defconst utils-diagnostics--smoketest-lsp-specs
+    '(("Python" "t.py" (python-ts-mode python-mode)
+       "import os\n# zebrafish_marker\nos.pa" "pa" "path" "pyright-langserver" nil)
+      ("C" "t.c" (c-ts-mode c-mode)
+       "#include <stdio.h>\nint main(void) {\n// zebrafish_marker\nprin" "prin" "printf"
+       "clangd" nil)
+      ("Go" "t.go" (go-ts-mode go-mode)
+       "package main\n\nimport \"fmt\"\n\nfunc main() {\n\t// zebrafish_marker\n\tfmt.Prin"
+       "Prin" "Println" "gopls"
+       (("go.mod" . "module smoketest\n\ngo 1.21\n"))))
+    "Languages the live LSP smoke test tries.
+  Each element is (LABEL FILE MODES TEXT PREFIX EXPECT EXECUTABLE
+  EXTRA-FILES).  Visiting FILE must select one of MODES by itself, so
+  the file-to-mode mapping and the tree-sitter remaps are tested too.
+  TEXT ends with PREFIX, which the server should complete to a
+  candidate starting with EXPECT (clangd appends the signature).
+  EXTRA-FILES is an alist of (NAME . CONTENT) files created beside
+  FILE.")
+
+  (defun utils-diagnostics--smoketest-lsp-one (spec)
+    "Run the mode and Eglot + dabbrev merge checks for one language SPEC."
+    (pcase-let ((`(,label ,file ,modes ,text ,prefix ,expect ,exe ,extra) spec))
+      (if (not (executable-find exe))
+          (utils-diagnostics--smoketest-record
+           (format "LSP %s: 実サーバとの合流" label)
+           (lambda () (cons 'skip (format "%s が無い" exe))))
+        ;; 一時ファイルだけの専用ディレクトリにして、システムの一時ディレクトリ全体が
+        ;; プロジェクトの根にならないようにする。
+        (let* ((dir (make-temp-file "smoketest-" t))
+               (path (expand-file-name file dir))
+               buf)
+          (dolist (f extra)
+            (write-region (cdr f) nil (expand-file-name (car f) dir) nil 'silent))
+          (write-region text nil path nil 'silent)
+          (setq buf (find-file-noselect path))
+          (unwind-protect
+              (with-current-buffer buf
+                (goto-char (point-max))
+                ;; モードは find-file が自分で選んだものを使う（auto-mode-alist と
+                ;; tree-sitter の remap まで含めて確かめるため、ここでは設定しない）。
+                (utils-diagnostics--smoketest-record
+                 (format "LSP %s: ファイルを開くと %s のいずれかになる" label modes)
+                 (lambda () (or (memq major-mode modes)
+                                (list 'error (format "実際は %s" major-mode)))))
+                (let ((eglot-sync-connect t)
+                      (eglot-autoshutdown t))
+                  (call-interactively #'eglot))
+                (utils-diagnostics--smoketest-record
+                 (format "LSP %s: Eglot が接続した" label)
+                 (lambda () (utils-diagnostics--smoketest-wait
+                             (lambda () (and (eglot-managed-p) (eglot-current-server))) 30)))
+                (utils-diagnostics--smoketest-record
+                 (format "LSP %s: 合流した CAPF が先頭にあり、Eglot 単体は消える" label)
+                 (lambda () (and (functionp (car completion-at-point-functions))
+                                 (not (memq 'eglot-completion-at-point
+                                            completion-at-point-functions)))))
+                ;; 合流した CAPF の前に、Eglot 単体が補完要求に答えるかを確かめる。答えないなら
+                ;; 合流の不具合ではなくサーバ側の問題なので、以降は SKIP にする。
+                (let ((server-ok
+                       (utils-diagnostics--smoketest-record
+                        (format "LSP %s: サーバが補完要求に応答する" label)
+                        (lambda ()
+                          (let ((res (eglot-completion-at-point)))
+                            (all-completions prefix (nth 2 res))
+                            t)))))
+                  (utils-diagnostics--smoketest-record
+                   (format "LSP %s: サーバの候補（%s → %s）" label prefix expect)
+                   (lambda ()
+                     (if (not server-ok)
+                         '(skip . "サーバが補完要求に応答しない")
+                       (utils-diagnostics--smoketest-wait
+                        (lambda ()
+                          (let ((res (funcall (car completion-at-point-functions))))
+                            (and res (cl-some (lambda (c) (string-prefix-p expect c))
+                                              (all-completions prefix (nth 2 res))))))
+                        20))))
+                  (utils-diagnostics--smoketest-record
+                   (format "LSP %s: サーバが知らない語の候補（dabbrev: zebra → zebrafish_marker）" label)
+                   (lambda ()
+                     (if (not server-ok)
+                         '(skip . "サーバが補完要求に応答しない")
+                       (save-excursion
+                         (goto-char (point-max))
+                         (insert "\nzebra")
+                         (let ((res (funcall (car completion-at-point-functions))))
+                           (and res (member "zebrafish_marker"
+                                            (all-completions "zebra" (nth 2 res))))))))))
+                (when-let* ((server (eglot-current-server)))
+                  (ignore-errors (eglot-shutdown server))))
+            (with-current-buffer buf (set-buffer-modified-p nil))
+            (kill-buffer buf)
+            (delete-directory dir t))))))
+
   (defun utils-diagnostics--smoketest-lsp ()
-    "Check the Eglot + dabbrev merge against a real Python language server."
-    (if (not (or (executable-find "pylsp") (executable-find "pyright-langserver")))
-        (utils-diagnostics--smoketest-record
-         "LSP: 実サーバとの合流" (lambda () '(skip . "pylsp / pyright-langserver が無い")))
-      (let* ((file (make-temp-file "smoketest-" nil ".py"
-                                   "import os\n# zebrafish_marker\nos.pa"))
-             (buf (find-file-noselect file)))
-        (unwind-protect
-            (with-current-buffer buf
-              (python-mode)
-              (goto-char (point-max))
-              (let ((eglot-sync-connect t)
-                    (eglot-autoshutdown t)
-                    (eglot-server-programs
-                     (cons (cons '(python-mode python-ts-mode)
-                                 (if (executable-find "pyright-langserver")
-                                     '("pyright-langserver" "--stdio")
-                                   '("pylsp")))
-                           eglot-server-programs)))
-                (call-interactively #'eglot))
-              (utils-diagnostics--smoketest-record
-               "LSP: Eglot が接続した"
-               (lambda () (utils-diagnostics--smoketest-wait
-                           (lambda () (and (eglot-managed-p) (eglot-current-server))) 20)))
-              (utils-diagnostics--smoketest-record
-               "LSP: 合流した CAPF が先頭にあり、Eglot 単体は消える"
-               (lambda () (and (functionp (car completion-at-point-functions))
-                               (not (memq 'eglot-completion-at-point
-                                          completion-at-point-functions)))))
-              ;; 合流した CAPF の前に、Eglot 単体が補完要求に答えるかを確かめる。答えないなら
-              ;; 合流の不具合ではなくサーバ側の問題なので、以降は SKIP にする。
-              (let ((server-ok
-                     (utils-diagnostics--smoketest-record
-                      "LSP: サーバが補完要求に応答する"
-                      (lambda ()
-                        (let ((res (eglot-completion-at-point)))
-                          (all-completions "pa" (nth 2 res))
-                          t)))))
-                (utils-diagnostics--smoketest-record
-                 "LSP: サーバの候補（os.pa → path）"
-                 (lambda ()
-                   (if (not server-ok)
-                       '(skip . "サーバが補完要求に応答しない")
-                     (utils-diagnostics--smoketest-wait
-                      (lambda ()
-                        (let ((res (funcall (car completion-at-point-functions))))
-                          (and res (member "path" (all-completions "pa" (nth 2 res))))))
-                      10))))
-                (utils-diagnostics--smoketest-record
-                 "LSP: サーバが知らない語の候補（dabbrev: zebra → zebrafish_marker）"
-                 (lambda ()
-                   (if (not server-ok)
-                       '(skip . "サーバが補完要求に応答しない")
-                     (save-excursion
-                       (goto-char (point-max))
-                       (insert "\nzebra")
-                       (let ((res (funcall (car completion-at-point-functions))))
-                         (and res (member "zebrafish_marker"
-                                          (all-completions "zebra" (nth 2 res)))))))))))
-          (when-let* ((server (with-current-buffer buf (eglot-current-server))))
-            (ignore-errors (eglot-shutdown server)))
-          (with-current-buffer buf (set-buffer-modified-p nil))
-          (kill-buffer buf)
-          (delete-file file)))))
+    "Check the Eglot + dabbrev merge against real servers (Python, C, Go)."
+    (dolist (spec utils-diagnostics--smoketest-lsp-specs)
+      (utils-diagnostics--smoketest-lsp-one spec)))
 
   (defun utils-diagnostics--smoketest-terminal ()
     "Check that `emacs -nw' draws Corfu candidates, by driving it on a pty.

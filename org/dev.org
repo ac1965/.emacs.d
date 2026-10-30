@@ -161,6 +161,8 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
   ;; - C/C++ は clangd（--background-index --clang-tidy）、Python は pyright を
   ;;   `eglot-server-programs' に登録する（clangd は Homebrew の llvm を優先）
   ;; - 最後のバッファを閉じたらサーバを止める（`eglot-autoshutdown'）
+  ;; - サーバが動的に登録するファイル監視（`workspace/didChangeWatchedFiles'）を受け付けない
+  ;;   （`dev-lsp-eglot--skip-file-watchers'）。理由は下の「ファイル監視を受け付けない理由」
   ;; - eglot は Emacs 同梱を使う（`:straight nil'。コーディング規則 3）。`:straight t' だと
   ;;   ELPA から eglot と、その依存の eldoc・flymake・project・xref・jsonrpc などまで
   ;;   取得して同梱版を上書きし、初回の起動も遅くなる
@@ -169,12 +171,30 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
   ;; rename / code-actions は `dev-lsp-rename'、`dev-lsp-code-actions'（ui-keymap の
   ;; leader-c-map）で呼ぶ。`C-c r' は query-replace に使っているため eglot-mode-map には
   ;; 割り当てない。
+  ;;
+  ;; ファイル監視を受け付けない理由:
+  ;; pyright は起動直後に、Python のインストール先（site-packages）全体を対象にした
+  ;; ファイル監視を登録してくる。Eglot はこれを kqueue で監視するが、kqueue は
+  ;; ファイル 1 つにつきファイル記述子を 1 つ使うため、site-packages のような大きな木では
+  ;; 記述子が尽きて `file-notify-error' になる。Eglot はサーバへ「Internal error」と返し、
+  ;; pyright はそれを受けて終了コード 1 で落ちる。Eglot は再接続を繰り返し、補完要求は
+  ;; 「Server died」で失敗する（2026-10-31 に M-x my/smoketest-lsp で見つかった）。
+  ;; pylsp でも同じ形で落ちた。代わりに失うのは、エディタの外でファイルが変わったときの
+  ;; 通知だけである。サーバは開いているバッファの内容を didChange で受け取るので、
+  ;; 編集中の補完・診断・定義ジャンプには影響しない。
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は eglot 側にある）。
   (defvar eglot-server-programs)
+
+  (defun dev-lsp-eglot--skip-file-watchers (orig server method &rest args)
+    "Around advice for `eglot-register-capability': ignore file-watch registrations.
+  Call ORIG with SERVER, METHOD and ARGS for every other method.  Return nil
+  without calling ORIG when METHOD is `workspace/didChangeWatchedFiles'."
+    (unless (eq method 'workspace/didChangeWatchedFiles)
+      (apply orig server method args)))
 
   (defun my/eglot-guessable-p ()
     "Return non-nil if Eglot can guess a server for the current buffer.
@@ -210,6 +230,7 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
              (eglot-autoshutdown . t))
     :hook ((prog-mode . dev-lsp-eglot--maybe-ensure))
     :config
+    (advice-add 'eglot-register-capability :around #'dev-lsp-eglot--skip-file-watchers)
     (add-to-list 'eglot-server-programs
                  `((c-mode c-ts-mode c++-mode c++-ts-mode)
                    . (,(let ((brew "/opt/homebrew/opt/llvm/bin/clangd"))
