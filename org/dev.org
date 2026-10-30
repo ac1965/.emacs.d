@@ -339,10 +339,15 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   ;; - CLI 引数を重複なく拡張するための `dev-ai--append-unique-args' を提供する
   ;;
   ;; - ターミナル・バックエンドを選択する: vterm が使えればそれを、無ければ comint
-  ;; - `aidermacs-run' の直前（:before advice）に一度だけ、~/.authinfo.gpg の
-  ;;   openrouter.ai のエントリを auth-source から取り、見つかれば OpenRouter の
-  ;;   エンドポイントと `OPENAI_API_KEY' を設定する。見つからなければ警告を出す
-  ;;   （OpenAI 直接アクセスへのフォールバックは、コメントアウトしてあり無効）
+  ;; - `aidermacs-run' の直前（:before advice）に一度だけ、`dev-ai-credentials-function'
+  ;;   が返す認証情報（:api-base :api-key :model）を `OPENAI_API_BASE' / `OPENAI_API_KEY' と
+  ;;   `aidermacs-default-model' に設定する。得られなければ警告を出す
+  ;;
+  ;; API キーの取得先（auth-source など）を、本モジュールは知らない。取得は personal 層の
+  ;; `personal-credentials' が担い、`dev-ai-credentials-function' へ渡す。下位層である dev は
+  ;; 上位層の personal を参照できないため、関数を差し込む形で依存の向きを保っている。
+  ;; 取得を実際に使う瞬間（`aidermacs-run' の直前）まで遅らせる理由と、検索を 1 回にまとめる
+  ;; 理由（GPG / Touch ID の連続認証が失敗した）は、`personal-credentials' に書いてある。
   ;;; Code:
 
   (eval-when-compile (require 'leaf) (require 'subr-x))
@@ -379,108 +384,41 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   (defvar dev-ai--api-key-configured nil
     "Non-nil once `dev-ai--setup-api-key' has run in this session.")
 
-  ;; API キーの参照は `aidermacs-run' への :before advice で行う。after-init-hook
-  ;; では *ない*。
-  ;;
-  ;; 落とし穴その1（実機で踏んだ）: `add-hook' は APPEND 引数を渡さない限り新しい
-  ;; 関数をフックリストの *先頭* に追加する（同じ DEPTH 内では後から登録した関数
-  ;; ほど先に走る）。当初 after-init-hook DEPTH 10 で登録していたが、これは
-  ;; auth-core（epa-file-enable）／auth-gpg（~/.authinfo.gpg を auth-sources へ
-  ;; 追加）の既定 DEPTH（0）より後に走ることは保証できても、それ以外の問題までは
-  ;; 解決しなかった（落とし穴その2参照）。
-  ;;
-  ;; 落とし穴その2（実機で踏んだ）: after-init-hook で毎起動時に無条件でキーを
-  ;; 検索する設計そのものが問題だった。 =auth-source-backends= （auth-source.el
-  ;; 組み込みマクロ）はキャッシュを持たず、呼ばれるたびに =auth-sources= の
-  ;; 全エントリを再パースする——=~/.authinfo.gpg= も呼ばれるたびに epa-file 経由で
-  ;; 再復号される。旧実装は openrouter.ai と api.openai.com を別々に2回
-  ;; =auth-source-search= していたため、Emacs 起動直後に GPG 復号（macOS では
-  ;; Touch ID 生体認証）が短時間に2回連続で走ってしまい、2回目が
-  ;; "No secret key" で失敗する（LAContext の生体評価は極端に短い間隔で連続実行
-  ;; できないため）という、毎起動ごとに再現する形で表面化した。
-  ;;
-  ;; 対処（この2つを両方やって初めて解決する）:
-  ;;   1. 検索を1回の =auth-source-search= にまとめる（:host にリストを渡し、
-  ;;      結果を host で振り分ける）。無条件の2回検索を1回に減らす。
-  ;;   2. after-init-hook を完全にやめ、`aidermacs-run' への :before advice に
-  ;;      変更する。これにより GPG/Touch ID 認証は「実際に aidermacs を使う
-  ;;      瞬間」だけに発生し、通常の Emacs 起動では一切発生しない。
-  ;;      `dev-ai--api-key-configured' で 1 セッション 1 回だけに絞り、
-  ;;      `aidermacs-run' を呼ぶたびに再認証が走らないようにする。
-  ;;
-  ;; ~/.authinfo.gpg のエントリ形式:
-  ;;   machine openrouter.ai login ac1965  password sk-or-...
-  ;;   machine api.openai.com login org-ai password sk-proj-...
-  ;;
-  ;; :user の値は ~/.authinfo.gpg の `login' フィールドと厳密に一致させること。
-  (defun dev-ai--ensure-authinfo-in-sources ()
-    "Ensure the GPG credential store is in `auth-sources' before searching.
-  Reads `auth-gpg-file' when the auth-gpg module is loaded, falling back to
-  ~/.authinfo.gpg.  Adds the file to the front of `auth-sources' if absent and
-  clears the auth-source cache so the next search reads the file fresh.
-  Called by `dev-ai--setup-api-key'."
-    (require 'auth-source)
-    (let ((gpg-file (expand-file-name
-                     (if (boundp 'auth-gpg-file)
-                         auth-gpg-file
-                       "~/.authinfo.gpg"))))
-      (when (and (file-exists-p gpg-file)
-                 (not (member gpg-file auth-sources)))
-        (setopt auth-sources (cons gpg-file auth-sources))
-        (auth-source-forget-all-cached))))
+  (defgroup dev-ai nil
+    "AI-assisted development helpers."
+    :group 'tools)
 
+  (defcustom dev-ai-credentials-function nil
+    "Function of no arguments that returns the credentials aider should use.
+  It returns a plist (:api-base URL :api-key KEY :model MODEL), or nil when
+  there is no key.  The personal layer sets it (`personal-credentials-aider');
+  this layer never learns where the key is stored."
+    :type '(choice (const :tag "None" nil) function)
+    :group 'dev-ai)
+
+  (defvar aidermacs-default-model)
+
+  ;; 認証情報の参照は `aidermacs-run' への :before advice で行う。after-init-hook では
+  ;; ない。GPG / Touch ID の認証を、実際に aidermacs を使う瞬間だけにするためである。
   (defun dev-ai--setup-api-key (&rest _ignore)
-    "Configure OPENAI_API_KEY and OPENAI_API_BASE from auth-source.
-  Reads ~/.authinfo.gpg via a *single* `auth-source-search' call for:
-    machine openrouter.ai login ac1965  (preferred)
-    machine api.openai.com login org-ai (fallback)
-  A single call is deliberate: `auth-source-backends' rebuilds every backend
-  (including re-decrypting ~/.authinfo.gpg via epa-file) on every call, with
-  no cache of its own.  Two back-to-back calls used to trigger two Touch ID
-  prompts in immediate succession, and the second reliably failed with
-  \"No secret key\" (see the comment above).
-  Calls `dev-ai--ensure-authinfo-in-sources' first so the lookup succeeds
-  even if `auth-gpg--configure-sources' has not added the file yet.
-  Added as `:before' advice on `aidermacs-run' (not `after-init-hook'), so
-  this — and the GPG/Touch ID prompt it triggers — only happens when
-  aidermacs is actually invoked, never on ordinary Emacs startup.
-  Runs at most once per session, guarded by `dev-ai--api-key-configured'."
+    "Export the credentials from `dev-ai-credentials-function' for aider.
+  Added as `:before' advice on `aidermacs-run' and run at most once per session
+  (guarded by `dev-ai--api-key-configured'), so that any prompt the lookup
+  triggers happens only when aidermacs is actually used."
     (unless dev-ai--api-key-configured
       (setq dev-ai--api-key-configured t)
-      (dev-ai--ensure-authinfo-in-sources)
-      (require 'auth-source)
-      (let* ((entries (auth-source-search
-                       :host '("openrouter.ai" "api.openai.com")
-                       :max 2
-                       :require '(:secret)))
-             (router-entry (seq-find (lambda (e) (equal (plist-get e :host) "openrouter.ai"))
-                                     entries))
-             (openai-entry (seq-find (lambda (e) (equal (plist-get e :host) "api.openai.com"))
-                                     entries))
-             (router-key (when router-entry
-                           (let ((s (plist-get router-entry :secret)))
-                             (if (functionp s) (funcall s) s))))
-             (openai-key (when openai-entry
-                           (let ((s (plist-get openai-entry :secret)))
-                             (if (functionp s) (funcall s) s)))))
-        ;; openai-key はフォールバック（下のコメントアウトした分岐）用。有効にするまで未使用。
-        (ignore openai-key)
-        (cond
-         (router-key
-          (setenv "OPENAI_API_BASE" "https://openrouter.ai/api/v1")
-          (setenv "OPENAI_API_KEY"  router-key)
-          (setopt aidermacs-default-model "openrouter/anthropic/claude-sonnet-4-5"))
-         ;;    (openai-key
-         ;;     (setenv "OPENAI_API_BASE" "https://api.openai.com/v1")
-         ;;     (setenv "OPENAI_API_KEY"  openai-key)
-         ;;     (setopt aidermacs-default-model "gpt-4o-mini"))
-         (t
+      (let ((cred (and (functionp dev-ai-credentials-function)
+                       (funcall dev-ai-credentials-function))))
+        (if (and cred (plist-get cred :api-key))
+            (progn
+              (setenv "OPENAI_API_BASE" (plist-get cred :api-base))
+              (setenv "OPENAI_API_KEY"  (plist-get cred :api-key))
+              (when (plist-get cred :model)
+                (setopt aidermacs-default-model (plist-get cred :model))))
           (display-warning
            'aidermacs
-           (concat "No API key found in auth-source.  "
-                   "Add to ~/.authinfo.gpg:\n"
-                   "  machine openrouter.ai login ac1965 password <key>\n"
-                   "  machine api.openai.com login org-ai password <key>")))))))
+           (concat "API キーを取得できません。personal 層の `dev-ai-credentials-function' を"
+                   "確認してください（~/.authinfo.gpg に openrouter.ai の行が必要です）。"))))))
 
   (leaf aidermacs
     :straight t

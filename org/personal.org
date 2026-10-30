@@ -198,6 +198,24 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   (when (locate-library "personal-llm")
     (require 'personal-llm nil t))
 
+  ;; personal-credentials: LLM の API キーの取得（dev-ai / utils-claude へ関数として渡す）
+  ;;
+  ;; ロードしても auth-source は引かない。最初に API キーが必要になった瞬間に初めて引く。
+  (when (locate-library "personal-credentials")
+    (require 'personal-credentials nil t))
+
+  ;; personal-ai: Org Babel の `claude' ブロックと `my/claude-*' コマンド
+  ;;
+  ;; Org Babel は Org の準備ができてから登録するため、`with-eval-after-load 'org' で読み込む。
+  ;; Org を開く前でも `M-x my/claude-*' が呼べるよう、コマンドだけ autoload しておく。
+  (when (locate-library "personal-ai")
+    (dolist (cmd '(my/claude-refactor-defun
+                   my/claude-complete-docstring
+                   my/claude-analyze-require-graph))
+      (autoload cmd "personal-ai" nil t))
+    (with-eval-after-load 'org
+      (require 'personal-ai nil t)))
+
   ;; ---------------------------------------------------------------------------
   ;; 自動保存の除外設定（個人ポリシー）
   ;; ---------------------------------------------------------------------------
@@ -1407,6 +1425,153 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;;; personal/personal-messages.el ends here
 #+end_src
 
+** personal/personal-credentials.el
+:PROPERTIES:
+:CUSTOM_ID: personal-credentials
+:header-args:emacs-lisp: :tangle ../personal/personal-credentials.el
+:END:
+
+LLM の API キーを取り出す唯一の場所です。取り出したキーは、関数として下位層のモジュールへ渡します。
+
+*なぜ personal 層に置くのか*
+
+キーをどこに保管しているか（ =~/.authinfo.gpg= の中身、どのホスト、どのログイン名）は、この設定を使う
+個人に固有の事情です。 =dev-ai= （dev 層）と =utils-claude= （utils 層）は、それぞれ自分で auth-source を
+引いていたため、取得先の知識が 3 か所に散らばっていました。
+
+下位層は上位層を参照できません。そこで依存の向きを逆にします。
+
+| 下位層のモジュール | 受け取る変数 | 渡される関数 |
+|---+---+---|
+| =utils-claude= （utils） | =utils-claude-api-key-function= | =personal-credentials-anthropic-key= |
+| =dev-ai= （dev） | =dev-ai-credentials-function= | =personal-credentials-aider= |
+
+下位層は「関数があれば呼ぶ」だけで、キーの出どころを知りません。personal 層だけが、出どころを知っています。
+
+*検索は 1 回にまとめ、使う瞬間まで遅らせる*
+
+=auth-source-search= は呼ぶたびに =~/.authinfo.gpg= を復号します（キャッシュを持ちません）。macOS では
+復号のたびに Touch ID が走り、短い間隔で 2 回続けると 2 回目が「No secret key」で失敗しました。そこで、
+
+- 3 つのホスト（Anthropic、OpenRouter、OpenAI）を *1 回の検索* でまとめて引き、結果をセッション中は覚えておく。
+- 検索は、キーが実際に必要になった瞬間（最初の API 呼び出し、 =aidermacs-run= の直前）まで遅らせる。起動時には走らない。
+
+キーを変えたときは、 =M-x personal-credentials-reset= で覚えた結果を捨てます。
+
+ホスト名とログイン名は、auth 層が持つ登録（ =auth-gpg-services= ）から読みます。ここには書き写しません。
+
+#+begin_src emacs-lisp
+  ;;; personal/personal-credentials.el --- LLM の API キーの取得 -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: personal
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; LLM の API キーを auth-source から取り出し、下位層のモジュールへ関数として渡す。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - Anthropic / OpenRouter / OpenAI のエントリを、1 回の `auth-source-search' で引き、
+  ;;   セッション中は覚えておく（連続した復号が Touch ID で失敗するのを避けるため）
+  ;; - `utils-claude-api-key-function' へ `personal-credentials-anthropic-key' を渡す
+  ;; - `dev-ai-credentials-function' へ `personal-credentials-aider' を渡す
+  ;;
+  ;; 検索は、関数が呼ばれた瞬間に初めて走る。起動時には復号しない。
+  ;;; Code:
+
+  (eval-when-compile (require 'subr-x))
+  (require 'seq)
+  (require 'auth-source)
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各層のモジュール側にある）。
+  (defvar auth-gpg-file)
+  (defvar auth-gpg-services)
+  (defvar utils-claude-api-key-function)
+  (defvar dev-ai-credentials-function)
+
+  (defgroup personal-credentials nil
+    "Where the LLM API keys come from."
+    :group 'auth)
+
+  (defconst personal-credentials--hosts
+    '("api.anthropic.com" "openrouter.ai" "api.openai.com")
+    "Hosts looked up in one `auth-source-search'.")
+
+  (defvar personal-credentials--entries 'unset
+    "Entries found by the first lookup in this session, or `unset' before it.")
+
+  (defun personal-credentials--ensure-authinfo ()
+    "Make sure the encrypted credential store is in `auth-sources'.
+  Reads `auth-gpg-file' when the auth-gpg module is loaded, falling back to
+  ~/.authinfo.gpg, and clears the auth-source cache when it adds the file."
+    (let ((gpg-file (expand-file-name
+                     (if (boundp 'auth-gpg-file) auth-gpg-file "~/.authinfo.gpg"))))
+      (when (and (file-exists-p gpg-file)
+                 (not (member gpg-file auth-sources)))
+        (setopt auth-sources (cons gpg-file auth-sources))
+        (auth-source-forget-all-cached))))
+
+  (defun personal-credentials--entries ()
+    "Return the entries for `personal-credentials--hosts', searching only once."
+    (when (eq personal-credentials--entries 'unset)
+      (personal-credentials--ensure-authinfo)
+      (setq personal-credentials--entries
+            (auth-source-search :host personal-credentials--hosts
+                                :max (length personal-credentials--hosts)
+                                :require '(:secret))))
+    personal-credentials--entries)
+
+  (defun personal-credentials--service-user (host)
+    "Return the login name registered for HOST in `auth-gpg-services', or nil."
+    (when (boundp 'auth-gpg-services)
+      (when-let* ((service (seq-find (lambda (s) (equal (plist-get s :host) host))
+                                     auth-gpg-services)))
+        (plist-get service :user))))
+
+  (defun personal-credentials--secret (host)
+    "Return the secret registered for HOST, or nil."
+    (let ((user (personal-credentials--service-user host)))
+      (when-let* ((entry (seq-find
+                          (lambda (e)
+                            (and (equal (plist-get e :host) host)
+                                 (or (null user) (equal (plist-get e :user) user))))
+                          (personal-credentials--entries)))
+                  (secret (plist-get entry :secret)))
+        (if (functionp secret) (funcall secret) secret))))
+
+  (defun personal-credentials-anthropic-key ()
+    "Return the Anthropic API key, or nil when there is none."
+    (personal-credentials--secret "api.anthropic.com"))
+
+  (defun personal-credentials-aider ()
+    "Return the credentials aider should use, or nil when there is no key.
+  The value is a plist (:api-base URL :api-key KEY :model MODEL) that routes
+  aider through OpenRouter."
+    (when-let* ((key (personal-credentials--secret "openrouter.ai")))
+      (list :api-base "https://openrouter.ai/api/v1"
+            :api-key key
+            :model "openrouter/anthropic/claude-sonnet-4-5")))
+
+  (defun personal-credentials-reset ()
+    "Forget the remembered lookup, so the next call reads the store again."
+    (interactive)
+    (setq personal-credentials--entries 'unset)
+    (auth-source-forget-all-cached)
+    (message "personal-credentials: 次の API 呼び出しで認証情報を読み直します"))
+
+  ;; 下位層の変数は、そのモジュールがロードされた後に設定する。
+  (with-eval-after-load 'utils-claude
+    (setopt utils-claude-api-key-function #'personal-credentials-anthropic-key))
+  (with-eval-after-load 'dev-ai
+    (setopt dev-ai-credentials-function #'personal-credentials-aider))
+
+  (provide 'personal-credentials)
+  ;;; personal/personal-credentials.el ends here
+#+end_src
+
 ** personal/personal-ai.el
 :PROPERTIES:
 :CUSTOM_ID: personal-ai
@@ -1425,8 +1590,9 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;;; Commentary:
   ;;
   ;; Claude API に対する Org Babel および対話的 Emacs Lisp ワークフローの統合。
-  ;; 本モジュールは HTTP 通信と auth-source によるキー取得のすべてを
-  ;; `utils-claude'（utils 層）に依存する。
+  ;; 本モジュールは HTTP 通信を `utils-claude'（utils 層）に依存する。API キーの取得は
+  ;; `personal-credentials' が担い、`utils-claude-api-key-function' 経由で渡される。
+  ;; user.el が Org のロード後に読み込み、対話コマンドは autoload で呼べる。
   ;;
   ;; Org Babel 統合:
   ;;   `claude' Babel 言語を登録し、`#+begin_src claude' で始まるソースブロックの本文を
@@ -1500,7 +1666,11 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
         (utils-claude-error
          (error "Claude Babel block failed: %s" (cadr err))))))
 
-  (add-to-list 'org-babel-load-languages '(claude . t))
+  ;; `org-babel-load-languages' に `claude' を足してはならない。`org-babel-do-load-languages' は
+  ;; 一覧の言語ごとに `ob-claude' を `require' するが、そのファイルは無い。Org のロード時に
+  ;; 「Cannot open load file: ob-claude」で落ちる（2026-10-31 に smoketest で見つかった。
+  ;; このモジュールがロードされていなかった間は表に出なかった）。Babel は
+  ;; `org-babel-execute:claude' が定義されていれば実行できる。
 
   ;;; ── 非公開ヘルパー ────────────────────────────────────────────────────────
 

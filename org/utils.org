@@ -1174,12 +1174,16 @@ Claude API（=api.anthropic.com/v1/messages=）への同期・非同期 HTTP ク
   ;; 本モジュールは UI、Org、および utils より上位のいかなる層にも依存しない。
   ;;
   ;; 公開 API:
-  ;;   `utils-claude-get-api-key'  — auth-source（.authinfo.gpg）からキーを取得する
+  ;;   `utils-claude-api-key-function' — API キーを返す関数（personal 層が設定する）
+  ;;   `utils-claude-get-api-key'  — 上の関数でキーを取得する。無ければ nil
   ;;   `utils-claude-request-sync' — 同期 POST。応答テキストを返す
   ;;   `utils-claude-request'      — コールバックを伴う非同期 POST
   ;;
-  ;; auth-source のエントリ形式（~/.authinfo または ~/.authinfo.gpg）:
-  ;;   machine api.anthropic.com login apikey password sk-ant-...
+  ;; API キーの取得先（auth-source など）を、本モジュールは知らない。取得は personal 層の
+  ;; `personal-credentials' が担い、`utils-claude-api-key-function' へ渡す。下位層である
+  ;; utils は上位層を参照できないため、関数を差し込む形で依存の向きを保っている。
+  ;; 本モジュールは `personal-ai' が `require' して使う（`personal-ai' は user.el が Org の
+  ;; ロード後に読み込む）。
   ;;
   ;; 既定のモデルは `utils-claude-default-model' で変更できる。
   ;; 既定の max-tokens は `utils-claude-max-tokens' で変更できる。
@@ -1199,7 +1203,6 @@ Claude API（=api.anthropic.com/v1/messages=）への同期・非同期 HTTP ク
   (require 'url)
   (require 'url-http)
   (require 'json)
-  (require 'auth-source)
 
   (defgroup utils-claude nil
     "Claude API HTTP client for Emacs."
@@ -1228,17 +1231,17 @@ Claude API（=api.anthropic.com/v1/messages=）への同期・非同期 HTTP ク
 
   (define-error 'utils-claude-error "Claude API error" 'error)
 
+  (defcustom utils-claude-api-key-function nil
+    "Function of no arguments that returns the Anthropic API key, or nil.
+  The personal layer sets it (`personal-credentials-anthropic-key'), so
+  this lower layer never learns where the key is stored."
+    :type '(choice (const :tag "None" nil) function)
+    :group 'utils-claude)
+
   (defun utils-claude-get-api-key ()
-    "Return the Anthropic API key from auth-source, or nil if absent.
-  Searches for machine=api.anthropic.com login=apikey in the
-  auth-source backend (typically ~/.authinfo.gpg)."
-    (when-let* ((entry (car (auth-source-search
-                             :host "api.anthropic.com"
-                             :user "apikey"
-                             :require '(:secret)
-                             :max 1)))
-                (secret (plist-get entry :secret)))
-      (if (functionp secret) (funcall secret) secret)))
+    "Return the Anthropic API key from `utils-claude-api-key-function', or nil."
+    (when (functionp utils-claude-api-key-function)
+      (funcall utils-claude-api-key-function)))
 
   (defun utils-claude--build-headers (api-key)
     "Return the alist of HTTP headers required by the Anthropic API.
@@ -1297,7 +1300,7 @@ Claude API（=api.anthropic.com/v1/messages=）への同期・非同期 HTTP ク
   Signals `utils-claude-error' on failure."
     (let* ((api-key (or (utils-claude-get-api-key)
                         (signal 'utils-claude-error
-                                '("No API key found in auth-source"))))
+                                '("No API key: `utils-claude-api-key-function' returned nil"))))
            (url-request-method "POST")
            (url-request-extra-headers (utils-claude--build-headers api-key))
            (url-request-data (utils-claude--build-body
@@ -1319,7 +1322,7 @@ Claude API（=api.anthropic.com/v1/messages=）への同期・非同期 HTTP ク
            (url-request-extra-headers
             (if api-key
                 (utils-claude--build-headers api-key)
-              (funcall callback "ERROR: No API key found in auth-source")
+              (funcall callback "ERROR: No API key (see `utils-claude-api-key-function')")
               nil))
            (url-request-data
             (when url-request-extra-headers

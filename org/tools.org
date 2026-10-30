@@ -1604,6 +1604,66 @@ make smoketest
                (secret (plist-get (car res) :secret)))
           (and (functionp secret) (> (length (funcall secret)) 10))))))
 
+  (defun smoketest--llm ()
+    "Check the LLM wiring: the key flows from the personal layer, nothing is dead."
+    (smoketest--section "LLM: 認証情報の取得は personal 層、死にコードがない")
+    (require 'org)
+    (smoketest--check "personal/ の各モジュールがロード済み（死にコードがない）"
+      (let (missing)
+        (dolist (f (directory-files (expand-file-name "personal/" user-emacs-directory)
+                                    nil "\\`personal-.*\\.el\\'"))
+          (let ((feature (intern (file-name-sans-extension f))))
+            (unless (featurep feature) (push feature missing))))
+        (when missing (smoketest--say "  未ロード: %S" missing))
+        (null missing)))
+    (smoketest--check "personal-ai の対話コマンドと Org Babel の claude が使える"
+      (and (commandp 'my/claude-refactor-defun)
+           (fboundp 'org-babel-execute:claude)
+           (featurep 'utils-claude)))
+    (smoketest--check "utils-claude / dev-ai へ personal 層が関数を渡している"
+      (and (eq utils-claude-api-key-function 'personal-credentials-anthropic-key)
+           (eq dev-ai-credentials-function 'personal-credentials-aider)))
+    (smoketest--check "認証情報: 1 回の検索で 3 つとも引け、2 回目以降は検索しない"
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'auth-source-search)
+                   (lambda (&rest _)
+                     (cl-incf calls)
+                     (list (list :host "api.anthropic.com" :user "apikey" :secret "ant-key")
+                           (list :host "openrouter.ai" :user "ac1965" :secret (lambda () "or-key"))
+                           (list :host "api.openai.com" :user "org-ai" :secret "oa-key"))))
+                  ((symbol-function 'personal-credentials--ensure-authinfo) #'ignore))
+          (personal-credentials-reset)
+          (prog1 (and (equal (utils-claude-get-api-key) "ant-key")
+                      (equal (plist-get (personal-credentials-aider) :api-key) "or-key")
+                      (equal (plist-get (personal-credentials-aider) :api-base)
+                             "https://openrouter.ai/api/v1")
+                      (= calls 1))
+            (personal-credentials-reset)))))
+    (smoketest--check "認証情報: キーが無ければ nil（エラーにしない）"
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil))
+                ((symbol-function 'personal-credentials--ensure-authinfo) #'ignore))
+        (personal-credentials-reset)
+        (prog1 (and (null (utils-claude-get-api-key)) (null (personal-credentials-aider)))
+          (personal-credentials-reset))))
+    (smoketest--check "dev-ai: 渡された認証情報を aider の環境変数にする"
+      (let ((old-key (getenv "OPENAI_API_KEY")) (old-base (getenv "OPENAI_API_BASE"))
+            (dev-ai-credentials-function
+             (lambda () (list :api-base "https://example.invalid/v1" :api-key "fake" :model "m")))
+            (dev-ai--api-key-configured nil))
+        (unwind-protect
+            (progn (dev-ai--setup-api-key)
+                   (and (equal (getenv "OPENAI_API_KEY") "fake")
+                        (equal (getenv "OPENAI_API_BASE") "https://example.invalid/v1")))
+          (setenv "OPENAI_API_KEY" old-key)
+          (setenv "OPENAI_API_BASE" old-base))))
+    (smoketest--check "utils-claude は auth-source を直接引かない"
+      (not (let ((found nil))
+             (with-temp-buffer
+               (insert-file-contents (locate-library "utils-claude.el"))
+               (goto-char (point-min))
+               (while (re-search-forward "^[^;\n]*(auth-source-search" nil t) (setq found t)))
+             found))))
+
   (defun smoketest--completion ()
     "Actually complete in scratch buffers."
     (smoketest--section "補完の実動作")
@@ -1657,6 +1717,7 @@ make smoketest
     (smoketest--corfu)
     (smoketest--keys)
     (smoketest--vcs)
+    (smoketest--llm)
     (smoketest--completion)
     (smoketest--eglot-merge)
     (smoketest--say "== 結果 PASS=%d FAIL=%d" smoketest--pass smoketest--fail)
