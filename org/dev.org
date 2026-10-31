@@ -1967,3 +1967,165 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
   (provide 'dev-tools)
   ;;; dev/dev-tools.el ends here
 #+end_src
+
+* dev/dev-run.el
+:PROPERTIES:
+:CUSTOM_ID: dev-run
+:header-args:emacs-lisp: :tangle ../lisp/dev/dev-run.el
+:END:
+
+コードを書いたあとの「動かす・確かめる」を受け持つモジュールです。デバッガ、プロジェクトごとの環境、テストの実行の 3 つを置きます。
+
+| 機能 | 中身 | キー |
+|---+---+---|
+| デバッガ | =dape= （DAP クライアント。デバッグアダプタは別に入れる） | =M-SPC c D= で開始、 =M-SPC c B= でブレークポイント |
+| 環境 | =envrc= （direnv の環境をバッファごとに適用） | なし（ =direnv= があるときだけ自動で有効） |
+| テスト | =dev-run-test= 。プロジェクトの種類からコマンドを決めて =compile= で走らせる | =M-SPC c t= で実行、 =M-SPC c T= で再実行 |
+
+*テストのコマンドの決め方*
+
+プロジェクトの根（ =project.el= の根。無ければ今のディレクトリ）にあるファイルで決めます。上から順に最初に当たったものを使い、
+どれにも当たらなければ、コマンドを尋ねます。
+
+| ファイル | コマンド |
+|---+---|
+| =Makefile= （ =test:= の目標がある場合のみ） | =make test= |
+| =package.json= | =npm test= |
+| =go.mod= | =go test ./...= |
+| =Cargo.toml= | =cargo test= |
+| =pyproject.toml= または =pytest.ini= | =python -m pytest= |
+
+一覧は =dev-run-test-commands= で変えられます。
+
+*envrc を条件つきで有効にする理由*
+
+=envrc-global-mode= は、 =direnv= が無い環境でも有効にすると、バッファを開くたびに警告を出します。
+そのため =direnv= の実行ファイルがあるときだけ、 =after-init-hook= で有効にします。
+
+#+begin_src emacs-lisp
+  ;;; dev/dev-run.el --- 実行と検証: デバッガ・環境・テスト -*- lexical-binding: t; -*-
+  ;;
+  ;; Copyright (c) 2021-2026
+  ;; Author: YAMASHITA, Takao
+  ;; License: GNU GPL v3 or later
+  ;;
+  ;; Category: dev
+  ;;
+  ;;; Commentary:
+  ;;
+  ;; コードを動かして確かめるための補助。
+  ;;
+  ;; 本ファイルの責務:
+  ;; - dape（DAP クライアント）を導入する。デバッグアダプタ（debugpy、lldb-dap、delve など）は
+  ;;   別に入れる必要がある
+  ;; - envrc を、direnv があるときだけ有効にする
+  ;; - `dev-run-test' / `dev-run-test-rerun': プロジェクトの種類からテストのコマンドを決め、
+  ;;   `compile' で走らせる
+  ;; - キーを `ui-leader-c-map' に割り当てる（M-SPC c D / B / t / T）。キーは
+  ;;   `after-init-hook'（depth 90）で割り当てる。マップは ui-keymap の `after-init-hook'
+  ;;   （depth 0）で作られるため、その後に走らせる必要がある
+  ;;; Code:
+
+  (eval-when-compile (require 'leaf) (require 'cl-lib) (require 'subr-x))
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
+  (defvar ui-leader-c-map)
+  (declare-function project-current "project")
+  (declare-function project-root "project")
+  (declare-function envrc-global-mode "envrc")
+  (declare-function dape "dape")
+  (declare-function dape-breakpoint-toggle "dape")
+
+  (defgroup dev-run nil
+    "Debugger, environment and test running."
+    :group 'tools)
+
+  (defcustom dev-run-test-commands
+    '(("Makefile"       . "make test")
+      ("package.json"   . "npm test")
+      ("go.mod"         . "go test ./...")
+      ("Cargo.toml"     . "cargo test")
+      ("pyproject.toml" . "python -m pytest")
+      ("pytest.ini"     . "python -m pytest"))
+    "Project files and the test command each one selects, tried from the top.
+  A Makefile only counts when it has a `test:' target."
+    :type '(alist :key-type string :value-type string)
+    :group 'dev-run)
+
+  (defvar dev-run--last-test nil
+    "The directory and command of the last test run, as (DIR . COMMAND), or nil.")
+
+  (defun dev-run--makefile-has-test-p (dir)
+    "Return non-nil when the Makefile in DIR has a `test:' target."
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "Makefile" dir))
+      (goto-char (point-min))
+      (re-search-forward "^test[ \t]*:" nil t)))
+
+  (defun dev-run-test-command (dir)
+    "Return the test command for the project in DIR, or nil when none is known."
+    (let (found)
+      (dolist (entry dev-run-test-commands)
+        (when (and (not found)
+                   (file-exists-p (expand-file-name (car entry) dir))
+                   (or (not (equal (car entry) "Makefile"))
+                       (dev-run--makefile-has-test-p dir)))
+          (setq found (cdr entry))))
+      found))
+
+  (defun dev-run--root ()
+    "Return the project root, or the current directory outside a project."
+    (if-let* ((project (project-current)))
+        (project-root project)
+      default-directory))
+
+  ;;;###autoload
+  (defun dev-run-test ()
+    "Run the project's tests with `compile'.
+  The command comes from `dev-run-test-commands'; ask when none matches."
+    (interactive)
+    (let* ((root (dev-run--root))
+           (command (or (dev-run-test-command root)
+                        (read-shell-command "テストのコマンド: ")))
+           (default-directory root))
+      (setq dev-run--last-test (cons root command))
+      (compile command)))
+
+  ;;;###autoload
+  (defun dev-run-test-rerun ()
+    "Run the last test command again, or `dev-run-test' when there is none."
+    (interactive)
+    (if dev-run--last-test
+        (let ((default-directory (car dev-run--last-test)))
+          (compile (cdr dev-run--last-test)))
+      (dev-run-test)))
+
+  (defun dev-run--enable-envrc ()
+    "Enable `envrc-global-mode' when direnv is installed."
+    (when (executable-find "direnv")
+      (envrc-global-mode 1)))
+
+  (defun dev-run--bind-keys ()
+    "Bind the run and debug commands in `ui-leader-c-map' when it exists."
+    (when (and (boundp 'ui-leader-c-map) (keymapp ui-leader-c-map))
+      (keymap-set ui-leader-c-map "t" #'dev-run-test)
+      (keymap-set ui-leader-c-map "T" #'dev-run-test-rerun)
+      (keymap-set ui-leader-c-map "D" #'dape)
+      (keymap-set ui-leader-c-map "B" #'dape-breakpoint-toggle)))
+
+  ;; depth 90: ui-keymap--startup-init（depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'dev-run--bind-keys 90)
+
+  (leaf dape
+    :straight t
+    :commands (dape dape-breakpoint-toggle dape-quit)
+    :custom ((dape-buffer-window-arrangement . 'right)))
+
+  (leaf envrc
+    :straight t
+    :commands (envrc-global-mode)
+    :hook (after-init-hook . dev-run--enable-envrc))
+
+  (provide 'dev-run)
+  ;;; dev/dev-run.el ends here
+#+end_src

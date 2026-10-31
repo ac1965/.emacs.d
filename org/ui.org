@@ -1565,6 +1565,8 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;; - `my:saved-window-config' に保存する名前付きスナップショットのため
   ;;   `my/save-window-layout' と `my/restore-window-layout' を提供する
   ;; - 行間（`ui-window-line-spacing'）と、グラフィカルフレームの余白（spacious-padding）を設定する
+  ;; - ポップアップのバッファ（*Messages*、*Help*、*compilation*、*Smoketest* など）を popper で
+  ;;   まとめる。`M-SPC w p' で出し入れ、`w n' で順に切り替え、`w P' で通常のウィンドウへ昇格
   ;;   （テーマの適用は ui-theme.el が受け持つ）
   ;;; Code:
 
@@ -1663,6 +1665,39 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'ui-window--apply-padding 90)
     (add-hook 'emacs-startup-hook #'ui-window--apply-padding 90))
+
+  ;; ポップアップの整理: 補助的なバッファが、作業中のウィンドウ配置を壊さないようにする。
+  ;; キーは `after-init-hook'（depth 90）で割り当てる（leader のマップは ui-keymap の
+  ;; `after-init-hook'（depth 0）で作られるため）。
+  (defvar ui-leader-w-map)
+  (declare-function popper-mode "popper")
+  (declare-function popper-echo-mode "popper")
+  (declare-function popper-toggle "popper")
+  (declare-function popper-cycle "popper")
+  (declare-function popper-toggle-type "popper")
+
+  (defun ui-window--enable-popper ()
+    "Enable `popper-mode' and its echo-area hints."
+    (popper-mode 1)
+    (popper-echo-mode 1))
+
+  (defun ui-window--bind-popper-keys ()
+    "Bind the popper commands in `ui-leader-w-map' when it exists."
+    (when (and (boundp 'ui-leader-w-map) (keymapp ui-leader-w-map))
+      (keymap-set ui-leader-w-map "p" #'popper-toggle)
+      (keymap-set ui-leader-w-map "n" #'popper-cycle)
+      (keymap-set ui-leader-w-map "P" #'popper-toggle-type)))
+
+  (add-hook 'after-init-hook #'ui-window--bind-popper-keys 90)
+
+  (leaf popper
+    :straight t
+    :commands (popper-toggle popper-cycle popper-toggle-type)
+    :custom ((popper-reference-buffers
+              . '("\\*Messages\\*" "\\*Warnings\\*" "\\*Smoketest\\*"
+                  "\\*Auth-GPG Status\\*" "\\*Async Shell Command\\*"
+                  help-mode compilation-mode)))
+    :hook (after-init-hook . ui-window--enable-popper))
 
   (provide 'ui-window)
   ;;; ui/ui-window.el ends here

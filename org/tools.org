@@ -1731,6 +1731,144 @@ make smoketest
            (string-match-p "\\${title" org-roam-node-display-template)
            (equal org-roam-dailies-directory "daily/"))))
 
+  (defun smoketest--keymap-problems (map &optional prefix)
+    "Return descriptions of bindings in MAP whose symbol is not a command.
+PREFIX is the key sequence leading to MAP, as a string, for the messages."
+    (let (problems)
+      (map-keymap
+       (lambda (event def)
+         (let ((key (string-trim (concat prefix " " (key-description (vector event))))))
+           (cond ((keymapp def)
+                  (setq problems (append problems (smoketest--keymap-problems def key))))
+                 ((and def (symbolp def) (not (commandp def)))
+                  (push (format "%s -> %s" key def) problems)))))
+       (if (symbolp map) (symbol-function map) map))
+      problems))
+
+  (defun smoketest--wait-for-compilation (buffer)
+    "Wait up to 20 seconds for the compilation in BUFFER to finish; return non-nil if it did."
+    (let ((deadline (+ (float-time) 20)))
+      (while (and (get-buffer-process buffer) (< (float-time) deadline))
+        (accept-process-output nil 0.2))
+      (null (get-buffer-process buffer))))
+
+  (defun smoketest--layers ()
+    "Check the core, ui, auth, dev and utils layers."
+    (smoketest--section "各層: core / ui / auth / dev / utils")
+    ;; core
+    (smoketest--check "core: 履歴・自動再読込・選択置換のモードが有効"
+      (and savehist-mode save-place-mode recentf-mode
+           global-auto-revert-mode delete-selection-mode))
+    (smoketest--check "core: undo と構造編集のコマンド（undo-fu・vundo・puni）"
+      (and (commandp 'undo-fu-only-undo) (commandp 'vundo) (commandp 'puni-mode)))
+    (smoketest--check "core: tree-sitter が有効で、c / python / go / json の文法がある"
+      (and (eq treesit-enabled-modes t)
+           (cl-every #'treesit-language-available-p '(c python go json))))
+    (smoketest--check "core: repeat-mode と so-long が有効で、長い行を検出する"
+      (and repeat-mode global-so-long-mode
+           (with-temp-buffer
+             (insert (make-string 20000 ?x))
+             (so-long-detected-long-line-p))))
+    ;; ui
+    (smoketest--check "ui: popper が有効で、M-SPC w p / n / P がコマンド"
+      (and (bound-and-true-p popper-mode)
+           (cl-every (lambda (k) (commandp (lookup-key ui-leader-w-map (kbd k))))
+                     '("p" "n" "P"))))
+    (smoketest--check "ui: テーマが当たっていて which-key が有効"
+      (and (car custom-enabled-themes) (bound-and-true-p which-key-mode)))
+    (smoketest--check "ui: リーダーキーの全割り当てがコマンドに結びついている"
+      (let ((problems (smoketest--keymap-problems ui-leader-map "M-SPC")))
+        (when problems (smoketest--say "  %s" (string-join problems "\n  ")))
+        (null problems)))
+    ;; auth
+    (smoketest--check "auth: サービス一覧の各項目が :label :host :user を持つ"
+      (and auth-gpg-services
+           (cl-every (lambda (s) (and (plist-get s :label) (plist-get s :host)
+                                      (plist-get s :user)))
+                     auth-gpg-services)))
+    (smoketest--check "auth: gpg があり、auth-sources が空でない"
+      (and (executable-find "gpg") auth-sources))
+    (smoketest--check "auth: my/auth-gpg-verify が有無を示し、秘密は先頭 4 文字しか出さない"
+      (cl-letf (((symbol-function 'auth-gpg--lookup-all)
+                 (lambda (services)
+                   (list (cons (nth 0 services) (list :secret "abcdefghijkl"))
+                         (cons (nth 1 services) nil)))))
+        (my/auth-gpg-verify)
+        (prog1 (with-current-buffer "*Auth-GPG Status*"
+                 (let ((text (buffer-string)))
+                   (and (string-match-p "PRESENT" text)
+                        (string-match-p "MISSING" text)
+                        (string-match-p "gpg: " text)
+                        (string-match-p "abcd…" text)
+                        (not (string-match-p "efghijkl" text)))))
+          (kill-buffer "*Auth-GPG Status*"))))
+    ;; dev
+    (smoketest--check "dev: Eglot が Python・C・Go のサーバを知っている"
+      (cl-every (lambda (mode)
+                  (cl-some (lambda (e)
+                             (let ((m (car e)))
+                               (memq mode (mapcar (lambda (x) (if (consp x) (car x) x))
+                                                  (if (listp m) m (list m))))))
+                           (progn (require 'eglot) eglot-server-programs)))
+                '(python-ts-mode c-ts-mode go-ts-mode)))
+    (smoketest--check "dev: 整形・スニペット・プロジェクトのコマンド"
+      (and (fboundp 'apheleia-global-mode) (commandp 'tempel-insert)
+           (commandp 'project-find-file)))
+    (smoketest--check "dev-run: テストのコマンドをプロジェクトの種類から決める"
+      (let ((dir (file-name-as-directory (make-temp-file "smoketest-run-" t))))
+        (unwind-protect
+            (let (r)
+              (push (null (dev-run-test-command dir)) r)
+              (write-region "build:\n\t@true\n" nil (expand-file-name "Makefile" dir) nil 'silent)
+              (push (null (dev-run-test-command dir)) r)
+              (write-region "test:\n\t@true\n" nil (expand-file-name "Makefile" dir) nil 'silent)
+              (push (equal (dev-run-test-command dir) "make test") r)
+              (delete-file (expand-file-name "Makefile" dir))
+              (write-region "module m\n" nil (expand-file-name "go.mod" dir) nil 'silent)
+              (push (equal (dev-run-test-command dir) "go test ./...") r)
+              (cl-every #'identity r))
+          (delete-directory dir t))))
+    (smoketest--check "dev-run: dev-run-test が実際に走り、出力が compilation バッファに出る"
+      (let* ((dir (file-name-as-directory (make-temp-file "smoketest-run-" t)))
+             (default-directory dir))
+        (unwind-protect
+            (progn
+              (write-region "test:\n\t@echo smoketest-ok-marker\n" nil
+                            (expand-file-name "Makefile" dir) nil 'silent)
+              (dev-run-test)
+              (let ((buf (get-buffer "*compilation*")))
+                (and buf
+                     (smoketest--wait-for-compilation buf)
+                     (with-current-buffer buf
+                       (save-excursion (goto-char (point-min))
+                                       (search-forward "smoketest-ok-marker" nil t))))))
+          (when (get-buffer "*compilation*") (kill-buffer "*compilation*"))
+          (delete-directory dir t))))
+    (smoketest--check "dev-run: M-SPC c の t / T / D / B がコマンド、dape と envrc が呼べる"
+      (and (cl-every (lambda (k) (commandp (lookup-key ui-leader-c-map (kbd k))))
+                     '("t" "T" "D" "B"))
+           (commandp 'dape) (fboundp 'envrc-global-mode)
+           ;; direnv が無い環境では、envrc を有効にしない（バッファを開くたびに警告が出る）。
+           (or (executable-find "direnv") (not (bound-and-true-p envrc-global-mode)))))
+    ;; utils
+    (smoketest--check "utils: 汎用コマンドが対話的に呼べる"
+      (cl-every #'commandp '(my/smart-kill-buffer my/indent-buffer my/scratch-new
+                             my/toggle-debug-on-error my/open-emacs-config
+                             my/copy-whole-buffer my/join-next-line my/show-full-path)))
+    (smoketest--check "utils: 診断は flymake だけが動く（flycheck は有効にしない）"
+      (and (not (bound-and-true-p flycheck-mode))
+           (not (bound-and-true-p global-flycheck-mode))
+           (memq 'utils-lint--enable-flymake-maybe prog-mode-hook)))
+    (smoketest--check "utils: ファイルを訪問する prog バッファで flymake が有効になる"
+      (let ((file (make-temp-file "smoketest-lint-" nil ".el" ";;; x -*- lexical-binding: t; -*-\n")))
+        (unwind-protect
+            (with-current-buffer (find-file-noselect file)
+              (prog1 (and (bound-and-true-p flymake-mode)
+                          (not (bound-and-true-p flycheck-mode)))
+                (set-buffer-modified-p nil)
+                (kill-buffer)))
+          (delete-file file)))))
+
   (defun smoketest--completion ()
     "Actually complete in scratch buffers."
     (smoketest--section "補完の実動作")
@@ -1786,6 +1924,7 @@ make smoketest
     (smoketest--vcs)
     (smoketest--llm)
     (smoketest--org)
+    (smoketest--layers)
     (smoketest--completion)
     (smoketest--eglot-merge)
     (smoketest--say "== 結果 PASS=%d FAIL=%d" smoketest--pass smoketest--fail)

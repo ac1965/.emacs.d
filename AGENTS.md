@@ -22,7 +22,7 @@ Org 文書とソースコードを一体として管理する literate program �
 以降の本書で `README.org` の source block と書いた箇所は、特に断らない限り、上の表のどの Org 文書にも当てはまる。
 `org/` の各ファイルは、`:tangle ../lisp/...` のように、`.emacs.d/` からの相対パスに `../` を付ける。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-102 個の `.el` ターゲット（`lisp/` 配下 85 個〔`lisp/modules.el` を含む〕、
+103 個の `.el` ターゲット（`lisp/` 配下 86 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 10 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`、`scripts/smoketest.el`）が生成される。
 （`scripts/` の 5 個の `.el` は `org/tools.org` から、`early-init.el`・`init.el` は `org/boot.org` から、`lisp/` と `personal/` の `.el` は上の表の各 Org 文書から tangle される。）
@@ -159,7 +159,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── completion/ (9)
 │   ├── orgx/       (14; 標準 10 + 任意 4)
 │   ├── vcs/        (4)
-│   ├── dev/        (17)
+│   ├── dev/        (18)
 │   └── utils/      (9)
 ├── personal/       (10) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
 ├── scripts/        (14) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
@@ -463,7 +463,7 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |
 | `make cheatsheet` / `make check-cheatsheet` | キーバインド一覧 `svg/emacs_keybindings_cheatsheet.svg` を、init を読み込んだ Emacs の実際のキーマップから書き直す / 書き出さずに、コミット済みの SVG が今のキーマップと同じかを調べる（違えば終了コード 1）。約 40 秒かかるため `lint` には含めない。本体は `scripts/cheatsheet.el` |
 | `make check-bytecomp` | `early-init.el` と `init.el` を読み込んだ Emacs で、`lisp/`・`personal/`・`early-init.el`・`init.el` をすべてバイトコンパイルし、警告があれば一覧して終了コード 1 で終わる。読み込めずコンパイルに失敗したファイルと、init の後でロードされていないモジュールも警告に数える（出力は一時ディレクトリで `.elc` は作らない。約 40 秒かかるため `lint` には含めない。本体は `scripts/check-bytecomp.el`） |
-| `make smoketest` | `early-init.el` と `init.el` を読み込んだ Emacs で、起動（警告・全モジュールのロード）、vertico / consult / embark / corfu の設定とキー、主要なキーが command に結びつくこと、vcs 層の leader キー・diff-hl・gh 経由の forge トークン・一時 git リポジトリでのコミット補助とワークツリー、Org の日々の運用（agenda ビュー・capture・アーカイブ・clock・org-ql）を一時ファイルで動かした確認、一時バッファでの補完の実動作、Eglot と dabbrev の合流（Eglot は代役）を確かめる。失敗が 1 件でもあれば終了コード 1。バッチの Emacs が書き直す straight のビルドキャッシュを、開始時に退避して終了時に戻す（戻さないと GUI 起動で `consult-line` などが未定義になる）。約 40 秒かかるため `lint` には含めない。本体は `scripts/smoketest.el` |
+| `make smoketest` | `early-init.el` と `init.el` を読み込んだ Emacs で、起動（警告・全モジュールのロード）、vertico / consult / embark / corfu の設定とキー、主要なキーが command に結びつくこと、vcs 層の leader キー・diff-hl・gh 経由の forge トークン・一時 git リポジトリでのコミット補助とワークツリー、Org の日々の運用（agenda ビュー・capture・アーカイブ・clock・org-ql）を一時ファイルで動かした確認、各層（core・ui・auth・dev・utils）の状態の確認（リーダーキーの全割り当てがコマンドに結びつくことを含む）、`dev-run` のテスト実行、一時バッファでの補完の実動作、Eglot と dabbrev の合流（Eglot は代役）を確かめる。失敗が 1 件でもあれば終了コード 1。バッチの Emacs が書き直す straight のビルドキャッシュを、開始時に退避して終了時に戻す（戻さないと GUI 起動で `consult-line` などが未定義になる）。約 40 秒かかるため `lint` には含めない。本体は `scripts/smoketest.el` |
 | `M-x my/smoketest`（`my/smoketest-lsp` / `-terminal` / `-gui`） | `make` ではなく、起動中の Emacs で実行する確認。実 LSP サーバへの接続、`emacs -nw` を疑似端末で動かした corfu-terminal の描画、GUI の posframe・Corfu・popupinfo の子フレームを確かめ、結果を `*Smoketest*` に出す。本体は `org/utils.org` の `utils-diagnostics`。端末の確認は子にキー入力を送らない（復元されたファイルへ文字が入る事故があった）。実行中は入力しない |
 | `make stage` | `TRACKED`（`README.org`, `org`, `AGENTS.md`, `demo.png`, `puppeteer-config.json`, `.gitignore`, `svg`）だけを `git add -A` し、それ以外がステージ済みなら中止する。`git add .` の代わりに使う。追跡するファイルが増えたら `README.org` の `* Makefile` の `TRACKED` に足す。`TRACKED` の外にある追跡済みファイルの**削除**（名前変更の旧パスを含む）は、中止の対象にしない |
 
