@@ -20,7 +20,7 @@
 - =scripts/claude_org_roam_export.py= 、 =scripts/update_build_info.py=
 - =scripts/check-bytecomp.el= 、 =scripts/cheatsheet.el= 、 =scripts/check_modules.py= 、 =scripts/stats.py=
 - =scripts/compose.py= 、 =scripts/shot.sh= 、 =scripts/demo-layout.el=
-- =scripts/orphans.el= 、 =scripts/smoketest.el=
+- =scripts/orphans.el= 、 =scripts/smoketest.el= 、 =scripts/smoketest_daemon.py= 、 =scripts/test_fresh.py= 、 =scripts/pre-commit=
 
 tangle は =make tangle= が、 =README.org= や =org/*.org= とあわせて行います。tangle 先は =../scripts/= です。
 
@@ -1860,9 +1860,14 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
       (and global-auto-revert-mode delete-selection-mode))
     (smoketest--check "core: undo と構造編集のコマンド（undo-fu・vundo・puni）"
       (and (commandp 'undo-fu-only-undo) (commandp 'vundo) (commandp 'puni-mode)))
-    (smoketest--check "core: tree-sitter が有効で、c / python / go / json の文法がある"
+    (smoketest--check "core: tree-sitter が有効で、c / python / go / json の文法がある（新しい環境では、初回に自動で入る取得元がある）"
+      ;; 文法は .var/tree-sitter/ に入り、リポジトリの外（.gitignore）。新しいマシンには無く、
+      ;; ts-mode を初めて開いたときに treesit-auto-install-grammar が入れる。取得元が分かっていればよい。
       (and (eq treesit-enabled-modes t)
-           (cl-every #'treesit-language-available-p '(c python go json))))
+           (cl-every (lambda (lang)
+                       (or (treesit-language-available-p lang)
+                           (assq lang treesit-language-source-alist)))
+                     '(c python go json))))
     (smoketest--check "core: repeat-mode と so-long が有効で、長い行を検出する"
       (and repeat-mode global-so-long-mode
            (with-temp-buffer
@@ -1955,6 +1960,34 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
     (smoketest--check "dev-ai: Claude Code の ACP クライアント（claude-agent-acp）がある"
       (or (executable-find "claude-agent-acp")
           (progn (smoketest--say "  claude-agent-acp が無い（npm i -g @zed-industries/claude-agent-acp）") nil)))
+    (smoketest--check "dev: consult-eglot・devdocs・treesit-fold が autoload で呼べ、M-SPC c s / K / z に割り当てがある"
+      (and (commandp 'consult-eglot-symbols) (commandp 'devdocs-lookup)
+           (commandp 'treesit-fold-toggle)
+           (eq (lookup-key ui-leader-c-map (kbd "s")) 'consult-eglot-symbols)
+           (eq (lookup-key ui-leader-c-map (kbd "K")) 'devdocs-lookup)
+           (eq (lookup-key ui-leader-c-map (kbd "z")) 'treesit-fold-toggle)))
+    (smoketest--check "dev: tree-sitter のバッファで treesit-fold が有効になる（python-ts-mode）"
+      (with-temp-buffer
+        (python-ts-mode)
+        (insert "def f():\n    return 1\n")
+        (dev-navigation--maybe-treesit-fold)
+        (and (bound-and-true-p treesit-fold-mode)
+             (progn (goto-char (point-min)) (treesit-fold-toggle) t))))
+    (smoketest--check "ui: tab-bar はタブが 2 つ以上になるまでバーを出さず、起動時は有効にしない。M-SPC w t / x / [ / ] / T がタブのコマンド"
+      (and (eql tab-bar-show 1)
+           (not (bound-and-true-p tab-bar-mode))
+           (eq (lookup-key ui-leader-w-map (kbd "t")) 'tab-new)
+           (eq (lookup-key ui-leader-w-map (kbd "x")) 'tab-close)
+           (eq (lookup-key ui-leader-w-map (kbd "[")) 'tab-previous)
+           (eq (lookup-key ui-leader-w-map (kbd "]")) 'tab-next)
+           (eq (lookup-key ui-leader-w-map (kbd "T")) 'tab-switch)))
+    (smoketest--check "ui: helpful が autoload で呼べ、describe-* を置き換え、M-SPC h . がポイント位置の記号"
+      (and (eq (command-remapping 'describe-function) 'helpful-callable)
+           (eq (command-remapping 'describe-variable) 'helpful-variable)
+           (eq (command-remapping 'describe-key) 'helpful-key)
+           (eq (command-remapping 'describe-command) 'helpful-command)
+           (commandp 'helpful-at-point)
+           (eq (lookup-key ui-leader-h-map (kbd ".")) 'helpful-at-point)))
     (smoketest--check "dev-run: テストのコマンドをプロジェクトの種類から決める"
       (let ((dir (file-name-as-directory (make-temp-file "smoketest-run-" t))))
         (unwind-protect
@@ -3361,6 +3394,390 @@ make bench-startup BENCH_ARGS="--runs 8 --save"      # 8 回測り、結果を�
           return 1
       print("[bench-startup] ok")
       return 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv[1:]))
+#+end_src
+
+* Appendix: pre-commit — コミットの前に lint を通すフック
+:PROPERTIES:
+:CUSTOM_ID: appendix-pre-commit
+:header-args:sh: :tangle ../scripts/pre-commit :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+=make install-hooks= が、 =.git/hooks/pre-commit= に入れる Git のフックです。コミットの前に、
+=make reload= で tangle し直し、 =make lint= を通します。
+
+*なぜ必要か*
+
+生成ファイル（ =lisp/= 、 =personal/= など）は =.gitignore= の対象で、コミットされません。
+正本は =README.org= と =org/*.org= です。正本を編集したのに、 =make reload= を忘れて検査すると、
+古い生成ファイルを検査してしまい、検査が通ったように見えます。このフックは、コミットの前に必ず
+tangle し直すので、その取り違えを防ぎます。
+
+*使い方*
+
+#+begin_example
+make install-hooks      # フックを入れる
+make uninstall-hooks    # フックを外す
+SKIP_HOOKS=1 git commit -m "..."   # 急ぐときだけ、フックを飛ばす
+#+end_example
+
+=README.org= 、 =AGENTS.md= 、 =org/= 、 =svg/= 、 =Makefile= 、 =.gitignore= のどれもステージされていないコミットでは、
+何もしません。約 15〜20 秒かかります。
+
+#+NAME: pre-commit-src
+#+begin_src sh
+  #!/bin/sh
+  # pre-commit: コミットの前に、tangle し直して静的検査（make lint）を通す。
+  # `make install-hooks` が .git/hooks/pre-commit へ入れる。急ぐときは SKIP_HOOKS=1 git commit ...
+  #
+  # 生成ファイル（lisp/ personal/ user-lisp/ scripts/ init.el など）は .gitignore の対象で、
+  # コミットされない。正本は README.org と org/*.org なので、コミットの前に tangle し直して、
+  # 正本の編集が検査を通ることを確かめる。
+
+  [ -n "$SKIP_HOOKS" ] && exit 0
+
+  root=$(git rev-parse --show-toplevel) || exit 1
+  cd "$root" || exit 1
+
+  # README.org / org/*.org / Makefile に関係のない変更だけなら、何もしない。
+  changed=$(git diff --cached --name-only --diff-filter=ACMR)
+  echo "$changed" | grep -Eq '^(README\.org|AGENTS\.md|org/|svg/|Makefile|\.gitignore)' || exit 0
+
+  echo "[pre-commit] make reload && make lint ..."
+  if ! make reload >/dev/null 2>&1; then
+    echo "[pre-commit] make reload が失敗した。make reload を実行して原因を確かめる" >&2
+    exit 1
+  fi
+  if ! make lint; then
+    echo "[pre-commit] make lint が失敗した。直してからコミットする（急ぐときは SKIP_HOOKS=1）" >&2
+    exit 1
+  fi
+  exit 0
+#+end_src
+
+* Appendix: smoketest_daemon.py — デーモンモードのスモークテスト
+:PROPERTIES:
+:CUSTOM_ID: appendix-smoketest-daemon-py
+:header-args:python: :tangle ../scripts/smoketest_daemon.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+=make smoketest-daemon= が呼び出します。この設定には、 =(daemonp)= で分岐する箇所が多くあります（フォント、テーマ、
+posframe、ligature、nano-modeline などを、最初のグラフィカルなフレームができた時点で当てる）。
+=make smoketest= はバッチで動くので、この分岐は通りません。デーモンとして起動して、確かめます。
+
+*流れ*
+
+1. =emacs --daemon= で、この設定を読み込んだデーモンを起動する。
+2. フレームを作る前に確かめる: 全モジュールがロード済み、リーダーキーの全割り当てがコマンド、
+   グラフィカルなフレームが無い、フレームができた時に設定を当てるフックが登録されている、警告が無い。
+3. =emacsclient -c= でグラフィカルなフレームを 1 つ作り、確かめる: フォント、テーマ、vertico-posframe、ligature が
+   当たっている。
+4. デーモンを止める。
+
+グラフィカルなフレームが数秒、画面に出ます。画面が無い環境では =--no-frame= を付けると、手順 3 を飛ばします。
+約 20 秒かかるので、 =make verify= には含めません。
+
+#+NAME: smoketest-daemon-py-src
+#+begin_src python
+  #!/usr/bin/env python3
+  """Smoke-test this configuration when Emacs runs as a daemon.
+
+  Starts `emacs --daemon' with this configuration, checks the state before any frame
+  exists, opens a graphical frame with `emacsclient -c' and checks what the daemon
+  must apply on the first frame (fonts, theme, posframe, ligatures), then stops the
+  daemon.  Many modules branch on `(daemonp)'; this is what exercises that branch.
+
+  The graphical frame is visible for a few seconds.  Standard library only.
+  """
+  import argparse
+  import os
+  import subprocess
+  import sys
+  import time
+  from pathlib import Path
+
+  BEFORE = [
+      ("daemonp", "(and (daemonp) t)"),
+      ("全モジュールがロード済み",
+       "(null (cl-remove-if (lambda (m) (or (featurep m) (memq m my:modules-skip))) "
+       "(append my:modules my:modules-extra)))"),
+      ("リーダーキーの全割り当てがコマンドに結びついている",
+       "(let (bad) (cl-labels ((walk (map) (map-keymap (lambda (_e d) "
+       "(cond ((keymapp d) (walk d)) ((and d (symbolp d) (not (commandp d))) (push d bad)))) map))) "
+       "(walk ui-leader-map)) (or (null bad) (format \"%S\" bad)))"),
+      ("フレームを作る前は、グラフィカルなフレームが無い",
+       "(cl-notany (lambda (f) (display-graphic-p f)) (frame-list))"),
+      ("最初のフレームで設定を当てるフックが登録されている",
+       "(and (memq 'ui-font--apply-to-frame after-make-frame-functions) "
+       "(or (memq 'ui-theme--apply-frame after-make-frame-functions) t))"),
+      ("警告バッファに警告がない",
+       "(or (not (get-buffer \"*Warnings*\")) (with-current-buffer \"*Warnings*\" "
+       "(string-blank-p (replace-regexp-in-string \"Batch mode does not support[^\\n]*\" "
+       "\"\" (buffer-string)))))"),
+  ]
+  AFTER = [
+      ("グラフィカルなフレームができた", "(cl-some #'display-graphic-p (frame-list))"),
+      ("既定のフォントが設定された",
+       "(let ((f (cl-find-if #'display-graphic-p (frame-list)))) "
+       "(and f (not (equal (face-attribute 'default :family f) \"Monospace\"))))"),
+      ("テーマが有効", "(and custom-enabled-themes t)"),
+      ("vertico-posframe が有効になった", "(bound-and-true-p vertico-posframe-mode)"),
+      ("ligature が有効になった", "(bound-and-true-p global-ligature-mode)"),
+  ]
+
+
+  def client(emacsclient, sock, *args, timeout=20):
+      return subprocess.run([emacsclient, "-s", sock, *args], capture_output=True, text=True,
+                            timeout=timeout)
+
+
+  def evaluate(emacsclient, sock, form):
+      """Return (ok, output).  A form passes when it prints anything but nil.
+      A form that prints a quoted string reports a problem: the string is shown."""
+      r = client(emacsclient, sock, "-e", form)
+      out = r.stdout.strip()
+      ok = r.returncode == 0 and out not in ("nil", "") and not out.startswith('"')
+      return ok, out
+
+
+  def main(argv: list[str]) -> int:
+      parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+      parser.add_argument("--root", type=Path, default=Path.cwd())
+      parser.add_argument("--emacs", default=os.environ.get("EMACS", "emacs"))
+      parser.add_argument("--emacsclient", default=os.environ.get("EMACSCLIENT", "emacsclient"))
+      parser.add_argument("--no-frame", action="store_true",
+                          help="do not open a graphical frame (skip the second half)")
+      args = parser.parse_args(argv)
+      root = args.root.expanduser().resolve()
+      sock = f"smoketest-daemon-{os.getpid()}"
+
+      print(f"[smoketest-daemon] starting the daemon ({sock}) ...")
+      subprocess.run([args.emacs, f"--daemon={sock}", "--init-directory", str(root)],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+      deadline = time.time() + 90
+      while time.time() < deadline:
+          if client(args.emacsclient, sock, "-e", "t").returncode == 0:
+              break
+          time.sleep(1)
+      else:
+          print("[smoketest-daemon] FAILED: the daemon did not start", file=sys.stderr)
+          return 2
+
+      failed = 0
+
+      def check(name, form):
+          nonlocal failed
+          try:
+              ok, out = evaluate(args.emacsclient, sock, form)
+          except subprocess.TimeoutExpired:
+              ok, out = False, "timeout"
+          print(f"{'PASS' if ok else 'FAIL'} {name}")
+          if not ok and out not in ("nil", ""):
+              print(f"     {out[:300]}")
+          failed += 0 if ok else 1
+
+      try:
+          print("== フレームを作る前")
+          for name, form in BEFORE:
+              check(name, form)
+          if args.no_frame:
+              print("SKIP フレームを作った後の確認（--no-frame）")
+          else:
+              print("== グラフィカルなフレームを作った後")
+              client(args.emacsclient, sock, "-c", "-n", "-e", "t", timeout=60)
+              time.sleep(3)
+              for name, form in AFTER:
+                  check(name, form)
+      finally:
+          client(args.emacsclient, sock, "-e", "(kill-emacs)")
+      total_failed = failed
+      print(f"== 結果 FAIL={total_failed}")
+      return 1 if total_failed else 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv[1:]))
+#+end_src
+
+* Appendix: test_fresh.py — 新しい環境での再構築テスト
+:PROPERTIES:
+:CUSTOM_ID: appendix-test-fresh-py
+:header-args:python: :tangle ../scripts/test_fresh.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+=make test-fresh= が呼び出します。新しいマシンでこの設定を組み立てる手順は、 =README.org= に書いてあります。
+書いてあることが本当に動くかは、書いた本人の環境では確かめられません（生成物も、パッケージも、すでにあるため）。
+そこで、一時ディレクトリへ clone し、README の手順どおりに組み立てて、動くかを確かめます。
+
+*手順*
+
+| # | 内容 |
+|---+---|
+| 1 | リポジトリを clone する（コミット済みの状態。 =--url= で GitHub からも可） |
+| 2 | ブートストラップ: 依存ゼロの =emacs -Q --batch= の tangle で、 =Makefile= などを生成する |
+| 3 | =make reload= |
+| 4 | =make lint= |
+| 5 | clone を =--init-directory= にして Emacs を起動し、 =scripts/smoketest.el= を実行する |
+| 6 | =make install-hooks= で pre-commit フックを入れ、変更をコミットして、フックが走って通ること |
+
+パッケージは、共有の straight のキャッシュから使うので、ネットワークは要りません。 =--isolate-cache= を付けると、
+空のキャッシュで始めるので、全パッケージを取得して作り直します（数十分かかり、ネットワークが要ります）。
+
+既定では、コミット済みの状態を clone するので、未コミットの変更は検査の対象になりません。 =--working-tree= を付けると、
+=--root= の未コミットの状態（追跡中のファイルと、新しいファイル）も clone に重ねます。コミットの前の確認に使えます。
+
+#+NAME: test-fresh-py-src
+#+begin_src python
+  #!/usr/bin/env python3
+  """Rebuild this configuration from a fresh clone and check that it works.
+
+  Follows the steps README.org documents for a new machine, in a temporary
+  directory, so that the README is tested rather than trusted:
+
+    1. clone the repository (the committed state, or --url)
+    2. bootstrap: the dependency-free `emacs -Q --batch' tangle
+    3. make reload
+    4. make lint
+    5. start Emacs on the clone (--init-directory) and run scripts/smoketest.el
+    6. install the pre-commit hook and commit a change through it
+
+  The packages come from the shared straight cache, so no network is needed.
+  --isolate-cache gives the clone an empty cache: every package is downloaded and
+  built again (many minutes, needs network).  Standard library only.
+  """
+  import argparse
+  import os
+  import shutil
+  import subprocess
+  import sys
+  import tempfile
+  import time
+  from pathlib import Path
+
+  BOOTSTRAP = ["--eval", "(require 'ob-tangle)", "--eval",
+               "(dolist (f (append (list \"README.org\") (directory-files \"org\" t \"[.]org$\"))) "
+               "(org-babel-tangle-file f))"]
+
+
+  def step(name, fn, results):
+      start = time.time()
+      try:
+          ok, note = fn()
+      except Exception as err:  # noqa: BLE001 - report any failure as a failed step
+          ok, note = False, repr(err)
+      took = time.time() - start
+      results.append(ok)
+      print(f"{'PASS' if ok else 'FAIL'} {name} ({took:.0f} s){'  ' + note if note else ''}")
+      return ok
+
+
+  def run(cmd, cwd, env=None, timeout=900):
+      return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+
+
+  def tail(proc, n=6):
+      text = (proc.stdout + proc.stderr).strip().splitlines()
+      return " | ".join(text[-n:])[:400]
+
+
+  def main(argv: list[str]) -> int:
+      parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+      parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository to clone")
+      parser.add_argument("--url", help="clone this URL instead of --root (for example the GitHub one)")
+      parser.add_argument("--emacs", default=os.environ.get("EMACS", "emacs"))
+      parser.add_argument("--working-tree", action="store_true",
+                          help="also copy the uncommitted state of --root into the clone "
+                               "(tracked and new files; to test before committing)")
+      parser.add_argument("--isolate-cache", action="store_true",
+                          help="use an empty package cache (downloads everything; slow)")
+      parser.add_argument("--keep", action="store_true", help="keep the temporary directory")
+      args = parser.parse_args(argv)
+
+      tmp = Path(tempfile.mkdtemp(prefix="emacs-fresh-"))
+      clone = tmp / "emacs.d"
+      env = dict(os.environ, EMACS=args.emacs)
+      if args.isolate_cache:
+          env["XDG_CACHE_HOME"] = str(tmp / "cache")
+      results: list[bool] = []
+      print(f"[test-fresh] {tmp}")
+
+      def do_clone():
+          src = args.url or str(args.root.expanduser().resolve())
+          r = run(["git", "clone", "--quiet", src, str(clone)], tmp)
+          if r.returncode != 0:
+              return False, tail(r)
+          if args.working_tree:
+              root = args.root.expanduser().resolve()
+              listed = run(["git", "ls-files", "--cached", "--others", "--exclude-standard"], root)
+              present = set(listed.stdout.splitlines())
+              for rel in present:
+                  src_file = root / rel
+                  if src_file.is_file():
+                      dest = clone / rel
+                      dest.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(src_file, dest)
+              for rel in run(["git", "ls-files"], clone).stdout.splitlines():
+                  if rel not in present and (clone / rel).exists():
+                      (clone / rel).unlink()
+              run(["git", "add", "-A"], clone)
+              return True, "(未コミットの状態を含む)"
+          return True, ""
+
+      def do_bootstrap():
+          r = run([args.emacs, "-Q", "--batch", *BOOTSTRAP], clone, env)
+          made = [(clone / p).exists() for p in ("Makefile", "scripts/reload.py", "lisp/modules.el",
+                                                "init.el", "early-init.el")]
+          return r.returncode == 0 and all(made), "" if all(made) else "生成物が足りない"
+
+      def do_make(target):
+          def inner():
+              r = run(["make", target], clone, env)
+              return r.returncode == 0, tail(r) if r.returncode else ""
+          return inner
+
+      def do_smoketest():
+          cmd = [args.emacs, "--batch", "--init-directory", str(clone),
+                 "-l", str(clone / "early-init.el"), "-l", str(clone / "init.el"),
+                 "-l", str(clone / "scripts" / "smoketest.el")]
+          r = run(cmd, clone, env, timeout=1500)
+          last = [l for l in r.stdout.splitlines() if l.startswith("== 結果")]
+          failed = [l for l in r.stdout.splitlines() if l.startswith("FAIL ")]
+          ok = r.returncode == 0 and bool(last) and last[-1].endswith("FAIL=0")
+          note = (last[-1] if last else tail(r)) + ("".join(f" | {l[:120]}" for l in failed[:3]))
+          return ok, note
+
+      def do_hook():
+          for k, v in (("user.name", "fresh"), ("user.email", "fresh@example.invalid")):
+              run(["git", "config", k, v], clone)
+          if run(["make", "install-hooks"], clone, env).returncode != 0:
+              return False, "make install-hooks が失敗した"
+          readme = clone / "README.org"
+          readme.write_text(readme.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+          run(["git", "add", "README.org"], clone)
+          r = run(["git", "commit", "-m", "test(fresh): フックを通る変更"], clone, env)
+          ran = "[pre-commit]" in (r.stdout + r.stderr)
+          return r.returncode == 0 and ran, "" if ran else "フックが走っていない"
+
+      try:
+          if step("clone", do_clone, results):
+              for name, fn in (("bootstrap (emacs -Q --batch の tangle)", do_bootstrap),
+                               ("make reload", do_make("reload")),
+                               ("make lint", do_make("lint")),
+                               ("起動と smoketest (--init-directory)", do_smoketest),
+                               ("pre-commit フックを入れ、コミットが通る", do_hook)):
+                  if not step(name, fn, results):
+                      break
+      finally:
+          if args.keep:
+              print(f"[test-fresh] kept {tmp}")
+          else:
+              shutil.rmtree(tmp, ignore_errors=True)
+      failed = not (results and all(results) and len(results) == 6)
+      print(f"[test-fresh] {'FAILED' if failed else 'ok'}")
+      return 1 if failed else 0
 
 
   if __name__ == "__main__":

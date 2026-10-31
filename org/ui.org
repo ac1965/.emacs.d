@@ -1564,6 +1564,9 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;; - `my:saved-window-config' に保存する名前付きスナップショットのため
   ;;   `my/save-window-layout' と `my/restore-window-layout' を提供する
   ;; - 行間（`ui-window-line-spacing'）と、グラフィカルフレームの余白（spacious-padding）を設定する
+  ;; - tab-bar でプロジェクトごとの作業台（タブ）を持てるようにする。`M-SPC w t' で新しいタブ、
+  ;;   `w x' で閉じる、`w [' / `w ]' で前後、`w T' で名前で選ぶ。タブが 1 つのときはバーを出さず、
+  ;;   最初のタブを作るまで tab-bar-mode は有効にならない（起動のコストは 0）
   ;; - ポップアップのバッファ（*Messages*、*Help*、*compilation*、*Smoketest* など）を popper で
   ;;   まとめる。`M-SPC w p' で出し入れ、`w n' で順に切り替え、`w P' で通常のウィンドウへ昇格
   ;;   （テーマの適用は ui-theme.el が受け持つ）
@@ -1688,6 +1691,35 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
       (keymap-set ui-leader-w-map "P" #'popper-toggle-type)))
 
   (add-hook 'after-init-hook #'ui-window--bind-popper-keys 90)
+
+  ;; tab-bar: タブが 2 つ以上になるまでバーを出さない（`tab-bar-show' = 1）。`tab-bar-mode' は
+  ;; `tab-new' が最初に有効にするので、起動時には何もしない。
+  (declare-function tab-new "tab-bar")
+  (declare-function tab-close "tab-bar")
+  (declare-function tab-previous "tab-bar")
+  (declare-function tab-next "tab-bar")
+  (declare-function tab-switch "tab-bar")
+
+  ;; `setopt' / :custom は使わない。`tab-bar-show' の :set 関数が `tab-bar-mode' を有効にして
+  ;; しまい、起動時に tab-bar をロードして有効にするため。`setq' なら、`tab-new' が初めて呼ばれる
+  ;; まで何も起きない（コーディング規則 6 の、`setopt' が副作用を持つ場合の例外）。
+  (leaf tab-bar
+    :straight nil
+    :pre-setq ((tab-bar-show . 1)
+               (tab-bar-close-button-show . nil)
+               (tab-bar-tab-hints . t)
+               (tab-bar-new-tab-choice . "*scratch*")))
+
+  (defun ui-window--bind-tab-keys ()
+    "Bind the tab commands in `ui-leader-w-map' when it exists."
+    (when (and (boundp 'ui-leader-w-map) (keymapp ui-leader-w-map))
+      (keymap-set ui-leader-w-map "t" #'tab-new)
+      (keymap-set ui-leader-w-map "x" #'tab-close)
+      (keymap-set ui-leader-w-map "[" #'tab-previous)
+      (keymap-set ui-leader-w-map "]" #'tab-next)
+      (keymap-set ui-leader-w-map "T" #'tab-switch)))
+
+  (add-hook 'after-init-hook #'ui-window--bind-tab-keys 90)
 
   (leaf popper
     :straight t
@@ -1824,6 +1856,34 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   (if (daemonp)
       (add-hook 'after-make-frame-functions #'ui-utils--maybe-activate-pbcopy)
     (add-hook 'after-init-hook #'ui-utils--maybe-activate-pbcopy))
+
+  ;; helpful: 組み込みのヘルプ（describe-*）を、ソースと参照元を併せて見せる helpful に置き換える。
+  ;; `C-h f' / `v' / `k' / `x' は、置き換え（remap）で helpful-* になる。`M-SPC h .' はポイント位置の記号。
+  (defvar ui-leader-h-map)
+  (declare-function helpful-callable "helpful")
+  (declare-function helpful-variable "helpful")
+  (declare-function helpful-key "helpful")
+  (declare-function helpful-command "helpful")
+  (declare-function helpful-symbol "helpful")
+  (declare-function helpful-at-point "helpful")
+
+  (leaf helpful
+    :straight t
+    :commands (helpful-callable helpful-variable helpful-key helpful-command
+               helpful-symbol helpful-at-point))
+
+  (keymap-global-set "<remap> <describe-function>" #'helpful-callable)
+  (keymap-global-set "<remap> <describe-variable>" #'helpful-variable)
+  (keymap-global-set "<remap> <describe-key>" #'helpful-key)
+  (keymap-global-set "<remap> <describe-command>" #'helpful-command)
+  (keymap-global-set "<remap> <describe-symbol>" #'helpful-symbol)
+
+  (defun ui-utils--bind-helpful-keys ()
+    "Bind `helpful-at-point' in `ui-leader-h-map' when it exists."
+    (when (and (boundp 'ui-leader-h-map) (keymapp ui-leader-h-map))
+      (keymap-set ui-leader-h-map "." #'helpful-at-point)))
+
+  (add-hook 'after-init-hook #'ui-utils--bind-helpful-keys 90)
 
   (provide 'ui-utils)
 

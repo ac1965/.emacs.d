@@ -1804,6 +1804,15 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
   ;; - 多点編集のため multiple-cursors を導入する
   ;; - EWW ブラウジング用に `my/eww-search' と `my/eww-toggle-images' を提供する
   ;; - EWW のページ描画時に、検索語をハイライトする
+  ;; - consult-eglot: LSP のワークスペースの記号（関数・クラスなど）を、プロジェクト全体から
+  ;;   絞り込んで探す（M-SPC c s）。Eglot が接続しているときに使う
+  ;; - devdocs: DevDocs のドキュメントを Emacs 内で引く（M-SPC c K）。初回は `M-x devdocs-install'
+  ;;   で言語のドキュメントを入れる（ネットワークが要る）
+  ;; - treesit-fold: tree-sitter の構文木で、関数やブロックを折りたたむ（M-SPC c z）。
+  ;;   tree-sitter のモードのバッファでだけ有効にする
+  ;;
+  ;; キーは `after-init-hook'（depth 90）で割り当てる。leader のマップは ui-keymap の
+  ;; `after-init-hook'（depth 0）で作られるため、その後に走らせる必要がある。
   ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
@@ -1874,6 +1883,42 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
     (make-directory eww-cache-directory t)
     (setopt eww-history-limit 200)
     (add-hook 'eww-after-render-hook #'my/eww-after-render))
+
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ側にある）。
+  (defvar ui-leader-c-map)
+  (declare-function consult-eglot-symbols "consult-eglot")
+  (declare-function devdocs-lookup "devdocs")
+  (declare-function treesit-fold-toggle "treesit-fold")
+  (declare-function treesit-fold-mode "treesit-fold")
+  (declare-function treesit-parser-list "treesit.c")
+
+  (leaf consult-eglot
+    :straight t
+    :commands (consult-eglot-symbols))
+
+  (leaf devdocs
+    :straight t
+    :commands (devdocs-lookup devdocs-install devdocs-peruse))
+
+  (defun dev-navigation--maybe-treesit-fold ()
+    "Enable `treesit-fold-mode' in buffers that have a tree-sitter parser."
+    (when (and (fboundp 'treesit-parser-list) (treesit-parser-list))
+      (treesit-fold-mode 1)))
+
+  (leaf treesit-fold
+    :straight t
+    :commands (treesit-fold-toggle treesit-fold-mode treesit-fold-close-all treesit-fold-open-all)
+    :hook (prog-mode-hook . dev-navigation--maybe-treesit-fold))
+
+  (defun dev-navigation--bind-keys ()
+    "Bind the navigation commands in `ui-leader-c-map' when it exists."
+    (when (and (boundp 'ui-leader-c-map) (keymapp ui-leader-c-map))
+      (keymap-set ui-leader-c-map "s" #'consult-eglot-symbols)
+      (keymap-set ui-leader-c-map "K" #'devdocs-lookup)
+      (keymap-set ui-leader-c-map "z" #'treesit-fold-toggle)))
+
+  ;; depth 90: ui-keymap--startup-init（depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'dev-navigation--bind-keys 90)
 
   (provide 'dev-navigation)
   ;;; dev/dev-navigation.el ends here

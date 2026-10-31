@@ -1322,6 +1322,9 @@ git diff README.org   # 差分を確認してコミットする
 	@echo "  make check-modules            # modules.el の一覧・層の順序・provide・未登録 .el を検査"
 	@echo "  make check-orphans            # tangle 先から外れた生成物（古い .el など）を一覧"
 	@echo "  make verify                   # lint + check-bytecomp + check-cheatsheet + smoketest（コミット前の確認）"
+	@echo "  make install-hooks            # コミット前に make lint を通す Git のフックを入れる（uninstall-hooks で外す）"
+	@echo "  make smoketest-daemon         # デーモンモードで起動して確かめる（グラフィカルなフレームが数秒出る）"
+	@echo "  make test-fresh               # 一時ディレクトリへ clone し、README の手順で組み立てて確かめる（数分）"
 	@echo "  make check-docs               # README.org と AGENTS.md の数・名前を実コードと照合"
 	@echo "  make bench-startup            # 起動時間を測り、基準と比べる（BENCH_ARGS=\"--runs 8 --save\" で基準を保存）"
 	@echo "  make clean-orphans            # 上の生成物を削除（reload の最後の段で自動実行）"
@@ -1570,7 +1573,7 @@ git diff README.org   # 差分を確認してコミットする
   # my:modules と my:modules-extra に挙がるモジュールの実在と provide、層の並び順、
   # 上位層への明示的な require、どちらにも載らない .el を、Emacs なしで検査する。
   # 本体は scripts/check_modules.py（org/tools.org の Appendix: check_modules.py を参照）。
-  .PHONY: check-modules stats check-docs bench-startup
+  .PHONY: check-modules stats check-docs bench-startup install-hooks uninstall-hooks smoketest-daemon test-fresh
   check-modules:
 	@python3 scripts/check_modules.py "$(ROOT)"
 
@@ -1593,6 +1596,36 @@ git diff README.org   # 差分を確認してコミットする
   BENCH_ARGS ?=
   bench-startup:
 	@python3 scripts/bench_startup.py --root "$(ROOT)" --emacs "$(EMACS)" $(BENCH_ARGS)
+
+  # ---- smoketest-daemon : デーモンモードのスモークテスト --------------------------------------
+  # emacs --daemon で起動し、フレームを作る前後の状態を確かめる（グラフィカルなフレームが数秒出る）。
+  # 画面が無い環境では SMOKETEST_DAEMON_ARGS=--no-frame。約 20 秒。lint / verify には含めない。
+  # 本体は scripts/smoketest_daemon.py（org/tools.org の Appendix: smoketest_daemon.py を参照）。
+  SMOKETEST_DAEMON_ARGS ?=
+  smoketest-daemon:
+	@python3 scripts/smoketest_daemon.py --root "$(ROOT)" --emacs "$(EMACS)" $(SMOKETEST_DAEMON_ARGS)
+
+  # ---- test-fresh : 新しい環境での再構築テスト ---------------------------------------------------
+  # 一時ディレクトリへ clone し、README の手順（ブートストラップ、reload、lint、起動と smoketest、
+  # pre-commit フック）で組み立てて、動くかを確かめる。コミット済みの状態が対象。数分かかる。
+  # FRESH_ARGS=--isolate-cache で、空のパッケージキャッシュから作り直す（数十分、ネットワークが要る）。
+  # 本体は scripts/test_fresh.py（org/tools.org の Appendix: test_fresh.py を参照）。
+  FRESH_ARGS ?=
+  test-fresh:
+	@python3 scripts/test_fresh.py --root "$(ROOT)" --emacs "$(EMACS)" $(FRESH_ARGS)
+
+  # ---- install-hooks / uninstall-hooks : コミット前に lint を通す Git のフック ------------------
+  # scripts/pre-commit（org/tools.org の Appendix: pre-commit を参照）を .git/hooks/pre-commit へ入れる。
+  # コミットの前に make reload && make lint を実行する。SKIP_HOOKS=1 git commit で飛ばせる。
+  install-hooks:
+	@hooks="$$(git -C "$(ROOT)" rev-parse --git-path hooks)"; \
+  	  case "$$hooks" in /*) ;; *) hooks="$(ROOT)/$$hooks";; esac; \
+  	  mkdir -p "$$hooks" && install -m 755 "$(ROOT)/scripts/pre-commit" "$$hooks/pre-commit" \
+  	    && echo "[install-hooks] $$hooks/pre-commit"
+  uninstall-hooks:
+	@hooks="$$(git -C "$(ROOT)" rev-parse --git-path hooks)"; \
+  	  case "$$hooks" in /*) ;; *) hooks="$(ROOT)/$$hooks";; esac; \
+  	  rm -f "$$hooks/pre-commit" && echo "[uninstall-hooks] removed $$hooks/pre-commit"
 
   # Emacs の標準エラーは、通常は雑音（Batch mode does not support ... の警告や、[modules] の行）なので捨てる。
   # ただし終了コードが 2 以上（Lisp のエラーは 255）のときは、雑音を除いて末尾を表示する。
@@ -1701,7 +1734,7 @@ Overview 節の [[file:svg/tangle-flow.svg]] は、もともと Mermaid Live Edi
       o3["lisp/&lt;layer&gt;/&lt;module&gt;.el<br/>(85 files)"]
       o4["personal/*.el<br/>(7 files)"]
       o4b["user-lisp/*.el<br/>(2 files)"]
-      o5["scripts/*<br/>(16 files)"]
+      o5["scripts/*<br/>(19 files)"]
 
       readme --> tangle
       boot --> tangle
@@ -2188,6 +2221,19 @@ digraph personal_override_contract {
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* org/dev.org (dev-navigation), org/ui.org (ui-window, ui-utils), org/tools.org (smoketest): consult-eglot（M-SPC c s）、
+	devdocs（c K）、treesit-fold（c z。tree-sitter のバッファでだけ有効）、tab-bar（M-SPC w t / x / [ / ] / T）、
+	helpful（C-h f / v / k / x を置き換え、M-SPC h .）を追加した。tab-bar は、tab-bar-show の :set が tab-bar-mode を
+	有効にしてしまうため、setopt ではなく setq（:pre-setq）で設定し、最初の tab-new まで何も起きないようにした。
+	* org/tools.org (pre-commit), README.org (Makefile): make install-hooks / uninstall-hooks を追加した。コミットの前に
+	make reload && make lint を実行する Git のフック（SKIP_HOOKS=1 で飛ばせる）。
+	* org/tools.org (smoketest_daemon.py), README.org (Makefile): make smoketest-daemon を追加した。emacs --daemon で起動し、
+	フレームを作る前後の状態を確かめる。これで、リーダーキーの Org のコマンド（org-todo など）が、Org のロード前は
+	コマンドではない問題を見つけたので、orgx-core に autoload を足した。
+	* org/tools.org (test_fresh.py), README.org (Makefile): make test-fresh を追加した。一時ディレクトリへ clone し、
+	README の手順で組み立てて、動くかを確かめる（--working-tree で未コミットの状態も重ねる）。これで、tree-sitter の
+	文法の取得元に go が無く、新しい環境で go-ts-mode の文法が自動で入らない問題を見つけたので、core-treesit に足した。
 
 	* org/dev.org (dev-ai), org/personal.org (personal-credentials), org/auth.org (auth-gpg, auth-keychain),
 	org/boot.org, org/tools.org (smoketest), README.org, AGENTS.md, svg/12_dev_ai_auth.*: aidermacs を削除した。OpenRouter を
