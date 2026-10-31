@@ -196,7 +196,10 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 ただし personal だけは例外です。依存の向きでは最上位ですが、 =personal/user.el= と
 =personal/<ユーザー名>.el= は、先に =my:modules-extra= や各種変数を決めておく必要があります。
 そのため =init.el= のステップ 9 で、 =lisp/modules.el= （ステップ 10）より前に読み込まれます。
-それ以外の =personal-*.el= は、 =user.el= が必要に応じて読み込みます（Org のロード後やアイドル時など）。
+それ以外の =personal-*.el= は、置き場所で読み込み方が分かれます。 =user-lisp/= のライブラリ（ =personal-llm= 、
+=personal-messages= ）は、 =;;;###autoload= の注釈から Emacs が集めた autoload で、呼ばれたときに読み込まれます。
+ =personal/= の設定（ =personal-credentials= 、 =personal-hugo= 、 =personal-ime= ）は、 =user.el= と =ac1965.el= が
+起動時に読み込みます。 =personal-messages= の定期実行だけは、Org のロード後に =user.el= が予約します。
 
 *守るべき不変条件*
 
@@ -741,8 +744,9 @@ macOS では =exec-path-from-shell= がログインシェルを起動して =exe
    起動時間はおよそ半分になります。
 
 2. =exec-path-from-shell-variables= を =("PATH" "LANG")= だけに絞っています。API キー
-   （ =OPENAI_API_KEY= 、 =OPENROUTER_API_KEY= ）は、 =utils-claude.el= の中で必要になった時点で
-   =auth-source= 経由で =~/.authinfo.gpg= から取得します。
+   （ =OPENAI_API_KEY= 、 =OPENROUTER_API_KEY= ）は、 =personal/personal-credentials.el= が、
+   必要になった時点（最初の API 呼び出し、または =aidermacs-run= の直前）で =auth-source= 経由で
+   =~/.authinfo.gpg= から取得し、 =utils-claude= と =dev-ai= へ関数として渡します。
 
 2 番目が効くのは、これらのキーを export しているログインプロファイルを読み込む理由が、
 そもそも無くなるからです。結果として =exec-path-from-shell= のコストは、最小構成のログイン
@@ -1674,9 +1678,10 @@ Overview 節の [[file:svg/tangle-flow.svg]] は、もともと Mermaid Live Edi
 
       o1["Makefile · LICENSE · ChangeLog<br/>svg/*.dot · svg/*.mmd"]
       o2["early-init.el · init.el<br/>lisp/modules.el"]
-      o3["lisp/&lt;layer&gt;/&lt;module&gt;.el<br/>(84 files)"]
-      o4["personal/*.el<br/>(9 files)"]
-      o5["scripts/*<br/>(13 files)"]
+      o3["lisp/&lt;layer&gt;/&lt;module&gt;.el<br/>(85 files)"]
+      o4["personal/*.el<br/>(7 files)"]
+      o4b["user-lisp/*.el<br/>(2 files)"]
+      o5["scripts/*<br/>(14 files)"]
 
       readme --> tangle
       boot --> tangle
@@ -1688,6 +1693,7 @@ Overview 節の [[file:svg/tangle-flow.svg]] は、もともと Mermaid Live Edi
       tangle -->|boot.org| o2
       tangle -->|"&lt;layer&gt;.org"| o3
       tangle -->|personal.org| o4
+      tangle -->|personal.org| o4b
       tangle -->|tools.org| o5
 
       classDef src fill:#EEEDFE,stroke:#534AB7,color:#3C3489
@@ -1803,7 +1809,7 @@ Graphviz で書ける図ではありません。
   }
 #+end_src
 
-本文中の =svg/NN_*.svg= は、すべて Graphviz（ =dot= ）で生成しています。全 13 枚分の
+本文中の =svg/NN_*.svg= は、すべて Graphviz（ =dot= ）で生成しています。全 12 枚分（番号 03 は欠番）の
 =.dot= ソースを、通し番号順にここへまとめました。各コードブロックは、 =:tangle= で
 =svg/NN_*.dot= として書き出せます。
 
@@ -1925,6 +1931,8 @@ digraph autosave_flow {
 :header-args:dot: :tangle svg/06_auth_resolution.dot :file svg/06_auth_resolution.svg :cmdline -Tsvg
 :END:
 
+API キーの検索は、起動時には走りません。最初にキーが必要になった瞬間に、 =personal-credentials= が 1 回だけ行います。
+
 #+begin_src dot
 digraph auth_resolution {
   rankdir=TB;
@@ -1934,15 +1942,18 @@ digraph auth_resolution {
   edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
 
   g1 [label="auth-gpg ロード\nafter-init-hookにconfigure-sources登録"];
-  g2 [label="dev-ai ロード\nafter-init-hookにsetup-api-key登録"];
+  g2 [label="personal-credentials ロード\n(auth-source は引かない)"];
   fire [label="after-init-hook 発火" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
   s1 [label="#1 auth-gpg--configure-sources\n~/.authinfo.gpgをauth-sources先頭へ"];
-  s2 [label="#2 dev-ai--setup-api-key\nauth-source-search実行" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
-  safety [label="dev-ai--ensure-authinfo-in-sources\n(保険: 未追加なら自分で追加)" fillcolor="#FCEBEB" color="#A32D2D" fontcolor="#501313"];
+  use [label="最初にキーが必要になった瞬間\n(最初の API 呼び出し / aidermacs-run の直前)" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+  s2 [label="#2 personal-credentials--entries\nauth-source-search を 1 回実行して覚える" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  safety [label="personal-credentials--ensure-authinfo\n(保険: 未追加なら自分で追加)" fillcolor="#FCEBEB" color="#A32D2D" fontcolor="#501313"];
 
   g1 -> fire;
   g2 -> fire;
-  fire -> s1 -> s2;
+  fire -> s1;
+  s1 -> use [style=dotted];
+  use -> s2;
   s2 -> safety [style=dashed label="順序に依存せず常時チェック"];
 }
 #+end_src
@@ -2016,12 +2027,14 @@ digraph utils_claude {
 
   sync [label="utils-claude-request-sync\n同期呼び出し"];
   async [label="utils-claude-request\n非同期 + callback"];
+  key [label="utils-claude-api-key-function\n(personal 層が設定:\npersonal-credentials-anthropic-key)" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
   http [label="HTTP POST\napi.anthropic.com/v1/messages" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
   ok [label="応答テキスト" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
   err [label="utils-claude-error\nをシグナル" fillcolor="#FCEBEB" color="#A32D2D" fontcolor="#501313"];
 
-  sync -> http;
-  async -> http;
+  sync -> key [label="API キー"];
+  async -> key [label="API キー"];
+  key -> http;
   http -> ok [label="成功"];
   http -> err [label="失敗"];
 }
@@ -2087,11 +2100,13 @@ digraph leader_keymap {
 }
 #+end_src
 
-* Appendix: 12_dev_ai_timing.dot — dev-ai.el の認証タイミング cond ロジック
+* Appendix: 12_dev_ai_timing.dot — dev-ai.el の認証情報の受け取り
 :PROPERTIES:
 :CUSTOM_ID: appendix-12-dev-ai-timing-dot
 :header-args:dot: :tangle svg/12_dev_ai_timing.dot :file svg/12_dev_ai_timing.svg :cmdline -Tsvg
 :END:
+
+=dev-ai= （dev 層）は、API キーの出どころを知りません。 =aidermacs-run= の直前に、personal 層が渡した関数を呼ぶだけです。
 
 #+begin_src dot
 digraph dev_ai_timing {
@@ -2101,18 +2116,16 @@ digraph dev_ai_timing {
   node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11 fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
   edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
 
-  hook [label="after-init-hook\ndev-ai--setup-api-key"];
-  router [label="router-key\n(auth-source-search)" shape=diamond fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-  or1 [label="OpenRouter\naidermacs-default-model = claude-sonnet-4-5" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
-  openai [label="openai-key\n(auth-source-search)" shape=diamond fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-  or2 [label="OpenAI直接\naidermacs-default-model = gpt-4o-mini" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  hook [label="aidermacs-run の直前 (:before advice)\ndev-ai--setup-api-key\nセッションに 1 回だけ"];
+  fn [label="dev-ai-credentials-function\n(personal 層が設定: personal-credentials-aider)" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+  search [label="personal-credentials\nauth-source-search を 1 回\n(Anthropic / OpenRouter / OpenAI をまとめて)" shape=diamond fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+  or1 [label="OpenRouter\nOPENAI_API_BASE / OPENAI_API_KEY を設定\naidermacs-default-model =\nopenrouter/anthropic/claude-sonnet-4-5" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
   warn [label="display-warning\nキーが見つからない" fillcolor="#FCEBEB" color="#A32D2D" fontcolor="#501313"];
 
-  hook -> router;
-  router -> or1 [label="見つかった"];
-  router -> openai [label="見つからない"];
-  openai -> or2 [label="見つかった"];
-  openai -> warn [label="見つからない"];
+  hook -> fn;
+  fn -> search;
+  search -> or1 [label="OpenRouter のキーがある"];
+  search -> warn [label="ない"];
 }
 #+end_src
 
@@ -2154,6 +2167,12 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Overview, 環境変数, personal, Appendix: 06_auth_resolution, 09_utils_claude, 12_dev_ai_timing, tangle-flow),
+	svg/*.svg: 散文と図を、現在のコードに合わせた。API キーの取得は personal/personal-credentials.el が担うこと、
+	user-lisp/ のライブラリの読み込み方（autoload）、tangle の図のファイル数（lisp 85、personal 7、user-lisp 2、
+	scripts 14）、Appendix の図の枚数（12 枚。番号 03 は欠番）を直した。06 と 12 の図は、削除済みの
+	dev-ai--setup-api-key の検索と dev-ai--ensure-authinfo-in-sources を描いていたため、遅延検索の流れに描き直した。
+	* org/tools.org (stats.py): user-lisp/ の数に、Emacs が書く .user-lisp-autoloads.el を含めない。
 	* org/personal.org (personal-llm, personal-user), org/utils.org (utils-claude), org/tools.org (smoketest--layers),
 	AGENTS.md, README.org: personal-ai.el を personal-llm.el に統合した。ポイント位置の defun を取り出す処理（同一のコードが
 	2 つあった）と、Org の出力バッファを開く処理を共有する。personal-ai の (require 'ob) を除き、org-babel-execute:claude に
