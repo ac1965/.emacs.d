@@ -187,9 +187,9 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 ディレクトリ作成の標準ヘルパーは
 `early-init.el` の `my/ensure-directory-exists` である。
 
-`design_spec.org` は廃止され、完全に削除された。12 個の図 `.dot` ソース（番号 03 は欠番）は
+`design_spec.org` は廃止され、完全に削除された。13 個の図 `.dot` ソース（番号 03 は欠番）は
 README.org の Appendix（`Appendix: 01_boot_flow.dot` から
-`13_personal_override_contract.dot` まで）に、それぞれ対象モジュールの
+`14_llm_overview.dot` まで）に、それぞれ対象モジュールの
 隣へ埋め込まれている。Makefile の `DESIGN_SPEC` 変数と、それが駆動して
 いた 2 ファイル前提の `dot-tangle`/`mmd-tangle` ロジックも削除済みである。
 `DESIGN_SPEC` 型のガードを再導入しないこと。`design_spec.org` が

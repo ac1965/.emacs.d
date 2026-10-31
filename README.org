@@ -1862,7 +1862,7 @@ Graphviz で書ける図ではありません。
   }
 #+end_src
 
-本文中の =svg/NN_*.svg= は、すべて Graphviz（ =dot= ）で生成しています。全 12 枚分（番号 03 は欠番）の
+本文中の =svg/NN_*.svg= は、すべて Graphviz（ =dot= ）で生成しています。全 13 枚分（番号 03 は欠番）の
 =.dot= ソースを、通し番号順にここへまとめました。各コードブロックは、 =:tangle= で
 =svg/NN_*.dot= として書き出せます。
 
@@ -2208,6 +2208,77 @@ digraph personal_override_contract {
 }
 #+end_src
 
+* Appendix: 14_llm_overview.dot — LLM まわりの全体像（agent-shell 系と API 系）
+:PROPERTIES:
+:CUSTOM_ID: appendix-14-llm-overview-dot
+:header-args:dot: :tangle svg/14_llm_overview.dot :file svg/14_llm_overview.svg :cmdline -Tsvg
+:END:
+
+Claude を使う経路は、2 本あります。互いに独立していて、片方が壊れても、もう片方は動きます。
+
+| 経路 | 入口 | 橋渡し | 認証 | 課金 |
+|---+---+---+---+---|
+| agent-shell 系 | =dev-ai= （ =M-SPC a c= ） | =claude-agent-acp= （外部の実行ファイル） | 既定は =login= 。 =claude= のログイン（Pro / Max の契約）。API キーは要らない | 契約の枠内 |
+| API 系 | =personal-llm= （ =my/claude-refactor-defun= など、Org Babel の =claude= ） | =utils-claude= （utils 層の HTTP クライアント） | API キー（ =personal-credentials= が =authinfo.gpg= から取る） | 従量課金 |
+
+=claude-agent-acp= は、自分では認証しません。 =dev-ai-agent-authentication= が =login= （既定）のときは、
+=claude= が保存したログインを使うので、Pro / Max の契約の枠で動きます。 =api-key= にすると、
+=claude-agent-acp= も API キーで動きます。キーは、personal 層が =dev-ai-anthropic-key-function= へ渡した
+=personal-credentials-anthropic-key= が返します。この場合の課金は、API の従量課金です。
+
+=utils-claude= は、Claude API を直接呼ぶクライアントで、API キーだけで動きます。 =claude= のログインは使いません。
+
+API キーの取得は、personal 層の =personal-credentials= だけが知ります。下位層（dev・utils）は、キーを返す関数を
+入れる変数だけを持ち、 ~auth-source-search~ を書きません（上位層への依存を避けるため）。
+
+#+begin_src dot
+digraph llm_overview {
+  rankdir=TB;
+  bgcolor="white";
+  fontname="Noto Sans CJK JP";
+  compound=true;
+  node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11 fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
+  edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
+
+  subgraph cluster_personal {
+    label="personal 層（認証の出どころ）"; style="rounded,dashed"; color="#854F0B"; fontcolor="#633806";
+    cred [label="personal-credentials-anthropic-key\n(authinfo.gpg を 1 回だけ検索)" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+    llm [label="personal-llm (user-lisp/)\nmy/claude-*、Org Babel の claude"];
+  }
+
+  subgraph cluster_utils {
+    label="utils 層"; style="rounded,dashed"; color="#185FA5"; fontcolor="#0C447C";
+    uc [label="utils-claude\nClaude API の HTTP クライアント" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+    ucf [label="utils-claude-api-key-function" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+  }
+
+  subgraph cluster_dev {
+    label="dev 層"; style="rounded,dashed"; color="#0F6E56"; fontcolor="#04342C";
+    ai [label="dev-ai\nM-SPC a c" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+    choice [label="dev-ai-agent-authentication" shape=diamond fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+    daf [label="dev-ai-anthropic-key-function" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  }
+
+  acp [label="claude-agent-acp\n(層の外。外部の実行ファイル)"];
+  cli [label="claude のログイン\n(Pro / Max の契約)" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  api [label="Claude API\n(従量課金)" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+
+  ai -> choice;
+  choice -> acp [label="login（既定）"];
+  choice -> daf [label="api-key"];
+  daf -> acp [label="API キー"];
+  acp -> cli [label="login のとき"];
+  acp -> api [label="api-key のとき" style=dashed];
+
+  llm -> uc [label="呼ぶ"];
+  uc -> ucf [label="キーを要求"];
+  uc -> api;
+
+  cred -> ucf [label="関数として渡す" style=dashed color="#854F0B"];
+  cred -> daf [label="関数として渡す" style=dashed color="#854F0B"];
+}
+#+end_src
+
 * Changelog
 :PROPERTIES:
 :CUSTOM_ID: changelog
@@ -2222,6 +2293,10 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Appendix: 14_llm_overview.dot), org/dev.org (dev-ai), AGENTS.md: Claude を使う 2 本の経路（agent-shell 系と、
+	utils-claude を使う API 系）の全体像を、層ごとの図 14_llm_overview として追加した。claude-agent-acp は自分では認証せず、
+	既定の login では Pro / Max の契約の枠で動くこと、api-key にすると API キーで動くこと（従量課金）を、散文で明示した。
+	図の枚数を 12 から 13 にした。
 	* org/dev.org (dev-navigation), org/ui.org (ui-window, ui-utils), org/tools.org (smoketest): consult-eglot（M-SPC c s）、
 	devdocs（c K）、treesit-fold（c z。tree-sitter のバッファでだけ有効）、tab-bar（M-SPC w t / x / [ / ] / T）、
 	helpful（C-h f / v / k / x を置き換え、M-SPC h .）を追加した。tab-bar は、tab-bar-show の :set が tab-bar-mode を
