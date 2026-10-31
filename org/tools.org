@@ -1692,40 +1692,31 @@ make smoketest
             (kill-buffer personal-llm-claude-output-buffer))))))
     (smoketest--check "utils-claude / dev-ai へ personal 層が関数を渡している"
       (and (eq utils-claude-api-key-function 'personal-credentials-anthropic-key)
-           (eq dev-ai-credentials-function 'personal-credentials-aider)))
-    (smoketest--check "認証情報: 1 回の検索で 3 つとも引け、2 回目以降は検索しない"
+           (eq dev-ai-anthropic-key-function 'personal-credentials-anthropic-key)))
+    (smoketest--check "認証情報: Anthropic のキーが引け、2 回目以降は検索しない"
       (let ((calls 0))
         (cl-letf (((symbol-function 'auth-source-search)
                    (lambda (&rest _)
                      (cl-incf calls)
-                     (list (list :host "api.anthropic.com" :user "apikey" :secret "ant-key")
-                           (list :host "openrouter.ai" :user "ac1965" :secret (lambda () "or-key"))
-                           (list :host "api.openai.com" :user "org-ai" :secret "oa-key"))))
+                     (list (list :host "api.anthropic.com" :user "apikey" :secret (lambda () "ant-key")))))
                   ((symbol-function 'personal-credentials--ensure-authinfo) #'ignore))
           (personal-credentials-reset)
           (prog1 (and (equal (utils-claude-get-api-key) "ant-key")
-                      (equal (plist-get (personal-credentials-aider) :api-key) "or-key")
-                      (equal (plist-get (personal-credentials-aider) :api-base)
-                             "https://openrouter.ai/api/v1")
+                      (equal (personal-credentials-anthropic-key) "ant-key")
                       (= calls 1))
             (personal-credentials-reset)))))
     (smoketest--check "認証情報: キーが無ければ nil（エラーにしない）"
       (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil))
                 ((symbol-function 'personal-credentials--ensure-authinfo) #'ignore))
         (personal-credentials-reset)
-        (prog1 (and (null (utils-claude-get-api-key)) (null (personal-credentials-aider)))
+        (prog1 (null (utils-claude-get-api-key))
           (personal-credentials-reset))))
-    (smoketest--check "dev-ai: 渡された認証情報を aider の環境変数にする"
-      (let ((old-key (getenv "OPENAI_API_KEY")) (old-base (getenv "OPENAI_API_BASE"))
-            (dev-ai-credentials-function
-             (lambda () (list :api-base "https://example.invalid/v1" :api-key "fake" :model "m")))
-            (dev-ai--api-key-configured nil))
-        (unwind-protect
-            (progn (dev-ai--setup-api-key)
-                   (and (equal (getenv "OPENAI_API_KEY") "fake")
-                        (equal (getenv "OPENAI_API_BASE") "https://example.invalid/v1")))
-          (setenv "OPENAI_API_KEY" old-key)
-          (setenv "OPENAI_API_BASE" old-base))))
+    (smoketest--check "aidermacs を削除した（OpenRouter / OpenAI の受け渡しが残っていない）"
+      (and (not (fboundp 'personal-credentials-aider))
+           (not (boundp 'dev-ai-credentials-function))
+           (not (fboundp 'dev-ai--setup-api-key))
+           (not (cl-some (lambda (s) (member (plist-get s :host) '("openrouter.ai" "api.openai.com")))
+                         auth-gpg-services))))
     (smoketest--check "utils-claude は auth-source を直接引かない"
       (not (let ((found nil))
              (with-temp-buffer
@@ -1941,6 +1932,29 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
     (smoketest--check "dev: 整形・スニペット・プロジェクトのコマンド"
       (and (fboundp 'apheleia-global-mode) (commandp 'tempel-insert)
            (commandp 'project-find-file)))
+    (smoketest--check "dev-ai: agent-shell が autoload で呼べ、既定は claude のログインで認証する"
+      (and (commandp 'agent-shell) (commandp 'agent-shell-anthropic-start-claude-code)
+           (progn (require 'agent-shell-anthropic)
+                  (dev-ai--configure-agent-shell)
+                  (eq (alist-get :login agent-shell-anthropic-authentication) t))))
+    (smoketest--check "dev-ai: api-key にすると、personal 層が渡した関数で認証する（キーの値は代役）"
+      (let ((dev-ai-agent-authentication 'api-key)
+            (dev-ai-anthropic-key-function (lambda () "sk-fake")))
+        (prog1 (progn (dev-ai--configure-agent-shell)
+                      (and (functionp (alist-get :api-key agent-shell-anthropic-authentication))
+                           (equal (funcall (alist-get :api-key agent-shell-anthropic-authentication))
+                                  "sk-fake")))
+          (let ((dev-ai-agent-authentication 'login)) (dev-ai--configure-agent-shell)))))
+    (smoketest--check "dev-ai: personal 層が dev-ai-anthropic-key-function を渡している"
+      (eq dev-ai-anthropic-key-function 'personal-credentials-anthropic-key))
+    (smoketest--check "dev-ai: M-SPC a c / C が agent-shell のコマンドで、aidermacs には割り当てていない"
+      ;; M-SPC a a は Apple Music の hydra（dev-apple-music）が使う。
+      (and (eq (lookup-key ui-leader-a-map (kbd "c")) 'agent-shell-anthropic-start-claude-code)
+           (eq (lookup-key ui-leader-a-map (kbd "C")) 'agent-shell)
+           (not (eq (lookup-key ui-leader-a-map (kbd "a")) 'aidermacs-transient-menu))))
+    (smoketest--check "dev-ai: Claude Code の ACP クライアント（claude-agent-acp）がある"
+      (or (executable-find "claude-agent-acp")
+          (progn (smoketest--say "  claude-agent-acp が無い（npm i -g @zed-industries/claude-agent-acp）") nil)))
     (smoketest--check "dev-run: テストのコマンドをプロジェクトの種類から決める"
       (let ((dir (file-name-as-directory (make-temp-file "smoketest-run-" t))))
         (unwind-protect

@@ -236,14 +236,20 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
 - キー操作のモジュールは、2026-10-25 に `ui-leader` / `ui-keymap` / `ui-dirvish-keys` / `ui-global-keys` / `ui-hydra` / `ui-which-key` / `ui-keyboard` の 7 つを `ui-keys` に集約した（`org/ui.org` の `* ui/ui-keys.el`）。公開 API（`ui-keymap-bind`、`ui-leader-key`、`ui-leader-map`、`ui-leader-*-map`）の名前は、`personal/`・`dev/`・`utils/`・`orgx/` が参照するため変えていないので、接頭辞（`ui-leader-` / `ui-keymap-` / `ui-hydra-` / `ui-which-key-` / `ui-keyboard-` など）はモジュール名と一致しない。ファイル内の並びは、リーダー基盤 → Hydra → which-key → キーボード変換 → 割り当て → dirvish → グローバルの順で、ロード時の実行（`ui-leader--bind-root`、`ui-keyboard--apply`）と `after-init-hook` への登録順（`ui-which-key--startup-init` → `ui-keymap--startup-init` → `ui-dirvish-keys--startup-init` → `ui-global-keys--startup-init`）は暗黙の契約なので入れ替えない。feature 名は `ui-keys` だけで、旧 feature 名は存在しない（`with-eval-after-load` では `'ui-keys` を使う）
 - LLM の API キーの取得は personal 層（`personal/personal-credentials.el`）だけが知る。下位層は
   関数を受け取る変数だけを持つ: `utils-claude-api-key-function`（utils）と
-  `dev-ai-credentials-function`（dev）に、personal 層が `personal-credentials-anthropic-key` と
-  `personal-credentials-aider` を渡す。下位層に `auth-source-search` を書かないこと
+  `dev-ai-anthropic-key-function`（dev。agent-shell を API キーで認証するときだけ）に、personal 層が
+  `personal-credentials-anthropic-key` を渡す。下位層に `auth-source-search` を書かないこと
   （上位層への依存を避けるため。`make smoketest` が `utils-claude` を検査する）。検索は 1 回に
   まとめ、使う瞬間まで遅らせる（GPG / Touch ID の連続認証が失敗するため）。Claude API と
   ローカルルーターの呼び出しは `user-lisp/personal-llm.el` 1 つにまとめてあり、すべて
   `;;;###autoload` で、Org をロードしない（Org Babel の `claude` ブロックの
   `org-babel-execute:claude` も autoload）。`org-babel-load-languages` に `claude` を足してはならない
   （`ob-claude` は存在しない）
+- AI の役割分担（`dev/dev-ai.el` の Commentary にも同じ表がある）: `agent-shell`（Claude Code。
+  `claude-agent-acp`。`M-SPC a c`）が主役で、複数ファイルの作業・コマンドやテストの実行を担い、
+  認証は `claude` のログイン（`dev-ai-agent-authentication` の既定は `login`。`api-key` にすると
+  `dev-ai-anthropic-key-function` が返すキーを使う。personal 層が `personal-credentials-anthropic-key` を
+  渡す）。単発の処理は `user-lisp/personal-llm.el`。`aidermacs` は、OpenRouter を使わなくなったため
+  2026-10-31 に削除した（再び入れるときは、OpenRouter のキーの受け渡しも作り直すこと）
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
   このリポジトリには存在しない。存在すると仮定しないこと。
   ただし mu4e だけは `personal/ac1965.el` の leaf で設定している（モジュールではない）

@@ -1416,30 +1416,30 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
 :header-args:emacs-lisp: :tangle ../personal/personal-credentials.el
 :END:
 
-LLM の API キーを取り出す唯一の場所です。取り出したキーは、関数として下位層のモジュールへ渡します。
+LLM の API キー（Anthropic）を取り出す唯一の場所です。取り出したキーは、関数として下位層のモジュールへ渡します。
 
 *なぜ personal 層に置くのか*
 
 キーをどこに保管しているか（ =~/.authinfo.gpg= の中身、どのホスト、どのログイン名）は、この設定を使う
-個人に固有の事情です。 =dev-ai= （dev 層）と =utils-claude= （utils 層）は、それぞれ自分で auth-source を
-引いていたため、取得先の知識が 3 か所に散らばっていました。
-
-下位層は上位層を参照できません。そこで依存の向きを逆にします。
+個人に固有の事情です。下位層は上位層を参照できないので、依存の向きを逆にします。
 
 | 下位層のモジュール | 受け取る変数 | 渡される関数 |
 |---+---+---|
 | =utils-claude= （utils） | =utils-claude-api-key-function= | =personal-credentials-anthropic-key= |
-| =dev-ai= （dev） | =dev-ai-credentials-function= | =personal-credentials-aider= |
+| =dev-ai= （dev）。 =agent-shell= を API キーで認証するときだけ | =dev-ai-anthropic-key-function= | =personal-credentials-anthropic-key= |
 
 下位層は「関数があれば呼ぶ」だけで、キーの出どころを知りません。personal 層だけが、出どころを知っています。
+
+以前は OpenRouter と OpenAI のキーも、 =aidermacs= のために渡していました。OpenRouter を使わなくなり、
+=aidermacs= を削除したので、2026-10-31 に取り除きました。
 
 *検索は 1 回にまとめ、使う瞬間まで遅らせる*
 
 =auth-source-search= は呼ぶたびに =~/.authinfo.gpg= を復号します（キャッシュを持ちません）。macOS では
 復号のたびに Touch ID が走り、短い間隔で 2 回続けると 2 回目が「No secret key」で失敗しました。そこで、
 
-- 3 つのホスト（Anthropic、OpenRouter、OpenAI）を *1 回の検索* でまとめて引き、結果をセッション中は覚えておく。
-- 検索は、キーが実際に必要になった瞬間（最初の API 呼び出し、 =aidermacs-run= の直前）まで遅らせる。起動時には走らない。
+- 検索の結果はセッション中は覚えておき、2 回目以降は検索しない。
+- 検索は、キーが実際に必要になった瞬間（最初の API 呼び出し）まで遅らせる。起動時には走らない。
 
 キーを変えたときは、 =M-x personal-credentials-reset= で覚えた結果を捨てます。
 
@@ -1456,15 +1456,17 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
   ;;
   ;;; Commentary:
   ;;
-  ;; LLM の API キーを auth-source から取り出し、下位層のモジュールへ関数として渡す。
+  ;; LLM の API キー（Anthropic）を auth-source から取り出し、下位層のモジュールへ関数として渡す。
   ;;
   ;; 本ファイルの責務:
-  ;; - Anthropic / OpenRouter / OpenAI のエントリを、1 回の `auth-source-search' で引き、
-  ;;   セッション中は覚えておく（連続した復号が Touch ID で失敗するのを避けるため）
+  ;; - Anthropic のエントリを `auth-source-search' で引き、セッション中は覚えておく
+  ;;   （連続した復号が Touch ID で失敗するのを避けるため）
   ;; - `utils-claude-api-key-function' へ `personal-credentials-anthropic-key' を渡す
-  ;; - `dev-ai-credentials-function' へ `personal-credentials-aider' を渡す
+  ;; - `dev-ai-anthropic-key-function' へ `personal-credentials-anthropic-key' を渡す
+  ;;   （agent-shell を API キーで認証するときだけ使う。既定は claude のログイン）
   ;;
   ;; 検索は、関数が呼ばれた瞬間に初めて走る。起動時には復号しない。
+  ;; OpenRouter と OpenAI のキーは、aidermacs のために渡していたが、削除した（2026-10-31）。
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
@@ -1475,14 +1477,13 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
   (defvar auth-gpg-file)
   (defvar auth-gpg-services)
   (defvar utils-claude-api-key-function)
-  (defvar dev-ai-credentials-function)
+  (defvar dev-ai-anthropic-key-function)
 
   (defgroup personal-credentials nil
     "Where the LLM API keys come from."
     :group 'auth)
 
-  (defconst personal-credentials--hosts
-    '("api.anthropic.com" "openrouter.ai" "api.openai.com")
+  (defconst personal-credentials--hosts '("api.anthropic.com")
     "Hosts looked up in one `auth-source-search'.")
 
   (defvar personal-credentials--entries 'unset
@@ -1531,15 +1532,6 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
     "Return the Anthropic API key, or nil when there is none."
     (personal-credentials--secret "api.anthropic.com"))
 
-  (defun personal-credentials-aider ()
-    "Return the credentials aider should use, or nil when there is no key.
-  The value is a plist (:api-base URL :api-key KEY :model MODEL) that routes
-  aider through OpenRouter."
-    (when-let* ((key (personal-credentials--secret "openrouter.ai")))
-      (list :api-base "https://openrouter.ai/api/v1"
-            :api-key key
-            :model "openrouter/anthropic/claude-sonnet-4-5")))
-
   (defun personal-credentials-reset ()
     "Forget the remembered lookup, so the next call reads the store again."
     (interactive)
@@ -1551,7 +1543,7 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
   (with-eval-after-load 'utils-claude
     (setopt utils-claude-api-key-function #'personal-credentials-anthropic-key))
   (with-eval-after-load 'dev-ai
-    (setopt dev-ai-credentials-function #'personal-credentials-aider))
+    (setopt dev-ai-anthropic-key-function #'personal-credentials-anthropic-key))
 
   (provide 'personal-credentials)
   ;;; personal/personal-credentials.el ends here

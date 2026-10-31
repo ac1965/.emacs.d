@@ -316,10 +316,31 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-ai.el
 :END:
 
-API キー検索を =aidermacs-run= への advice に載せ替えるまでの経緯は、下記の :config
-コメント（落とし穴その 1・その 2）に詳しい。処理の流れを図で示します。
+AI 支援開発の口です。 =agent-shell= （Claude Code などのエージェントの Emacs 画面。ACP）を導入し、
+認証の方法を選べるようにします。
 
-[[file:../svg/12_dev_ai_timing.svg]]
+以前は =aidermacs= （aider の Emacs 版）も置いていましたが、OpenRouter を使わなくなったため、
+2026-10-31 に削除しました。API キーを環境変数へ渡す処理、aider の履歴ファイルの置き場所、 =vterm= と =comint= の
+選択も、あわせて無くなりました。
+
+*AI の役割分担*
+
+| ツール | 役割 | キー |
+|---+---+---|
+| =agent-shell= （Claude Code） | 主役。複数ファイルにまたがる作業、コマンドやテストの実行、長いタスク | =M-SPC a c= |
+| =personal-llm= （ =user-lisp/= ） | 単発の処理。defun のリファクタリング、docstring 生成、Org Babel の =claude= ブロック、ローカルのルーター | =my/claude-*= 、 =my/llm-run= |
+
+*認証の選び方*
+
+| =dev-ai-agent-authentication= | 認証 | API キー |
+|---+---+---|
+| =login= （既定） | =claude= のログイン（Pro / Max の契約） | 要らない |
+| =api-key= | personal 層が渡す Anthropic の API キー | =dev-ai-anthropic-key-function= が返す |
+
+API キーの出どころ（ =auth-source= ）は、dev 層は知りません。personal 層の =personal-credentials= が
+関数として渡します。
+
+[[file:../svg/12_dev_ai_auth.svg]]
 
 #+begin_src emacs-lisp
   ;;; dev/dev-ai.el --- AI 支援開発の補助 -*- lexical-binding: t; -*-
@@ -332,117 +353,83 @@ API キー検索を =aidermacs-run= への advice に載せ替えるまでの経
   ;;
   ;;; Commentary:
   ;;
-  ;; aidermacs（aider.chat の Emacs フロントエンド）による AI 支援開発。
+  ;; agent-shell（Claude Code などのエージェントの Emacs 画面。ACP）による AI 支援開発。
   ;;
   ;; 本ファイルの責務:
-  ;; - aider の履歴・ログファイルを `my:d:aider' 配下に配置する
-  ;; - CLI 引数を重複なく拡張するための `dev-ai--append-unique-args' を提供する
-  ;;
-  ;; - ターミナル・バックエンドを選択する: vterm が使えればそれを、無ければ comint
-  ;; - `aidermacs-run' の直前（:before advice）に一度だけ、`dev-ai-credentials-function'
-  ;;   が返す認証情報（:api-base :api-key :model）を `OPENAI_API_BASE' / `OPENAI_API_KEY' と
-  ;;   `aidermacs-default-model' に設定する。得られなければ警告を出す
+  ;; - agent-shell を導入し、M-SPC a c（Claude Code を起動）と M-SPC a C（エージェントを選んで
+  ;;   起動）に割り当てる（`dev-ai--bind-keys'）
+  ;; - 認証の方法を `dev-ai-agent-authentication' で選べるようにする。既定は `login'
+  ;;   （`claude' のログイン。API キーは要らない）。`api-key' にすると、
+  ;;   `dev-ai-anthropic-key-function' が返すキーを使う
   ;;
   ;; API キーの取得先（auth-source など）を、本モジュールは知らない。取得は personal 層の
-  ;; `personal-credentials' が担い、`dev-ai-credentials-function' へ渡す。下位層である dev は
+  ;; `personal-credentials' が担い、`dev-ai-anthropic-key-function' へ渡す。下位層である dev は
   ;; 上位層の personal を参照できないため、関数を差し込む形で依存の向きを保っている。
-  ;; 取得を実際に使う瞬間（`aidermacs-run' の直前）まで遅らせる理由と、検索を 1 回にまとめる
-  ;; 理由（GPG / Touch ID の連続認証が失敗した）は、`personal-credentials' に書いてある。
+  ;;
+  ;; AI の役割分担（どれを使うか迷ったら、この表で決める）:
+  ;;
+  ;;   agent-shell   主役。Claude Code（`claude-agent-acp'）が、複数のファイルにまたがる作業、
+  ;;                 コマンドやテストの実行、長いタスクを自律的にこなす。M-SPC a c
+  ;;   personal-llm  単発。defun のリファクタリングや docstring 生成（`my/claude-*'）、Org Babel の
+  ;;                 `claude' ブロック、ローカルのルーター（`my/llm-run'）。対話の画面は持たない。
+  ;;
+  ;; aidermacs（aider の Emacs 版）は、OpenRouter を使わなくなったため、2026-10-31 に削除した。
   ;;; Code:
 
-  (eval-when-compile (require 'leaf) (require 'subr-x))
+  (eval-when-compile (require 'leaf))
 
-  (defvar my:d:aider
-    (expand-file-name "aideremacs/"
-                      (or (bound-and-true-p my:d:var)
-                          (expand-file-name "~/.var/"))))
-
-  (my/ensure-directory-exists my:d:aider)
-
-  (setenv "AIDER_INPUT_HISTORY_FILE" (expand-file-name "input.history" my:d:aider))
-  (setenv "AIDER_CHAT_HISTORY_FILE"  (expand-file-name "chat.history.md" my:d:aider))
-  (setenv "AIDER_LLM_HISTORY_FILE"   (expand-file-name "llm.history" my:d:aider))
-  (setenv "AIDER_ANALYTICS_LOG"      (expand-file-name "analytics.log" my:d:aider))
-
-  ;; defvar を最初の使用箇所より前に移動した。
-  ;; dev-ai--append-unique-args は実行時に aidermacs-extra-args を参照するため、
-  ;; インタプリタ実行で関数が呼ばれたときに void-variable エラーとならないよう、
-  ;; defvar は defun より前に置かなければならない。
-  ;; この defvar は aidermacs 自身の defvar にも先行するため、:config が値をリセット
-  ;; されるリスクなしにリストへ追記できる。
-  (defvar aidermacs-extra-args nil
-    "Extra command-line arguments passed to the aider process.")
-
-  (defun dev-ai--append-unique-args (args)
-    (setq aidermacs-extra-args
-          (append aidermacs-extra-args
-                  (seq-remove (lambda (arg) (member arg aidermacs-extra-args)) args))))
-
-  ;; dev-ai--api-key-configured を defun より前に置く。dev-ai--setup-api-key が
-  ;; 実行時に参照するため、インタプリタ実行時の void-variable エラーを避ける
-  ;; （aidermacs-extra-args と同じ理由。上のコメント参照）。
-  (defvar dev-ai--api-key-configured nil
-    "Non-nil once `dev-ai--setup-api-key' has run in this session.")
+  ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ側にある）。
+  (defvar ui-leader-a-map)
+  (defvar agent-shell-anthropic-authentication)
+  (declare-function agent-shell-anthropic-make-authentication "agent-shell-anthropic")
+  (declare-function agent-shell-anthropic-start-claude-code "agent-shell-anthropic")
+  (declare-function agent-shell "agent-shell")
 
   (defgroup dev-ai nil
     "AI-assisted development helpers."
     :group 'tools)
 
-  (defcustom dev-ai-credentials-function nil
-    "Function of no arguments that returns the credentials aider should use.
-  It returns a plist (:api-base URL :api-key KEY :model MODEL), or nil when
-  there is no key.  The personal layer sets it (`personal-credentials-aider');
-  this layer never learns where the key is stored."
+  (defcustom dev-ai-agent-authentication 'login
+    "How agent-shell authenticates to Claude Code.
+  `login' uses the logged-in `claude' CLI (a Pro or Max subscription); no API
+  key is needed.  `api-key' uses the key `dev-ai-anthropic-key-function' returns."
+    :type '(choice (const :tag "claude CLI login" login)
+                   (const :tag "Anthropic API key" api-key))
+    :group 'dev-ai)
+
+  (defcustom dev-ai-anthropic-key-function nil
+    "Function of no arguments that returns the Anthropic API key, or nil.
+  Only used when `dev-ai-agent-authentication' is `api-key'.  The personal
+  layer sets it (`personal-credentials-anthropic-key'); this layer never
+  learns where the key is stored."
     :type '(choice (const :tag "None" nil) function)
     :group 'dev-ai)
 
-  (defvar aidermacs-default-model)
+  (defun dev-ai--agent-authentication ()
+    "Return the agent-shell authentication for `dev-ai-agent-authentication'."
+    (if (and (eq dev-ai-agent-authentication 'api-key)
+             (functionp dev-ai-anthropic-key-function))
+        (agent-shell-anthropic-make-authentication
+         :api-key (lambda () (funcall dev-ai-anthropic-key-function)))
+      (agent-shell-anthropic-make-authentication :login t)))
 
-  ;; 認証情報の参照は `aidermacs-run' への :before advice で行う。after-init-hook では
-  ;; ない。GPG / Touch ID の認証を、実際に aidermacs を使う瞬間だけにするためである。
-  (defun dev-ai--setup-api-key (&rest _ignore)
-    "Export the credentials from `dev-ai-credentials-function' for aider.
-  Added as `:before' advice on `aidermacs-run' and run at most once per session
-  (guarded by `dev-ai--api-key-configured'), so that any prompt the lookup
-  triggers happens only when aidermacs is actually used."
-    (unless dev-ai--api-key-configured
-      (setq dev-ai--api-key-configured t)
-      (let ((cred (and (functionp dev-ai-credentials-function)
-                       (funcall dev-ai-credentials-function))))
-        (if (and cred (plist-get cred :api-key))
-            (progn
-              (setenv "OPENAI_API_BASE" (plist-get cred :api-base))
-              (setenv "OPENAI_API_KEY"  (plist-get cred :api-key))
-              (when (plist-get cred :model)
-                (setopt aidermacs-default-model (plist-get cred :model))))
-          (display-warning
-           'aidermacs
-           (concat "API キーを取得できません。personal 層の `dev-ai-credentials-function' を"
-                   "確認してください（~/.authinfo.gpg に openrouter.ai の行が必要です）。"))))))
+  (defun dev-ai--configure-agent-shell ()
+    "Apply `dev-ai-agent-authentication' to agent-shell's Claude Code client."
+    (setopt agent-shell-anthropic-authentication (dev-ai--agent-authentication)))
 
-  (leaf aidermacs
+  (defun dev-ai--bind-keys ()
+    "Bind the AI commands in `ui-leader-a-map' when it exists."
+    (when (and (boundp 'ui-leader-a-map) (keymapp ui-leader-a-map))
+      (keymap-set ui-leader-a-map "c" #'agent-shell-anthropic-start-claude-code)
+      (keymap-set ui-leader-a-map "C" #'agent-shell)))
+
+  ;; depth 90: ui-keymap--startup-init（depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'dev-ai--bind-keys 90)
+
+  (leaf agent-shell
     :straight t
-    :custom
-    ((aidermacs-retry-attempts . 3)
-     (aidermacs-retry-delay   . 2.0))
-    :config
-    ;; API キーの参照（`dev-ai--setup-api-key'）は、:config の外（この leaf の前）で定義している。
-    ;; defun は leaf の中に置かない（コーディング規則 8）。
-    (advice-add 'aidermacs-run :before #'dev-ai--setup-api-key)
-
-    ;; 順序を確実にするため、ロード後の設定はすべてここに集約している。
-    (let ((env-file (expand-file-name ".env" my:d:aider)))
-      (when (file-exists-p env-file)
-        (dev-ai--append-unique-args (list "--env-file" env-file))))
-    (dev-ai--append-unique-args
-     (list "--input-history-file" (getenv "AIDER_INPUT_HISTORY_FILE")
-           "--chat-history-file"  (getenv "AIDER_CHAT_HISTORY_FILE")
-           "--llm-history-file"   (getenv "AIDER_LLM_HISTORY_FILE")))
-    ;; vterm が使えるならそれを使い、無ければ静かに comint にフォールバックする。
-    ;; comint は完全にサポートされたバックエンドであり、vterm が無いことは
-    ;; 通常の構成であってエラー条件ではない。
-    (setopt aidermacs-backend
-            (if (require 'vterm nil 'noerror) 'vterm 'comint)))
+    :commands (agent-shell agent-shell-anthropic-start-claude-code)
+    :config (dev-ai--configure-agent-shell))
 
   (provide 'dev-ai)
   ;;; dev/dev-ai.el ends here

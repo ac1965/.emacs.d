@@ -470,7 +470,9 @@ vcs は dev 層に依存してはいけません。
 責務:
 
 - LSP バックエンド（eglot、lsp-mode）と、その切り替えを吸収するファサード（ =dev-lsp-bridge= ）
-- AI 支援編集（aidermacs。 =dev-ai= ）
+- AI 支援（ =dev-ai= ）。Claude Code を呼ぶ =agent-shell= （ =M-SPC a c= ）が主役で、複数ファイルにまたがる作業、
+  コマンドやテストの実行を担います。 =claude= のログインで認証するので、API キーは要りません。単発の処理（defun の
+  リファクタリングなど）は =personal-llm= です。 =aidermacs= は、OpenRouter を使わなくなったため削除しました
 - ターミナル統合（vterm）
 - コード整形（apheleia）
 - ビルド・Docker・SQL・REST・インフラ系ファイルのモード・プロジェクト基盤・検索／ナビゲーション
@@ -744,9 +746,9 @@ macOS では =exec-path-from-shell= がログインシェルを起動して =exe
    起動時間はおよそ半分になります。
 
 2. =exec-path-from-shell-variables= を =("PATH" "LANG")= だけに絞っています。API キー
-   （ =OPENAI_API_KEY= 、 =OPENROUTER_API_KEY= ）は、 =personal/personal-credentials.el= が、
-   必要になった時点（最初の API 呼び出し、または =aidermacs-run= の直前）で =auth-source= 経由で
-   =~/.authinfo.gpg= から取得し、 =utils-claude= と =dev-ai= へ関数として渡します。
+   （ =ANTHROPIC_API_KEY= など）は、 =personal/personal-credentials.el= が、
+   必要になった時点（最初の API 呼び出し）で =auth-source= 経由で =~/.authinfo.gpg= から取得し、
+   =utils-claude= と =dev-ai= へ関数として渡します。
 
 2 番目が効くのは、これらのキーを export しているログインプロファイルを読み込む理由が、
 そもそも無くなるからです。結果として =exec-path-from-shell= のコストは、最小構成のログイン
@@ -1642,7 +1644,8 @@ git diff README.org   # 差分を確認してコミットする
 
   # ---- verify : コミット前の確認をまとめて実行する -------------------------------------
   # lint（静的チェック）、check-bytecomp（バイトコンパイル警告）、check-cheatsheet（キーバインド一覧 SVG が
-  # 実際のキーマップと同じか）。後の 2 つは約 40 秒ずつかかるため lint には入れず、ここでまとめる。
+  # 実際のキーマップと同じか）、smoketest（起動・キー・補完などの動作）。後の 3 つは約 40 秒ずつかかるため
+  # lint には入れず、ここでまとめる。
   # キーを入れる関数を足したのに一覧 SVG を作り直していない、といった食い違いを、コミット前に見つける。
   .PHONY: verify
   verify: lint check-bytecomp check-cheatsheet smoketest
@@ -1962,7 +1965,7 @@ digraph auth_resolution {
   g2 [label="personal-credentials ロード\n(auth-source は引かない)"];
   fire [label="after-init-hook 発火" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
   s1 [label="#1 auth-gpg--configure-sources\n~/.authinfo.gpgをauth-sources先頭へ"];
-  use [label="最初にキーが必要になった瞬間\n(最初の API 呼び出し / aidermacs-run の直前)" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+  use [label="最初にキーが必要になった瞬間\n(最初の API 呼び出し)" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
   s2 [label="#2 personal-credentials--entries\nauth-source-search を 1 回実行して覚える" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
   safety [label="personal-credentials--ensure-authinfo\n(保険: 未追加なら自分で追加)" fillcolor="#FCEBEB" color="#A32D2D" fontcolor="#501313"];
 
@@ -2117,32 +2120,34 @@ digraph leader_keymap {
 }
 #+end_src
 
-* Appendix: 12_dev_ai_timing.dot — dev-ai.el の認証情報の受け取り
+* Appendix: 12_dev_ai_auth.dot — dev-ai.el の認証の選択
 :PROPERTIES:
-:CUSTOM_ID: appendix-12-dev-ai-timing-dot
-:header-args:dot: :tangle svg/12_dev_ai_timing.dot :file svg/12_dev_ai_timing.svg :cmdline -Tsvg
+:CUSTOM_ID: appendix-12-dev-ai-auth-dot
+:header-args:dot: :tangle svg/12_dev_ai_auth.dot :file svg/12_dev_ai_auth.svg :cmdline -Tsvg
 :END:
 
-=dev-ai= （dev 層）は、API キーの出どころを知りません。 =aidermacs-run= の直前に、personal 層が渡した関数を呼ぶだけです。
+=dev-ai= （dev 層）は、API キーの出どころを知りません。 =dev-ai-agent-authentication= で、 =claude= のログインか、
+personal 層が渡した関数を選ぶだけです。
 
 #+begin_src dot
-digraph dev_ai_timing {
+digraph dev_ai_auth {
   rankdir=TB;
   bgcolor="white";
   fontname="Noto Sans CJK JP";
   node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11 fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
   edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
 
-  hook [label="aidermacs-run の直前 (:before advice)\ndev-ai--setup-api-key\nセッションに 1 回だけ"];
-  fn [label="dev-ai-credentials-function\n(personal 層が設定: personal-credentials-aider)" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
-  search [label="personal-credentials\nauth-source-search を 1 回\n(Anthropic / OpenRouter / OpenAI をまとめて)" shape=diamond fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-  or1 [label="OpenRouter\nOPENAI_API_BASE / OPENAI_API_KEY を設定\naidermacs-default-model =\nopenrouter/anthropic/claude-sonnet-4-5" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
-  warn [label="display-warning\nキーが見つからない" fillcolor="#FCEBEB" color="#A32D2D" fontcolor="#501313"];
+  start [label="M-SPC a c\nagent-shell-anthropic-start-claude-code"];
+  choice [label="dev-ai-agent-authentication" shape=diamond fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
+  login [label="claude のログイン（既定）\nPro / Max の契約\nAPI キーは要らない" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
+  fn [label="dev-ai-anthropic-key-function\n(personal 層が設定:\npersonal-credentials-anthropic-key)" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
+  acp [label="claude-agent-acp\n(Claude Code の ACP クライアント)"];
 
-  hook -> fn;
-  fn -> search;
-  search -> or1 [label="OpenRouter のキーがある"];
-  search -> warn [label="ない"];
+  start -> choice;
+  choice -> login [label="login"];
+  choice -> fn [label="api-key"];
+  login -> acp;
+  fn -> acp [label="API キー"];
 }
 #+end_src
 
@@ -2184,6 +2189,17 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* org/dev.org (dev-ai), org/personal.org (personal-credentials), org/auth.org (auth-gpg, auth-keychain),
+	org/boot.org, org/tools.org (smoketest), README.org, AGENTS.md, svg/12_dev_ai_auth.*: aidermacs を削除した。OpenRouter を
+	使わなくなったため。dev-ai から、aidermacs の導入、OpenAI 向けの環境変数（OPENAI_API_KEY など）の設定、aider の履歴ファイルの
+	置き場所（my:d:aider）、vterm / comint の選択、dev-ai-credentials-function、dev-ai--setup-api-key を除いた。
+	personal-credentials から personal-credentials-aider と、OpenRouter・OpenAI のホストを除いた（検索するのは Anthropic だけ）。
+	auth-gpg-services と auth-keychain-services から、OpenRouter・OpenAI の項目と、authinfo の例の行を除いた。
+	図 12 を、削除した認証情報の受け取りから、agent-shell の認証の選択（login / api-key）に描き直し、
+	12_dev_ai_timing を 12_dev_ai_auth に改名した。M-SPC a a は、aidermacs のメニューを割り当てていたが、
+	Apple Music の hydra（dev-apple-music）が使っているので、何も割り当てなくなった。
+	.var/aideremacs/（aider の履歴）と、straight の aidermacs のリポジトリは残してある（手で消してよい）。
+
 	* org/orgx.org (orgx-agenda) (orgx-agenda--prune-dataless, orgx-agenda--dataless-files): macOS で、iCloud が退避した
 	（dataless の）ファイルを agenda の対象から外す。agenda を開く直前に stat で SF_DATALESS を調べる（起動時には調べない）。
 	読まないのでダウンロードも起こらず、1 件でも読めないと agenda 全体が落ちる問題を防ぐ。利用者が自分で束縛した
@@ -2194,6 +2210,11 @@ digraph personal_override_contract {
 	* README.org (Makefile): make verify に smoketest を含めた。
 	* org/tools.org (bench_startup.py), README.org (Makefile): make bench-startup を追加した。GUI の Emacs を数回起動して
 	使える状態になるまでの時間を測り、保存した基準と比べる。基準と負荷平均が 1 以上違うときは判定しない。
+	* org/dev.org (dev-ai), org/personal.org (personal-credentials), org/tools.org (smoketest): agent-shell を導入し、
+	Claude Code（claude-agent-acp）を M-SPC a c から呼べるようにした。AI の役割を、agent-shell（主役）、aidermacs（従）、
+	personal-llm（単発）に分けた。認証は claude のログイン（既定）か API キー（dev-ai-agent-authentication）。
+	dev-ai-anthropic-key-function を personal 層が渡す。M-SPC a a で aidermacs のメニューを開く。
+
 	* org/core.org (core-history) (core-history--schedule, core-history--startup-init): 履歴系のモード（save-place、
 	recentf、savehist、keyfreq）の有効化を、起動の 1 秒後のアイドル時へ回した（有効化に約 100 ms）。有効にする前に
 	開いたファイルは、カーソル位置の復元と最近のファイルへの記録の対象にならない（起動の 1 秒以内に限る）。
