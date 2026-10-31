@@ -746,6 +746,8 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   ;; - `my/print-load-path': `load-path' を専用の view バッファに表示する
   ;; - `my/print-feature-list': ロード済みの全 feature をアルファベット順に列挙する
   ;; - `my/check-missing-executables': 不足している外部ツールを報告する
+  ;; - `my/modules-report': モジュールごとの読み込み時間を、遅い順に表で示す。起動時間、
+  ;;   起動が終わった時点の GC の回数と時間、今の GC の回数と時間も添える
   ;;   （rg、git、make、aspell、gpg、pass）
   ;; - `my/smoketest' ほか: 起動中の Emacs で、LSP サーバとの接続（`my/smoketest-lsp'）、
   ;;   端末フレーム（`my/smoketest-terminal'）、GUI のフレーム（`my/smoketest-gui'）を確かめ、
@@ -773,6 +775,52 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
         (insert (format "%s\n" f)))
       (view-mode 1)
       (switch-to-buffer (current-buffer))))
+
+  (defvar my:modules-load-times)
+  (defvar my:startup-gc-stats)
+  (defvar my:startup-phases)
+  (defvar my:startup-hook-times)
+  (declare-function modules--format-seconds "modules")
+
+  (defun my/modules-report ()
+    "Show how long each module took to load, slowest first, in *Modules*.
+  The times come from `my:modules-load-times' and are inclusive (a module that
+  requires another counts the other's time).  The header also gives the
+  startup time and the GC count and time at the end of startup and now."
+    (interactive)
+    (let* ((rows (sort (copy-sequence my:modules-load-times)
+                       (lambda (a b) (> (cdr a) (cdr b)))))
+           (total (max 1e-9 (apply #'+ 0.0 (mapcar #'cdr rows)))))
+      (with-current-buffer (get-buffer-create "*Modules*")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "emacs-init-time: %s\n" (emacs-init-time))
+                  (format "modules: %d, total %s\n" (length rows) (modules--format-seconds total))
+                  (format "features: %d\n" (length features))
+                  (mapconcat (lambda (p) (format "  %-26s %s\n" (car p)
+                                                 (modules--format-seconds (cdr p))))
+                             my:startup-phases "")
+                  (format "GC at end of startup: %s\n"
+                          (if my:startup-gc-stats
+                              (format "%d times, %.2fs" (car my:startup-gc-stats)
+                                      (cdr my:startup-gc-stats))
+                            "(not recorded)"))
+                  (format "GC now: %d times, %.2fs\n\n" gcs-done gc-elapsed))
+          (when my:startup-hook-times
+            (insert "Slowest startup-hook functions (EMACS_STARTUP_PROFILE):\n")
+            (dolist (r (seq-take (sort (copy-sequence my:startup-hook-times)
+                                       (lambda (a b) (> (nth 2 a) (nth 2 b))))
+                                 20))
+              (insert (format "  %-44s %-20s %9s\n" (nth 0 r) (nth 1 r)
+                              (modules--format-seconds (nth 2 r)))))
+            (insert "\n"))
+          (dolist (row rows)
+            (insert (format "%-26s %9s %5.1f%%\n" (car row)
+                            (modules--format-seconds (cdr row))
+                            (* 100 (/ (cdr row) total))))))
+        (special-mode)
+        (goto-char (point-min))
+        (pop-to-buffer (current-buffer)))))
 
   (defun my/check-missing-executables ()
     "Report which external tools (rg, git, make, aspell, gpg, pass) are missing."

@@ -1791,6 +1791,25 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
            (with-temp-buffer
              (insert (make-string 20000 ?x))
              (so-long-detected-long-line-p))))
+    (smoketest--check "起動の計測: モジュールごとの読み込み時間と、起動終了時の GC が記録される"
+      (and my:modules-load-times
+           (cl-every (lambda (r) (and (symbolp (car r)) (numberp (cdr r)))) my:modules-load-times)
+           (consp my:startup-gc-stats)))
+    (smoketest--check "起動の計測: my/modules-report が遅い順の表を出す"
+      (progn
+        (my/modules-report)
+        (prog1 (with-current-buffer "*Modules*"
+                 (goto-char (point-min))
+                 (and (search-forward "emacs-init-time:" nil t)
+                      (search-forward "GC at end of startup:" nil t)
+                      (let (times)
+                        (while (re-search-forward "^[a-z][a-z-]* +\\([0-9.]+\\)\\(ms\\|s\\) " nil t)
+                          (push (* (string-to-number (match-string 1))
+                                   (if (equal (match-string 2) "ms") 0.001 1.0))
+                                times))
+                        (and (cdr times)
+                             (equal times (sort (copy-sequence times) #'<))))))
+          (kill-buffer "*Modules*"))))
     ;; ui
     (smoketest--check "ui: popper が有効で、M-SPC w p / n / P がコマンド"
       (and (bound-and-true-p popper-mode)

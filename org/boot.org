@@ -1283,6 +1283,86 @@ native-comp が走ります。
      ((< sec 1.0)   (format "%.1fms"  (* sec 1000.0)))
      (t             (format "%.2fs"   sec))))
 
+  (defvar my:modules-load-times nil
+    "Alist of (FEATURE . SECONDS) per module `my/modules-load' required.
+  In load order.  The time is inclusive: a module that requires another
+  counts the other's time too.  Always recorded, not only when
+  `my:modules-verbose' is non-nil; `my/modules-report' shows it.")
+
+  (defvar my:startup-gc-stats nil
+    "GC count and seconds when startup finished, (COUNT . SECONDS), or nil.")
+
+  (defun modules--record-startup-gc ()
+    "Record the GC count and time at the end of startup in `my:startup-gc-stats'."
+    (setq my:startup-gc-stats (cons gcs-done gc-elapsed)))
+
+  (add-hook 'emacs-startup-hook #'modules--record-startup-gc 90)
+
+  (defvar my:startup-phases nil
+    "Alist of (LABEL . SECONDS since `before-init-time') for startup milestones.
+  `emacs-init-time' stops at the end of `after-init-hook'; the frame setup in
+  `window-setup-hook' comes after it, and the last entry shows when Emacs was
+  really ready.")
+
+  (defun modules--record-phase (label)
+    "Record LABEL with the seconds elapsed since `before-init-time'."
+    (setq my:startup-phases
+          (append my:startup-phases
+                  (list (cons label (float-time (time-since before-init-time)))))))
+
+  (defvar my:startup-hook-times nil
+    "List of (FUNCTION HOOK SECONDS) for startup-hook functions, when profiling.
+  Recorded only when the environment variable EMACS_STARTUP_PROFILE is set
+  (EMACS_STARTUP_PROFILE=1 emacs).  `my/modules-report' lists the slowest.")
+
+  (defun modules--time-hook-functions (hooks)
+    "Advise every named function in HOOKS to record its run time.
+  The advice is named `modules--timing', so wrapping a function twice is harmless."
+    (dolist (hook hooks)
+      (dolist (fn (symbol-value hook))
+        (when (and fn (symbolp fn) (not (eq fn t)) (fboundp fn)
+                   (not (special-form-p fn)) (not (macrop fn)))
+          (let ((fn fn) (hook hook))
+            (advice-add fn :around
+                        (lambda (orig &rest args)
+                          (let ((start (float-time)))
+                            (prog1 (apply orig args)
+                              (push (list fn hook (- (float-time) start))
+                                    my:startup-hook-times))))
+                        '((name . modules--timing))))))))
+
+  ;; EMACS_STARTUP_TRACE="関数1,関数2" を併せて指定すると、起動フックの関数に加えて、
+  ;; 指定した関数（たとえばフック関数の中で呼ばれる関数）の所要時間も記録する。
+  ;; CPU のサンプリング（profiler）は、この環境（macOS）では標本が 1 件も取れないため使わない。
+  (defun modules--trace-functions ()
+    "Record the run time of the functions named in EMACS_STARTUP_TRACE."
+    (dolist (name (split-string (or (getenv "EMACS_STARTUP_TRACE") "") "[, ]+" t))
+      (let ((fn (intern name)))
+        (when (and (fboundp fn) (not (special-form-p fn)) (not (macrop fn)))
+          (advice-add fn :around
+                      (lambda (orig &rest args)
+                        (let ((start (float-time)))
+                          (prog1 (apply orig args)
+                            (push (list fn 'trace (- (float-time) start))
+                                  my:startup-hook-times))))
+                      '((name . modules--timing-trace)))))))
+
+  (when (getenv "EMACS_STARTUP_PROFILE")
+    (add-hook 'after-init-hook
+              (lambda () (modules--trace-functions)
+                (modules--time-hook-functions
+                 '(after-init-hook emacs-startup-hook window-setup-hook)))
+              -1000)
+    (add-hook 'emacs-startup-hook
+              (lambda () (modules--time-hook-functions
+                          '(emacs-startup-hook window-setup-hook)))
+              -1000))
+
+  (add-hook 'after-init-hook (lambda () (modules--record-phase "init.el 読み込み完了")) -100)
+  (add-hook 'after-init-hook (lambda () (modules--record-phase "after-init-hook 完了")) 100)
+  (add-hook 'emacs-startup-hook (lambda () (modules--record-phase "emacs-startup-hook 完了")) 100)
+  (add-hook 'window-setup-hook (lambda () (modules--record-phase "window-setup-hook 完了")) 100)
+
   (defun my/modules-load ()
     "Load all modules defined by `my:modules`, respecting options."
     (let* ((all (append my:modules my:modules-extra))
@@ -1291,17 +1371,18 @@ native-comp が走ります。
            (ok 0) (ng 0)
            (failed '())
            (t0 (and my:modules-verbose (current-time))))
+      (setq my:modules-load-times nil)
       (dolist (mod final)
-        (let ((m0 (and my:modules-verbose (current-time))))
+        (let ((m0 (current-time)) elapsed)
           (if (modules--require-safe mod)
               (setq ok (1+ ok))
             (setq ng (1+ ng))
             (push mod failed))
+          (setq elapsed (float-time (time-subtract (current-time) m0)))
+          (push (cons mod elapsed) my:modules-load-times)
           (when my:modules-verbose
-            (message "[modules] %-24s %s"
-                     mod
-                     (modules--format-seconds
-                      (float-time (time-subtract (current-time) m0)))))))
+            (message "[modules] %-24s %s" mod (modules--format-seconds elapsed)))))
+      (setq my:modules-load-times (nreverse my:modules-load-times))
       (when my:modules-verbose
         (message "[modules] loaded=%d skipped=%d failed=%d total=%s"
                  ok (length skipped) ng
