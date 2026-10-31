@@ -1760,12 +1760,12 @@ make smoketest
             (unless (featurep feature) (push feature missing))))
         (when missing (smoketest--say "  未ロード: %S" missing))
         (null missing)))
-    (smoketest--check "personal-llm: Claude のコマンドと Org Babel の claude が autoload で呼べ、Org を要求しない"
-      (and (commandp 'my/claude-refactor-defun)
-           (fboundp 'org-babel-execute:claude)
-           (autoloadp (symbol-function 'org-babel-execute:claude))
+    (smoketest--check "personal-llm: ローカルルーターだけが autoload で呼べ、Claude API の経路（utils-claude）が残っていない"
+      (and (commandp 'my/llm-run)
            (not (featurep 'personal-llm))
-           (not (featurep 'utils-claude))))
+           (not (fboundp 'my/claude-refactor-defun))
+           (not (fboundp 'org-babel-execute:claude))
+           (not (locate-library "utils-claude"))))
     (smoketest--check "user-lisp: 2 ライブラリが load-path にあり、autoload で呼べる（起動時にロードしない）"
       (let ((dir (expand-file-name "user-lisp/" user-emacs-directory)))
         (and (member (directory-file-name dir) (mapcar #'directory-file-name load-path))
@@ -1776,38 +1776,13 @@ make smoketest
              (not (file-exists-p (expand-file-name "personal-ai.el" dir)))
              (commandp 'my/llm-run) (commandp 'my/llm-run-from-org-roam)
              (commandp 'my/llm-run-from-coding-buffer)
-             (commandp 'my/claude-complete-docstring)
-             (commandp 'my/claude-analyze-require-graph)
              (fboundp 'personal-messages-archive)
              ;; personal-llm は autoload だけで、呼ぶまでロードされない。
              (autoloadp (symbol-function 'my/llm-run))
              ;; 旧置き場 personal/ に同名の生成物が残っていない。
              (not (file-exists-p (expand-file-name "personal/personal-llm.el" user-emacs-directory))))))
-    (smoketest--check "personal-llm: Claude の経路（API は代役）が結果を Org バッファに出し、Babel が応答を返す"
-      (progn (require 'utils-claude) (require 'personal-llm)
-      (cl-letf (((symbol-function 'utils-claude-request)
-                 (lambda (_messages callback &rest _) (funcall callback "DOC-BODY")))
-                ((symbol-function 'utils-claude-request-sync)
-                 (lambda (&rest _) "SYNC-REPLY")))
-        (unwind-protect
-            (and (equal (org-babel-execute:claude "hi" nil) "SYNC-REPLY")
-                 (with-temp-buffer
-                   (emacs-lisp-mode)
-                   (insert "(defun smoketest-foo () 1)")
-                   (goto-char (point-min))
-                   (my/claude-complete-docstring)
-                   t)
-                 (with-current-buffer personal-llm-claude-output-buffer
-                   (and (derived-mode-p 'org-mode)
-                        (save-excursion (goto-char (point-min))
-                                        (search-forward "* Docstring: smoketest-foo" nil t))
-                        (save-excursion (goto-char (point-min))
-                                        (search-forward "DOC-BODY" nil t)))))
-          (when (get-buffer personal-llm-claude-output-buffer)
-            (kill-buffer personal-llm-claude-output-buffer))))))
-    (smoketest--check "utils-claude / dev-ai へ personal 層が関数を渡している"
-      (and (eq utils-claude-api-key-function 'personal-credentials-anthropic-key)
-           (eq dev-ai-anthropic-key-function 'personal-credentials-anthropic-key)))
+    (smoketest--check "dev-ai へ personal 層が関数を渡している"
+      (eq dev-ai-anthropic-key-function 'personal-credentials-anthropic-key))
     (smoketest--check "認証情報: Anthropic のキーが引け、2 回目以降は検索しない"
       (let ((calls 0))
         (cl-letf (((symbol-function 'auth-source-search)
@@ -1816,15 +1791,14 @@ make smoketest
                      (list (list :host "api.anthropic.com" :user "apikey" :secret (lambda () "ant-key")))))
                   ((symbol-function 'personal-credentials--ensure-authinfo) #'ignore))
           (personal-credentials-reset)
-          (prog1 (and (equal (utils-claude-get-api-key) "ant-key")
-                      (equal (personal-credentials-anthropic-key) "ant-key")
+          (prog1 (and (equal (personal-credentials-anthropic-key) "ant-key")
                       (= calls 1))
             (personal-credentials-reset)))))
     (smoketest--check "認証情報: キーが無ければ nil（エラーにしない）"
       (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil))
                 ((symbol-function 'personal-credentials--ensure-authinfo) #'ignore))
         (personal-credentials-reset)
-        (prog1 (null (utils-claude-get-api-key))
+        (prog1 (null (personal-credentials-anthropic-key))
           (personal-credentials-reset))))
     (smoketest--check "aidermacs を削除した（OpenRouter / OpenAI の受け渡しが残っていない）"
       (and (not (fboundp 'personal-credentials-aider))
@@ -1832,10 +1806,10 @@ make smoketest
            (not (fboundp 'dev-ai--setup-api-key))
            (not (cl-some (lambda (s) (member (plist-get s :host) '("openrouter.ai" "api.openai.com")))
                          auth-gpg-services))))
-    (smoketest--check "utils-claude は auth-source を直接引かない"
+    (smoketest--check "dev-ai は auth-source を直接引かない"
       (not (let ((found nil))
              (with-temp-buffer
-               (insert-file-contents (locate-library "utils-claude.el"))
+               (insert-file-contents (locate-library "dev-ai.el"))
                (goto-char (point-min))
                (while (re-search-forward "^[^;\n]*(auth-source-search" nil t) (setq found t)))
              found))))
@@ -2989,8 +2963,7 @@ make check-cheatsheet    # 書き出さずに、コミット済みの SVG が今
 - =lisp/= 配下のすべての =.el= が、どちらかの一覧に載っているか、オンデマンド読み込みの既知の一覧に載っていること
 
 オンデマンドの一覧（ =ON_DEMAND= ）は、 =core-switches= や =ui-theme= が必要になった時に読むモジュール、
-=user-lisp/personal-llm.el= が最初に使うときに =require= する =utils-claude= 、起動時の Org 遅延ロードのために意図して
-外している =orgx-roam-ui= です。ここに無い未登録の =.el= は、ロード漏れの疑いとして失敗にします。
+起動時の Org 遅延ロードのために意図して外している =orgx-roam-ui= です。ここに無い未登録の =.el= は、ロード漏れの疑いとして失敗にします。
 
 Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を起動せず、標準ライブラリだけで実行して検証できます。
 
@@ -3020,8 +2993,6 @@ Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を�
       "ui-doom-modeline", "ui-nano-modeline", "ui-doom-nano-modeline",
       "ui-nano-palette", "ui-nano-modeline-items",
       "orgx-roam-ui",
-      # required by user-lisp/personal-llm.el
-      "utils-claude",
   }
   # Explicit upward `require's that are accepted (module -> required module).
   ALLOWED_UPWARD = {}

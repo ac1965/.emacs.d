@@ -22,7 +22,7 @@ Org 文書とソースコードを一体として管理する literate program �
 以降の本書で `README.org` の source block と書いた箇所は、特に断らない限り、上の表のどの Org 文書にも当てはまる。
 `org/` の各ファイルは、`:tangle ../lisp/...` のように、`.emacs.d/` からの相対パスに `../` を付ける。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-102 個の `.el` ターゲット（`lisp/` 配下 86 個〔`lisp/modules.el` を含む〕、
+101 個の `.el` ターゲット（`lisp/` 配下 85 個〔`lisp/modules.el` を含む〕、
 `personal/` 配下 7 個、`user-lisp/` 配下 2 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`、`scripts/smoketest.el`）が生成される。
 （`scripts/` の 5 個の `.el` は `org/tools.org` から、`early-init.el`・`init.el` は `org/boot.org` から、`lisp/` と `personal/` の `.el` は上の表の各 Org 文書から tangle される。）
@@ -161,7 +161,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── orgx/       (14; 標準 10 + 任意 4)
 │   ├── vcs/        (4)
 │   ├── dev/        (18)
-│   └── utils/      (9)
+│   └── utils/      (8)
 ├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
 ├── user-lisp/      (2) — 個人用ライブラリ（personal-llm / personal-messages）。Emacs 31 の user-lisp。起動時に Emacs がバイトコンパイルと autoload の収集を行う。org/personal.org から tangle
 ├── scripts/        (19) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
@@ -187,7 +187,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 ディレクトリ作成の標準ヘルパーは
 `early-init.el` の `my/ensure-directory-exists` である。
 
-`design_spec.org` は廃止され、完全に削除された。13 個の図 `.dot` ソース（番号 03 は欠番）は
+`design_spec.org` は廃止され、完全に削除された。12 個の図 `.dot` ソース（番号 03・09 は欠番）は
 README.org の Appendix（`Appendix: 01_boot_flow.dot` から
 `14_llm_overview.dot` まで）に、それぞれ対象モジュールの
 隣へ埋め込まれている。Makefile の `DESIGN_SPEC` 変数と、それが駆動して
@@ -235,20 +235,19 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
   `core-switches` で選択する。コードはバックエンド非依存を保つこと
 - キー操作のモジュールは、2026-10-25 に `ui-leader` / `ui-keymap` / `ui-dirvish-keys` / `ui-global-keys` / `ui-hydra` / `ui-which-key` / `ui-keyboard` の 7 つを `ui-keys` に集約した（`org/ui.org` の `* ui/ui-keys.el`）。公開 API（`ui-keymap-bind`、`ui-leader-key`、`ui-leader-map`、`ui-leader-*-map`）の名前は、`personal/`・`dev/`・`utils/`・`orgx/` が参照するため変えていないので、接頭辞（`ui-leader-` / `ui-keymap-` / `ui-hydra-` / `ui-which-key-` / `ui-keyboard-` など）はモジュール名と一致しない。ファイル内の並びは、リーダー基盤 → Hydra → which-key → キーボード変換 → 割り当て → dirvish → グローバルの順で、ロード時の実行（`ui-leader--bind-root`、`ui-keyboard--apply`）と `after-init-hook` への登録順（`ui-which-key--startup-init` → `ui-keymap--startup-init` → `ui-dirvish-keys--startup-init` → `ui-global-keys--startup-init`）は暗黙の契約なので入れ替えない。feature 名は `ui-keys` だけで、旧 feature 名は存在しない（`with-eval-after-load` では `'ui-keys` を使う）
 - LLM の API キーの取得は personal 層（`personal/personal-credentials.el`）だけが知る。下位層は
-  関数を受け取る変数だけを持つ: `utils-claude-api-key-function`（utils）と
-  `dev-ai-anthropic-key-function`（dev。agent-shell を API キーで認証するときだけ）に、personal 層が
-  `personal-credentials-anthropic-key` を渡す。下位層に `auth-source-search` を書かないこと
-  （上位層への依存を避けるため。`make smoketest` が `utils-claude` を検査する）。検索は 1 回に
-  まとめ、使う瞬間まで遅らせる（GPG / Touch ID の連続認証が失敗するため）。Claude API と
-  ローカルルーターの呼び出しは `user-lisp/personal-llm.el` 1 つにまとめてあり、すべて
-  `;;;###autoload` で、Org をロードしない（Org Babel の `claude` ブロックの
-  `org-babel-execute:claude` も autoload）。`org-babel-load-languages` に `claude` を足してはならない
-  （`ob-claude` は存在しない）
+  関数を受け取る変数だけを持つ: `dev-ai-anthropic-key-function`（dev。agent-shell を API キーで
+  認証するときだけ）に、personal 層が `personal-credentials-anthropic-key` を渡す。下位層に `auth-source-search` を書かないこと
+  （上位層への依存を避けるため。`make smoketest` が `dev-ai` を検査する）。検索は 1 回に
+  まとめ、使う瞬間まで遅らせる（GPG / Touch ID の連続認証が失敗するため）。personal 層の仕事は
+  この認証（ログイン・API キー・環境変数）の用意だけで、Claude API を直接呼ぶ経路（旧 `utils-claude`、
+  `my/claude-*`、Org Babel の `claude`）は 2026-10-31 に削除した（`agent-shell` と役割が重なるため）。
+  `user-lisp/personal-llm.el` はローカルルーター（`my/llm-run*`）だけで、すべて `;;;###autoload`、
+  Org をロードしない
 - AI の役割分担（`dev/dev-ai.el` の Commentary にも同じ表がある）: `agent-shell`（Claude Code。
   `claude-agent-acp`。`M-SPC a c`）が主役で、複数ファイルの作業・コマンドやテストの実行を担い、
   認証は `claude` のログイン（`dev-ai-agent-authentication` の既定は `login`。`api-key` にすると
   `dev-ai-anthropic-key-function` が返すキーを使う。personal 層が `personal-credentials-anthropic-key` を
-  渡す）。単発の処理は `user-lisp/personal-llm.el`。`aidermacs` は、OpenRouter を使わなくなったため
+  渡す）。単発の処理は `user-lisp/personal-llm.el`（ローカルルーター。Claude ではない）。`aidermacs` は、OpenRouter を使わなくなったため
   2026-10-31 に削除した（再び入れるときは、OpenRouter のキーの受け渡しも作り直すこと）
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
   このリポジトリには存在しない。存在すると仮定しないこと。

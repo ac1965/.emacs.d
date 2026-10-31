@@ -46,7 +46,7 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Keychain。Apple Music の操作は =dev-apple-music= を追加で読み込む |
 | =personal/device-wsl.el= | WSL のリーダーキー切替（ =C-c SPC= ）、クリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
 | =user-lisp/personal-messages.el= | macOS Messages.app のアーカイバ |
-| =user-lisp/personal-llm.el= | LLM との統合。ローカルルーター（=~/.local/bin/localllm=。 =my/llm-run= ）と Claude API（ =my/claude-*= 、Org Babel の =claude= ）。すべて autoload |
+| =user-lisp/personal-llm.el= | ローカル LLM ルーターとの統合（=~/.local/bin/localllm=。 =my/llm-run= ）。すべて autoload |
 
 [[file:../svg/13_personal_override_contract.svg]]
 ** personal/user.el
@@ -188,12 +188,12 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
           ;; 初回はアイドル 120 秒後。以降は 600 秒（10 分）ごとに繰り返す。
           (run-with-idle-timer 120 600 #'personal-messages-archive)))))
 
-  ;; personal-llm（ローカルルーターと Claude API）は user-lisp/ にあり、ここでは読み込まない。
-  ;; `;;;###autoload' の付いたコマンド（`my/llm-run'、`my/claude-*'、Org Babel の
-  ;; `org-babel-execute:claude'）を、Emacs が起動時に user-lisp/ から集めた autoload で呼ぶ。
+  ;; personal-llm（ローカルルーター）は user-lisp/ にあり、ここでは読み込まない。
+  ;; `;;;###autoload' の付いたコマンド（`my/llm-run' ほか）を、Emacs が起動時に
+  ;; user-lisp/ から集めた autoload で呼ぶ。
   ;; 呼ばれるまでロードされず、Org のロードも要求しない。
 
-  ;; personal-credentials: LLM の API キーの取得（dev-ai / utils-claude へ関数として渡す）
+  ;; personal-credentials: LLM の API キーの取得（dev-ai へ関数として渡す）
   ;;
   ;; ロードしても auth-source は引かない。最初に API キーが必要になった瞬間に初めて引く。
   (when (locate-library "personal-credentials")
@@ -1425,7 +1425,6 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
 
 | 下位層のモジュール | 受け取る変数 | 渡される関数 |
 |---+---+---|
-| =utils-claude= （utils） | =utils-claude-api-key-function= | =personal-credentials-anthropic-key= |
 | =dev-ai= （dev）。 =agent-shell= を API キーで認証するときだけ | =dev-ai-anthropic-key-function= | =personal-credentials-anthropic-key= |
 
 下位層は「関数があれば呼ぶ」だけで、キーの出どころを知りません。personal 層だけが、出どころを知っています。
@@ -1461,7 +1460,6 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
   ;; 本ファイルの責務:
   ;; - Anthropic のエントリを `auth-source-search' で引き、セッション中は覚えておく
   ;;   （連続した復号が Touch ID で失敗するのを避けるため）
-  ;; - `utils-claude-api-key-function' へ `personal-credentials-anthropic-key' を渡す
   ;; - `dev-ai-anthropic-key-function' へ `personal-credentials-anthropic-key' を渡す
   ;;   （agent-shell を API キーで認証するときだけ使う。既定は claude のログイン）
   ;;
@@ -1476,7 +1474,6 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各層のモジュール側にある）。
   (defvar auth-gpg-file)
   (defvar auth-gpg-services)
-  (defvar utils-claude-api-key-function)
   (defvar dev-ai-anthropic-key-function)
 
   (defgroup personal-credentials nil
@@ -1540,8 +1537,6 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
     (message "personal-credentials: 次の API 呼び出しで認証情報を読み直します"))
 
   ;; 下位層の変数は、そのモジュールがロードされた後に設定する。
-  (with-eval-after-load 'utils-claude
-    (setopt utils-claude-api-key-function #'personal-credentials-anthropic-key))
   (with-eval-after-load 'dev-ai
     (setopt dev-ai-anthropic-key-function #'personal-credentials-anthropic-key))
 
@@ -1555,34 +1550,22 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
 :header-args:emacs-lisp: :tangle ../user-lisp/personal-llm.el
 :END:
 
-LLM を Emacs から呼ぶ統合を、1 つのファイルにまとめています。呼び先が違う 2 つの経路があります。
+ローカルのルーター（ =~/.local/bin/localllm= 。Ollama のモデルへ振り分ける）を Emacs から呼ぶ薄い統合です。
+コマンドは =my/llm-run= 、 =my/llm-run-from-org-roam= 、 =my/llm-run-from-coding-buffer= で、すべて =;;;###autoload= です。
 
-| 経路 | 呼び先 | コマンド |
-|---+---+---|
-| ローカルルーター | =~/.local/bin/localllm= （Ollama のモデルへ振り分ける） | =my/llm-run= 、 =my/llm-run-from-org-roam= 、 =my/llm-run-from-coding-buffer= |
-| Claude API | =utils-claude= （HTTP）。API キーは =personal-credentials= が渡す | =my/claude-refactor-defun= 、 =my/claude-complete-docstring= 、 =my/claude-analyze-require-graph= 、Org Babel の =claude= ブロック |
+*Claude API の経路は削除した*
 
-以前は =personal-ai.el= と =personal-llm.el= に分かれていました。ポイント位置の defun を取り出す処理が
-まったく同じコードで 2 つあり、Org の出力バッファを開く処理も似ていたので、統合して共有しています。
+以前は、Claude API を直接呼ぶ経路（ =my/claude-*= 、Org Babel の =claude= ブロック、HTTP クライアントの utils-claude）も
+ここにありました。Claude は =agent-shell= （ =dev-ai= ）が担うので、単発の API 呼び出しは役割が重なります。
+personal 層の仕事は、 =dev-ai= に渡すログイン・API キー・環境変数の用意だけになりました
+（ =personal-credentials= の節を参照）。
 
 *Org を要求しない*
 
-=personal-ai.el= は =(require 'ob)= をしていたため、Org のロード後に読み込む特別扱いが
-=user.el= に要りました。 =org-babel-execute:claude= は、関数が定義されてさえいれば Org Babel が実行できるので、
-=;;;###autoload= を付けるだけで足ります。そのため、このモジュールは Org をロードせず、 =user.el= の特別扱いも
-無くなりました。 =org-mode= は、出力バッファを作るときに初めて呼びます。
-
-*変数名の変更*
-
-コマンド名は変えていません。次の 2 つの変数名だけを改めました。
-
-| 旧 | 新 |
-|---+---|
-| =personal-ai-default-system= | =personal-llm-claude-system= |
-| =personal-ai-output-buffer= | =personal-llm-claude-output-buffer= |
+このモジュールは Org をロードしません。 =org-mode= は、出力バッファを作るときに初めて呼びます。
 
 #+begin_src emacs-lisp
-  ;;; user-lisp/personal-llm.el --- LLM との統合（ローカルルーターと Claude API） -*- lexical-binding: t; -*-
+  ;;; user-lisp/personal-llm.el --- ローカル LLM ルーターとの統合 -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1592,17 +1575,11 @@ LLM を Emacs から呼ぶ統合を、1 つのファイルにまとめていま�
   ;;
   ;;; Commentary:
   ;;
-  ;; LLM を Emacs から呼ぶための統合。呼び先が違う 2 つの経路を 1 つのファイルに置き、
-  ;; 重複していたヘルパー（ポイント位置の defun の取り出し、Org の出力バッファの表示）を共有する。
-  ;;
-  ;;   経路 1: ローカルのルーター（~/.local/bin/localllm）   `my/llm-run' ほか
-  ;;   経路 2: Claude API（HTTP は `utils-claude'）         `my/claude-*'、Org Babel の `claude'
+  ;; ローカルのルーター（~/.local/bin/localllm）を Emacs から呼ぶ統合。
+  ;; Claude は agent-shell（dev-ai）が担うので、Claude API を直接呼ぶ経路は持たない。
   ;;
   ;; すべてのコマンドは `;;;###autoload' で、呼ばれるまでロードされない。本モジュールは Org を
-  ;; ロードしない（Org Babel の `org-babel-execute:claude' も、定義されていれば実行できるので、
-  ;; autoload だけで足りる）。出力バッファを作るときに初めて `org-mode' を呼ぶ。
-  ;;
-  ;; ── 経路 1: ローカルルーター ──
+  ;; ロードしない。出力バッファを作るときに初めて `org-mode' を呼ぶ。
   ;;
   ;; =~/.local/bin/localllm= （ローカル Ollama モデルへのルーター）を呼び出す薄い統合層。
   ;; プロンプトの内容に応じてどのモデル（qwen3:14b / qwen3-coder / LFM2.5-8B-A1B / qwen2.5vl）へ
@@ -1630,47 +1607,14 @@ LLM を Emacs から呼ぶ統合を、1 つのファイルにまとめていま�
   ;; "llm" と打つと Homebrew 版に奪われる（実際に発生し、OpenAI の課金エラーが
   ;; 出た）。以後は "localllm" という別名を使うことでこれを避けている。
   ;;
-  ;; ── 経路 2: Claude API ──
-  ;;
-  ;; HTTP 通信は `utils-claude'（utils 層）に依存する。API キーの取得は `personal-credentials'
-  ;; が担い、`utils-claude-api-key-function' 経由で渡される。`utils-claude' は最初に使うときに
-  ;; `require' する。
-  ;;
-  ;; Org Babel 統合:
-  ;;   `#+begin_src claude' で始まるソースブロックの本文をユーザーメッセージとして送信し、
-  ;;   その応答をブロックの結果として挿入する。
-  ;;
-  ;;     #+begin_src claude :system "You are an Emacs Lisp refactoring expert."
-  ;;     次の関数を、中間リストを作らないようにリファクタリングしてください:
-  ;;     (defun foo (xs) (let ((acc nil)) (dolist (x xs) (push x acc)) acc))
-  ;;     #+end_src
-  ;;
-  ;;   対応するヘッダ引数:
-  ;;     :system  — システムプロンプト文字列（既定: `personal-llm-claude-system'）
-  ;;     :model   — モデル識別子（既定: `utils-claude-default-model'）
-  ;;     :tokens  — max_tokens の整数値（既定: `utils-claude-max-tokens'）
-  ;;
-  ;; 対話コマンド（結果は `personal-llm-claude-output-buffer' に Org で出す）:
-  ;;   `my/claude-refactor-defun'        — ポイント位置の defun をリファクタリングする
-  ;;   `my/claude-complete-docstring'    — ポイント位置の defun の docstring を生成する
-  ;;   `my/claude-analyze-require-graph' — 上位層への require 違反を報告する
-  ;;
-  ;; 旧 personal-ai.el の変数名は、次のとおり改めた（コマンド名は変えていない）:
-  ;;   `personal-ai-default-system' → `personal-llm-claude-system'
-  ;;   `personal-ai-output-buffer'  → `personal-llm-claude-output-buffer'
-  ;;
   ;;; Code:
 
   (eval-when-compile
     (require 'cl-lib)
     (require 'subr-x))
 
-  ;; バイトコンパイル時の警告を避けるための宣言（実体は utils-claude 側にある）。
-  (declare-function utils-claude-request "utils-claude")
-  (declare-function utils-claude-request-sync "utils-claude")
-
   (defgroup personal-llm nil
-    "LLM integration: the local router and the Claude API."
+    "LLM integration: the local router."
     :group 'tools
     :prefix "personal-llm-")
 
@@ -1681,18 +1625,6 @@ LLM を Emacs から呼ぶ統合を、1 つのファイルにまとめていま�
 
   (defcustom personal-llm-output-buffer "*LLM Router Output*"
     "Name of the buffer used to display streamed LLM router output."
-    :type 'string
-    :group 'personal-llm)
-
-  (defcustom personal-llm-claude-system
-    "You are an expert Emacs Lisp programmer and software architect.
-  Respond in plain text. Omit preamble. Be concise and precise."
-    "Default system prompt sent with every Claude request from this module."
-    :type 'string
-    :group 'personal-llm)
-
-  (defcustom personal-llm-claude-output-buffer "*Claude Output*"
-    "Name of the buffer used to display interactive Claude results."
     :type 'string
     :group 'personal-llm)
 
@@ -1727,7 +1659,7 @@ LLM を Emacs から呼ぶ統合を、1 つのファイルにまとめていま�
       (pop-to-buffer buf)
       buf))
 
-  ;;; ── 経路 1: ローカルルーター ──────────────────────────────────────────────
+  ;;; ── ローカルルーター ──────────────────────────────────────────────────────
 
   (defun personal-llm--ensure-script ()
     "Return the expanded, executable path to the router script.
@@ -1829,124 +1761,6 @@ LLM を Emacs から呼ぶ統合を、1 つのファイルにまとめていま�
       (unless src
         (user-error "No region active and no defun found at point"))
       (my/llm-run src 'coding)))
-
-  ;;; ── 経路 2: Claude API ────────────────────────────────────────────────────
-
-  (defun personal-llm--claude-request (messages callback system)
-    "Send MESSAGES to Claude asynchronously and call CALLBACK with the text.
-  SYSTEM is the system prompt.  `utils-claude' is loaded on first use."
-    (require 'utils-claude)
-    (utils-claude-request messages callback nil nil system))
-
-  (defun personal-llm--claude-show (header text)
-    "Display HEADER and TEXT in `personal-llm-claude-output-buffer'."
-    (with-current-buffer
-        (personal-llm--open-output-buffer personal-llm-claude-output-buffer header)
-      (insert text "\n")
-      (goto-char (point-max))))
-
-  ;;;###autoload
-  (defun org-babel-execute:claude (body params)
-    "Execute a Claude Babel block with BODY as the user message.
-  PARAMS is the alist of header arguments from the source block.
-  Returns the assistant response text as a string, suitable for
-  insertion as the block result under :results value semantics."
-    (require 'utils-claude)
-    (let* ((system  (or (cdr (assq :system params))
-                        personal-llm-claude-system))
-           (model   (cdr (assq :model params)))
-           (tokens  (when-let* ((raw (cdr (assq :tokens params))))
-                      (if (stringp raw) (string-to-number raw) raw)))
-           (messages (list (list :role "user" :content body))))
-      (condition-case err
-          (utils-claude-request-sync messages model tokens system)
-        (utils-claude-error
-         (error "Claude Babel block failed: %s" (cadr err))))))
-
-  ;; `org-babel-load-languages' に `claude' を足してはならない。`org-babel-do-load-languages' は
-  ;; 一覧の言語ごとに `ob-claude' を `require' するが、そのファイルは無い。Org のロード時に
-  ;; 「Cannot open load file: ob-claude」で落ちる（2026-10-31 に smoketest で見つかった）。
-  ;; Babel は `org-babel-execute:claude' が定義されていれば実行できる。
-
-  ;;;###autoload
-  (defun my/claude-refactor-defun ()
-    "Send the top-level defun at point to Claude and display refactoring suggestions.
-  Instructs Claude to preserve the public interface and docstring, and to
-  apply this configuration's coding rules: lexical-binding, named defun
-  for hooks, setopt for defcustom, setq for defvar and internal state."
-    (interactive)
-    (let ((src (personal-llm--defun-at-point)))
-      (unless src
-        (user-error "No defun found at point"))
-      (message "Sending defun to Claude...")
-      (personal-llm--claude-request
-       (list (list :role "user"
-                   :content (format "Refactor the following Emacs Lisp function.\n\
-  Preserve its public interface and docstring.\n\
-  Apply these rules: lexical-binding, named defun (no lambdas in hooks),\n\
-  setopt for defcustom, setq for defvar and internal state.\n\n%s" src)))
-       (lambda (result)
-         (personal-llm--claude-show
-          (format "Refactor: %s"
-                  (and (string-match "(def[a-z]+ \\([^ \n(]+\\)" src)
-                       (match-string 1 src)))
-          result))
-       personal-llm-claude-system)))
-
-  ;;;###autoload
-  (defun my/claude-complete-docstring ()
-    "Generate a docstring for the top-level defun at point and display it.
-  The response contains only the docstring body text, ready for insertion
-  between the argument list and the first expression of the defun."
-    (interactive)
-    (let ((src (personal-llm--defun-at-point)))
-      (unless src
-        (user-error "No defun found at point"))
-      (message "Requesting docstring from Claude...")
-      (personal-llm--claude-request
-       (list (list :role "user"
-                   :content (format "Write a concise Emacs Lisp docstring for the \
-  following function.\nOutput only the docstring text (no surrounding quotes, \
-  no code fence).\nFirst line: single sentence summary ending with a period.\n\
-  Subsequent lines: describe arguments and return value.\n\n%s" src)))
-       (lambda (result)
-         (personal-llm--claude-show
-          (format "Docstring: %s"
-                  (and (string-match "(def[a-z]+ \\([^ \n(]+\\)" src)
-                       (match-string 1 src)))
-          result))
-       "You are an Emacs Lisp documentation expert. Be concise.")))
-
-  ;;;###autoload
-  (defun my/claude-analyze-require-graph ()
-    "Analyze require statements in the current buffer and report layer
-  violations.
-  Detects upward-layer dependencies relative to the 10-layer architecture:
-  early-init → core → ui → auth → completion → orgx → vcs → dev → utils
-  → personal.
-  Results are displayed in `personal-llm-claude-output-buffer'."
-    (interactive)
-    (unless buffer-file-name
-      (user-error "Buffer is not visiting a file"))
-    (let* ((src  (buffer-substring-no-properties (point-min) (point-max)))
-           (file (file-name-nondirectory buffer-file-name)))
-      (message "Analyzing require graph in %s..." file)
-      (personal-llm--claude-request
-       (list (list :role "user"
-                   :content (format "Analyze the following Emacs Lisp module (%s) \
-  for dependency issues.\n\
-  Layer order (low to high): early-init, core, ui, auth, completion, \
-  orgx, vcs, dev, utils, personal.\n\
-  Rules: a module must not require a module from a higher layer.\n\
-  List every (require ...) or (load ...) call, identify its layer, \
-  and flag any upward-layer dependency.\n\
-  Output a plain list: SYMBOL — LAYER — OK/VIOLATION.\n\n%s"
-                                    file src)))
-       (lambda (result)
-         (personal-llm--claude-show
-          (format "Require graph: %s" file)
-          result))
-       personal-llm-claude-system)))
 
   (provide 'personal-llm)
   ;;; user-lisp/personal-llm.el ends here
