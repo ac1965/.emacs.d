@@ -45,9 +45,9 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 | =personal/personal-hugo.el= | Hugo ブログ（ =all-posts.org= ）のタグ設定と capture |
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Keychain。Apple Music の操作は =dev-apple-music= を追加で読み込む |
 | =personal/device-wsl.el= | WSL のリーダーキー切替（ =C-c SPC= ）、クリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
-| =personal/personal-messages.el= | macOS Messages.app のアーカイバ |
-| =personal/personal-ai.el= | Org Babel と Claude API の統合（どこからも自動では読み込まれない。使うときは =(require 'personal-ai)= する） |
-| =personal/personal-llm.el= | ローカル LLM ルーター（=~/.local/bin/localllm=）との統合（=my/llm-run=） |
+| =user-lisp/personal-messages.el= | macOS Messages.app のアーカイバ |
+| =user-lisp/personal-ai.el= | Org Babel と Claude API の統合（ =user.el= が Org のロード後に読み込む。コマンドは autoload） |
+| =user-lisp/personal-llm.el= | ローカル LLM ルーター（=~/.local/bin/localllm=）との統合（=my/llm-run=。autoload） |
 
 [[file:../svg/13_personal_override_contract.svg]]
 ** personal/user.el
@@ -189,14 +189,9 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
           ;; 初回はアイドル 120 秒後。以降は 600 秒（10 分）ごとに繰り返す。
           (run-with-idle-timer 120 600 #'personal-messages-archive)))))
 
-  ;; personal-llm: ローカル LLM ルーター（~/.local/bin/localllm）統合
-  ;;
-  ;; personal-messages と異なり org 本体には依存しない（Org-roam バッファからの
-  ;; 呼び出しでもリージョン／バッファ文字列を渡すだけで org 固有関数を使わない）
-  ;; ため、`with-eval-after-load 'org' で遅延させる必要はない。`locate-library'
-  ;; でガードし、ファイルが無ければ静かにスキップする。
-  (when (locate-library "personal-llm")
-    (require 'personal-llm nil t))
+  ;; personal-llm（ローカル LLM ルーター）は user-lisp/ にあり、ここでは読み込まない。
+  ;; `;;;###autoload' の付いたコマンド（`my/llm-run' など）を、Emacs が起動時に
+  ;; user-lisp/ から集めた autoload で呼ぶ。呼ばれるまでロードされない。
 
   ;; personal-credentials: LLM の API キーの取得（dev-ai / utils-claude へ関数として渡す）
   ;;
@@ -204,15 +199,12 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   (when (locate-library "personal-credentials")
     (require 'personal-credentials nil t))
 
-  ;; personal-ai: Org Babel の `claude' ブロックと `my/claude-*' コマンド
+  ;; personal-ai（user-lisp/）: Org Babel の `claude' ブロックと `my/claude-*' コマンド
   ;;
-  ;; Org Babel は Org の準備ができてから登録するため、`with-eval-after-load 'org' で読み込む。
-  ;; Org を開く前でも `M-x my/claude-*' が呼べるよう、コマンドだけ autoload しておく。
+  ;; `my/claude-*' コマンドは `;;;###autoload' で、Org を開く前でも呼べる。Org Babel の
+  ;; `org-babel-execute:claude' は Org のロード後に定義されている必要があるため、
+  ;; `with-eval-after-load 'org' で読み込む。
   (when (locate-library "personal-ai")
-    (dolist (cmd '(my/claude-refactor-defun
-                   my/claude-complete-docstring
-                   my/claude-analyze-require-graph))
-      (autoload cmd "personal-ai" nil t))
     (with-eval-after-load 'org
       (require 'personal-ai nil t)))
 
@@ -1296,14 +1288,14 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
   ;;; personal/device-wsl.el ends here
 #+end_src
 
-** personal/personal-messages.el
+** user-lisp/personal-messages.el
 :PROPERTIES:
 :CUSTOM_ID: personal-messages
-:header-args:emacs-lisp: :tangle ../personal/personal-messages.el
+:header-args:emacs-lisp: :tangle ../user-lisp/personal-messages.el
 :END:
 
 #+begin_src emacs-lisp
-  ;;; personal/personal-messages.el --- macOS Messages.app のアーカイバ -*- lexical-binding: t; -*-
+  ;;; user-lisp/personal-messages.el --- macOS Messages.app のアーカイバ -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1422,7 +1414,7 @@ Hugo ブログ（ =all-posts.org= ）の執筆まわりの設定です。 =perso
                   (error-message-string err))))))
 
   (provide 'personal-messages)
-  ;;; personal/personal-messages.el ends here
+  ;;; user-lisp/personal-messages.el ends here
 #+end_src
 
 ** personal/personal-credentials.el
@@ -1572,14 +1564,14 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
   ;;; personal/personal-credentials.el ends here
 #+end_src
 
-** personal/personal-ai.el
+** user-lisp/personal-ai.el
 :PROPERTIES:
 :CUSTOM_ID: personal-ai
-:header-args:emacs-lisp: :tangle ../personal/personal-ai.el
+:header-args:emacs-lisp: :tangle ../user-lisp/personal-ai.el
 :END:
 
 #+begin_src emacs-lisp
-  ;;; personal/personal-ai.el --- Org Babel + Claude API 統合 -*- lexical-binding: t; -*-
+  ;;; user-lisp/personal-ai.el --- Org Babel + Claude API 統合 -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1700,6 +1692,7 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
 
   ;;; ── 対話コマンド ──────────────────────────────────────────────────────────
 
+  ;;;###autoload
   (defun my/claude-refactor-defun ()
     "Send the top-level defun at point to Claude and display refactoring suggestions.
   Instructs Claude to preserve the public interface and docstring, and to
@@ -1724,6 +1717,7 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
           result))
        nil nil personal-ai-default-system)))
 
+  ;;;###autoload
   (defun my/claude-complete-docstring ()
     "Generate a docstring for the top-level defun at point and display it.
   The response contains only the docstring body text, ready for insertion
@@ -1747,6 +1741,7 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
           result))
        nil nil "You are an Emacs Lisp documentation expert. Be concise.")))
 
+  ;;;###autoload
   (defun my/claude-analyze-require-graph ()
     "Analyze require statements in the current buffer and report layer
   violations.
@@ -1778,17 +1773,17 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
        nil nil personal-ai-default-system)))
 
   (provide 'personal-ai)
-  ;;; personal/personal-ai.el ends here
+  ;;; user-lisp/personal-ai.el ends here
 #+end_src
 
-** personal/personal-llm.el
+** user-lisp/personal-llm.el
 :PROPERTIES:
 :CUSTOM_ID: personal-llm
-:header-args:emacs-lisp: :tangle ../personal/personal-llm.el
+:header-args:emacs-lisp: :tangle ../user-lisp/personal-llm.el
 :END:
 
 #+begin_src emacs-lisp
-  ;;; personal/personal-llm.el --- ローカル LLM ルーター統合 -*- lexical-binding: t; -*-
+  ;;; user-lisp/personal-llm.el --- ローカル LLM ルーター統合 -*- lexical-binding: t; -*-
   ;;
   ;; Copyright (c) 2021-2026
   ;; Author: YAMASHITA, Takao
@@ -1926,6 +1921,7 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
 
   ;;; ── 対話コマンド ──────────────────────────────────────────────────────────
 
+  ;;;###autoload
   (defun my/llm-run (prompt &optional task image-path)
     "Send PROMPT to the local LLM router and stream the response.
   TASK, when non-nil, must be one of the symbols `general', `coding',
@@ -1947,6 +1943,7 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
     (message "[llm] sending to router (task: %s)..." (or task "auto"))
     (personal-llm--start-process prompt task image-path))
 
+  ;;;###autoload
   (defun my/llm-run-from-org-roam ()
     "Send the current Org-roam note to the LLM router.
   Sends the active region if any, otherwise the whole buffer. The task
@@ -1959,6 +1956,7 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
          (buffer-substring-no-properties (region-beginning) (region-end))
        (buffer-substring-no-properties (point-min) (point-max)))))
 
+  ;;;###autoload
   (defun my/llm-run-from-coding-buffer ()
     "Send the current defun (or active region) to the LLM router as `coding'.
   Pinning the task bypasses the router's rule-based auto-detection so the
@@ -1973,5 +1971,5 @@ LLM の API キーを取り出す唯一の場所です。取り出したキー�
       (my/llm-run src 'coding)))
 
   (provide 'personal-llm)
-  ;;; personal/personal-llm.el ends here
+  ;;; user-lisp/personal-llm.el ends here
 #+end_src

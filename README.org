@@ -236,6 +236,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 │   ├── dev/
 │   └── utils/
 ├── personal/    (ユーザー／デバイス固有のオーバーレイ)
+├── user-lisp/   (個人用のライブラリ。Emacs 31 の user-lisp。呼ばれるまでロードしない)
 ├── scripts/     (lint・リロード・エクスポート・デモ撮影用のヘルパー。tangle 生成物)
 ├── svg/         (図のソース .dot/.mmd と、描画済みの .svg)
 ├── .var/        (ランタイム状態)
@@ -249,6 +250,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 |-------------+------|
 | =lisp/=     | モジュールのソースコード。 =lisp/modules.el= がローダのエントリポイント |
 | =personal/= | ユーザー／デバイスのオーバーレイ（ =modules.el= より前に =init.el= が読み込む） |
+| =user-lisp/= | 個人用のライブラリ（ =personal-ai= 、 =personal-llm= 、 =personal-messages= ）。Emacs 31 が起動時にバイトコンパイルし、 =;;;###autoload= の注釈から autoload を集め、 =load-path= に加える |
 | =.var/=     | ランタイム状態（パッケージが書き出すデータ） |
 | キャッシュ（ =my:d:cache= ） | 一時キャッシュ。リポジトリの外の =$XDG_CACHE_HOME/emacs/= （なければ =~/.cache/emacs/= ）にあり、削除しても自動的に再生成される |
 | =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる）、デモ画像の撮影スクリプト（ =demo-layout.el= 、 =shot.sh= 、 =compose.py= ）、キーバインド一覧 SVG の生成（ =cheatsheet.el= ） |
@@ -477,10 +479,10 @@ vcs は dev 層に依存してはいけません。
 - osascript による Apple Music の操作（ =dev-apple-music= 。macOS のみ。 =personal/device-darwin.el= が =my:modules-extra= に加える）
 - LSP バックエンドを =core-switches= の登録簿へ登録する（ =dev-lsp-bridge= ）
 
-なお、Org Babel と Claude API を組み合わせたワークフローは =personal/personal-ai.el= にあり、
+なお、Org Babel と Claude API を組み合わせたワークフローは =user-lisp/personal-ai.el= にあり、
 HTTP 通信は =utils/utils-claude.el= に依存します。AI 関連がすべて dev 層にあるわけではない
 点に注意してください。同様に、ローカル Ollama モデルへのルーター（=~/.local/bin/localllm=）を
-Org-roam / コーディングバッファの双方から呼び出す統合は =personal/personal-llm.el= にあり、
+Org-roam / コーディングバッファの双方から呼び出す統合は =user-lisp/personal-llm.el= にあり、
 HTTP クライアントを介さずプロセス起動のみで完結するため =utils= 層には依存しません。
 
 *** utils
@@ -497,7 +499,7 @@ HTTP クライアントを介さずプロセス起動のみで完結するため
 - =utils-lint= — flymake のポリシー。flycheck は lsp-mode の診断バックエンドとしてのみ保持
 - =utils-diagnostics= — =load-path= / feature / 外部実行ファイルの点検
 - =utils-scratch= — =*scratch*= の自動再生成と複数 scratch バッファ
-- =utils-claude= — Claude API の HTTP クライアント（ =personal/personal-ai.el= の通信層）
+- =utils-claude= — Claude API の HTTP クライアント（ =user-lisp/personal-ai.el= の通信層）
 
 パス操作と非同期シェルのヘルパーは、2026-07 のデッドコード除去で削除しました（呼び出し箇所が
 一つも無かったためです）。ディレクトリ操作の正式なヘルパーは =early-init.el= で定義される
@@ -935,10 +937,12 @@ git diff README.org   # 差分を確認してコミットする
   # これらは常にリポジトリルート直下として扱う
   LISPDIR_REL     ?= lisp
   PERSONALDIR_REL ?= personal
+  USERLISPDIR_REL ?= user-lisp
   SVGDIR_REL      ?= svg
 
   LISPDIR     := $(abspath $(ROOT)/$(LISPDIR_REL))
   PERSONALDIR := $(abspath $(ROOT)/$(PERSONALDIR_REL))
+  USERLISPDIR := $(abspath $(ROOT)/$(USERLISPDIR_REL))
   SVGDIR      := $(abspath $(ROOT)/$(SVGDIR_REL))
   ORG := $(abspath $(ROOT)/$(ORG))
   # 層別の Org 文書と補助スクリプト（org/*.org。tools.org を含む）。README.org とあわせてすべて tangle・検査する。
@@ -1073,6 +1077,7 @@ git diff README.org   # 差分を確認してコミットする
   show-files:
 	@echo "[list] $(LISPDIR)";    { [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.el' | sort; } || true
 	@echo "[list] $(PERSONALDIR)"; { [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.el' | sort; } || true
+	@echo "[list] $(USERLISPDIR)"; { [ -d "$(USERLISPDIR)" ] && find "$(USERLISPDIR)" -type f -name '*.el' | sort; } || true
 
   echo-paths:
 	@echo "ROOT=$(ROOT)"; \
@@ -1087,9 +1092,10 @@ git diff README.org   # 差分を確認してコミットする
   	echo "MY_D_CACHE_DIR=$(MY_D_CACHE_DIR)"
 
   clean:
-	@echo "[clean] remove *.elc under $(LISPDIR) and $(PERSONALDIR)"
+	@echo "[clean] remove *.elc under $(LISPDIR), $(PERSONALDIR) and $(USERLISPDIR)"
 	@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 	@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+	@{ [ -d "$(USERLISPDIR)" ] && find "$(USERLISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 
   # distclean は README.org からの tangle 生成物一式を削除し、fresh clone 相当に戻す。
   # 対象は早期に消えても実害のない「ソースから常に再生成できるもの」だけ（early-init.el
@@ -1106,9 +1112,9 @@ git diff README.org   # 差分を確認してコミットする
   distclean: clean
 	@echo "[distclean] remove stray *.eln"
 	@find "$(ROOT)" -type f -name '*.eln' -delete
-	@echo "[distclean] remove tangle-generated files (early-init.el init.el lisp/ personal/ scripts/ LICENSE svg intermediates)"
+	@echo "[distclean] remove tangle-generated files (early-init.el init.el lisp/ personal/ user-lisp/ scripts/ LICENSE svg intermediates)"
 	@rm -f "$(EARLY)" "$(INIT)" "$(ROOT)/LICENSE"
-	@rm -rf "$(LISPDIR)" "$(PERSONALDIR)" "$(ROOT)/scripts"
+	@rm -rf "$(LISPDIR)" "$(PERSONALDIR)" "$(USERLISPDIR)" "$(ROOT)/scripts"
 	@{ [ -d "$(SVGDIR)" ] && find "$(SVGDIR)" \( -name '*.dot' -o -name '*.mmd' -o -name '*.pdf' \) -delete; } 2>/dev/null || true
 	@echo "[distclean] remove ChangeLog (tangled from README.org Changelog section)"
 	@rm -f "$(ROOT)/ChangeLog"
@@ -1323,7 +1329,7 @@ git diff README.org   # 差分を確認してコミットする
 	@echo "  make stage                    # 追跡対象（TRACKED）だけを stage。それ以外が混ざれば中止"
 	@echo ""
 	@echo "  # その他"
-	@echo "  make show-files               # lisp/ と personal/ 配下の .el 一覧"
+	@echo "  make show-files               # lisp/ personal/ user-lisp/ 配下の .el 一覧"
 	@echo "  make echo-paths               # 解決済みの各種パスを表示（デバッグ用）"
 	@echo ""
 	@echo "個別の変数上書き例: make onepass-init STRICT_BYTE_WARN=1 NATIVE_COMPILE=0"
@@ -1543,7 +1549,7 @@ git diff README.org   # 差分を確認してコミットする
   # 検査本体は scripts/check_fboundp_guards.py（Appendix を参照）。
   .PHONY: check-fboundp-guards
   check-fboundp-guards:
-	@python3 scripts/check_fboundp_guards.py "$(LISPDIR)" "$(PERSONALDIR)" "$(EARLY)" "$(INIT)"
+	@python3 scripts/check_fboundp_guards.py "$(LISPDIR)" "$(PERSONALDIR)" "$(USERLISPDIR)" "$(EARLY)" "$(INIT)"
 
   # ---- check-bytecomp : バイトコンパイル警告の集計 ------------------------------
   # init を読み込んだ Emacs で lisp/ personal/ early-init.el init.el をすべてバイト
@@ -2147,6 +2153,13 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* org/personal.org (personal-ai, personal-llm, personal-messages), org/boot.org (init.el), README.org (Makefile),
+	org/tools.org (orphans.el, reload.py, check_modules.py, stats.py, check-bytecomp.el, smoketest.el), .gitignore:
+	個人用のライブラリ 3 つを personal/ から Emacs 31 の user-lisp/ へ移した。tangle 先を ../user-lisp/ に変え、
+	コマンドに ;;;###autoload を付けたので、user.el の locate-library と autoload の定型文が減り、personal-llm は
+	呼ぶまでロードされなくなった。Makefile（clean・distclean・show-files・check-fboundp-guards）、孤立の検査
+	（Emacs が書く .user-lisp-autoloads.el を除く）、reload・check_modules・stats・check-bytecomp を user-lisp/ に対応させた。
+	バッチ実行では Emacs が user-lisp/ を処理しないため、init.el が同じ処理（prepare-user-lisp）を行う。
 	* org/utils.org (utils-lint) (utils-lint-generated-file-p, utils-lint--enable-flymake-maybe): tangle で生成される
 	ファイル（early-init.el、init.el、lisp/、personal/、scripts/ の .el）では flymake を有効にしない。手で編集しない
 	ファイルで、編集のたびにバイトコンパイルが走り「byte-compile process … obsolete」の記録が出続けたため。

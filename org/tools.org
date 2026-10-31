@@ -603,15 +603,15 @@ python3 scripts/reload.py --only check-cookies
 
 
   # --- Step 1: clean ----------------------------------------------------------
-  def clean(lisp_dir: Path, personal_dir: Path) -> int:
-      """Delete every *.elc under lisp/ and personal/.  Best-effort (never fatal).
+  def clean(lisp_dir: Path, personal_dir: Path, user_lisp_dir: Path | None = None) -> int:
+      """Delete every *.elc under lisp/, personal/ and user-lisp/.  Best-effort (never fatal).
 
       Stale .elc files shadow freshly tangled .el files, so removing them is worth
       doing even if some deletions fail.  Returns the number of files removed.
       """
       removed = 0
-      for base in (lisp_dir, personal_dir):
-          if not base.is_dir():
+      for base in (lisp_dir, personal_dir, user_lisp_dir):
+          if base is None or not base.is_dir():
               continue
           for elc in base.rglob("*.elc"):
               try:
@@ -620,7 +620,7 @@ python3 scripts/reload.py --only check-cookies
               except OSError as err:
                   print(f"  WARN: could not delete {elc}: {err}", file=sys.stderr)
       print(f"[clean] removed {removed} .elc file(s) under "
-            f"{lisp_dir} and {personal_dir}")
+            f"{lisp_dir}, {personal_dir} and {user_lisp_dir}")
       return removed
 
 
@@ -734,6 +734,9 @@ python3 scripts/reload.py --only check-cookies
           "--personal", default="personal",
           help="personal directory, relative to --root (default: personal)")
       parser.add_argument(
+          "--user-lisp", default="user-lisp",
+          help="user-lisp directory, relative to --root (default: user-lisp)")
+      parser.add_argument(
           "--only", choices=("clean", "tangle", "check-cookies", "clean-orphans"),
           help="run only one step instead of the full reload")
       args = parser.parse_args(argv)
@@ -742,10 +745,11 @@ python3 scripts/reload.py --only check-cookies
       org = (root / args.org).resolve()
       lisp_dir = (root / args.lisp).resolve()
       personal_dir = (root / args.personal).resolve()
+      user_lisp_dir = (root / args.user_lisp).resolve()
       emacs = resolve_emacs()
 
       if args.only == "clean":
-          clean(lisp_dir, personal_dir)
+          clean(lisp_dir, personal_dir, user_lisp_dir)
           return 0
       if args.only == "tangle":
           tangle_all(emacs, org)
@@ -757,7 +761,7 @@ python3 scripts/reload.py --only check-cookies
           return 0
 
       # Full reload: clean -> tangle -> check-cookies -> clean-orphans.
-      clean(lisp_dir, personal_dir)
+      clean(lisp_dir, personal_dir, user_lisp_dir)
       tangle_all(emacs, org)
       rc = check_cookies(lisp_dir)
       if rc == 0:
@@ -1245,6 +1249,9 @@ CHECK_BYTECOMP_FILES="lisp/ui/ui-theme.el personal/ac1965.el" make check-bytecom
                 (expand-file-name "lisp" check-bytecomp--root) "\\.el\\'")
                (directory-files
                 (expand-file-name "personal" check-bytecomp--root) t "\\.el\\'")
+               (let ((dir (expand-file-name "user-lisp" check-bytecomp--root)))
+                 (and (file-directory-p dir)
+                      (directory-files dir t "\\`[^.].*\\.el\\'")))
                (mapcar (lambda (f) (expand-file-name f check-bytecomp--root))
                        '("early-init.el" "init.el")))
               #'string<))))
@@ -1620,6 +1627,21 @@ make smoketest
       (and (commandp 'my/claude-refactor-defun)
            (fboundp 'org-babel-execute:claude)
            (featurep 'utils-claude)))
+    (smoketest--check "user-lisp: 3 ライブラリが load-path にあり、autoload で呼べる（起動時にロードしない）"
+      (let ((dir (expand-file-name "user-lisp/" user-emacs-directory)))
+        (and (member (directory-file-name dir) (mapcar #'directory-file-name load-path))
+             (file-exists-p (expand-file-name ".user-lisp-autoloads.el" dir))
+             (cl-every (lambda (f) (file-exists-p (expand-file-name f dir)))
+                       '("personal-ai.el" "personal-llm.el" "personal-messages.el"))
+             (commandp 'my/llm-run) (commandp 'my/llm-run-from-org-roam)
+             (commandp 'my/llm-run-from-coding-buffer)
+             (commandp 'my/claude-complete-docstring)
+             (commandp 'my/claude-analyze-require-graph)
+             (fboundp 'personal-messages-archive)
+             ;; personal-llm は autoload だけで、呼ぶまでロードされない。
+             (autoloadp (symbol-function 'my/llm-run))
+             ;; 旧置き場 personal/ に同名の生成物が残っていない。
+             (not (file-exists-p (expand-file-name "personal/personal-llm.el" user-emacs-directory))))))
     (smoketest--check "utils-claude / dev-ai へ personal 層が関数を渡している"
       (and (eq utils-claude-api-key-function 'personal-credentials-anthropic-key)
            (eq dev-ai-credentials-function 'personal-credentials-aider)))
@@ -2730,7 +2752,7 @@ Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を�
       "ui-doom-modeline", "ui-nano-modeline", "ui-doom-nano-modeline",
       "ui-nano-palette", "ui-nano-modeline-items",
       "orgx-roam-ui",
-      # required by personal/personal-ai.el
+      # required by user-lisp/personal-ai.el
       "utils-claude",
   }
   # Explicit upward `require's that are accepted (module -> required module).
@@ -2762,7 +2784,8 @@ Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を�
       modules = symbols_after((lisp / "modules.el").read_text(encoding="utf-8"),
                               "(defconst my:modules")
       extras: list[str] = []
-      for path in sorted((root / "personal").glob("*.el")):
+      for path in sorted([*(root / "personal").glob("*.el"),
+                          *(root / "user-lisp").glob("*.el")]):
           text = strip_comments(path.read_text(encoding="utf-8"))
           for found in re.findall(r"my:modules-extra[^']*'\(([^()]*)\)", text):
               extras += found.split()
@@ -2849,6 +2872,7 @@ Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を�
                 for layer in LAYERS]
       groups.append(("lisp/modules.el", [root / "lisp" / "modules.el"]))
       groups.append(("personal", sorted((root / "personal").glob("*.el"))))
+      groups.append(("user-lisp", sorted((root / "user-lisp").glob("*.el"))))
       groups.append(("scripts (.el)", sorted((root / "scripts").glob("*.el"))))
       groups.append(("root", [p for p in (root / "early-init.el", root / "init.el")
                               if p.is_file()]))
@@ -2921,8 +2945,11 @@ tangle 先を 20 件より少なくしか取れなかった場合（Org 文書�
   (defconst orphans--min-targets 20
     "Refuse to delete anything when fewer tangle targets than this were found.")
 
-  (defconst orphans--dirs '("lisp" "personal" "scripts")
+  (defconst orphans--dirs '("lisp" "personal" "user-lisp" "scripts")
     "Directories under the root whose files are all tangle products.")
+
+  (defconst orphans--emacs-generated-re "\\`\\.user-lisp-autoloads\\.elc?\\'"
+    "File names Emacs itself writes into user-lisp/ (`prepare-user-lisp'); never orphans.")
 
   (defconst orphans--extensions "\\.\\(el\\|elc\\|py\\|sh\\)\\'"
     "Regexp matching the file names treated as tangle products.")
@@ -2943,7 +2970,10 @@ tangle 先を 20 件より少なくしか取れなかった場合（Org 文書�
     (cl-loop for dir in orphans--dirs
              for path = (expand-file-name dir root)
              when (file-directory-p path)
-             append (directory-files-recursively path orphans--extensions)))
+             append (cl-remove-if
+                     (lambda (f) (string-match-p orphans--emacs-generated-re
+                                                 (file-name-nondirectory f)))
+                     (directory-files-recursively path orphans--extensions))))
 
   (defun orphans--orphan-p (file targets)
     "Return non-nil when FILE is not produced by tangling (TARGETS)."

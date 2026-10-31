@@ -15,7 +15,7 @@ Org 文書とソースコードを一体として管理する literate program �
 |---|---|
 | `early-init.el`、`init.el`、`lisp/modules.el` | `org/boot.org` |
 | `lisp/<layer>/*.el` | `org/<layer>.org`（`core` / `ui` / `auth` / `completion` / `orgx` / `dev` / `vcs` / `utils`） |
-| `personal/*.el` | `org/personal.org` |
+| `personal/*.el`、`user-lisp/*.el` | `org/personal.org` |
 | `scripts/*`（補助スクリプト） | `org/tools.org` |
 | `Makefile`、`LICENSE`、`ChangeLog`、`svg/*.dot` / `svg/*.mmd` | `README.org` |
 
@@ -23,7 +23,7 @@ Org 文書とソースコードを一体として管理する literate program �
 `org/` の各ファイルは、`:tangle ../lisp/...` のように、`.emacs.d/` からの相対パスに `../` を付ける。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
 103 個の `.el` ターゲット（`lisp/` 配下 86 個〔`lisp/modules.el` を含む〕、
-`personal/` 配下 10 個、ルートの `early-init.el` と `init.el`、
+`personal/` 配下 7 個、`user-lisp/` 配下 3 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`、`scripts/smoketest.el`）が生成される。
 （`scripts/` の 5 個の `.el` は `org/tools.org` から、`early-init.el`・`init.el` は `org/boot.org` から、`lisp/` と `personal/` の `.el` は上の表の各 Org 文書から tangle される。）
 
@@ -69,7 +69,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 
 - `early-init.el`, `init.el`, `Makefile`, `LICENSE`, `lisp/modules.el`
 - `lisp/{core,ui,auth,completion,orgx,vcs,dev,utils}/` 配下のすべて
-- `personal/` 配下のすべて
+- `personal/` と `user-lisp/` 配下のすべて（`user-lisp/` には、Emacs 自身が書く `.user-lisp-autoloads.el` と `.elc` も入る。`.gitignore` 対象で、孤立の検査からも除いてある）
 - `ChangeLog`（GNU 標準形式。README.org の Changelog 節にある
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`, `check_modules.py`,
@@ -161,7 +161,8 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── vcs/        (4)
 │   ├── dev/        (18)
 │   └── utils/      (9)
-├── personal/       (10) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
+├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
+├── user-lisp/      (3) — 個人用ライブラリ（personal-ai / personal-llm / personal-messages）。Emacs 31 の user-lisp。起動時に Emacs がバイトコンパイルと autoload の収集を行う。org/personal.org から tangle
 ├── scripts/        (14) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
