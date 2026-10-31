@@ -250,7 +250,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 |-------------+------|
 | =lisp/=     | モジュールのソースコード。 =lisp/modules.el= がローダのエントリポイント |
 | =personal/= | ユーザー／デバイスのオーバーレイ（ =modules.el= より前に =init.el= が読み込む） |
-| =user-lisp/= | 個人用のライブラリ（ =personal-ai= 、 =personal-llm= 、 =personal-messages= ）。Emacs 31 が起動時にバイトコンパイルし、 =;;;###autoload= の注釈から autoload を集め、 =load-path= に加える |
+| =user-lisp/= | 個人用のライブラリ（ =personal-llm= 、 =personal-messages= ）。Emacs 31 が起動時にバイトコンパイルし、 =;;;###autoload= の注釈から autoload を集め、 =load-path= に加える |
 | =.var/=     | ランタイム状態（パッケージが書き出すデータ） |
 | キャッシュ（ =my:d:cache= ） | 一時キャッシュ。リポジトリの外の =$XDG_CACHE_HOME/emacs/= （なければ =~/.cache/emacs/= ）にあり、削除しても自動的に再生成される |
 | =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる）、デモ画像の撮影スクリプト（ =demo-layout.el= 、 =shot.sh= 、 =compose.py= ）、キーバインド一覧 SVG の生成（ =cheatsheet.el= ） |
@@ -479,7 +479,7 @@ vcs は dev 層に依存してはいけません。
 - osascript による Apple Music の操作（ =dev-apple-music= 。macOS のみ。 =personal/device-darwin.el= が =my:modules-extra= に加える）
 - LSP バックエンドを =core-switches= の登録簿へ登録する（ =dev-lsp-bridge= ）
 
-なお、Org Babel と Claude API を組み合わせたワークフローは =user-lisp/personal-ai.el= にあり、
+なお、Org Babel と Claude API を組み合わせたワークフローは =user-lisp/personal-llm.el= にあり、
 HTTP 通信は =utils/utils-claude.el= に依存します。AI 関連がすべて dev 層にあるわけではない
 点に注意してください。同様に、ローカル Ollama モデルへのルーター（=~/.local/bin/localllm=）を
 Org-roam / コーディングバッファの双方から呼び出す統合は =user-lisp/personal-llm.el= にあり、
@@ -499,7 +499,7 @@ HTTP クライアントを介さずプロセス起動のみで完結するため
 - =utils-lint= — flymake のポリシー。flycheck は lsp-mode の診断バックエンドとしてのみ保持
 - =utils-diagnostics= — =load-path= / feature / 外部実行ファイルの点検
 - =utils-scratch= — =*scratch*= の自動再生成と複数 scratch バッファ
-- =utils-claude= — Claude API の HTTP クライアント（ =user-lisp/personal-ai.el= の通信層）
+- =utils-claude= — Claude API の HTTP クライアント（ =user-lisp/personal-llm.el= の通信層）
 
 パス操作と非同期シェルのヘルパーは、2026-07 のデッドコード除去で削除しました（呼び出し箇所が
 一つも無かったためです）。ディレクトリ操作の正式なヘルパーは =early-init.el= で定義される
@@ -1096,6 +1096,7 @@ git diff README.org   # 差分を確認してコミットする
 	@{ [ -d "$(LISPDIR)" ] && find "$(LISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 	@{ [ -d "$(PERSONALDIR)" ] && find "$(PERSONALDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
 	@{ [ -d "$(USERLISPDIR)" ] && find "$(USERLISPDIR)" -type f -name '*.elc' -delete; } 2>/dev/null || true
+	@rm -f "$(USERLISPDIR)/.user-lisp-autoloads.el"
 
   # distclean は README.org からの tangle 生成物一式を削除し、fresh clone 相当に戻す。
   # 対象は早期に消えても実害のない「ソースから常に再生成できるもの」だけ（early-init.el
@@ -2152,6 +2153,16 @@ digraph personal_override_contract {
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* org/personal.org (personal-llm, personal-user), org/utils.org (utils-claude), org/tools.org (smoketest--layers),
+	AGENTS.md, README.org: personal-ai.el を personal-llm.el に統合した。ポイント位置の defun を取り出す処理（同一のコードが
+	2 つあった）と、Org の出力バッファを開く処理を共有する。personal-ai の (require 'ob) を除き、org-babel-execute:claude に
+	;;;###autoload を付けたので、user.el の「Org のロード後に読み込む」特別扱いを削除した（Org を要求しない）。
+	変数名は personal-ai-default-system を personal-llm-claude-system に、personal-ai-output-buffer を
+	personal-llm-claude-output-buffer に改めた（コマンド名は不変）。utils-claude は最初に使うときに require する。
+	make clean（reload.py の clean と Makefile）が user-lisp/.user-lisp-autoloads.el も消す（Emacs は、ファイルが
+	消えても古い autoload を残し、消えた personal-ai を指し続けるため）。
+	* org/tools.org (Appendix: smoketest.el): personal-llm の Claude 経路（API は代役）の確認を追加した。
 
 	* org/ui.org (ui-font) (ui-font-apply): 起動時に ui-font-describe を呼ばないようにした。複数行の message が、
 	最初の再描画でフォントの準備を強いて約 130 ms かかっていた（ui-font-apply の 137 ms のうち 128 ms）。

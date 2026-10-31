@@ -22,8 +22,8 @@ Org 文書とソースコードを一体として管理する literate program �
 以降の本書で `README.org` の source block と書いた箇所は、特に断らない限り、上の表のどの Org 文書にも当てはまる。
 `org/` の各ファイルは、`:tangle ../lisp/...` のように、`.emacs.d/` からの相対パスに `../` を付ける。
 `org-babel-tangle` により、厳格な 10 層アーキテクチャにまたがる
-103 個の `.el` ターゲット（`lisp/` 配下 86 個〔`lisp/modules.el` を含む〕、
-`personal/` 配下 7 個、`user-lisp/` 配下 3 個、ルートの `early-init.el` と `init.el`、
+102 個の `.el` ターゲット（`lisp/` 配下 86 個〔`lisp/modules.el` を含む〕、
+`personal/` 配下 7 個、`user-lisp/` 配下 2 個、ルートの `early-init.el` と `init.el`、
 `scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`、`scripts/smoketest.el`）が生成される。
 （`scripts/` の 5 個の `.el` は `org/tools.org` から、`early-init.el`・`init.el` は `org/boot.org` から、`lisp/` と `personal/` の `.el` は上の表の各 Org 文書から tangle される。）
 
@@ -162,7 +162,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   ├── dev/        (18)
 │   └── utils/      (9)
 ├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
-├── user-lisp/      (3) — 個人用ライブラリ（personal-ai / personal-llm / personal-messages）。Emacs 31 の user-lisp。起動時に Emacs がバイトコンパイルと autoload の収集を行う。org/personal.org から tangle
+├── user-lisp/      (2) — 個人用ライブラリ（personal-llm / personal-messages）。Emacs 31 の user-lisp。起動時に Emacs がバイトコンパイルと autoload の収集を行う。org/personal.org から tangle
 ├── scripts/        (14) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
@@ -238,9 +238,11 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
   `dev-ai-credentials-function`（dev）に、personal 層が `personal-credentials-anthropic-key` と
   `personal-credentials-aider` を渡す。下位層に `auth-source-search` を書かないこと
   （上位層への依存を避けるため。`make smoketest` が `utils-claude` を検査する）。検索は 1 回に
-  まとめ、使う瞬間まで遅らせる（GPG / Touch ID の連続認証が失敗するため）。`personal-ai`
-  （Org Babel の `claude` ブロック）は user.el が Org のロード後に読み込む。
-  `org-babel-load-languages` に `claude` を足してはならない（`ob-claude` は存在しない）
+  まとめ、使う瞬間まで遅らせる（GPG / Touch ID の連続認証が失敗するため）。Claude API と
+  ローカルルーターの呼び出しは `user-lisp/personal-llm.el` 1 つにまとめてあり、すべて
+  `;;;###autoload` で、Org をロードしない（Org Babel の `claude` ブロックの
+  `org-babel-execute:claude` も autoload）。`org-babel-load-languages` に `claude` を足してはならない
+  （`ob-claude` は存在しない）
 - メール系モジュール（`auth-mail`, `dev-mail`, `utils-notmuch`）は
   このリポジトリには存在しない。存在すると仮定しないこと。
   ただし mu4e だけは `personal/ac1965.el` の leaf で設定している（モジュールではない）

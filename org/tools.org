@@ -619,6 +619,16 @@ python3 scripts/reload.py --only check-cookies
                   removed += 1
               except OSError as err:
                   print(f"  WARN: could not delete {elc}: {err}", file=sys.stderr)
+      # Emacs の user-lisp は、ファイルが消えても古い autoload を残す。作り直させるため消す。
+      if user_lisp_dir is not None:
+          for name in (".user-lisp-autoloads.el", ".user-lisp-autoloads.elc"):
+              stale = user_lisp_dir / name
+              if stale.exists():
+                  try:
+                      stale.unlink()
+                      removed += 1
+                  except OSError as err:
+                      print(f"  WARN: could not delete {stale}: {err}", file=sys.stderr)
       print(f"[clean] removed {removed} .elc file(s) under "
             f"{lisp_dir}, {personal_dir} and {user_lisp_dir}")
       return removed
@@ -1623,16 +1633,20 @@ make smoketest
             (unless (featurep feature) (push feature missing))))
         (when missing (smoketest--say "  未ロード: %S" missing))
         (null missing)))
-    (smoketest--check "personal-ai の対話コマンドと Org Babel の claude が使える"
+    (smoketest--check "personal-llm: Claude のコマンドと Org Babel の claude が autoload で呼べ、Org を要求しない"
       (and (commandp 'my/claude-refactor-defun)
            (fboundp 'org-babel-execute:claude)
-           (featurep 'utils-claude)))
-    (smoketest--check "user-lisp: 3 ライブラリが load-path にあり、autoload で呼べる（起動時にロードしない）"
+           (autoloadp (symbol-function 'org-babel-execute:claude))
+           (not (featurep 'personal-llm))
+           (not (featurep 'utils-claude))))
+    (smoketest--check "user-lisp: 2 ライブラリが load-path にあり、autoload で呼べる（起動時にロードしない）"
       (let ((dir (expand-file-name "user-lisp/" user-emacs-directory)))
         (and (member (directory-file-name dir) (mapcar #'directory-file-name load-path))
              (file-exists-p (expand-file-name ".user-lisp-autoloads.el" dir))
              (cl-every (lambda (f) (file-exists-p (expand-file-name f dir)))
-                       '("personal-ai.el" "personal-llm.el" "personal-messages.el"))
+                       '("personal-llm.el" "personal-messages.el"))
+             ;; 統合した旧 personal-ai.el が残っていない。
+             (not (file-exists-p (expand-file-name "personal-ai.el" dir)))
              (commandp 'my/llm-run) (commandp 'my/llm-run-from-org-roam)
              (commandp 'my/llm-run-from-coding-buffer)
              (commandp 'my/claude-complete-docstring)
@@ -1642,6 +1656,28 @@ make smoketest
              (autoloadp (symbol-function 'my/llm-run))
              ;; 旧置き場 personal/ に同名の生成物が残っていない。
              (not (file-exists-p (expand-file-name "personal/personal-llm.el" user-emacs-directory))))))
+    (smoketest--check "personal-llm: Claude の経路（API は代役）が結果を Org バッファに出し、Babel が応答を返す"
+      (progn (require 'utils-claude) (require 'personal-llm)
+      (cl-letf (((symbol-function 'utils-claude-request)
+                 (lambda (_messages callback &rest _) (funcall callback "DOC-BODY")))
+                ((symbol-function 'utils-claude-request-sync)
+                 (lambda (&rest _) "SYNC-REPLY")))
+        (unwind-protect
+            (and (equal (org-babel-execute:claude "hi" nil) "SYNC-REPLY")
+                 (with-temp-buffer
+                   (emacs-lisp-mode)
+                   (insert "(defun smoketest-foo () 1)")
+                   (goto-char (point-min))
+                   (my/claude-complete-docstring)
+                   t)
+                 (with-current-buffer personal-llm-claude-output-buffer
+                   (and (derived-mode-p 'org-mode)
+                        (save-excursion (goto-char (point-min))
+                                        (search-forward "* Docstring: smoketest-foo" nil t))
+                        (save-excursion (goto-char (point-min))
+                                        (search-forward "DOC-BODY" nil t)))))
+          (when (get-buffer personal-llm-claude-output-buffer)
+            (kill-buffer personal-llm-claude-output-buffer))))))
     (smoketest--check "utils-claude / dev-ai へ personal 層が関数を渡している"
       (and (eq utils-claude-api-key-function 'personal-credentials-anthropic-key)
            (eq dev-ai-credentials-function 'personal-credentials-aider)))
@@ -2740,7 +2776,7 @@ make check-cheatsheet    # 書き出さずに、コミット済みの SVG が今
 - =lisp/= 配下のすべての =.el= が、どちらかの一覧に載っているか、オンデマンド読み込みの既知の一覧に載っていること
 
 オンデマンドの一覧（ =ON_DEMAND= ）は、 =core-switches= や =ui-theme= が必要になった時に読むモジュール、
-=personal/personal-ai.el= が =require= する =utils-claude= 、起動時の Org 遅延ロードのために意図して
+=user-lisp/personal-llm.el= が最初に使うときに =require= する =utils-claude= 、起動時の Org 遅延ロードのために意図して
 外している =orgx-roam-ui= です。ここに無い未登録の =.el= は、ロード漏れの疑いとして失敗にします。
 
 Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を起動せず、標準ライブラリだけで実行して検証できます。
@@ -2771,7 +2807,7 @@ Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を�
       "ui-doom-modeline", "ui-nano-modeline", "ui-doom-nano-modeline",
       "ui-nano-palette", "ui-nano-modeline-items",
       "orgx-roam-ui",
-      # required by user-lisp/personal-ai.el
+      # required by user-lisp/personal-llm.el
       "utils-claude",
   }
   # Explicit upward `require's that are accepted (module -> required module).
