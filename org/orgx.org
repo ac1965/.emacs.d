@@ -361,6 +361,12 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   ;; を提供する。ロード時に走査しないよう、`orgx-core' から after-init-hook 経由で
   ;; 呼び出される。
   ;;
+  ;; iCloud Drive が退避した（dataless の）ファイルは、読もうとするとダウンロードを待って
+  ;; 「Read error: Operation canceled」で agenda 全体が落ちる。macOS では、agenda を開く直前に
+  ;; `stat' で退避済みのファイルを調べ、agenda の対象から外す（`orgx-agenda--prune-dataless'）。
+  ;; 外したファイルは読まないので、ダウンロードも起こさない。結果は `orgx-agenda-cache-ttl' の間
+  ;; 覚えておく。起動時には調べない（プロセスを起動するため）。
+  ;;
   ;;; Code:
 
   ;; eval-when-compile には (require 'cl-lib) を置かない。
@@ -398,6 +404,11 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   (defcustom orgx-agenda-cache-ttl 300
     "Seconds before the cache is considered stale."
     :type 'integer :group 'orgx-agenda)
+
+  (defcustom orgx-agenda-skip-dataless t
+    "When non-nil (macOS only), leave iCloud-evicted files out of the agenda.
+  Reading such a file waits for a download and makes the whole agenda fail."
+    :type 'boolean :group 'orgx-agenda)
 
   (defun orgx-agenda--should-exclude-p (dir)
     (let ((name (file-name-nondirectory (directory-file-name dir))))
@@ -439,6 +450,58 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
           (setq orgx-agenda--cache files
                 orgx-agenda--last-scan-time now))))
     orgx-agenda--cache)
+
+  ;; ---------------------------------------------------------------------------
+  ;; iCloud で退避されたファイルを agenda から外す
+  ;; ---------------------------------------------------------------------------
+  (defconst orgx-agenda--sf-dataless #x40000000
+    "The `st_flags' bit (SF_DATALESS) macOS sets on a file evicted from iCloud.")
+
+  (defvar orgx-agenda--last-prune nil
+    "Time of the last `orgx-agenda--prune-dataless' check, or nil.")
+
+  (defvar orgx-agenda--pruned nil
+    "The list `orgx-agenda--prune-dataless' last stored in `org-agenda-files'.")
+
+  (defun orgx-agenda--dataless-files (files)
+    "Return the members of FILES that macOS reports as evicted (dataless).
+  One `stat' process per 200 files; nil when `stat' fails."
+    (let (found)
+      (while files
+        (let ((chunk (seq-take files 200)))
+          (setq files (nthcdr 200 files))
+          (condition-case nil
+              (dolist (line (apply #'process-lines "stat" "-f" "%f\t%N" chunk))
+                (when (string-match "\\`\\([0-9]+\\)\t\\(.*\\)\\'" line)
+                  (when (/= 0 (logand (string-to-number (match-string 1 line))
+                                      orgx-agenda--sf-dataless))
+                    (push (match-string 2 line) found))))
+            (error nil))))
+      (nreverse found)))
+
+  (defun orgx-agenda--prune-dataless (&rest _)
+    "Set `org-agenda-files' to the scanned files minus the evicted ones.
+  Runs before `org-agenda' (macOS only) and at most once per
+  `orgx-agenda-cache-ttl' seconds.  A list the user set or bound to
+  `org-agenda-files' (one that is neither the scanned list nor the one stored
+  here) is left alone."
+    (when (and orgx-agenda-skip-dataless
+               (eq system-type 'darwin)
+               (executable-find "stat")
+               (or (eq org-agenda-files orgx-agenda--cache)
+                   (eq org-agenda-files orgx-agenda--pruned))
+               (or (null orgx-agenda--last-prune)
+                   (> (- (float-time) orgx-agenda--last-prune) orgx-agenda-cache-ttl)))
+      (setq orgx-agenda--last-prune (float-time))
+      (let* ((all (orgx-agenda-build))
+             (skip (orgx-agenda--dataless-files all)))
+        (when all
+          (setq orgx-agenda--pruned (seq-remove (lambda (f) (member f skip)) all)
+                org-agenda-files orgx-agenda--pruned))
+        (when skip
+          (message "[orgx-agenda] iCloud で退避された %d 件を agenda から外しました" (length skip))))))
+
+  (advice-add 'org-agenda :before #'orgx-agenda--prune-dataless)
 
   ;; ---------------------------------------------------------------------------
   ;; 日々のビュー（agenda のカスタムコマンド）

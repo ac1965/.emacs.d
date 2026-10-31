@@ -1796,6 +1796,36 @@ make smoketest
                                 (search-forward "返事待ちの件" nil t))))
           (when (get-buffer "*Org Agenda*") (kill-buffer "*Org Agenda*"))
           (delete-file file))))
+    (smoketest--check "agenda: 退避（dataless）されたファイルを外す（stat の出力は代役、本物の stat は通常のファイルを退避と見ない）"
+      (let ((file (make-temp-file "smoketest-agenda-" nil ".org" "* x\n")))
+        (unwind-protect
+            (and
+             ;; 本物の stat: 通常のファイルは dataless ではない。
+             (null (orgx-agenda--dataless-files (list file)))
+             ;; 代役: SF_DATALESS (0x40000000 = 1073741824) の立ったものだけを返す。
+             (cl-letf (((symbol-function 'process-lines)
+                        (lambda (&rest _) '("1073741824\t/x/gone.org" "0\t/x/ok.org"))))
+               (equal (orgx-agenda--dataless-files '("/x/gone.org" "/x/ok.org"))
+                      '("/x/gone.org")))
+             ;; agenda の直前に呼ばれ、退避された分だけ org-agenda-files から外れる。
+             (advice-member-p #'orgx-agenda--prune-dataless 'org-agenda)
+             (let* ((all (list "/x/gone.org" "/x/ok.org"))
+                    (orgx-agenda--cache all)
+                    (org-agenda-files all)
+                    (orgx-agenda--pruned nil)
+                    (orgx-agenda--last-prune nil))
+               (cl-letf (((symbol-function 'orgx-agenda-build)
+                          (lambda (&optional _) all))
+                         ((symbol-function 'orgx-agenda--dataless-files)
+                          (lambda (_) '("/x/gone.org"))))
+                 (orgx-agenda--prune-dataless)
+                 (and (equal org-agenda-files '("/x/ok.org"))
+                      ;; 利用者が自分で束縛した一覧は、そのままにする。
+                      (let ((org-agenda-files (list "/y/mine.org"))
+                            (orgx-agenda--last-prune nil))
+                        (orgx-agenda--prune-dataless)
+                        (equal org-agenda-files '("/y/mine.org")))))))
+          (delete-file file))))
     (smoketest--check "roam: 日付ノートのコマンドと表示テンプレート"
       (and (commandp 'org-roam-dailies-goto-today)
            (string-match-p "\\${title" org-roam-node-display-template)
