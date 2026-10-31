@@ -214,6 +214,19 @@ ASCII（英字）へ切り替えます。
 - *範囲選択中* — リージョンが有効になった瞬間に、日本語入力なら ASCII へ切り替え、解除したら
   元の入力ソースへ戻します（ =activate-mark-hook= / =deactivate-mark-hook= 。 =utils-ime-enable-region-p= ）。
 
+- *修飾キーの押下時* （ =C-= =M-= =s-= ）— 修飾キーつきのキーを押した瞬間に、日本語入力なら ASCII へ切り替えます。
+  離脱したら、入る直前の入力ソースへ自動で戻します。 =C-n= のように 1 打鍵で終わるキーは =pre-command-hook= で、
+  =C-x b= のように後ろへ続くキー（ =utils-ime-modifier-prefix-keys= ）は、押した瞬間に =input-decode-map= の関数で検知します。
+  後者は、 =b= が日本語 IME に取られるのを防ぐためです（関数は nil を返すので、キーの意味は変わりません）。
+  =key-translation-map= は使いません。 =C-x= は =C-x 8= （ =iso-transl= ）の前置キーで、 =C-h= は DEL へ変換されているためです。
+  *離脱* は、次のどれかです。修飾キーなしのコマンドを打ったとき、または、最後の修飾キーから
+  =utils-ime-modifier-restore-delay= 秒（既定 0.5 秒）アイドルしたときです。前置キーの続きを待っている間は、戻しません。
+  修飾キーが続く間（ =C-n C-n C-n= ）は、 =macism= を呼ぶのは最初の 1 回だけです。 =TAB= =RET= =ESC= は、修飾キーとして扱いません。
+  すでに ASCII のとき、対象モード・ミニバッファ・範囲選択中のときは、何もしません。これらは、それぞれが入力ソースを管理しているためです。
+  =sis= （ =sis-global-respect-mode= ）は、 =C-x= =C-c= =C-h= を =input-decode-map= で自分で検知します。そのキーには関数を
+  重ねず（既存の割り当てを残す）、 =pre-command-hook= の側だけが働きます。この設定で =utils-ime= が足すのは、
+  =M-g= =M-s= の押下時の切替と、 =C-n= =M-f= =s-v= など 1 打鍵で終わる修飾キーの切替です。
+
 フックの登録は =emacs-startup-hook= まで遅らせています。起動中のバッファの出入りで =macism= を同期で呼ぶと
 （1 回約 40ms）、起動が約 80ms 遅くなるためです。
 
@@ -250,13 +263,18 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   ;;   実体は言語自身のメジャーモード）も同じ仕組みで自動的にカバーされる。
   ;; - ミニバッファ（`M-x'、`find-file' など）に入ったら ASCII へ切り替え、抜けたら
   ;;   入る直前の入力ソースへ自動復帰する。
+  ;; - 修飾キー（`C-' `M-' `s-'）を押したら ASCII へ切り替え、修飾キーなしのコマンドを
+  ;;   打つか、最後の修飾キーから `utils-ime-modifier-restore-delay' 秒アイドルしたら、
+  ;;   入る直前の入力ソースへ自動復帰する。
   ;;
   ;; 本ファイルの責務:
   ;; - `utils-ime-to-ascii': macism を同期呼び出しして ASCII 入力ソースへ切り替える。
   ;; - `utils-ime--install-leader': リーダーキーを `menu-item' の `:filter' で包み、
   ;;   キー押下時に ASCII 化してから `ui-leader-map' を返す。これにより which-key と
   ;;   `describe-key' の挙動はプレフィックスキーとして従来どおり維持される。
-  ;; - `utils-ime--startup-init': 下の 4 種類のフックを `emacs-startup-hook' で登録する
+  ;; - `utils-ime--modifier-enter' / `utils-ime--modifier-leave': 修飾キーの episode（修飾キーが
+  ;;   続く間）の開始と終了。`pre-command-hook' と、前置キー（`input-decode-map' の関数）が呼ぶ。
+  ;; - `utils-ime--startup-init': 下の 5 種類のフックを `emacs-startup-hook' で登録する
   ;;   （起動中は macism を呼ばないため。起動時間を約 80ms 縮める）
   ;; - `utils-ime--track-buffer-change': `buffer-list-update-hook' 上で、カレント
   ;;   バッファが `utils-ime-target-modes' の境界をまたいだときに ASCII 化／復帰する。
@@ -342,6 +360,28 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
     :type 'boolean
     :group 'utils-ime)
 
+  (defcustom utils-ime-enable-modifier-p t
+    "If non-nil, switch to ASCII when a C-, M- or s- key is pressed.
+  修飾キーが続く間だけ ASCII にし、離脱したら元の入力ソースへ戻す。"
+    :type 'boolean
+    :group 'utils-ime)
+
+  (defcustom utils-ime-modifier-restore-delay 0.5
+    "Idle seconds after the last modifier key before the input source is restored."
+    :type 'number
+    :group 'utils-ime)
+
+  (defcustom utils-ime-modifier-prefix-keys '("C-x" "C-c" "M-g" "M-s")
+    "Prefix keys that switch to ASCII the moment they are pressed.
+  A prefix is not a command, so `pre-command-hook' only runs after the whole
+  sequence; the next plain key (the `b' of `C-x b') would already have been
+  taken by the IME.  Each key gets an `input-decode-map' function that
+  switches and returns nil, so the key keeps its meaning.  A key that already
+  has a decoding is left alone.  (`key-translation-map' is not used: its `C-x'
+  entry is the `C-x 8' prefix of `iso-transl', and `C-h' is translated to DEL.)"
+    :type '(repeat string)
+    :group 'utils-ime)
+
   (defvar utils-ime--in-target-p nil
     "Non-nil while the selected buffer is considered inside a target context.")
 
@@ -355,6 +395,21 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   (defvar utils-ime--region-saved-source nil
     "Input source captured immediately before the region became active.
   Nil when the source was already ASCII or the region is inactive.")
+
+  (defvar utils-ime--modifier-active nil
+    "Non-nil during a run of modifier keys (an episode).
+  Inside an episode macism is not queried again.")
+
+  (defvar utils-ime--modifier-saved-source nil
+    "Input source captured when the episode began.
+  Nil when it was already ASCII.")
+
+  (defvar utils-ime--modifier-timer nil
+    "Idle timer that ends the episode.")
+
+  (defvar utils-ime--modifier-last-keys nil
+    "Keys of the last completed command.
+  Tells a pending prefix from a finished command.")
 
   (defun utils-ime-available-p ()
     "Return non-nil when macism can be used on this system."
@@ -455,6 +510,101 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
       (utils-ime--switch-to utils-ime--region-saved-source)
       (setq utils-ime--region-saved-source nil)))
 
+  ;; 修飾キー（C- M- s-）。episode は、修飾キーが続く間を指す。
+  (defun utils-ime--modified-key-p (event)
+    "Return non-nil when EVENT carries a control, meta or super modifier.
+  TAB, RET and ESC are control characters but plain keys, so they do not count."
+    (and (not (memq event '(9 13 27)))
+         (let ((mods (ignore-errors (event-modifiers event))))
+           (or (memq 'control mods) (memq 'meta mods) (memq 'super mods)))))
+
+  (defun utils-ime--modifier-managed-p ()
+    "Return non-nil when another context already owns the input source."
+    (or utils-ime--in-target-p
+        utils-ime--region-saved-source
+        (minibufferp)))
+
+  (defun utils-ime--modifier-cancel-timer ()
+    "Cancel the idle timer that ends the episode."
+    (when (timerp utils-ime--modifier-timer)
+      (cancel-timer utils-ime--modifier-timer))
+    (setq utils-ime--modifier-timer nil))
+
+  (defun utils-ime--modifier-arm-timer ()
+    "Start the idle timer that ends the episode."
+    (utils-ime--modifier-cancel-timer)
+    (setq utils-ime--modifier-timer
+          (run-with-idle-timer utils-ime-modifier-restore-delay nil
+                               #'utils-ime--modifier-idle)))
+
+  (defun utils-ime--modifier-enter ()
+    "Begin a modifier-key episode: switch to ASCII, remembering the source.
+  Does nothing when disabled, when macism is unavailable, or when another
+  context already owns the input source.  Inside an episode macism is not called."
+    (when (and utils-ime-enable-modifier-p
+               (utils-ime-available-p)
+               (not (utils-ime--modifier-managed-p)))
+      (unless utils-ime--modifier-active
+        (setq utils-ime--modifier-active t)
+        (let ((source (utils-ime--current-source)))
+          (when (and source (not (equal source utils-ime-ascii-source)))
+            (setq utils-ime--modifier-saved-source source)
+            (utils-ime-to-ascii))))
+      (utils-ime--modifier-arm-timer)))
+
+  (defun utils-ime--modifier-leave ()
+    "End the episode and restore the saved source.
+  Leaves it alone when the user changed the source meanwhile."
+    (utils-ime--modifier-cancel-timer)
+    (when utils-ime--modifier-active
+      (let ((source utils-ime--modifier-saved-source))
+        (setq utils-ime--modifier-active nil
+              utils-ime--modifier-saved-source nil)
+        (when (and source
+                   (equal (utils-ime--current-source) utils-ime-ascii-source))
+          (utils-ime--switch-to source)))))
+
+  (defun utils-ime--modifier-prefix-pending-p ()
+    "Return non-nil while a prefix key waits for the rest of its sequence."
+    (let ((keys (this-command-keys-vector)))
+      (and (> (length keys) 0)
+           (not (equal keys utils-ime--modifier-last-keys)))))
+
+  (defun utils-ime--modifier-idle ()
+    "End the episode after the idle delay, unless a prefix key is still pending."
+    (setq utils-ime--modifier-timer nil)
+    (if (utils-ime--modifier-prefix-pending-p)
+        (utils-ime--modifier-arm-timer)
+      (utils-ime--modifier-leave)))
+
+  (defun utils-ime--modifier-pre-command ()
+    "Enter an episode for a modified key, or end it for a plain one."
+    (when utils-ime-enable-modifier-p
+      (let ((keys (this-command-keys-vector)))
+        (cond
+         ((and (> (length keys) 0) (utils-ime--modified-key-p (aref keys 0)))
+          (utils-ime--modifier-enter))
+         (utils-ime--modifier-active
+          (utils-ime--modifier-leave))))))
+
+  (defun utils-ime--modifier-post-command ()
+    "Remember the finished command's keys, and start the idle timer."
+    (setq utils-ime--modifier-last-keys (this-command-keys-vector))
+    (when utils-ime--modifier-active
+      (utils-ime--modifier-arm-timer)))
+
+  (defun utils-ime--prefix-translate (_prompt)
+    "Enter an episode when a prefix key is pressed; return nil (no translation).
+  Used as an `input-decode-map' binding, so it runs when the key is read."
+    (utils-ime--modifier-enter)
+    nil)
+
+  (defun utils-ime--install-prefix-keys ()
+    "Bind `utils-ime--prefix-translate' for `utils-ime-modifier-prefix-keys'."
+    (dolist (key utils-ime-modifier-prefix-keys)
+      (unless (keymap-lookup input-decode-map key)
+        (keymap-set input-decode-map key #'utils-ime--prefix-translate))))
+
   ;; リーダー基盤のロード後にキーを包む。ui-keys が既に provide 済みなら即時実行。
   (with-eval-after-load 'ui-keys
     (utils-ime--install-leader))
@@ -465,7 +615,7 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   ;; 起動中に ASCII 化しても使われないので、登録は起動後でよい。
   (defun utils-ime--startup-init ()
     "Register the hooks that switch the input source, after startup.
-  Tracks major-mode boundaries, the minibuffer and the active region."
+  Tracks major-mode boundaries, the minibuffer, the region and modifier keys."
     ;; メジャーモード境界の追跡。dirvish・wdired は dired-mode 上に成り立つため、
     ;; `utils-ime-target-modes' に `dired-mode' を含めるだけで自動的にカバーされる。
     (add-hook 'buffer-list-update-hook #'utils-ime--track-buffer-change)
@@ -474,7 +624,11 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
     (add-hook 'minibuffer-exit-hook #'utils-ime--minibuffer-exit)
     ;; 範囲選択中の ASCII 化／復帰。
     (add-hook 'activate-mark-hook #'utils-ime--region-activate)
-    (add-hook 'deactivate-mark-hook #'utils-ime--region-deactivate))
+    (add-hook 'deactivate-mark-hook #'utils-ime--region-deactivate)
+    ;; 修飾キー（C- M- s-）の ASCII 化／復帰。前置キー（C-x など）は押した瞬間に検知する。
+    (add-hook 'pre-command-hook #'utils-ime--modifier-pre-command)
+    (add-hook 'post-command-hook #'utils-ime--modifier-post-command)
+    (utils-ime--install-prefix-keys))
 
   (add-hook 'emacs-startup-hook #'utils-ime--startup-init)
 
