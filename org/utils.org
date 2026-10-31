@@ -559,7 +559,12 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   ;;
   ;; 本ファイルの責務:
   ;; - オンデマンド検査のため flycheck を導入する
-  ;; - ファイルを訪問している `prog-mode' バッファで flymake を有効化する
+  ;; - ファイルを訪問している `prog-mode' バッファで flymake を有効化する。ただし、
+  ;;   org から tangle で生成されるファイル（early-init.el、init.el、lisp/、personal/、
+  ;;   scripts/ の .el）では有効にしない（`utils-lint-generated-file-p'）。手で編集しない
+  ;;   ファイルであり、編集のたびにバイトコンパイルが走ると、古いチェックを捨てる
+  ;;   「byte-compile process … obsolete」の記録が出続けるため。コンパイルの警告は
+  ;;   `make check-bytecomp' で見る
   ;;   （*scratch* 等の非ファイルバッファは除外する。理由は下記）
   ;; - 診断メッセージを行末に表示するよう設定する
   ;; - Python では、eglot が管理するバッファなら python-flymake を外し、外部チェッカー
@@ -602,12 +607,27 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   ;; 有効化しなければ済む話である。診断は C-x C-e / C-j での評価時に得られる。
   ;;
   ;; 信頼するディレクトリ（lisp/ と personal/）の宣言は core-policy.el にある。
+  (defun utils-lint-generated-file-p (&optional file)
+    "Return non-nil when FILE is generated from an Org source of this repository.
+  FILE defaults to the current buffer's file.  The generated files are
+  early-init.el, init.el, and the .el files under lisp/, personal/ and
+  scripts/ of `user-emacs-directory'; they are rewritten by `make tangle'."
+    (let ((file (or file buffer-file-name)))
+      (when (and file (string-suffix-p ".el" file))
+        (let ((rel (file-relative-name (file-truename file)
+                                       (file-truename user-emacs-directory))))
+          (and (or (member rel '("early-init.el" "init.el"))
+                   (string-match-p "\\`\\(?:lisp\\|personal\\|scripts\\)/" rel))
+               t)))))
+
   (defun utils-lint--enable-flymake-maybe ()
     "Enable `flymake-mode' in `prog-mode' buffers that visit a file.
+  Generated files (`utils-lint-generated-file-p') are skipped.
     Buffers without a file (notably *scratch*) can never satisfy
     `trusted-content-p', so `elisp-flymake-byte-compile' would only disable
     itself with a warning."
-    (when buffer-file-name
+    (when (and buffer-file-name
+               (not (utils-lint-generated-file-p)))
       (flymake-mode 1)))
 
   ;; :commands は、flymake を読み込む前（ファイルを訪問する prog バッファを開く前）に
