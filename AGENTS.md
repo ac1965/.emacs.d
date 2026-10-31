@@ -73,7 +73,8 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 - `ChangeLog`（GNU 標準形式。README.org の Changelog 節にある
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`, `check_modules.py`,
-  `reload.py`, `claude_org_roam_export.py`, `compose.py`, `stats.py`, `update_build_info.py`）、
+  `check_docs.py`, `bench_startup.py`, `reload.py`, `claude_org_roam_export.py`, `compose.py`, `stats.py`,
+  `update_build_info.py`）、
   `scripts/shot.sh`、`scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`、`scripts/smoketest.el`:
   **`org/tools.org`**（`README.org` ではない）の Python / zsh / emacs-lisp ブロックから tangle
   （`compose.py`、`shot.sh`、`demo-layout.el` は `demo.png` の撮影用で `Appendix: demo.png` 節に、
@@ -163,7 +164,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   └── utils/      (9)
 ├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
 ├── user-lisp/      (2) — 個人用ライブラリ（personal-llm / personal-messages）。Emacs 31 の user-lisp。起動時に Emacs がバイトコンパイルと autoload の収集を行う。org/personal.org から tangle
-├── scripts/        (14) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
+├── scripts/        (16) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
 ├── demo.png        README.org から参照するスクリーンショット（手で管理。scripts/shot.sh と scripts/compose.py で撮り直す）
@@ -453,14 +454,16 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 |---|---|
 | `make tangle` | `README.org` と `org/*.org` を `.el` ターゲット・`scripts/` へ tangle |
 | `make reload` | `clean` + `tangle` + `check-cookies` + `clean-orphans`。古い `.elc` と、tangle 先から外れた古い生成物（統合・改名・ブランチ切替で残る `.el` など）を避けるため、単独の `tangle` より推奨。途中で `Makefile` が書き換わったら、新しい `Makefile` でもう一度 `reload` を実行する（pull などで `Makefile` が更新されたときだけ。初回は `emacs -Q --batch` の tangle のあと 1 回で足りる） |
-| `make lint` | `check-tangle` + `check-emphasis` + `check-cookies` + `check-fboundp-guards` + `check-modules` + `check-orphans` + `checkdoc` を実行 |
+| `make lint` | `check-tangle` + `check-emphasis` + `check-cookies` + `check-fboundp-guards` + `check-modules` + `check-orphans` + `check-docs` + `checkdoc` を実行 |
 | `make check-tangle` | 見出しレベルの誤りで `:tangle` を継承できない src ブロックを検出 |
 | `make check-emphasis` | 太字が verbatim を囲む場合を含む、無効な Org 強調記法を検出（Elisp ではなく Python 製） |
 | `make check-cookies` | tangle された全 `.el` が `lexical-binding: t` クッキーで始まることを検証 |
 | `make check-fboundp-guards` | `(fboundp 'X)` でガードされた呼び出しを、実際には解決できないシンボルの `#'X` 参照と照合（Python 製。事前の tangle が必要） |
 | `make check-modules` | `lisp/modules.el` の一覧と `lisp/` 配下の整合性（実在・`provide`・層の順序・上位層への `require`・どちらにも載らない `.el`）を、Emacs なしで検査（Python 製） |
 | `make check-orphans` / `make clean-orphans` | `lisp/`・`personal/`・`scripts/` の `.el`・`.elc`・`.py`・`.sh` のうち、どの Org 文書も tangle しないもの（孤立した生成物）を一覧する（あれば失敗）／削除する。本体は `scripts/orphans.el`。tangle 先を 20 件未満しか取れないときは何も消さない |
-| `make verify` | `lint` + `check-bytecomp` + `check-cheatsheet` をまとめて実行する、コミット前の確認用。後の 2 つは約 40 秒ずつかかるため `lint` には含めず、ここでまとめる |
+| `make verify` | `lint` + `check-bytecomp` + `check-cheatsheet` + `smoketest` をまとめて実行する、コミット前の確認用。後の 3 つは約 40 秒ずつかかるため `lint` には含めず、ここでまとめる |
+| `make check-docs` | README.org と AGENTS.md に書いた数と名前を、実コードと照合する（Python 製）。AGENTS.md の `.el` の総数・各ディレクトリの数・構成図、README の図のファイル数と枚数、README の散文の `=…=` で書いた記号・パス・`make` のターゲットが実在するか。意味までは見ない。事前の tangle が必要。`lint` に含まれる。数を変えたら、この検査が教える |
+| `make bench-startup` | GUI の Emacs を `--runs` 回（既定 5）起動し、使える状態になるまでの時間（`my:startup-phases` の最後）を測る。`BENCH_ARGS="--runs 8 --save"` で基準を `.var/bench-startup.json` に保存し、以後は基準と比べて、10% 以上かつばらつき以上に遅ければ失敗する。Emacs のウィンドウが毎回出る。`lint`・`verify` には含めない |
 | `make stats` | 層ごとのファイル数・行数・コメント率を表示。本書の数値を更新するときの根拠にする（Python 製） |
 | `make checkdoc` | Elisp の docstring/スタイルチェック |
 | `make package-lint` | パッケージメタデータのチェック（任意。`load-path` に `package-lint` が必要） |

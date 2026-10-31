@@ -1313,13 +1313,15 @@ git diff README.org   # 差分を確認してコミットする
 	@echo "  # ChangeLog（GNU 形式）と LICENSE は README.org の各節に埋め込み済みで、make tangle で生成される"
 	@echo ""
 	@echo "  # 静的チェック"
-	@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + check-fboundp-guards + check-modules + check-orphans + checkdoc"
+	@echo "  make lint                     # check-tangle + check-emphasis + check-cookies + check-fboundp-guards + check-modules + check-orphans + check-docs + checkdoc"
 	@echo "  make check-tangle             # :tangle を継承できていない src block を検出"
 	@echo "  make check-emphasis           # 効かない =verbatim=/~code~/*bold* を検出"
 	@echo "  make check-fboundp-guards     # (fboundp 'X) ガードと #'X 参照の整合性を検査"
 	@echo "  make check-modules            # modules.el の一覧・層の順序・provide・未登録 .el を検査"
 	@echo "  make check-orphans            # tangle 先から外れた生成物（古い .el など）を一覧"
-	@echo "  make verify                   # lint + check-bytecomp + check-cheatsheet（コミット前の確認）"
+	@echo "  make verify                   # lint + check-bytecomp + check-cheatsheet + smoketest（コミット前の確認）"
+	@echo "  make check-docs               # README.org と AGENTS.md の数・名前を実コードと照合"
+	@echo "  make bench-startup            # 起動時間を測り、基準と比べる（BENCH_ARGS=\"--runs 8 --save\" で基準を保存）"
 	@echo "  make clean-orphans            # 上の生成物を削除（reload の最後の段で自動実行）"
 	@echo "  make stats                    # 層ごとのファイル数・行数・コメント率を表示"
 	@echo "  make check-cookies            # 全 .el の lexical-binding クッキーを検証"
@@ -1566,7 +1568,7 @@ git diff README.org   # 差分を確認してコミットする
   # my:modules と my:modules-extra に挙がるモジュールの実在と provide、層の並び順、
   # 上位層への明示的な require、どちらにも載らない .el を、Emacs なしで検査する。
   # 本体は scripts/check_modules.py（org/tools.org の Appendix: check_modules.py を参照）。
-  .PHONY: check-modules stats
+  .PHONY: check-modules stats check-docs bench-startup
   check-modules:
 	@python3 scripts/check_modules.py "$(ROOT)"
 
@@ -1574,6 +1576,21 @@ git diff README.org   # 差分を確認してコミットする
   # AGENTS.md に書く数値は手で数えるとずれるため、この出力から写す。
   stats:
 	@python3 scripts/stats.py "$(ROOT)"
+
+  # ---- check-docs : README.org と AGENTS.md の数と名前を、実コードと照合する ------------
+  # AGENTS.md の .el の数・構成図、README の図のファイル数・枚数、散文に書いた記号・パス・make の
+  # ターゲットが実在するかを検査する。事前に tangle 済みであること（lint にも含まれる）。
+  # 本体は scripts/check_docs.py（org/tools.org の Appendix: check_docs.py を参照）。
+  check-docs:
+	@python3 scripts/check_docs.py "$(ROOT)"
+
+  # ---- bench-startup : 起動時間を測り、基準と比べる ----------------------------------------
+  # GUI の Emacs を何度か起動して、使える状態になるまでの時間を測る（約 10 秒 × 回数）。
+  # 例: make bench-startup BENCH_ARGS="--runs 8 --save"（基準の保存）。lint / verify には含めない。
+  # 本体は scripts/bench_startup.py（org/tools.org の Appendix: bench_startup.py を参照）。
+  BENCH_ARGS ?=
+  bench-startup:
+	@python3 scripts/bench_startup.py --root "$(ROOT)" --emacs "$(EMACS)" $(BENCH_ARGS)
 
   # Emacs の標準エラーは、通常は雑音（Batch mode does not support ... の警告や、[modules] の行）なので捨てる。
   # ただし終了コードが 2 以上（Lisp のエラーは 255）のときは、雑音を除いて末尾を表示する。
@@ -1628,14 +1645,14 @@ git diff README.org   # 差分を確認してコミットする
   # 実際のキーマップと同じか）。後の 2 つは約 40 秒ずつかかるため lint には入れず、ここでまとめる。
   # キーを入れる関数を足したのに一覧 SVG を作り直していない、といった食い違いを、コミット前に見つける。
   .PHONY: verify
-  verify: lint check-bytecomp check-cheatsheet
+  verify: lint check-bytecomp check-cheatsheet smoketest
 	@echo "[verify] all checks passed"
 
   # ---- lint : check-tangle + check-emphasis + check-cookies + check-fboundp-guards + check-modules + check-orphans +
-  # checkdoc をまとめて実行 -----------------------------------------------------------
+  # check-docs + checkdoc をまとめて実行 -----------------------------------------------------------
   # コミット前に静的品質チェックをすべて走らせるための単一ターゲット。
   .PHONY: checkdoc lint
-  lint: check-tangle check-emphasis check-cookies check-fboundp-guards check-modules check-orphans checkdoc
+  lint: check-tangle check-emphasis check-cookies check-fboundp-guards check-modules check-orphans check-docs checkdoc
 	@echo "[lint] all checks passed"
 
   # ---- package-lint : 任意 — load-path 上に package-lint が必要 --------------------
@@ -1681,7 +1698,7 @@ Overview 節の [[file:svg/tangle-flow.svg]] は、もともと Mermaid Live Edi
       o3["lisp/&lt;layer&gt;/&lt;module&gt;.el<br/>(85 files)"]
       o4["personal/*.el<br/>(7 files)"]
       o4b["user-lisp/*.el<br/>(2 files)"]
-      o5["scripts/*<br/>(14 files)"]
+      o5["scripts/*<br/>(16 files)"]
 
       readme --> tangle
       boot --> tangle
@@ -2171,6 +2188,12 @@ digraph personal_override_contract {
 	（dataless の）ファイルを agenda の対象から外す。agenda を開く直前に stat で SF_DATALESS を調べる（起動時には調べない）。
 	読まないのでダウンロードも起こらず、1 件でも読めないと agenda 全体が落ちる問題を防ぐ。利用者が自分で束縛した
 	org-agenda-files には触れない。orgx-agenda-skip-dataless で無効にできる。
+	* org/tools.org (check_docs.py), README.org (Makefile), AGENTS.md: make check-docs を追加した。AGENTS.md の .el の数・構成図、
+	README の図のファイル数・枚数、README の散文の記号・パス・make のターゲットが実在するかを検査する。lint に含める。
+	追加した直後に、scripts/ のファイル数（14 と書いてあったが 16）のずれを見つけた。
+	* README.org (Makefile): make verify に smoketest を含めた。
+	* org/tools.org (bench_startup.py), README.org (Makefile): make bench-startup を追加した。GUI の Emacs を数回起動して
+	使える状態になるまでの時間を測り、保存した基準と比べる。基準と負荷平均が 1 以上違うときは判定しない。
 	* org/core.org (core-history) (core-history--schedule, core-history--startup-init): 履歴系のモード（save-place、
 	recentf、savehist、keyfreq）の有効化を、起動の 1 秒後のアイドル時へ回した（有効化に約 100 ms）。有効にする前に
 	開いたファイルは、カーソル位置の復元と最近のファイルへの記録の対象にならない（起動の 1 秒以内に限る）。
