@@ -216,6 +216,9 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;; - Ediff の制御パネルを別フレームにせず、同一フレームで開く
   ;; - 変更された hunk の中の、変わった単語を強調する（`magit-diff-refine-hunk'）
   ;; - コミットメッセージの 1 行目の目安を 72 桁にする（`git-commit-summary-max-length'）
+  ;; - magit が `after-init-hook' に自分で登録する `magit-maybe-define-global-key-bindings' を
+  ;;   外し、同じ 3 つの全体キー（C-x g、C-x M-g、C-c M-g）を autoload で自分で割り当てる。
+  ;;   この関数は全体キーを割り当てるために magit 本体をロードし、起動に 50〜95 ms かかっていた
   ;; - コミットメッセージの補助: 1 行目で `type(scope): 要約' の type と scope を補完し
   ;;   （`vcs-magit--commit-capf'）、この形でない件名のコミットは、確認してから通す
   ;;   （`vcs-magit--commit-check'）。scope は、直近 200 件のコミットから集める
@@ -234,6 +237,8 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   (declare-function magit-display-buffer-fullframe-status-v1 "magit-mode")
   (declare-function magit-restore-window-configuration "magit-mode")
   (declare-function magit-status "magit-status")
+  (declare-function magit-dispatch "magit")
+  (declare-function magit-file-dispatch "magit")
 
   (eval-when-compile (require 'leaf))
 
@@ -359,6 +364,16 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
              (magit-diff-refine-hunk . t)
              (git-commit-summary-max-length . 72)))
 
+  ;; magit の全体キーの割り当てを、起動時に magit をロードせずに行う。magit は、自分の
+  ;; autoload が `after-init-hook' に `magit-maybe-define-global-key-bindings' を登録する。
+  ;; この関数は `magit-define-global-key-bindings' を調べるために magit 本体をロードする。
+  ;; 登録を外し、既定の 3 つ（`magit-define-global-key-bindings' が `default' のときと同じ）を
+  ;; autoload のコマンドで割り当てる。
+  (remove-hook 'after-init-hook #'magit-maybe-define-global-key-bindings)
+  (keymap-global-set "C-x g" #'magit-status)
+  (keymap-global-set "C-x M-g" #'magit-dispatch)
+  (keymap-global-set "C-c M-g" #'magit-file-dispatch)
+
   ;; Ediff: 制御パネルを別フレームにせず同一フレームで開く（nano-modeline /
   ;; posframe 環境でフレーム管理を増やさないため）。
   (leaf ediff
@@ -392,7 +407,9 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
   ;;
   ;; 本ファイルの責務:
   ;; - 初期化後に `global-diff-hl-mode' と `diff-hl-flydiff-mode' を有効化する
-  ;;   （後者は、保存前の編集もガターに反映する）
+  ;;   （後者は、保存前の編集もガターに反映する）。diff-hl のロードに約 80 ms かかるため、
+  ;;   起動の 1 秒後のアイドル時に有効にする（`vcs-gutter--enable-later'）。グローバルモードは、
+  ;;   有効にした時点で開いているバッファにも効く
   ;; - Dired でも変更のあるファイルを示す（`diff-hl-dired-mode'）
   ;; - magit の pre/post-refresh フックでフリンジ表示を更新する
   ;; - hunk の移動と表示は `M-SPC g ] / [ / H' （vcs-core.el で割り当てる）
@@ -409,9 +426,17 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
     (global-diff-hl-mode 1)
     (diff-hl-flydiff-mode 1))
 
+  (defun vcs-gutter--enable-later ()
+    "Enable diff-hl once Emacs has been idle for a second after startup.
+  Loading diff-hl takes about 80 ms, so it is kept off the path to a usable Emacs."
+    (run-with-idle-timer 1 nil #'vcs-gutter--enable))
+
+  ;; :commands は、diff-hl を起動時にロードしなくなったため、ロード前に M-SPC g ] / [ を
+  ;; 押しても「commandp」で落ちないための autoload（smoketest のリーダーキー検査で見つかった）。
   (leaf diff-hl
     :straight t
-    :hook ((after-init-hook . vcs-gutter--enable)
+    :commands (diff-hl-next-hunk diff-hl-previous-hunk diff-hl-show-hunk)
+    :hook ((after-init-hook . vcs-gutter--enable-later)
            (dired-mode-hook . diff-hl-dired-mode)
            (magit-pre-refresh . diff-hl-magit-pre-refresh)
            (magit-post-refresh . diff-hl-magit-post-refresh)))
