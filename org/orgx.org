@@ -48,11 +48,33 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
   ;; my/org-buffer-files 内の cl-loop は（バイトコンパイル時だけでなく）インタプリタ
   ;; 実行時にも使うため、実行時の (require 'cl-lib) を置いている。
   ;;
+  ;; 日々の運用の設定:
+  ;; - `org-log-into-drawer' により、状態変更のメモを LOGBOOK ドロワーへ入れる。WAITING に
+  ;;   入るときは理由を尋ねる（`WAITING(w@)'）。CANCELED も同じ
+  ;; - capture "i" は、1 行を inbox.org に放り込む最短の入口
+  ;; - refile は、ファイル名つきのアウトラインパスを一度に補完する（vertico 向け）
+  ;; - アーカイブは月ごとのファイルへ送る（`orgx-core--archive-location'）。
+  ;;   `<org>/archive/YYYY-MM.org' で、agenda の走査対象からは外れる
+  ;; - 時間の記録（org-clock）は、履歴を終了後も残す。開始・終了・移動は
+  ;;   `M-SPC o I / O / C'（キーは `orgx-core--bind-keys'）
+  ;; - `M-SPC o A' で今日の agenda、`M-SPC o Q' で org-ql の検索、`M-SPC o D' で今日の日付ノート
+  ;;
+  ;; キーは `after-init-hook'（depth 90）で割り当てる。leader のマップは ui-keymap の
+  ;; `after-init-hook'（depth 0）で作られるため、その後に走らせる必要がある。
   ;;; Code:
 
   ;; バイトコンパイル時の警告を避けるための宣言（実体は各パッケージ／ライブラリ側にある）。
   (defvar org-emphasis-regexp-components)
+  (defvar org-archive-location)
+  (defvar ui-leader-o-map)
   (declare-function org-persist-load-all "org-persist")
+  (declare-function org-clock-persistence-insinuate "org-clock")
+  (declare-function org-clock-in "org-clock")
+  (declare-function org-clock-out "org-clock")
+  (declare-function org-clock-goto "org-clock")
+  (declare-function orgx-agenda-today "orgx-agenda")
+  (declare-function org-ql-search "org-ql")
+  (declare-function org-roam-dailies-goto-today "org-roam-dailies")
 
   (eval-when-compile
     (require 'leaf)
@@ -178,6 +200,14 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     ((org-directory . my:d:org)
      (org-default-notes-file . "notes.org")
      (org-log-done . 'time)
+     (org-log-into-drawer . t)
+     (org-refile-use-outline-path . 'file)
+     (org-outline-path-complete-in-steps . nil)
+     (org-refile-allow-creating-parent-nodes . 'confirm)
+     (org-clock-persist . 'history)
+     (org-clock-in-resume . t)
+     (org-clock-out-remove-zero-time-clocks . t)
+     (org-clock-into-drawer . t)
      (org-support-shift-select . t)
      (org-return-follows-link . t))
     :config
@@ -189,7 +219,7 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     ;; コーディング規則 6 を参照。
     ;;
     (setq org-todo-keywords
-          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w)" "|" "DONE(d)" "CANCELED(c@)")))
+          '((sequence "TODO(t)" "SOMEDAY(s)" "WAITING(w@)" "|" "DONE(d)" "CANCELED(c@)")))
     (setq org-refile-targets
           '((nil :maxlevel . 3)
             (my/org-buffer-files :maxlevel . 1)
@@ -198,7 +228,9 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     ;; my:f:capture-blog-file（上の defvar）の個人設定による上書きは、
     ;; orgx-core のロード前に personal/<user>.el で行うこと。
     (setq org-capture-templates
-          `(("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
+          `(("i" "Inbox" entry (file ,(expand-file-name "inbox.org" org-directory))
+             "* %?\n%U")
+            ("t" "Todo" entry (file+headline ,(expand-file-name "gtd.org" org-directory) "Inbox")
              "* TODO %?\n %i\n %a")
             ("n" "Note" entry (file+headline ,(expand-file-name "notes.org" org-directory) "Notes")
              "* %?\nEntered on %U\n %i\n %a")
@@ -242,13 +274,43 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
                   (nth 3 org-emphasis-regexp-components)
                   (nth 4 org-emphasis-regexp-components))))
 
-  ;; アーカイブ先
+  ;; アーカイブ先: 月ごとのファイル（<org>/archive/YYYY-MM.org）へ送る。
+  ;; `org-archive-subtree' の間だけ `org-archive-location' を束縛するので、
+  ;; ファイルごとの ARCHIVE プロパティや #+ARCHIVE: による指定が優先される。
+  (defun orgx-core--archive-location ()
+    "Return this month's archive location, e.g. <org>/archive/2026-10.org::."
+    (let ((dir (expand-file-name "archive"
+                                 (or (bound-and-true-p org-directory)
+                                     (bound-and-true-p my:d:org)
+                                     (expand-file-name "~/org")))))
+      (make-directory dir t)
+      (concat (expand-file-name (format-time-string "%Y-%m.org") dir) "::")))
+
+  (defun orgx-core--archive-monthly (fn &rest args)
+    "Call FN with ARGS while `org-archive-location' is this month's archive."
+    (let ((org-archive-location (orgx-core--archive-location)))
+      (apply fn args)))
+
+  (advice-add 'org-archive-subtree :around #'orgx-core--archive-monthly)
+
+  ;; 時間の記録: 終了後も履歴を残す。org-clock は Org 本体に含まれるので、Org のロード後に
+  ;; フックを入れる（`org-clock-persistence-insinuate' は終了時の保存と起動時の復元を仕込む）。
   (with-eval-after-load 'org
-    (let* ((central (expand-file-name "archive.org"
-                                      (or (bound-and-true-p org-directory)
-                                          (bound-and-true-p my:d:org)
-                                          (expand-file-name "~/org")))))
-      (setopt org-archive-location (concat central "::"))))
+    (require 'org-clock)
+    (org-clock-persistence-insinuate))
+
+  (defun orgx-core--bind-keys ()
+    "Bind the day-to-day Org commands in `ui-leader-o-map' when it exists."
+    (when (and (boundp 'ui-leader-o-map) (keymapp ui-leader-o-map))
+      (keymap-set ui-leader-o-map "A" #'orgx-agenda-today)
+      (keymap-set ui-leader-o-map "I" #'org-clock-in)
+      (keymap-set ui-leader-o-map "O" #'org-clock-out)
+      (keymap-set ui-leader-o-map "C" #'org-clock-goto)
+      (keymap-set ui-leader-o-map "Q" #'org-ql-search)
+      (keymap-set ui-leader-o-map "D" #'org-roam-dailies-goto-today)))
+
+  ;; depth 90: ui-keymap--startup-init（depth 0）がマップを作った後に走らせる。
+  (add-hook 'after-init-hook #'orgx-core--bind-keys 90)
 
   (defun orgx-core--rebuild-agenda-files ()
     "Phase 2: replace agenda-files fallback with the full cached list."
@@ -326,8 +388,11 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     "Maximum directory recursion depth for agenda file scanning."
     :type 'integer :group 'orgx-agenda)
 
-  (defcustom orgx-agenda-exclude-dirs '("archive" ".git" "node_modules")
-    "Directory names to skip during agenda scanning."
+  (defcustom orgx-agenda-exclude-dirs '("archive" "daily" ".git" "node_modules")
+    "Directory names to skip during agenda scanning.
+  \"daily\" holds org-roam daily notes (`org-roam-dailies-directory'): journals, not
+  tasks.  Scanning them also breaks the agenda when iCloud has offloaded a file
+  (\"Read error: Operation canceled\")."
     :type '(repeat string) :group 'orgx-agenda)
 
   (defcustom orgx-agenda-cache-ttl 300
@@ -374,6 +439,44 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
           (setq orgx-agenda--cache files
                 orgx-agenda--last-scan-time now))))
     orgx-agenda--cache)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 日々のビュー（agenda のカスタムコマンド）
+  ;; ---------------------------------------------------------------------------
+  ;; `M-SPC o a' のメニューに d / w / s / i が並ぶ。 `M-SPC o A' は d を直接開く。
+  ;;   d 今日（締切・予定・未完）と待ち   w 待ち（WAITING）
+  ;;   s いつか（SOMEDAY）                i inbox.org の TODO
+  (declare-function org-agenda "org-agenda")
+
+  (defun orgx-agenda--configure-commands ()
+    "Define the day-to-day agenda views."
+    (setopt org-agenda-custom-commands
+            `(("d" "今日"
+               ((agenda "" ((org-agenda-span 'day)
+                            (org-agenda-overriding-header "今日")))
+                (todo "WAITING" ((org-agenda-overriding-header "待ち")))))
+              ("w" "待ち" todo "WAITING")
+              ("s" "いつか" todo "SOMEDAY")
+              ("i" "Inbox" todo "TODO"
+               ((org-agenda-files
+                 (list ,(expand-file-name "inbox.org"
+                                          (or (bound-and-true-p org-directory)
+                                              (bound-and-true-p my:d:org)))))
+                (org-agenda-overriding-header "Inbox"))))))
+
+  (with-eval-after-load 'org-agenda
+    (orgx-agenda--configure-commands))
+
+  ;;;###autoload
+  (defun orgx-agenda-today ()
+    "Open the \"今日\" agenda view (custom command d)."
+    (interactive)
+    (org-agenda nil "d"))
+
+  ;; 構造化検索。「今週締切の WAITING」のような条件を、式で書ける。
+  (leaf org-ql
+    :straight t
+    :commands (org-ql-search org-ql-select org-ql-view))
 
   (provide 'orgx-agenda)
   ;;; orgx/orgx-agenda.el ends here
@@ -558,6 +661,12 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
     ;; 実行時に評価されるため :custom には直接置けない。setter と型検査の経路を保つため、
     ;; :config 内で setopt を用いる。
     (setopt org-roam-db-location (expand-file-name "org-roam.db" my:d:org-roam))
+
+    ;; ノード検索の表示: タイトルを広く取り、タグを右に薄く添える（vertico + marginalia 向け）。
+    (setopt org-roam-node-display-template
+            (concat "${title:*} " (propertize "${tags:10}" 'face 'org-tag)))
+    ;; 日付ノート（M-SPC o D）は daily/ の下に置く。
+    (setopt org-roam-dailies-directory "daily/")
 
     ;; Emacs 31.0.50: sqlitep の挙動が変わった。コネクタを明示的に固定する。
     (setopt org-roam-db-connector

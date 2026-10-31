@@ -1664,6 +1664,73 @@ make smoketest
                (while (re-search-forward "^[^;\n]*(auth-source-search" nil t) (setq found t)))
              found))))
 
+  (defun smoketest--org ()
+    "Check the day-to-day Org setup: agenda views, capture, log, archive, clock, ql."
+    (smoketest--section "Org: agenda・capture・アーカイブ・時間記録・検索")
+    (require 'org)
+    (require 'org-agenda)
+    (smoketest--check "agenda のカスタムコマンド d / w / s / i"
+      (cl-every (lambda (k) (assoc k org-agenda-custom-commands)) '("d" "w" "s" "i")))
+    (smoketest--check "TODO キーワード: WAITING は理由を尋ねる、状態の色が定義されている"
+      (and (member "WAITING(w@)" (cdr (car org-todo-keywords)))
+           (assoc "WAITING" org-modern-todo-faces)))
+    (smoketest--check "capture \"i\"（inbox）がある"
+      (assoc "i" org-capture-templates))
+    (smoketest--check "状態変更のログは LOGBOOK ドロワー、refile はファイル名つきパス"
+      (and org-log-into-drawer
+           (eq org-refile-use-outline-path 'file)
+           (null org-outline-path-complete-in-steps)))
+    (smoketest--check "アーカイブ先は月ごとのファイル"
+      (string-match-p "/archive/[0-9]\\{4\\}-[0-9]\\{2\\}\\.org::\\'"
+                      (orgx-core--archive-location)))
+    (smoketest--check "アーカイブ: 実際に今月のファイルへ送られる"
+      (let* ((dir (file-name-as-directory (make-temp-file "smoketest-org-" t)))
+             (org-directory dir)
+             (file (expand-file-name "t.org" dir))
+             (archive (expand-file-name (format-time-string "archive/%Y-%m.org") dir)))
+        (unwind-protect
+            (progn
+              (write-region "* DONE 終わった件\n" nil file nil 'silent)
+              (with-current-buffer (find-file-noselect file)
+                (goto-char (point-min))
+                (org-archive-subtree)
+                (save-buffer)
+                (kill-buffer))
+              (and (file-exists-p archive)
+                   (with-temp-buffer (insert-file-contents archive)
+                                     (search-forward "終わった件" nil t))))
+          (delete-directory dir t))))
+    (smoketest--check "時間記録: 履歴を残す設定とコマンド"
+      (and (eq org-clock-persist 'history)
+           (commandp 'org-clock-in) (commandp 'org-clock-out) (commandp 'org-clock-goto)))
+    (smoketest--check "M-SPC o の A / I / O / C / Q / D がコマンド"
+      (cl-every (lambda (k) (commandp (lookup-key ui-leader-o-map (kbd k))))
+                '("A" "I" "O" "C" "Q" "D")))
+    (smoketest--check "org-ql: WAITING の見出しを式で検索できる"
+      (let ((file (make-temp-file "smoketest-ql-" nil ".org"
+                                  "* WAITING 返事待ち\n* TODO 別件\n")))
+        (require 'org-ql)
+        (unwind-protect
+            (let ((buf (find-file-noselect file)))
+              (prog1 (= 1 (length (org-ql-select buf '(todo "WAITING"))))
+                (kill-buffer buf)))
+          (delete-file file))))
+    (smoketest--check "agenda: 待ちのビュー(w)に WAITING の項目が出る"
+      (let* ((file (make-temp-file "smoketest-agenda-" nil ".org" "* WAITING 返事待ちの件\n"))
+             (org-agenda-files (list file)))
+        (unwind-protect
+            (progn
+              (org-agenda nil "w")
+              (with-current-buffer "*Org Agenda*"
+                (save-excursion (goto-char (point-min))
+                                (search-forward "返事待ちの件" nil t))))
+          (when (get-buffer "*Org Agenda*") (kill-buffer "*Org Agenda*"))
+          (delete-file file))))
+    (smoketest--check "roam: 日付ノートのコマンドと表示テンプレート"
+      (and (commandp 'org-roam-dailies-goto-today)
+           (string-match-p "\\${title" org-roam-node-display-template)
+           (equal org-roam-dailies-directory "daily/"))))
+
   (defun smoketest--completion ()
     "Actually complete in scratch buffers."
     (smoketest--section "補完の実動作")
@@ -1718,6 +1785,7 @@ make smoketest
     (smoketest--keys)
     (smoketest--vcs)
     (smoketest--llm)
+    (smoketest--org)
     (smoketest--completion)
     (smoketest--eglot-merge)
     (smoketest--say "== 結果 PASS=%d FAIL=%d" smoketest--pass smoketest--fail)
