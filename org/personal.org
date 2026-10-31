@@ -46,7 +46,6 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 | =personal/device-darwin.el= | macOS の IME、マウス／スクロール、Keychain。Apple Music の操作は =dev-apple-music= を追加で読み込む |
 | =personal/device-wsl.el= | WSL のリーダーキー切替（ =C-c SPC= ）、クリップボード連携、Explorer 起動、既定ブラウザ (=wslview=) |
 | =user-lisp/personal-messages.el= | macOS Messages.app のアーカイバ |
-| =user-lisp/personal-llm.el= | ローカル LLM ルーターとの統合（=~/.local/bin/localllm=。 =my/llm-run= ）。すべて autoload |
 
 [[file:../svg/13_personal_override_contract.svg]]
 ** personal/user.el
@@ -187,11 +186,6 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
         (when (fboundp 'personal-messages-archive)
           ;; 初回はアイドル 120 秒後。以降は 600 秒（10 分）ごとに繰り返す。
           (run-with-idle-timer 120 600 #'personal-messages-archive)))))
-
-  ;; personal-llm（ローカルルーター）は user-lisp/ にあり、ここでは読み込まない。
-  ;; `;;;###autoload' の付いたコマンド（`my/llm-run' ほか）を、Emacs が起動時に
-  ;; user-lisp/ から集めた autoload で呼ぶ。
-  ;; 呼ばれるまでロードされず、Org のロードも要求しない。
 
   ;; personal-credentials: LLM の API キーの取得（dev-ai へ関数として渡す）
   ;;
@@ -1429,9 +1423,6 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
 
 下位層は「関数があれば呼ぶ」だけで、キーの出どころを知りません。personal 層だけが、出どころを知っています。
 
-以前は OpenRouter と OpenAI のキーも、 =aidermacs= のために渡していました。OpenRouter を使わなくなり、
-=aidermacs= を削除したので、2026-10-31 に取り除きました。
-
 *検索は 1 回にまとめ、使う瞬間まで遅らせる*
 
 =auth-source-search= は呼ぶたびに =~/.authinfo.gpg= を復号します（キャッシュを持ちません）。macOS では
@@ -1464,7 +1455,6 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
   ;;   （agent-shell を API キーで認証するときだけ使う。既定は claude のログイン）
   ;;
   ;; 検索は、関数が呼ばれた瞬間に初めて走る。起動時には復号しない。
-  ;; OpenRouter と OpenAI のキーは、aidermacs のために渡していたが、削除した（2026-10-31）。
   ;;; Code:
 
   (eval-when-compile (require 'subr-x))
@@ -1542,226 +1532,4 @@ LLM の API キー（Anthropic）を取り出す唯一の場所です。取り�
 
   (provide 'personal-credentials)
   ;;; personal/personal-credentials.el ends here
-#+end_src
-
-** user-lisp/personal-llm.el
-:PROPERTIES:
-:CUSTOM_ID: personal-llm
-:header-args:emacs-lisp: :tangle ../user-lisp/personal-llm.el
-:END:
-
-ローカルのルーター（ =~/.local/bin/localllm= 。Ollama のモデルへ振り分ける）を Emacs から呼ぶ薄い統合です。
-コマンドは =my/llm-run= 、 =my/llm-run-from-org-roam= 、 =my/llm-run-from-coding-buffer= で、すべて =;;;###autoload= です。
-
-*Claude API の経路は削除した*
-
-以前は、Claude API を直接呼ぶ経路（ =my/claude-*= 、Org Babel の =claude= ブロック、HTTP クライアントの utils-claude）も
-ここにありました。Claude は =agent-shell= （ =dev-ai= ）が担うので、単発の API 呼び出しは役割が重なります。
-personal 層の仕事は、 =dev-ai= に渡すログイン・API キー・環境変数の用意だけになりました
-（ =personal-credentials= の節を参照）。
-
-*Org を要求しない*
-
-このモジュールは Org をロードしません。 =org-mode= は、出力バッファを作るときに初めて呼びます。
-
-#+begin_src emacs-lisp
-  ;;; user-lisp/personal-llm.el --- ローカル LLM ルーターとの統合 -*- lexical-binding: t; -*-
-  ;;
-  ;; Copyright (c) 2021-2026
-  ;; Author: YAMASHITA, Takao
-  ;; License: GNU GPL v3 or later
-  ;;
-  ;; Category: personal
-  ;;
-  ;;; Commentary:
-  ;;
-  ;; ローカルのルーター（~/.local/bin/localllm）を Emacs から呼ぶ統合。
-  ;; Claude は agent-shell（dev-ai）が担うので、Claude API を直接呼ぶ経路は持たない。
-  ;;
-  ;; すべてのコマンドは `;;;###autoload' で、呼ばれるまでロードされない。本モジュールは Org を
-  ;; ロードしない。出力バッファを作るときに初めて `org-mode' を呼ぶ。
-  ;;
-  ;; =~/.local/bin/localllm= （ローカル Ollama モデルへのルーター）を呼び出す薄い統合層。
-  ;; プロンプトの内容に応じてどのモデル（qwen3:14b / qwen3-coder / LFM2.5-8B-A1B / qwen2.5vl）へ
-  ;; 振り分けるかの判定ロジックは、すべて =~/.local/bin/localllm= 側の責務であり、本ファイルは
-  ;; それに一切関与しない。本ファイルの責務は次の 3 点のみ:
-  ;;
-  ;;   1. プロンプトをルータープロセスの標準入力へ送る
-  ;;   2. 応答をストリーミングで `personal-llm-output-buffer' へ挿入する
-  ;;   3. Org-roam / コーディングバッファ向けの薄いラッパーコマンドを提供する
-  ;;
-  ;;   `my/llm-run'                    — 任意のプロンプトをルーターへ送る（対話コマンド）
-  ;;   `my/llm-run-from-org-roam'      — 現在の Org-roam ノート（リージョンか全体）を送る。
-  ;;                                     タスクは指定しない — ノートは雑多な内容を含み得るため
-  ;;                                     ルーター側のルールベース自動判定に委ねる。
-  ;;   `my/llm-run-from-coding-buffer' — ポイント位置の defun（かリージョン）を
-  ;;                                     --task coding 固定で送る。自動判定を待たず
-  ;;                                     確実に qwen3-coder へ振り分けるため。
-  ;;
-  ;; 実行ファイルの場所は `personal-llm-script-path' で変更できる。
-  ;;
-  ;; スクリプト名を単に "llm" にしなかったのは、Homebrew の llm（datasette 版、
-  ;; 既定で OpenAI API を叩く）と PATH 上で衝突するため。本モジュールは
-  ;; `expand-file-name' で解決した絶対パスを直接 `make-process' に渡すので
-  ;; その衝突の影響を受けないが、同じ理由でユーザーがターミナルから素の
-  ;; "llm" と打つと Homebrew 版に奪われる（実際に発生し、OpenAI の課金エラーが
-  ;; 出た）。以後は "localllm" という別名を使うことでこれを避けている。
-  ;;
-  ;;; Code:
-
-  (eval-when-compile
-    (require 'cl-lib)
-    (require 'subr-x))
-
-  (defgroup personal-llm nil
-    "LLM integration: the local router."
-    :group 'tools
-    :prefix "personal-llm-")
-
-  (defcustom personal-llm-script-path "~/.local/bin/localllm"
-    "Path to the local LLM router script invoked by `my/llm-run'."
-    :type 'file
-    :group 'personal-llm)
-
-  (defcustom personal-llm-output-buffer "*LLM Router Output*"
-    "Name of the buffer used to display streamed LLM router output."
-    :type 'string
-    :group 'personal-llm)
-
-  (defconst personal-llm--valid-tasks '(general coding agent vision)
-    "Task symbols accepted by the ~/.local/bin/localllm router's --task flag.")
-
-  ;;; ── 共有のヘルパー ────────────────────────────────────────────────────────
-
-  (defun personal-llm--defun-at-point ()
-    "Return the top-level defun source string surrounding point, or nil."
-    (save-excursion
-      (condition-case nil
-          (progn
-            (beginning-of-defun)
-            (let ((beg (point)))
-              (end-of-defun)
-              (buffer-substring-no-properties beg (point))))
-        (error nil))))
-
-  (defun personal-llm--open-output-buffer (buffer-name heading)
-    "Pop to the Org buffer BUFFER-NAME, appending an Org HEADING.
-  Return the buffer, with point at its end."
-    (let ((buf (get-buffer-create buffer-name)))
-      (with-current-buffer buf
-        (unless (derived-mode-p 'org-mode)
-          (org-mode))
-        (goto-char (point-max))
-        (unless (bobp)
-          (insert "\n\n"))
-        (insert (format "* %s\n\n" heading))
-        (goto-char (point-max)))
-      (pop-to-buffer buf)
-      buf))
-
-  ;;; ── ローカルルーター ──────────────────────────────────────────────────────
-
-  (defun personal-llm--ensure-script ()
-    "Return the expanded, executable path to the router script.
-  Signals `user-error' if `personal-llm-script-path' does not point to an
-  executable file."
-    (let ((script (expand-file-name personal-llm-script-path)))
-      (unless (file-executable-p script)
-        (user-error "LLM router script not found or not executable: %s" script))
-      script))
-
-  (defun personal-llm--task-string (task)
-    "Return TASK (a symbol) as the string expected by the router's --task flag.
-  Signals `user-error' if TASK is not one of `personal-llm--valid-tasks'."
-    (unless (memq task personal-llm--valid-tasks)
-      (user-error "Unknown LLM task %S (expected one of %S)"
-                  task personal-llm--valid-tasks))
-    (symbol-name task))
-
-  (defun personal-llm--sentinel (proc event)
-    "Report completion of the router PROC via EVENT in the echo area."
-    (when (memq (process-status proc) '(exit signal))
-      (message "[llm] %s" (string-trim event))))
-
-  (defun personal-llm--prepare-output-buffer (task)
-    "Pop to `personal-llm-output-buffer', appending a heading for TASK.
-  TASK is a symbol or nil (rendered as \"auto\" in the heading).
-  Returns the buffer, with point at its end."
-    (personal-llm--open-output-buffer
-     personal-llm-output-buffer
-     (format "llm (%s) — %s"
-             (or task "auto")
-             (format-time-string "%Y-%m-%d %H:%M:%S"))))
-
-  (defun personal-llm--start-process (prompt task image-path)
-    "Start the router process for PROMPT, streaming into its output buffer.
-  TASK, when non-nil, is validated and forwarded as the router's --task flag.
-  IMAGE-PATH, when non-nil, is expanded and forwarded as --image."
-    (let* ((script (personal-llm--ensure-script))
-           (task-str (and task (personal-llm--task-string task)))
-           (command (append (list script)
-                            (when task-str (list "--task" task-str))
-                            (when image-path
-                              (list "--image" (expand-file-name image-path)))))
-           (buf (personal-llm--prepare-output-buffer task))
-           (proc (make-process :name "personal-llm"
-                               :buffer buf
-                               :command command
-                               :noquery t
-                               :sentinel #'personal-llm--sentinel)))
-      (process-send-string proc prompt)
-      (process-send-eof proc)
-      proc))
-
-  ;;;###autoload
-  (defun my/llm-run (prompt &optional task image-path)
-    "Send PROMPT to the local LLM router and stream the response.
-  TASK, when non-nil, must be one of the symbols `general', `coding',
-  `agent', or `vision'; it is forwarded as the router's --task flag,
-  overriding its own rule-based auto-detection. When TASK is nil, the
-  router decides from PROMPT's content (or from IMAGE-PATH's presence).
-  IMAGE-PATH, when non-nil, is forwarded as the router's --image flag.
-
-  Interactively, PROMPT is the active region if any, otherwise it is
-  read from the minibuffer; TASK and IMAGE-PATH are left nil. Call this
-  function from Lisp (see `my/llm-run-from-coding-buffer') to pin a task
-  or attach an image."
-    (interactive
-     (list (if (use-region-p)
-               (buffer-substring-no-properties (region-beginning) (region-end))
-             (read-string "LLM prompt: "))))
-    (when (string-empty-p (string-trim prompt))
-      (user-error "Nothing to send to the LLM router"))
-    (message "[llm] sending to router (task: %s)..." (or task "auto"))
-    (personal-llm--start-process prompt task image-path))
-
-  ;;;###autoload
-  (defun my/llm-run-from-org-roam ()
-    "Send the current Org-roam note to the LLM router.
-  Sends the active region if any, otherwise the whole buffer. The task
-  is left unspecified so the router's rule-based detection picks it —
-  Org-roam notes span general writing, coding notes, and action items
-  alike, so pinning a single task here would waste that detection."
-    (interactive)
-    (my/llm-run
-     (if (use-region-p)
-         (buffer-substring-no-properties (region-beginning) (region-end))
-       (buffer-substring-no-properties (point-min) (point-max)))))
-
-  ;;;###autoload
-  (defun my/llm-run-from-coding-buffer ()
-    "Send the current defun (or active region) to the LLM router as `coding'.
-  Pinning the task bypasses the router's rule-based auto-detection so the
-  prompt is always routed to the coding model, regardless of how much
-  prose the snippet happens to mix in."
-    (interactive)
-    (let ((src (if (use-region-p)
-                   (buffer-substring-no-properties (region-beginning) (region-end))
-                 (personal-llm--defun-at-point))))
-      (unless src
-        (user-error "No region active and no defun found at point"))
-      (my/llm-run src 'coding)))
-
-  (provide 'personal-llm)
-  ;;; user-lisp/personal-llm.el ends here
 #+end_src

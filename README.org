@@ -96,7 +96,7 @@ Org 文書（ =README.org= と =org/*.org= ）しか設定の実体がありま�
                      --eval '(dolist (f (append (list "README.org") (directory-files "org" t "[.]org$"))) (org-babel-tangle-file f))'
    #+end_example
 
-3. 以後は =make reload= で再生成します（ =clean= + =tangle= + =check-cookies= ）。
+3. 以後は =make reload= で再生成します（ =clean= + =tangle= + =check-cookies= + =clean-orphans= ）。
 
    #+begin_example
    make reload
@@ -196,8 +196,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 ただし personal だけは例外です。依存の向きでは最上位ですが、 =personal/user.el= と
 =personal/<ユーザー名>.el= は、先に =my:modules-extra= や各種変数を決めておく必要があります。
 そのため =init.el= のステップ 9 で、 =lisp/modules.el= （ステップ 10）より前に読み込まれます。
-それ以外の =personal-*.el= は、置き場所で読み込み方が分かれます。 =user-lisp/= のライブラリ（ =personal-llm= 、
-=personal-messages= ）は、 =;;;###autoload= の注釈から Emacs が集めた autoload で、呼ばれたときに読み込まれます。
+それ以外の =personal-*.el= は、置き場所で読み込み方が分かれます。 =user-lisp/= のライブラリ（ =personal-messages= ）は、 =;;;###autoload= の注釈から Emacs が集めた autoload で、呼ばれたときに読み込まれます。
  =personal/= の設定（ =personal-credentials= 、 =personal-hugo= 、 =personal-ime= ）は、 =user.el= と =ac1965.el= が
 起動時に読み込みます。 =personal-messages= の定期実行だけは、Org のロード後に =user.el= が予約します。
 
@@ -253,7 +252,7 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 |-------------+------|
 | =lisp/=     | モジュールのソースコード。 =lisp/modules.el= がローダのエントリポイント |
 | =personal/= | ユーザー／デバイスのオーバーレイ（ =modules.el= より前に =init.el= が読み込む） |
-| =user-lisp/= | 個人用のライブラリ（ =personal-llm= 、 =personal-messages= ）。Emacs 31 が起動時にバイトコンパイルし、 =;;;###autoload= の注釈から autoload を集め、 =load-path= に加える |
+| =user-lisp/= | 個人用のライブラリ（ =personal-messages= ）。Emacs 31 が起動時にバイトコンパイルし、 =;;;###autoload= の注釈から autoload を集め、 =load-path= に加える |
 | =.var/=     | ランタイム状態（パッケージが書き出すデータ） |
 | キャッシュ（ =my:d:cache= ） | 一時キャッシュ。リポジトリの外の =$XDG_CACHE_HOME/emacs/= （なければ =~/.cache/emacs/= ）にあり、削除しても自動的に再生成される |
 | =scripts/=  | =check_emphasis.py= などの Python ヘルパー（ =Makefile= から呼ばれる）、デモ画像の撮影スクリプト（ =demo-layout.el= 、 =shot.sh= 、 =compose.py= ）、キーバインド一覧 SVG の生成（ =cheatsheet.el= ） |
@@ -471,8 +470,7 @@ vcs は dev 層に依存してはいけません。
 
 - LSP バックエンド（eglot、lsp-mode）と、その切り替えを吸収するファサード（ =dev-lsp-bridge= ）
 - AI 支援（ =dev-ai= ）。Claude Code を呼ぶ =agent-shell= （ =M-SPC a c= ）が主役で、複数ファイルにまたがる作業、
-  コマンドやテストの実行を担います。 =claude= のログインで認証するので、API キーは要りません。単発の処理は、
-  ローカルのルーターを呼ぶ =personal-llm= （ Claude ではない）です。 =aidermacs= は、OpenRouter を使わなくなったため削除しました
+  コマンドやテストの実行を担います。 =claude= のログインで認証するので、API キーは要りません
 - ターミナル統合（vterm）
 - コード整形（apheleia）
 - ビルド・Docker・SQL・REST・インフラ系ファイルのモード・プロジェクト基盤・検索／ナビゲーション
@@ -483,11 +481,6 @@ vcs は dev 層に依存してはいけません。
 - EMMS による音楽プレイヤー統合（ =dev-music= ）
 - osascript による Apple Music の操作（ =dev-apple-music= 。macOS のみ。 =personal/device-darwin.el= が =my:modules-extra= に加える）
 - LSP バックエンドを =core-switches= の登録簿へ登録する（ =dev-lsp-bridge= ）
-
-なお、ローカル Ollama モデルへのルーター（=~/.local/bin/localllm=）を
-Org-roam / コーディングバッファの双方から呼び出す統合は =user-lisp/personal-llm.el= にあり、
-プロセス起動のみで完結します。AI 関連がすべて dev 層にあるわけではない点に注意してください。
-Claude API を直接呼ぶ経路（旧 utils-claude）は、 =agent-shell= と役割が重なるため削除しました。
 
 *** utils
 
@@ -515,7 +508,7 @@ Claude API を直接呼ぶ経路（旧 utils-claude）は、 =agent-shell= と�
 - 任意（無くてもシステムは動きます）
 - 依存の向きでは最上位です。ただし =user.el= と =<ユーザー名>.el= は =modules.el= より前に読み込まれ、変数の上書きと =my:modules-extra= への追加を行います
 - 下位層の関数やモジュールは書き換えません（上書きしてよいのは =defvar= / =defcustom= の値だけです）
-- 利用者固有の機能（ =personal-llm= のコマンド、 =personal-messages= の定期実行、 =device-wsl= のクリップボード連携など）は、
+- 利用者固有の機能（ =personal-messages= の定期実行、 =device-wsl= のクリップボード連携など）は、
   自前のコマンドやフックを持てます。下位層の関数を置き換えず、足すだけにしてください
 
 ** Module Structure
@@ -877,7 +870,7 @@ git diff README.org   # 差分を確認してコミットする
 
 - =early-init.el= → 最初期のブートストラップ（性能、パス、UI の初期値）
 - =init.el=       → パッケージのブートストラップ、グローバル既定値、モジュールのエントリポイント
-- =lisp/=         → 共有されバージョン管理されるモジュール群（core, ui, completion, orgx, dev, vcs, utils）
+- =lisp/=         → 共有されバージョン管理されるモジュール群（core, ui, auth, completion, orgx, vcs, dev, utils）
 - =personal/=     → ユーザー／デバイス固有のオーバーレイ（共有ポリシーではない）
 
 ** 正本の構成
@@ -1732,7 +1725,7 @@ Overview 節の [[file:svg/tangle-flow.svg]] は、もともと Mermaid Live Edi
       o2["early-init.el · init.el<br/>lisp/modules.el"]
       o3["lisp/&lt;layer&gt;/&lt;module&gt;.el<br/>(84 files)"]
       o4["personal/*.el<br/>(7 files)"]
-      o4b["user-lisp/*.el<br/>(2 files)"]
+      o4b["user-lisp/*.el<br/>(1 files)"]
       o5["scripts/*<br/>(19 files)"]
 
       readme --> tangle
@@ -1861,7 +1854,7 @@ Graphviz で書ける図ではありません。
   }
 #+end_src
 
-本文中の =svg/NN_*.svg= は、すべて Graphviz（ =dot= ）で生成しています。全 12 枚分（番号 03・09 は欠番）の
+本文中の =svg/NN_*.svg= は、すべて Graphviz（ =dot= ）で生成しています。全 11 枚分（番号 03・09 は欠番）の
 =.dot= ソースを、通し番号順にここへまとめました。各コードブロックは、 =:tangle= で
 =svg/NN_*.dot= として書き出せます。
 
@@ -1876,7 +1869,7 @@ SVG そのものを再生成したいときは、次のどちらかを使いま�
 
 それぞれの図は、 [[file:org/boot.org::#modular-loader-and-core-suite][Modular
 Loader & Core Suite]] 内の対応するモジュール節から、インライン画像として参照されています
-（起動フロー・ =core-gc.el= ・自動保存・auth-gpg.el・completion-org-src.el・dev-lsp-bridge.el・
+（起動フロー・ =modules.el= の =condition-case= ・ =core-gc.el= ・自動保存・auth-gpg.el・completion-org-src.el・dev-lsp-bridge.el・
 orgx-auto-tangle.el・ui-keys.el・dev-ai.el・personal Overview）。
 
 * Appendix: 01_boot_flow.dot — 起動シーケンス（3フェーズ）
@@ -2178,67 +2171,6 @@ digraph personal_override_contract {
 }
 #+end_src
 
-* Appendix: 14_llm_overview.dot — LLM まわりの全体像（agent-shell とローカルルーター）
-:PROPERTIES:
-:CUSTOM_ID: appendix-14-llm-overview-dot
-:header-args:dot: :tangle svg/14_llm_overview.dot :file svg/14_llm_overview.svg :cmdline -Tsvg
-:END:
-
-LLM の入口は、2 本あります。互いに独立していて、片方が壊れても、もう片方は動きます。
-
-| 経路 | 入口 | 橋渡し | 認証 | 課金 |
-|---+---+---+---+---|
-| agent-shell | =dev-ai= （ =M-SPC a c= ） | =claude-agent-acp= （外部の実行ファイル） | 既定は =login= 。 =claude= のログイン（Pro / Max の契約）。 =api-key= にすると API キー | 契約の枠内（ =api-key= のときは従量課金） |
-| ローカルルーター | =personal-llm= （ =my/llm-run= など） | =~/.local/bin/localllm= | 要らない | 無し |
-
-=claude-agent-acp= は、自分では認証しません。 =dev-ai-agent-authentication= が =login= （既定）のときは、
-=claude= が保存したログインを使います。 =api-key= にすると、personal 層が =dev-ai-anthropic-key-function= へ渡した
-=personal-credentials-anthropic-key= が返すキーで動きます。
-
-personal 層が用意するのは、この認証（ログイン・API キー・環境変数）だけです。Claude API を直接呼ぶ経路は持ちません。
-API キーの取得は、personal 層の =personal-credentials= だけが知ります。下位層（dev）は、キーを返す関数を
-入れる変数だけを持ち、 ~auth-source-search~ を書きません（上位層への依存を避けるため）。
-
-#+begin_src dot
-digraph llm_overview {
-  rankdir=TB;
-  bgcolor="white";
-  fontname="Noto Sans CJK JP";
-  compound=true;
-  node [shape=box style="rounded,filled" fontname="Noto Sans CJK JP" fontsize=11 fillcolor="#F1EFE8" color="#5F5E5A" fontcolor="#2C2C2A"];
-  edge [color="#5F5E5A" fontname="Noto Sans CJK JP" fontsize=10 fontcolor="#5F5E5A"];
-
-  subgraph cluster_personal {
-    label="personal 層（認証の出どころ）"; style="rounded,dashed"; color="#854F0B"; fontcolor="#633806";
-    cred [label="personal-credentials-anthropic-key\n(authinfo.gpg を 1 回だけ検索)" fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-    llm [label="personal-llm (user-lisp/)\nmy/llm-run*"];
-  }
-
-  subgraph cluster_dev {
-    label="dev 層"; style="rounded,dashed"; color="#0F6E56"; fontcolor="#04342C";
-    ai [label="dev-ai\nM-SPC a c" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
-    choice [label="dev-ai-agent-authentication" shape=diamond fillcolor="#FAEEDA" color="#854F0B" fontcolor="#633806"];
-    daf [label="dev-ai-anthropic-key-function" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
-  }
-
-  acp [label="claude-agent-acp\n(層の外。外部の実行ファイル)"];
-  cli [label="claude のログイン\n(Pro / Max の契約)" fillcolor="#E1F5EE" color="#0F6E56" fontcolor="#04342C"];
-  api [label="Claude API\n(従量課金)" fillcolor="#E6F1FB" color="#185FA5" fontcolor="#0C447C"];
-  router [label="~/.local/bin/localllm\n(Ollama のモデルへ振り分け)"];
-
-  ai -> choice;
-  choice -> acp [label="login（既定）"];
-  choice -> daf [label="api-key"];
-  daf -> acp [label="API キー"];
-  acp -> cli [label="login のとき"];
-  acp -> api [label="api-key のとき" style=dashed];
-
-  llm -> router [label="プロセス起動"];
-
-  cred -> daf [label="関数として渡す" style=dashed color="#854F0B"];
-}
-#+end_src
-
 * Changelog
 :PROPERTIES:
 :CUSTOM_ID: changelog
@@ -2253,9 +2185,17 @@ digraph llm_overview {
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* org/personal.org (personal-llm), org/dev.org (dev-ai), org/tools.org (smoketest), README.org, AGENTS.md, svg/14_llm_overview.svg:
+	user-lisp/personal-llm.el（ローカルルーター my/llm-run*）を削除した。LLM は agent-shell に一本化する。aidermacs の削除の記載と、
+	AI の役割分担の表、図 14_llm_overview も削除した（図は 12_dev_ai_auth と重なる）。user-lisp/ は personal-messages だけになった。
+
+	* README.org (Clone and First Steps, Configuration, Appendix), org/personal.org, AGENTS.md: 散文をコードに合わせた。
+	make reload の内訳に clean-orphans を加え、lisp/ の層の一覧に auth を加え、図の参照先に condition-case を加えた。
+	環境変数を渡す処理は無いので、personal 層が用意するものを「ログインと API キー」に直した。
+
 	* org/personal.org (personal-llm, personal-credentials), org/utils.org (utils-claude), org/dev.org, org/tools.org (smoketest, check_modules.py),
 	README.org, AGENTS.md, svg/09_utils_claude.svg: Claude API を直接呼ぶ経路を削除した（utils-claude、my/claude-*、Org Babel の claude）。
-	agent-shell（dev-ai）と役割が重なるため。personal 層の仕事は、dev-ai へ渡すログイン・API キー・環境変数の用意だけにした。
+	agent-shell（dev-ai）と役割が重なるため。personal 層の仕事は、dev-ai へ渡すログインと API キーの用意だけにした。
 	personal-llm はローカルルーター（my/llm-run*）だけになった。図 09 を削除し、14_llm_overview を書き直した。
 
 	* org/utils.org (utils-ime), org/tools.org (smoketest): 修飾キー（C- M- s-）を押したら、日本語入力を ASCII へ切り替え、

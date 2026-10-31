@@ -1760,27 +1760,27 @@ make smoketest
             (unless (featurep feature) (push feature missing))))
         (when missing (smoketest--say "  未ロード: %S" missing))
         (null missing)))
-    (smoketest--check "personal-llm: ローカルルーターだけが autoload で呼べ、Claude API の経路（utils-claude）が残っていない"
-      (and (commandp 'my/llm-run)
-           (not (featurep 'personal-llm))
+    (smoketest--check "personal-llm と Claude API の経路（utils-claude）を削除した"
+      (and (not (locate-library "personal-llm"))
+           (not (fboundp 'my/llm-run))
            (not (fboundp 'my/claude-refactor-defun))
            (not (fboundp 'org-babel-execute:claude))
            (not (locate-library "utils-claude"))))
-    (smoketest--check "user-lisp: 2 ライブラリが load-path にあり、autoload で呼べる（起動時にロードしない）"
+    (smoketest--check "user-lisp: personal-messages が load-path にあり、autoload で呼べる（起動時にロードしない）"
       (let ((dir (expand-file-name "user-lisp/" user-emacs-directory)))
         (and (member (directory-file-name dir) (mapcar #'directory-file-name load-path))
              (file-exists-p (expand-file-name ".user-lisp-autoloads.el" dir))
              (cl-every (lambda (f) (file-exists-p (expand-file-name f dir)))
-                       '("personal-llm.el" "personal-messages.el"))
-             ;; 統合した旧 personal-ai.el が残っていない。
+                       '("personal-messages.el"))
+             ;; 削除した personal-llm.el・旧 personal-ai.el が残っていない。
+             (not (file-exists-p (expand-file-name "personal-llm.el" dir)))
              (not (file-exists-p (expand-file-name "personal-ai.el" dir)))
-             (commandp 'my/llm-run) (commandp 'my/llm-run-from-org-roam)
-             (commandp 'my/llm-run-from-coding-buffer)
              (fboundp 'personal-messages-archive)
-             ;; personal-llm は autoload だけで、呼ぶまでロードされない。
-             (autoloadp (symbol-function 'my/llm-run))
-             ;; 旧置き場 personal/ に同名の生成物が残っていない。
-             (not (file-exists-p (expand-file-name "personal/personal-llm.el" user-emacs-directory))))))
+             ;; personal-messages の autoload を Emacs が集めている（Org のロード後に user.el が読み込むので、
+             ;; ここでは autoloadp を見ない）。
+             (with-temp-buffer
+               (insert-file-contents (expand-file-name ".user-lisp-autoloads.el" dir))
+               (search-forward "personal-messages-archive" nil t)))))
     (smoketest--check "dev-ai へ personal 層が関数を渡している"
       (eq dev-ai-anthropic-key-function 'personal-credentials-anthropic-key))
     (smoketest--check "認証情報: Anthropic のキーが引け、2 回目以降は検索しない"
@@ -2039,6 +2039,11 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
                            (equal (funcall (alist-get :api-key agent-shell-anthropic-authentication))
                                   "sk-fake")))
           (let ((dev-ai-agent-authentication 'login)) (dev-ai--configure-agent-shell)))))
+    (smoketest--check "dev-ai: api-key でも関数が無ければ、警告して claude のログインに落ちる"
+      (let ((dev-ai-agent-authentication 'api-key)
+            (dev-ai-anthropic-key-function nil))
+        (cl-letf (((symbol-function 'display-warning) #'ignore))
+          (eq (alist-get :login (dev-ai--agent-authentication)) t))))
     (smoketest--check "dev-ai: personal 層が dev-ai-anthropic-key-function を渡している"
       (eq dev-ai-anthropic-key-function 'personal-credentials-anthropic-key))
     (smoketest--check "dev-ai: M-SPC a c / C が agent-shell のコマンドで、aidermacs には割り当てていない"

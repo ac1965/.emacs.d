@@ -319,17 +319,6 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
 AI 支援開発の口です。 =agent-shell= （Claude Code などのエージェントの Emacs 画面。ACP）を導入し、
 認証の方法を選べるようにします。
 
-以前は =aidermacs= （aider の Emacs 版）も置いていましたが、OpenRouter を使わなくなったため、
-2026-10-31 に削除しました。API キーを環境変数へ渡す処理、aider の履歴ファイルの置き場所、 =vterm= と =comint= の
-選択も、あわせて無くなりました。
-
-*AI の役割分担*
-
-| ツール | 役割 | キー |
-|---+---+---|
-| =agent-shell= （Claude Code） | 主役。複数ファイルにまたがる作業、コマンドやテストの実行、長いタスク | =M-SPC a c= |
-| =personal-llm= （ =user-lisp/= ） | 単発の処理。ローカルのルーター（Claude ではない） | =my/llm-run= |
-
 *認証の選び方*
 
 | =dev-ai-agent-authentication= | 認証 | API キー |
@@ -341,8 +330,7 @@ AI 支援開発の口です。 =agent-shell= （Claude Code などのエージ�
 Pro / Max の契約の枠で動きます。 =api-key= にすると、 =claude-agent-acp= も API キーで動きます（課金は API の従量課金）。
 
 API キーの出どころ（ =auth-source= ）は、dev 層は知りません。personal 層の =personal-credentials= が
-関数として渡します。Claude とローカルルーターの全体像は、
-=README.org= の Appendix の =14_llm_overview.dot= にあります。
+関数として渡します。
 
 [[file:../svg/12_dev_ai_auth.svg]]
 
@@ -361,22 +349,16 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
   ;;
   ;; 本ファイルの責務:
   ;; - agent-shell を導入し、M-SPC a c（Claude Code を起動）と M-SPC a C（エージェントを選んで
-  ;;   起動）に割り当てる（`dev-ai--bind-keys'）
+  ;;   起動）に割り当てる（`dev-ai--bind-keys'）。M-SPC a c は、ACP クライアント
+  ;;   （`claude-agent-acp'）の実行ファイルがあるときだけ割り当てる
   ;; - 認証の方法を `dev-ai-agent-authentication' で選べるようにする。既定は `login'
   ;;   （`claude' のログイン。API キーは要らない）。`api-key' にすると、
-  ;;   `dev-ai-anthropic-key-function' が返すキーを使う
+  ;;   `dev-ai-anthropic-key-function' が返すキーを使う。関数が無ければ警告して `login' に落ちる
   ;;
   ;; API キーの取得先（auth-source など）を、本モジュールは知らない。取得は personal 層の
   ;; `personal-credentials' が担い、`dev-ai-anthropic-key-function' へ渡す。下位層である dev は
   ;; 上位層の personal を参照できないため、関数を差し込む形で依存の向きを保っている。
   ;;
-  ;; AI の役割分担（どれを使うか迷ったら、この表で決める）:
-  ;;
-  ;;   agent-shell   主役。Claude Code（`claude-agent-acp'）が、複数のファイルにまたがる作業、
-  ;;                 コマンドやテストの実行、長いタスクを自律的にこなす。M-SPC a c
-  ;;   personal-llm  単発。ローカルのルーター（`my/llm-run'）。Claude ではない。対話の画面は持たない。
-  ;;
-  ;; aidermacs（aider の Emacs 版）は、OpenRouter を使わなくなったため、2026-10-31 に削除した。
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -409,21 +391,34 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
     :group 'dev-ai)
 
   (defun dev-ai--agent-authentication ()
-    "Return the agent-shell authentication for `dev-ai-agent-authentication'."
+    "Return the agent-shell authentication for `dev-ai-agent-authentication'.
+  When `api-key' is chosen but `dev-ai-anthropic-key-function' is not set,
+  warn and fall back to the `claude' login instead of failing at start-up."
+    (when (and (eq dev-ai-agent-authentication 'api-key)
+               (not (functionp dev-ai-anthropic-key-function)))
+      (display-warning 'dev-ai "api-key が選ばれたが dev-ai-anthropic-key-function が無い。claude のログインで認証する"))
     (if (and (eq dev-ai-agent-authentication 'api-key)
              (functionp dev-ai-anthropic-key-function))
         (agent-shell-anthropic-make-authentication
          :api-key (lambda () (funcall dev-ai-anthropic-key-function)))
       (agent-shell-anthropic-make-authentication :login t)))
 
+  (defun dev-ai--acp-available-p ()
+    "Return non-nil when the Claude Code ACP client executable is on `exec-path'."
+    (executable-find (if (boundp 'agent-shell-anthropic-claude-acp-command)
+                         (car agent-shell-anthropic-claude-acp-command)
+                       "claude-agent-acp")))
+
   (defun dev-ai--configure-agent-shell ()
     "Apply `dev-ai-agent-authentication' to agent-shell's Claude Code client."
     (setopt agent-shell-anthropic-authentication (dev-ai--agent-authentication)))
 
   (defun dev-ai--bind-keys ()
-    "Bind the AI commands in `ui-leader-a-map' when it exists."
+    "Bind the AI commands in `ui-leader-a-map' when it exists.
+  The Claude Code key is bound only when the ACP client executable exists."
     (when (and (boundp 'ui-leader-a-map) (keymapp ui-leader-a-map))
-      (keymap-set ui-leader-a-map "c" #'agent-shell-anthropic-start-claude-code)
+      (when (dev-ai--acp-available-p)
+        (keymap-set ui-leader-a-map "c" #'agent-shell-anthropic-start-claude-code))
       (keymap-set ui-leader-a-map "C" #'agent-shell)))
 
   ;; depth 90: ui-keymap--startup-init（depth 0）がマップを作った後に走らせる。
