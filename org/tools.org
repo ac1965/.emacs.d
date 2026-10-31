@@ -1529,7 +1529,8 @@ make smoketest
     (smoketest--check "corfu-popupinfo-delay が (0.5 . 0.2)"
       (equal corfu-popupinfo-delay '(0.5 . 0.2)))
     (smoketest--check "corfu-history を savehist に載せていない"
-      (not (memq 'corfu-history savehist-additional-variables)))
+      (not (memq 'corfu-history (and (boundp 'savehist-additional-variables)
+                                    savehist-additional-variables))))
     (smoketest--check "tty-setup-hook に corfu-terminal の有効化がある"
       (memq 'completion-corfu--enable-terminal tty-setup-hook))
     (smoketest--check "corfu-terminal-mode を有効化して無効に戻せる"
@@ -1825,9 +1826,17 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
     "Check the core, ui, auth, dev and utils layers."
     (smoketest--section "各層: core / ui / auth / dev / utils")
     ;; core
-    (smoketest--check "core: 履歴・自動再読込・選択置換のモードが有効"
-      (and savehist-mode save-place-mode recentf-mode
-           global-auto-revert-mode delete-selection-mode))
+    (smoketest--check "core: 履歴系のモードは起動時には有効にせず、アイドル時に有効にする予約がある"
+      (and (not (bound-and-true-p recentf-mode))
+           (not (bound-and-true-p savehist-mode))
+           (cl-some (lambda (tm) (eq (timer--function tm) 'core-history--startup-init))
+                    timer-idle-list)))
+    (smoketest--check "core: 予約された処理を実行すると、履歴系のモードと keyfreq が有効になる"
+      (progn (core-history--startup-init)
+             (and savehist-mode save-place-mode recentf-mode
+                  (bound-and-true-p keyfreq-mode))))
+    (smoketest--check "core: 自動再読込・選択置換のモードが有効"
+      (and global-auto-revert-mode delete-selection-mode))
     (smoketest--check "core: undo と構造編集のコマンド（undo-fu・vundo・puni）"
       (and (commandp 'undo-fu-only-undo) (commandp 'vundo) (commandp 'puni-mode)))
     (smoketest--check "core: tree-sitter が有効で、c / python / go / json の文法がある"
@@ -2938,7 +2947,7 @@ Python にしたのは、 =check_emphasis.py= と同じ理由です。Emacs を�
                 for layer in LAYERS]
       groups.append(("lisp/modules.el", [root / "lisp" / "modules.el"]))
       groups.append(("personal", sorted((root / "personal").glob("*.el"))))
-      # .user-lisp-autoloads.el は Emacs が書く生成物なので数えない。
+          # .user-lisp-autoloads.el は Emacs が書く生成物なので数えない。
       groups.append(("user-lisp", sorted(p for p in (root / "user-lisp").glob("*.el")
                                          if not p.name.startswith("."))))
       groups.append(("scripts (.el)", sorted((root / "scripts").glob("*.el"))))

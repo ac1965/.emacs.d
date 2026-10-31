@@ -820,8 +820,11 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
   ;;   パスで設定する
   ;; - `savehist-additional-variables' は設定しない（履歴ファイルの外部変更のマージを有効に
   ;;   保つため。下の注記を参照）
-  ;; - 3 つのモードを `core-history--startup-init' でまとめて有効化する
-  ;;   （`emacs-startup-hook' 経由）
+  ;; - 3 つのモードを `core-history--startup-init' でまとめて有効化する。起動の 1 秒後の
+  ;;   アイドル時に行う（`core-history--schedule'）。履歴の保存と復元は最初の描画に要らず、
+  ;;   有効化に約 100 ms（recentf の読み込みと整理、keyfreq など）かかるため、使える状態になるまでの
+  ;;   経路から外してある。有効にする前に開いたファイルは、カーソル位置の復元と最近のファイルへの
+  ;;   記録の対象にならない（起動の 1 秒以内に限る）
   ;; - keyfreq でコマンドの使用回数を記録する（保存先は `no-littering-var-directory'
   ;;   の keyfreq）。使っていない設定を整理する根拠にする。集計は M-x keyfreq-show
   ;;; Code:
@@ -891,8 +894,9 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
     "Activate session persistence modes after Emacs startup.
   Enables `save-place-mode', `recentf-mode', and `savehist-mode', and starts
   recording command usage with `keyfreq-mode' when keyfreq is installed.
-  Runs via `emacs-startup-hook' so that all module-configured paths are
-  established before the persistence files are loaded."
+  Runs from an idle timer (`core-history--schedule') so that all
+  module-configured paths are established before the persistence files are
+  loaded, and so that loading them stays off the path to a usable Emacs."
     (save-place-mode +1)
     (recentf-mode +1)
     (savehist-mode +1)
@@ -900,7 +904,11 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
       (keyfreq-mode +1)
       (keyfreq-autosave-mode +1)))
 
-  (add-hook 'emacs-startup-hook #'core-history--startup-init)
+  (defun core-history--schedule ()
+    "Enable the persistence modes once Emacs has been idle for a second."
+    (run-with-idle-timer 1 nil #'core-history--startup-init))
+
+  (add-hook 'emacs-startup-hook #'core-history--schedule)
 
   (provide 'core-history)
   ;;; core/core-history.el ends here
