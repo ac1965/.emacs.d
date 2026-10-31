@@ -73,7 +73,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 - `ChangeLog`（GNU 標準形式。README.org の Changelog 節にある
   `#+NAME: changelog` の `text` ブロックから tangle。`.gitignore` 対象）
 - `scripts/*.py`（`check_emphasis.py`, `check_fboundp_guards.py`, `check_modules.py`,
-  `check_docs.py`, `bench_startup.py`, `smoketest_daemon.py`, `test_fresh.py`, `pre-commit`, `reload.py`, `claude_org_roam_export.py`, `compose.py`, `stats.py`,
+  `check_docs.py`, `bench_startup.py`, `smoketest_daemon.py`, `test_fresh.py`, `auto_refactor.py`, `pre-commit`, `reload.py`, `claude_org_roam_export.py`, `compose.py`, `stats.py`,
   `update_build_info.py`）、
   `scripts/shot.sh`、`scripts/demo-layout.el`、`scripts/check-bytecomp.el`、`scripts/cheatsheet.el`、`scripts/orphans.el`、`scripts/smoketest.el`:
   **`org/tools.org`**（`README.org` ではない）の Python / zsh / emacs-lisp ブロックから tangle
@@ -164,7 +164,7 @@ Emacs 設定に手を入れる前に、`README.org` 内の該当する
 │   └── utils/      (8)
 ├── personal/       (7) — ユーザー/デバイス別オーバーレイ。lisp/modules.el より前にロード
 ├── user-lisp/      (1) — 個人用ライブラリ（personal-messages）。Emacs 31 の user-lisp。起動時に Emacs がバイトコンパイルと autoload の収集を行う。org/personal.org から tangle
-├── scripts/        (19) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
+├── scripts/        (20) — org/tools.org から tangle されたヘルパー (lint, reload, export, demo 撮影, bytecomp, ビルド情報, check_modules, stats, orphans, smoketest)
 ├── svg/            図ソース (.dot/.mmd, tangle) と描画済み .svg
 ├── puppeteer-config.json   mmdc (Mermaid CLI) 設定。手で管理
 ├── demo.png        README.org から参照するスクリーンショット（手で管理。scripts/shot.sh と scripts/compose.py で撮り直す）
@@ -466,6 +466,7 @@ Makefile を使う。手動で tangle しない。リポジトリ側で定義さ
 | `make check-docs` | README.org と AGENTS.md に書いた数と名前を、実コードと照合する（Python 製）。AGENTS.md の `.el` の総数・各ディレクトリの数・構成図、README の図のファイル数と枚数、README の散文の `=…=` で書いた記号・パス・`make` のターゲットが実在するか。意味までは見ない。事前の tangle が必要。`lint` に含まれる。数を変えたら、この検査が教える |
 | `make smoketest-daemon` | `emacs --daemon` で起動し、フレームを作る前（全モジュールのロード、リーダーキーの全割り当て、警告なし、フックの登録）と、`emacsclient -c` でグラフィカルなフレームを作った後（フォント、テーマ、posframe、ligature）を確かめる。この設定には `(daemonp)` で分岐する箇所が多く、バッチの `smoketest` は通らない。グラフィカルなフレームが数秒出る。画面が無い環境は `SMOKETEST_DAEMON_ARGS=--no-frame`。`lint`・`verify` には含めない |
 | `make test-fresh` | 一時ディレクトリへ clone し、README の手順（`emacs -Q --batch` のブートストラップ → `make reload` → `make lint` → `--init-directory` での起動と `smoketest` → `make install-hooks` と pre-commit を通るコミット）で組み立てて、動くかを確かめる。パッケージは共有の straight キャッシュを使う。既定はコミット済みの状態。`FRESH_ARGS=--working-tree` で未コミットの状態も重ねる。`--isolate-cache` は空のキャッシュで作り直す（数十分、ネットワークが要る）。数分かかる |
+| `make auto-refactor` | コミット済みの状態を一時ディレクトリへ clone し、byte-compile と checkdoc の警告を `claude -p` に無人で直させる。検収（`org/*.org` と `README.org` だけの変更、差分 200 行以下、`make reload`・`make lint`・smoketest の通過、警告の減少）を通ったときだけ、ローカルブランチ `auto/refactor-YYYYMMDD-HHMM` に残す。マージも push もしない。実行中は straight のキャッシュを退避して戻す。`AUTO_REFACTOR_ARGS=--dry-run` で警告の一覧だけを出す。数分〜数十分かかるため `lint`・`verify` には含めない。定期実行の launchd の plist は `org/tools.org` の Appendix にある（自動では入れない）。本体は `scripts/auto_refactor.py` |
 | `make install-hooks` / `make uninstall-hooks` | `scripts/pre-commit` を `.git/hooks/pre-commit` へ入れる／外す。フックは、README・AGENTS・`org/`・`svg/`・Makefile・`.gitignore` のいずれかがステージされているコミットの前に、`make reload && make lint` を実行する。`SKIP_HOOKS=1 git commit` で飛ばせる。`make verify` を済ませたあとのコミットでは、二重になるので `SKIP_HOOKS=1` を付けてよい |
 | `make bench-startup` | GUI の Emacs を `--runs` 回（既定 5）起動し、使える状態になるまでの時間（`my:startup-phases` の最後）を測る。`BENCH_ARGS="--runs 8 --save"` で基準を `.var/bench-startup.json` に保存し、以後は基準と比べて、10% 以上かつばらつき以上に遅ければ失敗する。Emacs のウィンドウが毎回出る。`lint`・`verify` には含めない |
 | `make stats` | 層ごとのファイル数・行数・コメント率を表示。本書の数値を更新するときの根拠にする（Python 製） |

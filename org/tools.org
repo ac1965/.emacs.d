@@ -20,7 +20,7 @@
 - =scripts/claude_org_roam_export.py= 、 =scripts/update_build_info.py=
 - =scripts/check-bytecomp.el= 、 =scripts/cheatsheet.el= 、 =scripts/check_modules.py= 、 =scripts/stats.py=
 - =scripts/compose.py= 、 =scripts/shot.sh= 、 =scripts/demo-layout.el=
-- =scripts/orphans.el= 、 =scripts/smoketest.el= 、 =scripts/smoketest_daemon.py= 、 =scripts/test_fresh.py= 、 =scripts/pre-commit=
+- =scripts/orphans.el= 、 =scripts/smoketest.el= 、 =scripts/smoketest_daemon.py= 、 =scripts/test_fresh.py= 、 =scripts/auto_refactor.py= 、 =scripts/pre-commit=
 
 tangle は =make tangle= が、 =README.org= や =org/*.org= とあわせて行います。tangle 先は =../scripts/= です。
 
@@ -3990,4 +3990,272 @@ tangle 先を 20 件より少なくしか取れなかった場合（Org 文書�
   (orphans--run)
 
   ;;; orphans.el ends here
+#+end_src
+
+* Appendix: auto_refactor.py — AI による無人のリファクタリング
+:PROPERTIES:
+:CUSTOM_ID: appendix-auto-refactor-py
+:header-args:python: :tangle ../scripts/auto_refactor.py :tangle-mode (identity #o755) :mkdirp yes :comments no
+:END:
+
+=make auto-refactor= が呼び出します。Claude Code（ =claude -p= ）に、byte-compile と checkdoc の警告を、無人で直させます。
+扱う題材は、この警告の解消だけです。挙動に触れる変更（重複ヘルパーの統合、層の再編、キーバインドの変更）は、人間が指示します。
+
+*安全のための囲い*
+
+| # | 内容 |
+|---+---|
+| 1 | コミット済みの状態を一時ディレクトリへ clone する。作業ツリーには触れない |
+| 2 | ブートストラップと =make reload= のあと、警告を集める。 *無ければ、Claude を呼ばずに終わる* |
+| 3 | clone の中で =claude -p= を実行する。編集してよいのは =org/*.org= だけ。予算の上限は =--max-budget-usd= |
+| 4 | 検収: 変更が =org/*.org= と =README.org= だけ、差分が =--max-lines= 以下、 =make reload= と =make lint= が通る、警告が減る、 =smoketest.el= が FAIL=0 |
+| 5 | clone でコミットし、リポジトリへローカルブランチ =auto/refactor-YYYYMMDD-HHMM= として取り込む。 *マージも push もしない* |
+
+検収のどれかが落ちたら、何も取り込まずに終わります。 =--dry-run= は、警告の一覧だけを出します。
+
+*straight のキャッシュ*
+
+init を読み込む batch の Emacs は、終了時に straight の =build-*-cache.el= を書き換えます。次の GUI の起動が、
+=consult-line= の未定義で失敗します。そのため、実行の前にこのファイルを退避し、終わったら戻します
+（ =make smoketest= と同じ対策）。GUI の Emacs を使っていない時間に実行してください。
+
+*launchd で定期実行する*
+
+定期実行の設定は、永続的な設定なので、自動では入れません。入れるときは、次の plist を
+=~/Library/LaunchAgents/net.ty07.emacs-auto-refactor.plist= に置き、読み込みます。
+
+#+begin_example
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>net.ty07.emacs-auto-refactor</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/bin/make</string><string>-C</string><string>/Users/ac1965/.emacs.d</string>
+    <string>auto-refactor</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/Users/ac1965/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartCalendarInterval</key><dict>
+    <key>Weekday</key><integer>0</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key><string>/tmp/emacs-auto-refactor.log</string>
+  <key>StandardErrorPath</key><string>/tmp/emacs-auto-refactor.log</string>
+</dict></plist>
+#+end_example
+
+#+begin_example
+launchctl load ~/Library/LaunchAgents/net.ty07.emacs-auto-refactor.plist
+launchctl unload ~/Library/LaunchAgents/net.ty07.emacs-auto-refactor.plist   # 止めるとき
+#+end_example
+
+毎週日曜の 3:30 に動きます。できたブランチは、 =git log auto/refactor-*= で見つけて、差分を確かめてからマージします。
+
+#+NAME: auto-refactor-py-src
+#+begin_src python
+  #!/usr/bin/env python3
+  """Let Claude Code fix byte-compile and checkdoc warnings in a throw-away clone.
+
+  Unattended, so everything is fenced in:
+
+    1. clone the committed state into a temporary directory (the working tree is never touched)
+    2. bootstrap, make reload, and collect the byte-compile and checkdoc warnings; none -> stop
+    3. run `claude -p' in the clone, told to edit org/*.org only
+    4. gates: only org/*.org and README.org changed, the diff is small, make reload and make lint
+       pass, the warnings went down, scripts/smoketest.el reports FAIL=0
+    5. commit in the clone and fetch the commit into the repository as a local branch
+       auto/refactor-YYYYMMDD-HHMM.  Nothing is merged or pushed.
+
+  The straight build cache is backed up before and restored after: any batch Emacs that loads init.el
+  rewrites it, and the next GUI start would fail.  Standard library only.
+  """
+  import argparse
+  import fnmatch
+  import os
+  import re
+  import shutil
+  import subprocess
+  import sys
+  import tempfile
+  from datetime import datetime
+  from pathlib import Path
+
+  BOOTSTRAP = ["--eval", "(require 'ob-tangle)", "--eval",
+               "(dolist (f (append (list \"README.org\") (directory-files \"org\" t \"[.]org$\"))) "
+               "(org-babel-tangle-file f))"]
+  ALLOWED = ("org/*.org", "README.org")
+  TOOLS = ("Read,Edit,Grep,Glob,Bash(make reload),Bash(make lint),Bash(make checkdoc),"
+           "Bash(git diff:*),Bash(git status:*)")
+  PROMPT = """AGENTS.md を最初に読み、その規則に従ってください。
+  題材は、次の byte-compile と checkdoc の警告を解消することだけです。
+
+  {warnings}
+
+  規則:
+  - 編集してよいのは org/*.org の source block だけです。生成物（.el）は編集しません。
+  - 公開コマンド、キーバインド、defcustom、tangle 先、noweb は変えません。
+  - docstring の継続行は、そのブロックの共通の字下げの桁に置きます（桁 0 に置かない）。
+  - 編集したら make reload、make lint の順に実行し、通るまで直します。
+  - コミットはしません。警告と関係ない変更はしません。直せない警告は、直さずに理由を報告してください。"""
+
+
+  def run(cmd, cwd, env=None, timeout=900):
+      return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+
+
+  def tail(proc, n=8):
+      text = (proc.stdout + proc.stderr).strip().splitlines()
+      return " | ".join(text[-n:])[:600]
+
+
+  def cache_dir() -> Path:
+      xdg = os.environ.get("XDG_CACHE_HOME")
+      return (Path(xdg) if xdg else Path.home() / ".cache") / "emacs"
+
+
+  class CacheGuard:
+      """Back up straight's build-*-cache.el and put it back on exit."""
+
+      def __init__(self, tmp: Path):
+          self.saved: list[tuple[Path, Path]] = []
+          self.tmp = tmp
+
+      def __enter__(self):
+          for src in (cache_dir() / "straight").glob("build-*-cache.el"):
+              dest = self.tmp / f"cache-{src.name}"
+              shutil.copy2(src, dest)
+              self.saved.append((src, dest))
+          return self
+
+      def __exit__(self, *_):
+          for src, dest in self.saved:
+              shutil.copy2(dest, src)
+
+
+  def emacs_batch(clone: Path, emacs: str, script: str, env):
+      cmd = [emacs, "--batch", "--init-directory", str(clone),
+             "-l", str(clone / "early-init.el"), "-l", str(clone / "init.el"),
+             "-l", str(clone / "scripts" / script)]
+      return run(cmd, clone, dict(env, ROOT=str(clone)), timeout=1500)
+
+
+  def warnings_of(clone: Path, emacs: str, env) -> list[str]:
+      comp = emacs_batch(clone, emacs, "check-bytecomp.el", env)
+      found = [l.strip() for l in (comp.stdout + comp.stderr).splitlines() if re.search(r"\.el:\d+:\d+: Warning", l)]
+      doc = run(["make", "checkdoc"], clone, env)
+      if doc.returncode != 0:
+          found += [l.strip() for l in (doc.stdout + doc.stderr).splitlines()
+                    if re.search(r"\.el:\d+", l)]
+      return sorted(set(found))
+
+
+  def smoketest_ok(clone: Path, emacs: str, env) -> tuple[bool, str]:
+      r = emacs_batch(clone, emacs, "smoketest.el", env)
+      last = [l for l in r.stdout.splitlines() if l.startswith("== 結果")]
+      return r.returncode == 0 and bool(last) and last[-1].endswith("FAIL=0"), (last[-1] if last else tail(r))
+
+
+  def changed_files(clone: Path) -> list[str]:
+      out = run(["git", "status", "--porcelain", "--untracked-files=no"], clone).stdout
+      return [l[3:].strip() for l in out.splitlines()]
+
+
+  def main(argv: list[str]) -> int:
+      ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+      ap.add_argument("--root", type=Path, default=Path.cwd(), help="repository to clone")
+      ap.add_argument("--emacs", default=os.environ.get("EMACS", "emacs"))
+      ap.add_argument("--claude", default="claude", help="the Claude Code command")
+      ap.add_argument("--max-lines", type=int, default=200, help="largest accepted diff (lines)")
+      ap.add_argument("--max-budget-usd", default="5", help="spending cap for one run")
+      ap.add_argument("--dry-run", action="store_true", help="only list the warnings")
+      ap.add_argument("--keep", action="store_true", help="keep the temporary directory")
+      args = ap.parse_args(argv)
+
+      root = args.root.expanduser().resolve()
+      tmp = Path(tempfile.mkdtemp(prefix="emacs-autorefactor-"))
+      clone = tmp / "emacs.d"
+      env = dict(os.environ, EMACS=args.emacs)
+      stamp = datetime.now().strftime("%Y%m%d-%H%M")
+      branch = f"auto/refactor-{stamp}"
+
+      def fail(msg: str) -> int:
+          print(f"[auto-refactor] FAILED: {msg}")
+          return 1
+
+      print(f"[auto-refactor] {tmp}")
+      try:
+          with CacheGuard(tmp):
+              if run(["git", "clone", "--quiet", str(root), str(clone)], tmp).returncode != 0:
+                  return fail("clone")
+              if run([args.emacs, "-Q", "--batch", *BOOTSTRAP], clone, env).returncode != 0:
+                  return fail("bootstrap")
+              r = run(["make", "reload"], clone, env)
+              if r.returncode != 0:
+                  return fail("make reload: " + tail(r))
+              before = warnings_of(clone, args.emacs, env)
+              print(f"[auto-refactor] warnings: {len(before)}")
+              if not before:
+                  print("[auto-refactor] nothing to do")
+                  return 0
+              for w in before:
+                  print("  " + w)
+              if args.dry_run:
+                  return 0
+
+              ask = [args.claude, "-p", PROMPT.format(warnings="\n".join(before)),
+                     "--permission-mode", "acceptEdits", "--allowedTools", TOOLS,
+                     "--max-budget-usd", str(args.max_budget_usd)]
+              r = run(ask, clone, env, timeout=2400)
+              print("[auto-refactor] claude:", tail(r, 12))
+              if r.returncode != 0:
+                  return fail("claude")
+
+              files = changed_files(clone)
+              if not files:
+                  return fail("no change")
+              bad = [f for f in files if not any(fnmatch.fnmatch(f, p) for p in ALLOWED)]
+              if bad:
+                  return fail(f"not allowed to change: {bad}")
+              stat = run(["git", "diff", "--shortstat"], clone).stdout
+              size = sum(int(n) for n in re.findall(r"(\d+) (?:insertion|deletion)", stat))
+              if size > args.max_lines:
+                  return fail(f"diff too large: {size} lines")
+              for target in ("reload", "lint"):
+                  r = run(["make", target], clone, env)
+                  if r.returncode != 0:
+                      return fail(f"make {target}: " + tail(r))
+              after = warnings_of(clone, args.emacs, env)
+              if len(after) >= len(before):
+                  return fail(f"warnings not reduced: {len(before)} -> {len(after)}")
+              ok, note = smoketest_ok(clone, args.emacs, env)
+              if not ok:
+                  return fail("smoketest: " + note)
+
+              def conf(key):
+                  return run(["git", "config", key], root).stdout.strip()
+              msg = (f"refactor(auto): byte-compile・checkdoc の警告を解消（{len(before)} → {len(after)}）\n\n"
+                     f"自動実行（scripts/auto_refactor.py）。変更: {', '.join(files)}")
+              run(["git", "add", "-A", "--", *files], clone)
+              c = run(["git", "-c", f"user.name={conf('user.name')}",
+                       "-c", f"user.email={conf('user.email')}", "commit", "--quiet", "-m", msg],
+                      clone, dict(env, SKIP_HOOKS="1"))
+              if c.returncode != 0:
+                  return fail("commit: " + tail(c))
+              f = run(["git", "fetch", "--quiet", str(clone), f"HEAD:refs/heads/{branch}"], root)
+              if f.returncode != 0:
+                  return fail("fetch: " + tail(f))
+              print(f"[auto-refactor] ok: branch {branch} ({len(before)} -> {len(after)} warnings)")
+              if sys.platform == "darwin":
+                  run(["osascript", "-e",
+                       f'display notification "{branch}" with title "auto-refactor"'], root)
+              return 0
+      finally:
+          if args.keep:
+              print(f"[auto-refactor] kept {tmp}")
+          else:
+              shutil.rmtree(tmp, ignore_errors=True)
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv[1:]))
 #+end_src

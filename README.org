@@ -1316,6 +1316,7 @@ git diff README.org   # 差分を確認してコミットする
 	@echo "  make install-hooks            # コミット前に make lint を通す Git のフックを入れる（uninstall-hooks で外す）"
 	@echo "  make smoketest-daemon         # デーモンモードで起動して確かめる（グラフィカルなフレームが数秒出る）"
 	@echo "  make test-fresh               # 一時ディレクトリへ clone し、README の手順で組み立てて確かめる（数分）"
+	@echo "  make auto-refactor            # Claude Code に警告を無人で直させ、ブランチに残す（マージ・push はしない）"
 	@echo "  make check-docs               # README.org と AGENTS.md の数・名前を実コードと照合"
 	@echo "  make bench-startup            # 起動時間を測り、基準と比べる（BENCH_ARGS=\"--runs 8 --save\" で基準を保存）"
 	@echo "  make clean-orphans            # 上の生成物を削除（reload の最後の段で自動実行）"
@@ -1565,7 +1566,7 @@ git diff README.org   # 差分を確認してコミットする
   # my:modules と my:modules-extra に挙がるモジュールの実在と provide、層の並び順、
   # 上位層への明示的な require、どちらにも載らない .el を、Emacs なしで検査する。
   # 本体は scripts/check_modules.py（org/tools.org の Appendix: check_modules.py を参照）。
-  .PHONY: check-modules stats check-docs bench-startup install-hooks uninstall-hooks smoketest-daemon test-fresh
+  .PHONY: check-modules stats check-docs bench-startup install-hooks uninstall-hooks smoketest-daemon test-fresh auto-refactor
   check-modules:
 	@python3 scripts/check_modules.py "$(ROOT)"
 
@@ -1605,6 +1606,16 @@ git diff README.org   # 差分を確認してコミットする
   FRESH_ARGS ?=
   test-fresh:
 	@python3 scripts/test_fresh.py --root "$(ROOT)" --emacs "$(EMACS)" $(FRESH_ARGS)
+
+  # ---- auto-refactor : AI による無人のリファクタリング ---------------------------------------------
+  # コミット済みの状態を一時ディレクトリへ clone し、byte-compile と checkdoc の警告を Claude Code に
+  # 直させる。検収（org/*.org だけの変更、差分の大きさ、reload・lint・smoketest、警告の減少）を通った
+  # ときだけ、ローカルブランチ auto/refactor-YYYYMMDD-HHMM に残す。マージも push もしない。
+  # AUTO_REFACTOR_ARGS=--dry-run で、警告の一覧だけを出す。
+  # 本体は scripts/auto_refactor.py（org/tools.org の Appendix: auto_refactor.py を参照）。
+  AUTO_REFACTOR_ARGS ?=
+  auto-refactor:
+	@python3 scripts/auto_refactor.py --root "$(ROOT)" --emacs "$(EMACS)" $(AUTO_REFACTOR_ARGS)
 
   # ---- install-hooks / uninstall-hooks : コミット前に lint を通す Git のフック ------------------
   # scripts/pre-commit（org/tools.org の Appendix: pre-commit を参照）を .git/hooks/pre-commit へ入れる。
@@ -1726,7 +1737,7 @@ Overview 節の [[file:svg/tangle-flow.svg]] は、もともと Mermaid Live Edi
       o3["lisp/&lt;layer&gt;/&lt;module&gt;.el<br/>(84 files)"]
       o4["personal/*.el<br/>(7 files)"]
       o4b["user-lisp/*.el<br/>(1 files)"]
-      o5["scripts/*<br/>(19 files)"]
+      o5["scripts/*<br/>(20 files)"]
 
       readme --> tangle
       boot --> tangle
@@ -2184,6 +2195,11 @@ digraph personal_override_contract {
 #+NAME: changelog
 #+begin_src text :tangle ChangeLog :comments no
 2026-10-31  YAMASHITA Takao  <tjy1965@gmail.com>
+
+	* org/tools.org (auto_refactor.py), README.org (Makefile), AGENTS.md: make auto-refactor を追加した。一時ディレクトリへ clone し、
+	byte-compile と checkdoc の警告を claude -p に無人で直させる（AI による自律的なリファクタリングの L2）。org/*.org だけの変更、
+	差分の大きさ、reload・lint・smoketest、警告の減少の検収を通ったときだけ、ローカルブランチ auto/refactor-YYYYMMDD-HHMM に残す。
+	マージも push もしない。実行中は straight のキャッシュを退避して戻す。launchd の plist は org/tools.org に載せたが、自動では入れない。
 
 	* org/personal.org (personal-llm), org/dev.org (dev-ai), org/tools.org (smoketest), README.org, AGENTS.md, svg/14_llm_overview.svg:
 	user-lisp/personal-llm.el（ローカルルーター my/llm-run*）を削除した。LLM は agent-shell に一本化する。aidermacs の削除の記載と、
