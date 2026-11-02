@@ -1579,8 +1579,11 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;;   `my/save-window-layout' と `my/restore-window-layout' を提供する
   ;; - 行間（`ui-window-line-spacing'）と、グラフィカルフレームの余白（spacious-padding）を設定する
   ;; - tab-bar でプロジェクトごとの作業台（タブ）を持てるようにする。`M-SPC w t' で新しいタブ、
-  ;;   `w x' で閉じる、`w [' / `w ]' で前後、`w T' で名前で選ぶ。タブが 1 つのときはバーを出さず、
-  ;;   最初のタブを作るまで tab-bar-mode は有効にならない（起動のコストは 0）
+  ;;   `w x' で閉じる、`w [' / `w ]' で前後、`w T' で名前で選ぶ、`M-S-<left>' / `M-S-<right>' で前後（`w [' / `w ]' と同じ。Org バッファでは Org の割り当てが優先）、`w .' でプロジェクトを選んで
+  ;;   新しいタブに開く（タブの名前はプロジェクト名）。タブが 1 つのときはバーを出さず、
+  ;;   最初のタブを作るまで tab-bar-mode は有効にならない（起動のコストは 0）。
+  ;;   タブごとにウィンドウ構成の履歴を持ち（`tab-bar-history-mode'）、見た目はモードラインの
+  ;;   フェイスを継承して、テーマの切替に追従する（`ui-window--apply-tab-faces'）
   ;; - ポップアップのバッファ（*Messages*、*Help*、*compilation*、*Smoketest* など）を popper で
   ;;   まとめる。`M-SPC w p' で出し入れ、`w n' で順に切り替え、`w P' で通常のウィンドウへ昇格
   ;;   （テーマの適用は ui-theme.el が受け持つ）
@@ -1722,16 +1725,75 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
     :pre-setq ((tab-bar-show . 1)
                (tab-bar-close-button-show . nil)
                (tab-bar-tab-hints . t)
-               (tab-bar-new-tab-choice . "*scratch*")))
+               (tab-bar-new-tab-choice . "*scratch*")
+               (tab-bar-auto-width . t)
+               (tab-bar-auto-width-max . '(240 24))
+               (tab-bar-separator . " ")
+               (tab-bar-tab-name-function . #'tab-bar-tab-name-truncated)
+               (tab-bar-format . '(tab-bar-format-history
+                                   tab-bar-format-tabs
+                                   tab-bar-separator
+                                   tab-bar-format-add-tab)))
+    :hook (tab-bar-mode-hook . tab-bar-history-mode))
+
+  ;; タブの見た目: モードラインのフェイスを継承し、テーマの light / dark に追従させる。
+  ;; 選択中のタブは強調（salient 色の下線）、他のタブは控えめにして、並びが一目で読めるようにする。
+  ;; `tab-bar-mode' が有効になる前でもフェイスは定義済み（tab-bar.el の defface）なので、
+  ;; ロード後とテーマ切替のたびに上書きする。
+  (defun ui-window--apply-tab-faces (&rest _)
+    "tab-bar のフェイスを、モードラインとパレットに合わせて設定する。"
+    (let ((accent (and (fboundp 'ui-theme--color)
+                       (ui-theme--color 'ui-nano-palette-color-salient))))
+      (dolist (spec `((tab-bar
+                       :inherit mode-line-inactive :box nil :height 1.0)
+                      (tab-bar-tab
+                       :inherit mode-line :weight bold
+                       :box (:line-width (10 . 4) :style flat-button)
+                       ,@(when accent `(:underline (:color ,accent :position -2))))
+                      (tab-bar-tab-inactive
+                       :inherit mode-line-inactive :weight normal
+                       :box (:line-width (10 . 4) :style flat-button))))
+        (when (facep (car spec))
+          (apply #'set-face-attribute (car spec) nil (cdr spec))))))
+
+  (with-eval-after-load 'tab-bar
+    (ui-window--apply-tab-faces))
+
+  (if (boundp 'enable-theme-functions)
+      (add-hook 'enable-theme-functions #'ui-window--apply-tab-faces 90)
+    (advice-add 'load-theme :after #'ui-window--apply-tab-faces))
+
+  (declare-function project-switch-project "project")
+  (declare-function project-root "project")
+  (declare-function project-current "project")
+
+  (defun ui-window-project-tab ()
+    "新しいタブでプロジェクトを選び、そのプロジェクトの名前をタブに付ける。
+  `project-switch-project' を新しいタブの中で呼ぶ。選ぶのをやめたら、作ったタブは閉じる。"
+    (interactive)
+    (tab-new)
+    (condition-case nil
+        (progn
+          (call-interactively #'project-switch-project)
+          (when-let* ((proj (project-current))
+                      (name (file-name-nondirectory
+                             (directory-file-name (project-root proj)))))
+            (tab-rename name)))
+      (quit (tab-close))))
 
   (defun ui-window--bind-tab-keys ()
     "Bind the tab commands in `ui-leader-w-map' when it exists."
     (when (and (boundp 'ui-leader-w-map) (keymapp ui-leader-w-map))
+      (keymap-set ui-leader-w-map "." #'ui-window-project-tab)
       (keymap-set ui-leader-w-map "t" #'tab-new)
       (keymap-set ui-leader-w-map "x" #'tab-close)
       (keymap-set ui-leader-w-map "[" #'tab-previous)
       (keymap-set ui-leader-w-map "]" #'tab-next)
-      (keymap-set ui-leader-w-map "T" #'tab-switch)))
+      (keymap-set ui-leader-w-map "T" #'tab-switch))
+    ;; どの文脈でも使えるよう、前後のタブはグローバルにも割り当てる。Org バッファでは
+    ;; `org-mode-map' の M-S-<left> / M-S-<right>（見出しの昇格・降格）が優先される。
+    (keymap-global-set "M-S-<left>"  #'tab-previous)
+    (keymap-global-set "M-S-<right>" #'tab-next))
 
   (add-hook 'after-init-hook #'ui-window--bind-tab-keys 90)
 

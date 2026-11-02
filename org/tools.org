@@ -2074,7 +2074,8 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
            (eq (lookup-key ui-leader-w-map (kbd "x")) 'tab-close)
            (eq (lookup-key ui-leader-w-map (kbd "[")) 'tab-previous)
            (eq (lookup-key ui-leader-w-map (kbd "]")) 'tab-next)
-           (eq (lookup-key ui-leader-w-map (kbd "T")) 'tab-switch)))
+           (eq (lookup-key ui-leader-w-map (kbd "T")) 'tab-switch)
+           (eq (lookup-key ui-leader-w-map (kbd ".")) 'ui-window-project-tab)))
     (smoketest--check "ui: helpful が autoload で呼べ、describe-* を置き換え、M-SPC h . がポイント位置の記号"
       (and (eq (command-remapping 'describe-function) 'helpful-callable)
            (eq (command-remapping 'describe-variable) 'helpful-variable)
@@ -2223,7 +2224,7 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
 
 | ファイル | 役割 |
 |----------+------|
-| =scripts/demo-layout.el= | Emacs の中でデモ画面（3 分割、Corfu、Vertico の 3 場面）を組む（ =-l= で読み込む） |
+| =scripts/demo-layout.el= | Emacs の中でデモ画面（3 分割、Corfu、Vertico、tab-bar の 4 場面）を組む（ =-l= で読み込む） |
 | =scripts/shot.sh=        | Emacs を起動して =DEMO_SCENE= の場面を組み、ウィンドウを 1 枚撮る |
 | =scripts/compose.py=     | dark と light の 2 枚、さらに補完の 2 枚（任意）を、1 枚の =demo.png= に合成する |
 
@@ -2238,6 +2239,10 @@ scripts/shot.sh light /tmp/light.png
 DEMO_SCENE=complete scripts/shot.sh dark /tmp/complete-dark.png
 DEMO_SCENE=vertico  scripts/shot.sh dark /tmp/vertico-dark.png
 
+# tab-bar とウィンドウ分割の場面を撮る（合成には含めず、単独の画像として使う）
+DEMO_SCENE=tabs     scripts/shot.sh dark  /tmp/tabs-dark.png
+DEMO_SCENE=tabs     scripts/shot.sh light /tmp/tabs-light.png
+
 # 合成して demo.png に置き換える（--complete と --vertico は省略できる）
 python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
     --complete /tmp/complete-dark.png --vertico /tmp/vertico-dark.png
@@ -2251,6 +2256,9 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
   右下: =make lint= の実行結果。エコーエリアには起動時間が出ます
 - =complete= — elisp バッファで =completion-pre= まで入力し、Corfu のポップアップとゴーストテキストを出します
 - =vertico= — =org/completion.org= の =leaf orderless= の節を背景に、 =M-x describe-= の縦型候補を出します
+- =tabs= — =tab-bar= に 3 つのタブ（ =emacs.d= / =README= / =scripts= ）を作り、タブごとに違う分割を見せます。
+  1 つ目は左に =org/ui.org= 、右上に生成された =ui-window.el= 、右下に =make check-modules= の結果の 3 分割。
+  2 つ目は =README.org= と =org/boot.org= の左右 2 分割。3 つ目は上 1 枚と下 2 枚。撮るのは 1 つ目のタブです
 - 合成画像は、dark と light を横に並べます。補完の 2 枚を渡すと、その下に横並びの 1 段として加わります（左が Corfu、右が Vertico）
 
 *設計上の注記*
@@ -2298,7 +2306,8 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
   ;;   DEMO_VARIANT  nano の variant（dark または light。既定は dark）
   ;;   DEMO_DIR      ログと完了マーカーを書くディレクトリ（既定は /tmp/emacs-demo）
   ;;   DEMO_SCENE    layout（既定。org/ui.org・生成 .el・make lint の 3 分割）、
-  ;;                 complete（Corfu のポップアップ）、vertico（M-x の縦型候補）
+  ;;                 complete（Corfu のポップアップ）、vertico（M-x の縦型候補）、
+  ;;                 tabs（tab-bar の 3 タブ。タブごとに違う分割を持つ）
   ;; 完了すると DEMO_DIR/ready、失敗すると DEMO_DIR/error を書く。
 
   ;;; Code:
@@ -2457,10 +2466,80 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
        (demo--log (format "ERROR %S" err))
        (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
 
+  (defun demo--show (window file needle &optional back)
+    "WINDOW に FILE を読み取り専用で出し、NEEDLE の BACK 行手前から見せる。"
+    (let ((buffer (find-file-noselect (expand-file-name file user-emacs-directory))))
+      (with-current-buffer buffer
+        (when (derived-mode-p 'org-mode) (org-show-all))
+        (setq buffer-read-only t))
+      (set-window-buffer window buffer)
+      (when needle
+        (demo--goto buffer needle)
+        (set-window-point window (with-current-buffer buffer (point)))
+        (set-window-start window
+                          (with-current-buffer buffer
+                            (save-excursion (forward-line (- (or back 6))) (point)))))))
+
+  (defun demo-scene-tabs ()
+    "tab-bar に 3 つのタブを作り、タブごとに違うウィンドウ分割を見せる。
+  1 つ目は 3 分割（org/ui.org・生成された .el・make check-modules の結果）、2 つ目は左右 2 分割、
+  3 つ目は上 1 枚と下 2 枚。最後に 1 つ目のタブへ戻して撮る。"
+    (condition-case err
+        (progn
+          (make-directory demo-dir t)
+          (demo--log "tabs start")
+          (demo--scene-frame)
+          (let* ((root user-emacs-directory)
+                 (left (selected-window))
+                 (right (split-window-right))
+                 (bottom (with-selected-window right
+                           (split-window-below
+                            (round (* 0.55 (window-total-height right)))))))
+            ;; 1 つ目のタブ: 設定を書く作業台
+            (demo--show left "org/ui.org" "(defun ui-window-project-tab" 4)
+            (demo--show right "lisp/ui/ui-window.el" "(defun ui-window-project-tab" 4)
+            (select-window bottom)
+            (let ((default-directory root)
+                  (display-buffer-overriding-action '(display-buffer-same-window)))
+              (compile "make check-modules"))
+            (demo--wait-compile)
+            (set-window-point bottom (with-current-buffer "*compilation*" (point-max)))
+            (with-selected-window bottom (recenter -1))
+            (tab-rename "emacs.d")
+            ;; 2 つ目のタブ: 設計と起動の文書を左右に並べる
+            (tab-new)
+            (delete-other-windows)
+            (let ((w (selected-window)))
+              (demo--show w "README.org" nil)
+              (demo--show (split-window-right) "org/boot.org" "early-init" 2))
+            (tab-rename "README")
+            ;; 3 つ目のタブ: 上に 1 枚、下に 2 枚
+            (tab-new)
+            (delete-other-windows)
+            (let* ((top (selected-window))
+                   (low (split-window-below (round (* 0.55 (window-total-height top))))))
+              (demo--show top "org/tools.org" "(defun demo-scene-tabs" 2)
+              (demo--show low "scripts/demo-layout.el" "(defun demo-scene-tabs" 2)
+              (demo--show (with-selected-window low (split-window-right))
+                          "org/core.org" nil))
+            (tab-rename "scripts")
+            (tab-select 1)
+            (select-window (get-largest-window))
+            (message nil)
+            (sit-for 2)
+            (redisplay t)
+            (message nil)
+            (with-temp-file (expand-file-name "ready" demo-dir) (insert "ok"))
+            (demo--log "ready")))
+      (error
+       (demo--log (format "ERROR %S" err))
+       (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
+
   (add-hook 'window-setup-hook
             (pcase demo-scene
               ('complete #'demo-scene-complete)
               ('vertico  #'demo-scene-vertico)
+              ('tabs     #'demo-scene-tabs)
               (_         #'demo-layout))
             90)
 
@@ -2479,7 +2558,7 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
   # README のデモ画像用に、Emacs を起動して 1 枚撮る。
   #   scripts/shot.sh <dark|light> <出力.png>
   # 環境変数: DEMO_DIR（作業ディレクトリ）、EMACS_APP（既定 /Applications/Emacs.app）、
-  #           DEMO_SCENE（layout|complete|vertico。既定 layout）
+  #           DEMO_SCENE（layout|complete|vertico|tabs。既定 layout）
   set -u
   ROOT=${0:A:h:h}
   VARIANT=${1:?usage: shot.sh <dark|light> <out.png>}
@@ -2564,7 +2643,8 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
           [--complete complete.png] [--vertico vertico.png]
 
   Layout: the dark and light captures side by side; the optional completion
-  captures (DEMO_SCENE=complete / vertico) go in a second row.  Needs Pillow;
+  captures (DEMO_SCENE=complete / vertico) go in a second row.  --dark-label and
+  --light-label change the captions (e.g. for the DEMO_SCENE=tabs pair).  Needs Pillow;
   pngquant is used when available to shrink the result.
   """
 
@@ -2618,10 +2698,14 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
       parser.add_argument("output", type=Path)
       parser.add_argument("--complete", type=Path, help="Corfu capture (DEMO_SCENE=complete)")
       parser.add_argument("--vertico", type=Path, help="Vertico capture (DEMO_SCENE=vertico)")
+      parser.add_argument("--dark-label", default="nano dark  ·  org/ui.org → lisp/*.el → make lint",
+                          help="label above the dark capture")
+      parser.add_argument("--light-label", default="nano light",
+                          help="label above the light capture")
       args = parser.parse_args()
 
-      rows = [[("nano dark  ·  org/ui.org → lisp/*.el → make lint", args.dark),
-               ("nano light", args.light)]]
+      rows = [[(args.dark_label, args.dark),
+               (args.light_label, args.light)]]
       extras = [("Corfu  ·  inline completion", args.complete),
                 ("Vertico  ·  M-x", args.vertico)]
       extras = [(label, path) for label, path in extras if path]
