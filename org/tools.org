@@ -2257,7 +2257,7 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
 - =complete= — elisp バッファで =completion-pre= まで入力し、Corfu のポップアップとゴーストテキストを出します
 - =vertico= — =org/completion.org= の =leaf orderless= の節を背景に、 =M-x describe-= の縦型候補を出します
 - =tabs= — =tab-bar= に 3 つのタブ（ =emacs.d= / =README= / =scripts= ）を作り、タブごとに違う分割を見せます。
-  1 つ目は左に =org/ui.org= 、右上に生成された =ui-window.el= 、右下に =make check-modules= の結果の 3 分割。
+  1 つ目は左に、タブのキーを書いている途中の elisp バッファ（ =tab-= の入力で Corfu が候補を出す）、右上に生成された =ui-window.el= 、右下に =make check-modules= の結果の 3 分割。
   2 つ目は =README.org= と =org/boot.org= の左右 2 分割。3 つ目は上 1 枚と下 2 枚。撮るのは 1 つ目のタブです
 - 合成画像は、dark と light を横に並べます。補完の 2 枚を渡すと、その下に横並びの 1 段として加わります（左が Corfu、右が Vertico）
 
@@ -2480,9 +2480,29 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
                           (with-current-buffer buffer
                             (save-excursion (forward-line (- (or back 6))) (point)))))))
 
+  (defun demo--prepare-tabs-edit (window)
+    "WINDOW に、タブのキーを書いている途中の elisp バッファを出す。
+  末尾は補完の入力途中で、1 文字を足すと Corfu が tab-new / tab-next などを出す。"
+    (let ((buffer (get-buffer-create "*demo-tabs-edit*")))
+      (with-current-buffer buffer
+        (emacs-lisp-mode)
+        (erase-buffer)
+        (insert ";; M-SPC w でウィンドウとタブを操作する（前後のタブは s-[ / s-] でも切り替える）\n\n"
+                "(defun ui-window--bind-tab-keys ()\n"
+                "  \"Bind the tab commands in `ui-leader-w-map' when it exists.\"\n"
+                "  (when (and (boundp 'ui-leader-w-map) (keymapp ui-leader-w-map))\n"
+                "    (keymap-set ui-leader-w-map \".\" #'ui-window-project-tab)\n"
+                "    (keymap-set ui-leader-w-map \"t\" #'tab-new)\n"
+                "    (keymap-set ui-leader-w-map \"x\" #'tab-close)\n"
+                "    (keymap-set ui-leader-w-map \"[\" #'tab-previous)\n"
+                "    (keymap-set ui-leader-w-map \"]\" #'tab-")
+        (goto-char (point-max)))
+      (set-window-buffer window buffer)
+      (set-window-point window (with-current-buffer buffer (point-max)))))
+
   (defun demo-scene-tabs ()
     "tab-bar に 3 つのタブを作り、タブごとに違うウィンドウ分割を見せる。
-  1 つ目は 3 分割（org/ui.org・生成された .el・make check-modules の結果）、2 つ目は左右 2 分割、
+  1 つ目は 3 分割（Corfu が出ている編集バッファ・生成された .el・make check-modules の結果）、2 つ目は左右 2 分割、
   3 つ目は上 1 枚と下 2 枚。最後に 1 つ目のタブへ戻して撮る。"
     (condition-case err
         (progn
@@ -2496,7 +2516,7 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
                            (split-window-below
                             (round (* 0.55 (window-total-height right)))))))
             ;; 1 つ目のタブ: 設定を書く作業台
-            (demo--show left "org/ui.org" "(defun ui-window-project-tab" 4)
+            (demo--prepare-tabs-edit left)
             (demo--show right "lisp/ui/ui-window.el" "(defun ui-window-project-tab" 4)
             (select-window bottom)
             (let ((default-directory root)
@@ -2524,13 +2544,12 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
                           "org/core.org" nil))
             (tab-rename "scripts")
             (tab-select 1)
-            (select-window (get-largest-window))
+            ;; 左の編集バッファで、最後の 1 文字を入力イベントとして流し、Corfu を実際に起動させる。
+            ;; 入力待ちの状態を撮るので、完了マーカーはタイマー（`demo--ready-after'）で書く。
+            (select-window (get-buffer-window "*demo-tabs-edit*"))
+            (setq unread-command-events (listify-key-sequence "n"))
             (message nil)
-            (sit-for 2)
-            (redisplay t)
-            (message nil)
-            (with-temp-file (expand-file-name "ready" demo-dir) (insert "ok"))
-            (demo--log "ready")))
+            (demo--ready-after 4)))
       (error
        (demo--log (format "ERROR %S" err))
        (with-temp-file (expand-file-name "error" demo-dir) (insert (format "%S" err))))))
