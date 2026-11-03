@@ -17,11 +17,65 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: completion-modules
 :END:
 
+completion 層は、候補を絞り込み、選ぶための仕組みの層です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+並びで、auth の次、orgx の前にあります。ここより下（early-init、core、ui、auth）に依存できますが、
+orgx 以降には依存できません。
+
+補完は、2 つの場面に分かれます。
+
+- *ミニバッファの補完* — =M-x= やファイル選択など、ミニバッファで候補を選ぶ場面です。Vertico が縦に候補を並べ、
+  Marginalia が注釈を添え、Consult が検索とナビゲーションを、Embark が候補への操作を足します。
+- *バッファ内の補完* — 入力中のシンボルを補う場面です。Corfu がポップアップで候補を出し、Cape が候補の出どころ
+  （ CAPF ）を増やします。Emacs 31 のインライン表示（ completion-preview ）も使います。
+
+どちらの場面でも、絞り込みは同じ Orderless（空白で区切った語を、順序を問わずに当てる）が担います。
+
+*構成*
+
+| モジュール | 責務 |
+|------------|------|
+| =completion-core= | 補完スタイル（orderless + basic）と、Emacs 31 の補完エンジンの設定 |
+| =completion-vertico= | Vertico、Marginalia、vertico-posframe、ファイル名補完の操作 |
+| =completion-consult= | Consult と consult-dir。xref の候補表示 |
+| =completion-embark= | Embark と wgrep。候補に対する文脈依存の操作 |
+| =completion-corfu= | Corfu、Cape、kind-icon、corfu-terminal、Emacs 31 の completion-preview |
+| =completion-icons= | ibuffer と補完の注釈への nerd-icons の統合 |
+| =completion-capf= | モード別の CAPF の並びと、補完のカテゴリ別スタイル |
+| =completion-org-src= | Org のソースブロックの編集バッファ向けの補完設定 |
+| =completion-lsp= | プロジェクトを切り替えたときの、不要になった Eglot サーバの停止 |
+
+ロード順は、上の表の順です（ =lisp/modules.el= の =my:modules= ）。
+
+*この層の方針*
+
+- *初期化は一度だけ、フレームができてから* — Vertico、Marginalia、Corfu、kind-icon、Cape は、 =window-setup-hook= で
+  1 回だけ初期化します（ =core-runtime-add-hook-once= が、初回で自分をフックから外します）。フレームを作るたびに
+  設定が走らないようにするためです。
+- *デーモンでは、実フレームを待つ* — posframe のように画面の種類に依存するものは、ロード時に =display-graphic-p= で
+  分けません。デーモンの起動時には実フレームがなく、判定が常に偽になって、あとから =emacsclient -c= で
+  フレームが繋がっても、再試行されなくなるためです。初回のグラフィカルなフレームができた時点で、一度だけ有効にします。
+- *正となる設定は 1 か所に置く* — 補完のカテゴリ別の上書き（ =completion-category-overrides= ）は、
+  =completion-capf= だけが持ちます。複数のファイルで定義すると、あとから読まれたほうが黙って勝つためです。
+
+
 * completion/completion-core.el
 :PROPERTIES:
 :CUSTOM_ID: completion-core
 :header-args:emacs-lisp: :tangle ../lisp/completion/completion-core.el
 :END:
+
+補完の土台になる設定です。ほかのモジュールは、ここで決めた補完スタイルの上に載ります。
+
+- *補完スタイル* — =completion-styles= は =orderless= と =basic= です。 =orderless= は、空白で区切った複数の語を、
+  順序を問わず、どこにでも一致させます。 =basic= は、 =orderless= で当たらなかったときのフォールバックです。
+- *Emacs 31 の補完エンジン* — Emacs 31 以上でだけ有効です（ =:if (>= emacs-major-version 31)= ）。
+  - =completion-eager-display= と =completion-eager-update= は =nil= に固定します。どちらも =*Completions*= を
+    ポップアップして逐次更新する機能で、その役割は Vertico がすでに担っています。将来 Emacs の既定値が変わっても、
+    候補のリストが二重に出ないようにするためです。
+  - =completion-pcm-leading-wildcard= は =t= です。 =partial-completion= が、どこでも一致する（部分一致の）ように
+    振る舞います。 =orderless= の隣に置くフォールバックとして、望ましい挙動だからです。
+- *カテゴリ別の上書きは、ここでは設定しない* — 正となる表は =completion-capf= にあります。両方に書くと、
+  あとから読まれる =completion-capf= が黙って勝ち、ここでの宣言が誤解を招くものになります。
 
 #+begin_src emacs-lisp
   ;;; completion/completion-core.el --- 補完のコア設定 -*- lexical-binding: t; -*-
@@ -84,6 +138,35 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: completion-vertico
 :header-args:emacs-lisp: :tangle ../lisp/completion/completion-vertico.el
 :END:
+
+ミニバッファの UI です。候補を縦に並べ、グラフィカルな画面では、画面の中央に子フレーム（posframe）で表示します。
+
+*初期化のしかた*
+
+- *Vertico と Marginalia* — =vertico-mode= と =marginalia-mode= は、フレームに依存しません（ディスプレイがなくても、
+  ミニバッファの補完は動きます）。 =window-setup-hook= で 1 回だけ有効にします。
+- *vertico-posframe* — 画面の種類に依存するので、上とは別に扱います。
+  - 非デーモン: =window-setup-hook= の時点でグラフィカルなら、一度だけ有効にします。
+  - デーモン: 初回のグラフィカルなフレームができた時点で、 =core-runtime-run-on-first-graphic-frame= が、一度だけ
+    有効にします。子フレームの背景色が、フレームの実体化の途中ではまだ確定しないことがあるため、1 tick 遅らせています。
+  - =leaf= の =:if= は、モジュールのロード時に一度だけ評価されます。デーモンの起動時は実フレームがなく、
+    常に偽になって、パッケージ自体が一度もロードされないバグがありました。そこで =:if= をやめ、 =:require nil= にして、
+    実際の =require= と有効化は =completion-vertico--activate-posframe= に任せています。
+
+*設定*
+
+- 候補の表示数は 15 です（ =vertico-count= ）。posframe の枠の幅は 2 です（ =vertico-posframe-border-width= ）。
+- =marginalia-align= は =right= です。注釈を右端に寄せます。この値は、 =marginalia= を導入する =leaf= が持ちます。
+  =completion-icons= には置きません。
+- ファイル名補完は =vertico-directory= で操作します。
+
+| キー | 動作 |
+|------|------|
+| =RET= | ディレクトリの上では、そのディレクトリへ入る |
+| =DEL= | ディレクトリの区切りの直後なら、パスを 1 階層戻る |
+| =M-DEL= | 単語（パスの 1 階層）ごと戻る |
+
+  =~/= や =/= を打ち直したときは、入力済みのパスを =vertico-directory-tidy= が捨てます。
 
 #+NAME: completion-vertico
 #+begin_src emacs-lisp
@@ -206,6 +289,19 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/completion/completion-consult.el
 :END:
 
+検索と、定義への移動を、候補つきで行うための Consult の設定です。割り当てのほとんどは =ui-keys.el= の
+leader にあり、ここでは Consult 自身の挙動と、 =consult-dir= のキーを決めます。
+
+- *xref の候補表示* — =xref-show-xrefs-function= と =xref-show-definitions-function= を =consult-xref= にします。
+  定義や参照が複数あるとき、候補をプレビューつきで選べます。
+- *プレビューの遅延* — =consult-preview-key= は =(:debounce 0.4 any)= です。候補を動かすたびにプレビューが走ると
+  重いので、0.4 秒止まってから表示します。
+- *絞り込みのキー* — =consult-narrow-key= は =<= です。Consult のコマンドの中で =<= を押してから、
+  種類のキーを押すと、候補を種類で絞り込めます。
+- *レジスタのプレビュー* — =register-preview-delay= は 0.5 秒で、整形に =consult-register-format= を使います。
+- *consult-dir* — =C-x C-d= で、プロジェクトやブックマークのディレクトリへ移れます（組み込みの =list-directory= を
+  置き換えます）。ミニバッファの中では、 =C-x C-d= でディレクトリの一覧、 =C-x C-j= でそこからのファイル選択です。
+
 #+begin_src emacs-lisp
   ;;; completion/completion-consult.el --- Consult による検索とナビゲーション -*- lexical-binding: t; -*-
   ;;
@@ -261,6 +357,28 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/completion/completion-embark.el
 :END:
 
+候補（やバッファの中の対象）に対して、文脈に合った操作を選んで実行するための Embark の設定です。
+Consult と組み合わせて、検索結果の一括編集まで繋ぎます。
+
+*キー*
+
+| キー | コマンド | 用途 |
+|------|----------|------|
+| =s-/= | =embark-act= | 対象に対する操作を選ぶ |
+| =s-;= | =embark-dwim= | 対象の既定の操作を実行する |
+| =C-<f2>= | =embark-bindings= | 今のバッファのキーバインドを一覧する |
+
+これらは Embark 固有のコマンドなので、汎用の =ui-keys.el= ではなく、ここで割り当てます。
+
+*設計のポイント*
+
+- =prefix-help-command= を =embark-prefix-help-command= にします。 =C-x= などの接頭辞のあとに =C-h= を押すと、
+  そのキーマップのコマンドを、候補つきで選べます。
+- =embark-consult= を読み込むと、 =embark-collect= のバッファで =consult-preview-at-point-mode= が有効になり、
+  集めた候補のプレビューが、ポイントの位置で出ます。
+- *検索結果の一括編集* — =wgrep= を導入しています。 =consult-ripgrep= などの結果を =embark-export= で =grep-mode= の
+  バッファに書き出し、 =C-c C-p= で編集を始め、 =C-c C-c= ですべてのファイルへ反映します。
+
 #+begin_src emacs-lisp
   ;;; completion/completion-embark.el --- Embark のアクション -*- lexical-binding: t; -*-
   ;;
@@ -311,6 +429,43 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: completion-corfu
 :header-args:emacs-lisp: :tangle ../lisp/completion/completion-corfu.el
 :END:
+
+バッファの中で、入力中のシンボルの候補をポップアップで出す Corfu の設定です。候補の出どころ（ CAPF ）を Cape で増やし、
+アイコンと、Emacs 31 のインライン表示を足します。
+
+*初期化*
+
+=window-setup-hook= で 1 回だけ、Corfu、popupinfo、history、kind-icon、Cape を有効にします
+（ =completion-corfu--init= ）。このとき、 =completion-at-point-functions= の先頭に =cape-elisp-symbol= 、
+=cape-file= 、 =cape-dabbrev= をこの順で足します。足し方は 1 回の =setq= と =append= で、優先順位（ elisp のシンボル、
+ファイル、 dabbrev 、既存の並び）を明示します。
+
+*設定*
+
+- =corfu-auto= は =t= で、入力するとポップアップが自動で出ます。 =corfu-cycle= も =t= で、候補の端から反対側へ回ります。
+- =tab-always-indent= は =complete= です。 =TAB= は、インデントできるときはインデントし、すでに整っているときは補完します。
+- =corfu-popupinfo= は、選択中の候補のドキュメントを横に表示します。遅延は =(0.5 . 0.2)= です（最初の表示まで 0.5 秒、
+  候補を替えたあとは 0.2 秒）。
+- =corfu-history= は、選んだ候補を、次回から上位に出します。ただし履歴は =savehist-additional-variables= に載せません
+  （ =core-history= が、Emacs 31 の履歴ファイルのマージを生かすため、ユーザー変数を足さない方針のため）。
+  このため、候補の履歴は、そのセッションの中だけで効きます。
+- =kind-icon= は、候補の種類（関数、変数など）のアイコンを、マージンに出します。
+
+*端末（ emacs -nw ）*
+
+Corfu のポップアップは子フレームなので、端末では使えません。端末のフレームの初期化（ =tty-setup-hook= ）のとき、
+=corfu-terminal= で描きます。 =corfu-terminal-mode= は、フレームごとに切り替えられない大域のモードなので、
+デーモンでは有効にしません（グラフィカルなフレームのポップアップを壊さないため）。
+
+*Emacs 31 のインライン表示（ completion-preview ）*
+
+ポップアップを開かずに、いちばん上の候補を、ポイントの先にゴーストテキストで出します。Emacs 31 以上でだけ有効です。
+
+- =prog-mode= と =org-mode= で有効にします。3 文字以上のシンボルから出ます（ =completion-preview-minimum-symbol-length= ）。
+- 並べ替えの関数を Corfu と共有します。プレビューの候補が、いつも Corfu が最初に挿入する候補と一致します。
+  Corfu が並べ替えの関数を持たないときは、Emacs の既定のままにします。
+- =vterm= 、 =eshell= 、 =comint= 、 =term= のバッファでは、プロセスの出力と衝突するので、出しません。
+- 候補の切り替えは =M-n= と =M-p= です。
 
 #+NAME: completion-corfu
 #+begin_src emacs-lisp
@@ -462,6 +617,13 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/completion/completion-icons.el
 :END:
 
+ibuffer と、補完の注釈に、nerd-icons のアイコンを足します。見た目だけのモジュールで、補完の動作は変えません。
+
+- =ibuffer= のバッファで、 =nerd-icons-ibuffer-mode= を有効にします。
+- =marginalia-mode= を有効にしたとき、 =nerd-icons-completion-marginalia-setup= が呼ばれ、Vertico の候補の注釈に、
+  ファイルやバッファの種類のアイコンが付きます。
+- =marginalia-align= は、ここでは設定しません。 =marginalia= を導入する =completion-vertico= の =leaf= が持ちます。
+
 #+begin_src emacs-lisp
   ;;; completion/completion-icons.el --- 補完 UI 用アイコン -*- lexical-binding: t; -*-
   ;;
@@ -501,6 +663,45 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: completion-capf
 :header-args:emacs-lisp: :tangle ../lisp/completion/completion-capf.el
 :END:
+
+モードごとに、バッファ内の補完の出どころ（ CAPF ）の並びを決めます。Cape の CAPF を、バッファローカルに組み立てます。
+
+*モード別の CAPF の並び*
+
+| モード | 並び | 関数 |
+|--------|------|------|
+| emacs-lisp、lisp-interaction | シンボル、ファイル、 dabbrev | =completion--elisp-capfs= |
+| prog-mode | 既存の並びに、ファイル、 dabbrev を足す | =completion--prog-capfs= |
+| text-mode | dabbrev、ファイル | =completion--text-capfs= |
+| org-mode | dabbrev、ファイル、TeX の記号 | =completion--org-capfs= |
+| sh、eshell | ファイル、 dabbrev | =completion--shell-capfs= |
+| ielm、comint | 既存の並びに、 dabbrev を足す | =completion--repl-capfs= |
+
+どの並びも =completion--set-capfs= が、 =completion-at-point-functions= にバッファローカルに設定します。重複は取り除き
+（最初に出てきたものが勝つ）、フックが複数回走っても、結果が変わらないようにしています。
+
+*カテゴリ別のスタイル*
+
+=completion-category-overrides= は、このモジュールだけが持ちます（ =setopt= で設定）。 =completion-core= で決めた
+orderless を、カテゴリごとに調整します。
+
+| カテゴリ | スタイル |
+|----------|----------|
+| =file= | =basic= 、 =partial-completion= |
+| =symbol= 、 =keyword= | =orderless= |
+| =tex= 、 =dabbrev= | =basic= |
+
+*Eglot との合流*
+
+Eglot が管理するバッファでは、Eglot の候補（ =eglot-completion-at-point= ）に =cape-dabbrev= を合流させます
+（ =completion--eglot-capfs= 。 =cape-capf-super= を使う）。 =eglot-managed-mode-hook= は、有効にするときと
+無効にするときの両方で走るので、Eglot が手を離したときは、合流した CAPF を外して、元に戻します。
+
+*なぜ、静的な並びは合流させないのか*
+
+elisp、text、org、shell の並びは、 =cape-capf-super= で 1 つにまとめません。 =cape-capf-super= は、補完の開始位置が
+違う CAPF を合流できません（ファイルや TeX は、シンボルと開始位置が違います）。まとめると、ファイルの補完が黙って
+落ちます。Eglot と dabbrev は同じ開始位置で補うので、合流させても失うものがありません。
 
 #+begin_src emacs-lisp
   ;;; completion/completion-capf.el --- モード別 CAPF 設定 -*- lexical-binding: t; -*-
@@ -648,6 +849,24 @@ corfu、orderless の順に登録しているため、実行順は orderless、c
 汎用より先に設定され、後から走る汎用の =completion--set-capfs= が重複を除くので、言語別の並びが保たれます。
 *登録の並びを入れ替えないでください。*
 
+*登録された関数と、設定される値*
+
+| 関数 | 設定するもの |
+|------|--------------|
+| =completion--org-src-capfs= | 派生元のモードで、並びを選ぶ（ elisp → elisp 用、 prog → prog 用、ほかは text 用） |
+| =completion--org-src-lang-capfs= | shell は「ファイル、 dabbrev 」、SQL は「 dabbrev 、ファイル」、Python は「既存の並びに、ファイル、 dabbrev を足す」 |
+| =completion--org-src-corfu-setup= | =corfu-auto= を =t= 、 =corfu-auto-delay= を 0.1 秒、 =corfu-auto-prefix= を 1 、 =corfu-cycle= を =nil= |
+| =completion--org-src-orderless-setup= | カテゴリ別のスタイル（ symbol 、 keyword 、 function 、 variable は orderless 。 file は basic と partial-completion 。 dabbrev は basic ） |
+
+どれも =org-src-mode-hook= に登録され、ソースブロックの編集バッファの中だけに効きます。
+
+*バッファローカルに設定する理由*
+
+コーディング規則 6 は、 =defcustom= の変数には =setopt= を使うと定めています。ただし、規則 6 は大域の設定に
+適用されるもので、ここは、ソースブロックの編集バッファの中だけに、グローバルな値に影響を与えずに上書きしたい
+場面です。 =setopt= にはバッファローカル版がないので、 =setq-local= が唯一の正しい形です。大域の
+=completion-category-overrides= を持つのは、 =completion-capf= です。
+
 #+NAME: completion-org-src-el
 #+begin_src emacs-lisp
   ;;; completion/completion-org-src.el --- Org SRC 編集バッファ向けの補完設定 -*- lexical-binding: t; -*-
@@ -771,6 +990,23 @@ corfu、orderless の順に登録しているため、実行順は orderless、c
 
 補完用の CAPF 関数（ =eglot-completion-at-point= など）はここでは追加しません。それらは Eglot 自身が
 接続したバッファで登録します。lsp-mode には対応しません。
+
+*設定と動作*
+
+- =completion-lsp-enable-p= （既定は =t= ）を =nil= にすると、この処理全体を止められます。
+- =completion-lsp-on-project-switch= が、ファイルを開くたび（ =find-file-hook= ）と、プロジェクトを切り替えるたび
+  （ =project-switch-project-hook= ）に、プロジェクトのルートを調べます。前回のルートと違えば、前回のルート配下の
+  サーバを探して停止します。
+- 停止の対象は、 =eglot-managed-buffers= から集めたサーバのうち、サーバのルートが前回のルート配下にあるものです。
+  同じサーバは 1 回しか止めません。停止に失敗しても、メッセージを出すだけで、処理は続けます。
+
+*注意*
+
+- TRAMP のバッファ（リモートのファイル）は、対象外です。 =project-current= が、 =find-file= のたびにリモートの
+  ホストでコマンドを実行してしまうためです。リモートのバッファは、記録しているルートも変えません。
+- Eglot の内部の変数（ =eglot--servers= ）は使いません。 =eglot--project= は内部の関数ですが、 =fboundp= で守って、
+  Emacs のバージョンの差に備えています。
+
 #+begin_src emacs-lisp
   ;;; completion/completion-lsp.el --- LSP ライフサイクルの後始末 -*- lexical-binding: t; -*-
   ;;

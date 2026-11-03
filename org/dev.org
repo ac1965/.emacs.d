@@ -17,6 +17,57 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: dev-modules
 :END:
 
+dev 層は、コードを書く・動かす・確かめるための層です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+並びで、vcs の次、utils の前にあります。下の層には依存できますが、utils と personal には依存できません。
+
+*構成*
+
+| モジュール | 責務 |
+|------------|------|
+| =dev-lsp-bridge= | LSP のバックエンド（Eglot / lsp-mode）を意識せずに使うための、code-actions、rename、format のコマンド |
+| =dev-ai= | agent-shell（Claude Code など）の導入と、認証の方法の選択 |
+| =dev-term= | vterm とプロジェクト単位のターミナル切替、Nano のパレットへの色合わせ |
+| =dev-web-core= | =project.el= 、保存時の空白の整理、EditorConfig |
+| =dev-build= | Makefile の編集、コンパイルバッファ、ANSI 色 |
+| =dev-format= | Apheleia による保存時の自動整形 |
+| =dev-infra-modes= | docker-compose、 =.env= 、TOML のメジャーモード |
+| =dev-docker= | Dockerfile、YAML、docker CLI、TRAMP のコンテナ |
+| =dev-music= | EMMS による音楽再生 |
+| =dev-sql= | PostgreSQL 向けの SQL 編集と整形 |
+| =dev-rest= | restclient と jq による HTTP の試験 |
+| =dev-radare2= | radare2 による、バイナリの解析 |
+| =dev-navigation= | dumb-jump、multiple-cursors、EWW、LSP のシンボル検索、DevDocs、構文木での折りたたみ |
+| =dev-tools= | VS Code で開く、環境変数の表示、Emacs のビルド情報 |
+| =dev-run= | デバッガ（dape）、direnv（envrc）、テストの実行 |
+
+ロード順は、上の表の順です（ =lisp/modules.el= の =my:modules= ）。ほかに、次の 2 点があります。
+
+- =dev-lsp-eglot= と =dev-lsp-mode= は、 =my:modules= にも =my:modules-extra= にも載せません。 =core-switches= が
+  選んだバックエンドを、 =after-init-hook= で、必要になったときにロードします。
+- =dev-apple-music= は macOS 専用で、 =personal/device-darwin.el= が =my:modules-extra= に加えます。
+
+*この層の方針*
+
+- *バックエンドに依存しない* — LSP は、 =dev-lsp-bridge= のコマンドを通して呼びます。 Eglot と lsp-mode の
+  どちらを使っていても、キーも、呼び出し側のコードも変わりません。
+- *起動を遅くしない* — 重いパッケージ（ apheleia 、 editorconfig 、 project 、 EMMS 、 Eglot ）は、起動の直後のアイドル時、
+  または最初に使うときまで、ロードを遅らせます。
+- *層の向きを守る* — dev 層は、上位の層（personal）を参照しません。API キーの取得は、personal 層が関数を渡す形にして、
+  dev 層は取得先を知りません。キーの割り当ては、leader のマップを作る処理（ =after-init-hook= の depth 0）のあとに走るよう、
+  depth 90 で登録します。
+
+*キーの一覧*
+
+| キー | コマンド | 割り当てるモジュール |
+|------|----------|----------------------|
+| =M-SPC c a= / =r= / =f= | code-actions / rename / format | =dev-lsp-bridge= |
+| =M-SPC c s= / =K= / =z= | LSP のシンボル検索 / DevDocs / 折りたたみ | =dev-navigation= |
+| =M-SPC c t= / =T= / =D= / =B= | テスト / 再実行 / デバッグ / ブレークポイント | =dev-run= |
+| =M-SPC a c= / =C= | Claude Code の起動 / エージェントを選んで起動 | =dev-ai= |
+| =M-SPC a a= | Apple Music の hydra（macOS） | =dev-apple-music= |
+| =M-SPC a v= / =m= / =d= | vterm / EMMS / docker | =ui-keys.el= |
+
+
 * dev/dev-lsp-bridge.el
 :PROPERTIES:
 :CUSTOM_ID: dev-lsp-bridge
@@ -25,6 +76,29 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 
 LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバインドやコマンド呼び出し側が
 影響を受けないようにするファサードです。詳細は以下の Commentary を参照してください。
+
+*使えるコマンド*
+
+| コマンド | キー | 中身 |
+|----------|------|------|
+| =dev-lsp-code-actions= | =M-SPC c a= | 今の位置のコードアクションを実行する |
+| =dev-lsp-rename= | =M-SPC c r= | ポイントのシンボルを改名する |
+| =dev-lsp-format-buffer= | =M-SPC c f= | バッファを整形する。LSP が動いていなければ =indent-region= |
+
+呼び出すときに、Eglot の関数（ =eglot-code-actions= など）が定義されていればそれを、なければ lsp-mode の関数を、
+どちらもなければ（整形だけ） =indent-region= を使い、最後はエラーにします（ =dev-lsp--dispatch= ）。
+
+*バックエンドの登録*
+
+=dev-lsp-bridge= は、 =core-switches-register= で、LSP のバックエンド（ =eglot= と =lsp= ）を、 =core-switches= の登録簿へ登録します。
+core 層の =core-switches= は、バックエンドのモジュールの名前を知りません。名前を知る =dev-lsp-bridge= が、
+有効にする関数（ =my/lsp-enable-eglot= と =my/lsp-enable-lspmode= ）と、それを持つライブラリ（ =dev-lsp-eglot= と =dev-lsp-mode= ）を登録し、
+同時に =autoload= を宣言します。バックエンドのファイルは、選ばれたときにだけロードされます。
+
+*キーを、この層が割り当てる理由*
+
+=ui-keys.el= がこの 3 コマンドを直接参照すると、ui 層が dev 層に依存してしまい、層の向きに反します。
+そのため、割り当ては =dev-lsp-bridge= が、 =after-init-hook= の depth 90 で行います。
 
 [[file:../svg/08_lsp_agnostic.svg]]
 
@@ -137,6 +211,49 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
 :CUSTOM_ID: dev-lsp-eglot
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-lsp-eglot.el
 :END:
+
+Eglot を LSP のバックエンドにするためのモジュールです。 =core-switches= が選んだときだけロードされます
+（ =my:modules= には載せません）。
+
+*いつ Eglot を起動するか*
+
+=prog-mode= のバッファでファイルを開いたとき、Eglot がそのバッファのサーバを見つけられるなら、 =eglot-ensure= を呼びます
+（ =dev-lsp-eglot--maybe-ensure= ）。
+
+- *scratch などは対象外* — ファイルを訪問していないバッファでは呼びません。Eglot のロードに約 130 ms 掛かるので、
+  起動時に引き込まないためです。
+- *サーバの有無を先に確かめる* — =my/eglot-guessable-p= は、 =eglot--guess-contact= の結果の 4 番目（ CONTACT ）が
+  空でないことを確かめます。サーバが登録されていないモード（ =emacs-lisp-mode= など）でも、この関数は空でない
+  リストを返すので、結果が空でないだけでは足りません。 CONTACT が空のまま接続すると、
+  「Wrong type argument: processp, nil」で失敗します。
+- *最初に Eglot をロードする* — 判定に使う =eglot--guess-contact= は、Eglot をロードするまで存在しません。
+  ロードしないと、判定がいつも偽になって、Eglot が 1 度も起動しません。
+
+*サーバの登録*
+
+| 言語 | サーバ |
+|------|--------|
+| C / C++（ =c-mode= 、 =c++-mode= と、それぞれの =-ts-mode= ） | =clangd= （ =--background-index --clang-tidy= ）。Homebrew の llvm にあれば、そちらを優先 |
+| Python（ =python-mode= と =python-ts-mode= ） | =pyright-langserver --stdio= |
+
+*設定*
+
+- =eglot-autoreconnect= と =eglot-autoshutdown= は =t= です。サーバが落ちたら再接続し、最後のバッファを閉じたら
+  サーバを止めます。
+- Eglot は、Emacs に同梱のものを使います（ =:straight nil= 。コーディング規則 3）。 =:straight t= だと、ELPA から
+  Eglot と、依存する eldoc、flymake、project、xref、jsonrpc までを取得して同梱版を上書きし、初回の起動も遅くなります。
+- rename と code-actions は、 =dev-lsp-bridge= のコマンドで呼びます。 =C-c r= は query-replace に使っているので、
+  =eglot-mode-map= には割り当てません。
+
+*ファイル監視を受け付けない理由*
+
+pyright は起動直後に、 =site-packages= 全体のファイル監視を登録してきます。Eglot はこれを kqueue で監視し、
+kqueue は 1 ファイルにつきファイル記述子を 1 つ使うため、大きな木では記述子が尽きて =file-notify-error= になります。
+Eglot がサーバへ「Internal error」を返すと、pyright が終了コード 1 で落ち、再接続を繰り返して、補完が「Server died」で
+失敗します（2026-10-31 に =M-x my/smoketest-lsp= で見つかりました。pylsp でも同じでした）。
+=dev-lsp-eglot--skip-file-watchers= が、 =workspace/didChangeWatchedFiles= の登録を無視します。失うのは、エディタの外で
+ファイルが変わったときの通知だけです。開いているバッファの内容は =didChange= で渡るので、編集中の補完、診断、
+定義ジャンプには影響しません。
 
 #+begin_src emacs-lisp
   ;;; dev/dev-lsp-eglot.el --- Eglot による LSP 設定 -*- lexical-binding: t; -*-
@@ -256,6 +373,23 @@ LSP バックエンド（eglot / lsp-mode）を切り替えても、キーバイ
 :CUSTOM_ID: dev-lsp-mode
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-lsp-mode.el
 :END:
+
+lsp-mode を LSP のバックエンドにするためのモジュールです。Eglot の代わりに使いたいときのための選択肢で、
+=core-switches= が選んだときだけロードされます。
+
+*設定*
+
+- =lsp-keymap-prefix= は =C-c l= です。
+- ファイル監視は有効（ =lsp-enable-file-watchers= ）で、監視するファイル数の上限は 5000 です（ =lsp-file-watch-threshold= ）。
+- サーバの応答を待つ時間は 5 秒です（ =lsp-response-timeout= ）。
+- 診断は、 =lsp-diagnostics-provider= が =:auto= で、Flycheck が入っていれば Flycheck、なければ Flymake が選ばれます。
+- 補完の提供元は =:none= です（ =lsp-completion-provider= ）。補完は lsp-mode 自身ではなく、Corfu と Cape に任せます。
+- =prog-mode= で =lsp-deferred= を呼び、バッファが見えてから接続します。
+- lsp-ui は、ドキュメントの表示（遅延 0.2 秒）と、サイドラインのオーバーレイを有効にします。
+
+*切り替え*
+
+=my/lsp-enable-lspmode= が、 =core-switches= から呼ばれる入口です。 =prog-mode-hook= に =lsp-deferred= を足します。
 
 #+begin_src emacs-lisp
   ;;; dev/dev-lsp-mode.el --- lsp-mode の設定 -*- lexical-binding: t; -*-
@@ -439,6 +573,31 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-term.el
 :END:
 
+vterm によるターミナルの統合です。プロジェクトごとにターミナルを切り替え、画面の下にドッキングして表示します。
+
+*提供するもの*
+
+- *vterm-toggle* — ターミナルの表示と非表示の切り替えです。 =vterm-toggle-scope= が =project= なので、プロジェクトごとに
+  別のターミナルになります。
+  全画面にはしません（ =vterm-toggle-fullscreen-p= は =nil= ）。 =vterm-toggle-cd= を使うときは、ターミナルがなければ作ります（ =vterm-toggle-cd-auto-create-buffer= は =t= ）。キーは =M-SPC a v= で、 =ui-keys.el= で割り当てます。
+- *下へのドッキング* — vterm のバッファは、フレームの下に、高さ 0.3 のウィンドウで出します。専用のウィンドウで
+  （ =dedicated= ）、見えているフレームで再利用します。
+- *Nano のパレットへの色合わせ* — =dev-term-apply-palette= が、vterm の色（ black、 red、 yellow、 blue、 white、
+  既定の前景と背景）を、Nano のパレットの色に合わせます。
+
+*パレットの依存の向き*
+
+dev 層は、ui 層のモジュールをロード時に強制ロードしません。そのため、 =ui-nano-palette= を =require= せず、色の変数が
+定義されていれば読み、なければ安全な既定値を使います（ =dev-term--nano-color= ）。 =ui-nano-palette= がロードされたとき、
+テーマが替わったとき、新しいフレームができたときに、色を適用し直します。
+
+パレットをロードするのは =ui-theme.el= で、 =my:use-ui= が =nano= か =doom-nano= のときだけです。 =doom= と =none= では、
+既定値のままです。
+
+*設定*
+
+=dev-term-enable-p= を =nil= にすると、vterm と vterm-toggle の設定を、まとめて無効にできます。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-term.el --- ターミナル統合の補助 -*- lexical-binding: t; -*-
   ;;
@@ -590,6 +749,24 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-web-core.el
 :END:
 
+プロジェクトの基盤と、ファイルの衛生管理、EditorConfig をまとめたモジュールです。
+
+- *project.el* — 組み込みの =project.el= を設定します。 =/tmp/= と =/private/var/folders/= のプロジェクトは、
+  プロジェクトの一覧から除きます（ =project-list-exclude= ）。モードラインには、リモートでないときだけ表示します
+  （ =project-mode-line= ）。 =project-prune-zombie-projects= は、ビルドによって型が boolean か alist のどちらにもなり得るので、
+  型を確かめて、boolean のときだけ =t= にします（誤った型で =setopt= すると、型検証の警告が出るため）。
+- *保存時の空白の整理* — 最終行の改行を必ず付け（ =require-final-newline= ）、末尾の空行は消します
+  （ =delete-trailing-lines= ）。行末の空白は、 =prog-mode= 、 =org-mode= 、 =conf-mode= 、 =text-mode= のバッファでだけ、
+  =delete-trailing-whitespace-mode= が除きます。以前の、グローバルな =before-save-hook= への登録は、保存した
+  あらゆるバッファ（サードパーティのリポジトリのファイルも）を書き換えて、空白だけの差分を作っていました。
+- *EditorConfig* — =editorconfig-mode= をグローバルに有効にします。Emacs 31 では、 =editorconfig-apply= は廃止され、
+  =editorconfig-mode= が正式な入口です。
+
+*起動を遅くしない工夫*
+
+=project= と =editorconfig= は、 =:require t= や =:global-minor-mode= だと、モジュールのロード時に即座に =require= されて、
+起動のコストになっていました。どちらも =emacs-startup-hook= から、アイドルタイマー（ 0 秒）で有効にします。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-web-core.el --- プロジェクト基盤の補助 -*- lexical-binding: t; -*-
   ;;
@@ -691,6 +868,21 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-build.el
 :END:
 
+Makefile の編集、コンパイルのバッファ、ANSI の色の設定です。
+
+- *Makefile* — =Makefile= 、 =GNUmakefile= 、 =makefile= を =makefile-gmake-mode= で開きます。Makefile のバッファでは、
+  ハードタブでインデントし（ =indent-tabs-mode= は =t= 、 =tab-width= は 8）、行末の空白を表示し、
+  =compile-command= を =make -k= にします。これらは =setq-local= で、そのバッファの中だけに効かせます。Makefile の構文は
+  ハードタブを必須とするので、グローバルに強制すると、ほかのモードを壊すためです。
+- *コンパイルのバッファ* — 出力の末尾に追従してスクロールし（ =compilation-scroll-output= ）、警告を飛ばして、
+  エラーまで進みます（ =compilation-skip-threshold= は 2）。
+- *ANSI の色* — コンパイルの出力に含まれる ANSI の色の指定を、 =ansi-color-apply-on-region= で色に直します。
+
+*補足*
+
+=defun= は =leaf= より前に置いています。 =:hook= が、マクロの展開時に関数名を参照するので、後ろに置くと、
+バイトコンパイルで「function ... not known to be defined」の警告になるためです。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-build.el --- ビルドと Makefile のツール -*- lexical-binding: t; -*-
   ;;
@@ -765,6 +957,20 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-format.el
 :END:
 
+Apheleia による、保存時の自動整形です。整形は非同期で、保存を待たせません。
+
+- *フォーマッタ* — =prettierd= （ =prettierd <ファイル>= ）と =prettier= （ =npx prettier --stdin-filepath <ファイル>= ）を
+  登録します。
+- *対応づけ* — =typescript-ts-mode= 、 =tsx-ts-mode= 、 =json-ts-mode= 、 =css-ts-mode= 、 =markdown-mode= を、
+  =prettierd= に対応づけます。
+- *有効化* — =apheleia-global-mode= を有効にします。
+
+*起動を遅くしない工夫*
+
+起動のプロファイルで、apheleia は 14 ms 前後を占めていました（ =:require t= がロード時に即座に =require= していたため）。
+フォーマッタの登録と有効化を、 =emacs-startup-hook= からのアイドルタイマーで遅らせています。保存時の整形という性質上、
+起動の直後に有効になれば、実用上の差はありません。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-format.el --- Apheleia によるコード整形 -*- lexical-binding: t; -*-
   ;;
@@ -829,6 +1035,20 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-infra-modes.el
 :END:
 
+インフラや設定のファイルに、メジャーモードを割り当てます。
+
+| ファイル | モード |
+|----------|--------|
+| =docker-compose= で始まる YAML | =docker-compose-mode= |
+| =.env= と =.env.*= | =dotenv-mode= |
+| =.toml= | =toml-mode= |
+
+*注意*
+
+YAML の割り当ては、 =dev-docker= の =yaml-mode= と重なります。 =auto-mode-alist= は先頭から探し、 =dev-docker= のほうがあとに
+ロードされるので、 =dev-infra-modes= の割り当てだけだと、 =docker-compose.yml= も =yaml-mode= で開いていました
+（2026-11-03 に確かめました）。そのため、 =dev-docker= が、 =docker-compose= のファイルの割り当てを、 =yaml-mode= の割り当てより前に足しています。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-infra-modes.el --- インフラ系ファイルのモード -*- lexical-binding: t; -*-
   ;;
@@ -866,6 +1086,17 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-docker.el
 :END:
 
+Docker まわりの編集と操作です。
+
+- *メジャーモード* — =Dockerfile= 、 =Dockerfile.*= 、 =.dockerfile= は =dockerfile-mode= （ビルドのコマンドは =docker= ）、
+  =docker-compose*.yml= は =docker-compose-mode= （ =dev-infra-modes= が導入）、一般の YAML は =yaml-mode= で開きます。
+- *docker の操作* — =docker= の transient で、コンテナ、イメージ、ボリューム、ネットワークを扱います。キーは =M-SPC a d= で、
+  =ui-keys.el= が割り当てます。
+- *TRAMP のコンテナ* — =tramp-container-method= を =docker= にして、 =/docker:<コンテナ>:/= のパスで、コンテナの中のファイルを
+  編集できます。
+- *テンプレート* — tempel に、Dockerfile のひな形（ =FROM= 、 =WORKDIR= 、 =COPY= 、 =RUN= 、 =CMD= ）を登録します。
+  =tempel-insert= で挿入します。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-docker.el --- Docker 統合の補助 -*- lexical-binding: t; -*-
   ;;
@@ -882,7 +1113,7 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
   ;;
   ;; 本ファイルの責務:
   ;; - Dockerfile と .dockerfile 拡張子に対して dockerfile-mode を設定する
-  ;; - docker-compose および一般の YAML ファイルに対して yaml-mode を設定する
+  ;; - YAML ファイルに対して yaml-mode を、docker-compose のファイルに対して docker-compose-mode を割り当てる
   ;; - コンテナ／イメージ／ボリューム管理のための `docker' transient を提供する
   ;; - `docker:' リモートホストへのアクセスのため `tramp-container' を設定する
   ;; - tempel の Dockerfile スニペット・テンプレートを登録する
@@ -899,7 +1130,16 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
     :custom ((dockerfile-mode-command . "docker")))
 
   (leaf yaml-mode :straight t
-    :mode (("\\`docker-compose.*\\.ya?ml\\'" . yaml-mode) ("\\.ya?ml\\'" . yaml-mode)))
+    :mode (("\\.ya?ml\\'" . yaml-mode)))
+
+  ;; docker-compose のファイルは docker-compose-mode（dev-infra-modes が導入する）で開く。
+  ;; `auto-mode-alist' は先頭から探すので、上の yaml-mode の割り当てより前に置く必要がある。
+  ;; dev-infra-modes の :mode は、このファイルより先にロードされるため、yaml-mode の割り当てに
+  ;; 隠れていた。docker-compose-mode は yaml-mode の派生で、YAML の編集は変わらない。
+  ;; パターンは、ファイル名だけでなく、ディレクトリを含む絶対パスに対して照合されるので、先頭を \\` で固定せず、
+  ;; ディレクトリの区切りの / から始める。
+  (add-to-list 'auto-mode-alist
+               '("/docker-compose[^/]*\\.ya?ml\\'" . docker-compose-mode))
 
   (leaf docker :straight t
     :commands (docker docker-containers docker-images docker-volumes docker-networks))
@@ -926,6 +1166,30 @@ API キーの出どころ（ =auth-source= ）は、dev 層は知りません。
 :CUSTOM_ID: dev-music
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-music.el
 :END:
+
+EMMS による音楽再生の統合です。外部のプレイヤー（ =mpv= を推奨）に依存し、ほかの層には干渉しません。
+
+*設定*
+
+- 音楽のディレクトリは =~/Music/= で、プレイリストのバッファ名は =*EMMS Playlist*= です。
+- プレイヤーは =emms-player-mpv= 、 =emms-player-mplayer= の順で、メタデータは =emms-info-native= で読みます。
+- 履歴とキャッシュは、 =my:d:var= 以下の =emms/= に置きます。
+- Dired のバッファでは =E= で、ポイントのファイルやディレクトリを再生します（ =emms-play-dired= ）。
+- =dev-music-enable-p= を =nil= にすると、この設定をまとめて無効にできます。キー =M-SPC a m= は =ui-keys.el= で割り当てます。
+
+*なぜ :config を遅らせるのか*
+
+=emms-all= 、 =emms-default-players= 、 =emms-mode-line-mode= の初期化に、実機で 6 秒以上掛かりました（ =emms-all= が
+引き込む多数のサブライブラリの初期化コストと見られますが、正確な内訳は調べていません）。音楽を使わない
+セッションで、毎回この時間を払わないよう、EMMS のコマンドを最初に呼ぶときまで、 =:config= を遅らせます。
+
+*設定の順序*
+
+- =emms-directory= は、 =emms-all= を呼ぶ前に設定します。 =emms-all= が、これを読んで履歴、キャッシュ、プレイリストの
+  パスを決めるためです（以前は後で設定していたので、パスが EMMS の既定の =~/.emacs.d/emms/= に静かに戻っていました）。
+  そのため =:pre-setq= で、パッケージのロード前に設定しています。
+- 履歴とキャッシュのパスは、 =emms-directory= が決まったあとの =:config= で、 =setopt= で設定します。
+- Dired の =E= の割り当ては、 =:commands= が作る autoload だけで足りるので、EMMS 本体をロードせずに、起動時に行います。
 
 #+begin_src emacs-lisp
   ;;; dev/dev-music.el --- EMMS 音楽プレイヤー統合 -*- lexical-binding: t; -*-
@@ -1610,6 +1874,14 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-sql.el
 :END:
 
+PostgreSQL を使う開発のための、SQL の編集と整形です。
+
+- 既定の SQL 製品は =postgres= です（ =sql-product= ）。
+- =sql-mode= のバッファで、 =sqlind-minor-mode= がインデントを整えます。
+- 保存時に、 =sqlformat= が =pgformatter= （ =--nostyle= つき）で整形します。 =sql-mode= と =sql-ts-mode= の両方が対象です。
+
+整形には、 =pg_format= の実行ファイルが要ります。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-sql.el --- SQL と PostgreSQL の補助 -*- lexical-binding: t; -*-
   ;;
@@ -1649,6 +1921,11 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-rest.el
 :END:
 
+HTTP の API を、Emacs の中で試すための restclient の設定です。
+
+- =.http= のファイルは、 =restclient-mode= で開きます。リクエストを書いて、 =C-c C-c= で実行します。
+- =restclient-jq= を、restclient のあとに読み込みます。レスポンスの JSON を、 =jq= の式で絞り込めます。 =jq= の実行ファイルが要ります。
+
 #+begin_src emacs-lisp
   ;;; dev/dev-rest.el --- REST クライアントの補助 -*- lexical-binding: t; -*-
   ;;
@@ -1681,6 +1958,27 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
 :CUSTOM_ID: dev-radare2
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-radare2.el
 :END:
+
+radare2（ r2 ）で、バイナリを解析するためのコマンドです。外部のパッケージには依存せず、 =comint= と =call-process= だけで
+実装しています。r2 がない環境でも、ロードは失敗しません。コマンドを呼んだときに、はじめてエラーにします
+（メッセージは「 r2 が見つかりません (brew install radare2) 」）。
+
+*コマンド*
+
+| コマンド | 中身 |
+|----------|------|
+| =my/r2= | 対象のファイルを、r2 の対話セッション（ comint ）で開く |
+| =my/r2-command= | 対象のファイルに、r2 のコマンドを 1 つ実行して、結果を表示する（既定は =afl= ） |
+| =my/r2-disassemble= | 対象のファイルの関数を逆アセンブルする（既定は =main= 。 =pdf @ <関数>= ） |
+| =my/r2-info= | 対象のファイルの情報を表示する（ =iI= ） |
+
+対象のファイルは、dired ならポイントのファイル、それ以外は今のバッファのファイル、なければミニバッファで尋ねます。
+
+*設定*
+
+- =dev-radare2-program= は =r2= です。実行ファイルの名前を変えられます。
+- =dev-radare2-analysis-command= は =aa= です。非対話の実行で、コマンドの前に、まず解析を走らせます。
+- 色は切ります（ =scr.color= を 0 にします）。標準エラーの進捗の表示は捨てます。
 
 #+begin_src emacs-lisp
   ;;; dev/dev-radare2.el --- radare2 を Emacs から使う -*- lexical-binding: t; -*-
@@ -1780,6 +2078,36 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
 :CUSTOM_ID: dev-navigation
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-navigation.el
 :END:
+
+コードを読むときの移動や、検索のための補助をまとめたモジュールです。
+
+*定義への移動*
+
+- *dumb-jump* — 副次的な xref のバックエンドとして登録します。Eglot がそのバッファを管理していないときにだけ有効です。
+  検索は ripgrep に固定します（ =dumb-jump-force-searcher= ）。 LSP のない言語や、サーバが動いていないときに、
+  =M-.= が効きます。
+- *consult-eglot* — LSP のワークスペースのシンボル（関数やクラス）を、プロジェクト全体から絞り込みます
+  （ =M-SPC c s= ）。Eglot が接続しているときに使います。
+- *devdocs* — DevDocs のドキュメントを、Emacs の中で引きます（ =M-SPC c K= ）。初回は =M-x devdocs-install= で、
+  言語のドキュメントを入れます（ネットワークが要ります）。
+- *treesit-fold* — tree-sitter の構文木で、関数やブロックを折りたたみます（ =M-SPC c z= ）。tree-sitter のモードの
+  バッファでだけ有効にします。
+
+*多点編集*
+
+=multiple-cursors= を導入しています。キーの割り当てはここにはありません。
+
+*EWW（ブラウザ）*
+
+- =my/eww-search= — 検索語で検索し、ページを描いたあとに、検索語をハイライトします。検索の接頭辞は DuckDuckGo の
+  日本語の設定です（ =eww-search-prefix= ）。
+- =my/eww-toggle-images= — 今のバッファで、画像の表示を切り替えます（ =shr-inhibit-images= ）。
+- キャッシュは =my:d:eww= 以下の =cache/= に置き、履歴は 200 件までです。ダウンロードは =~/Downloads= です。
+
+*キー*
+
+キーは =after-init-hook= の depth 90 で割り当てます。leader のマップは、 =ui-keymap= の処理（depth 0）で作られるので、
+そのあとに走らせる必要があります。
 
 #+begin_src emacs-lisp
   ;;; dev/dev-navigation.el --- 検索とナビゲーションの補助 -*- lexical-binding: t; -*-
@@ -1927,6 +2255,18 @@ macOS でだけ使うため、 =my:modules= には載せません。 =personal/d
 :CUSTOM_ID: dev-tools
 :header-args:emacs-lisp: :tangle ../lisp/dev/dev-tools.el
 :END:
+
+開発で使う、小さなコマンドの寄せ集めです。
+
+| コマンド | 中身 |
+|----------|------|
+| =my/open-by-vscode= | 今のファイルを、今の行と桁で VS Code で開く（ =code -r -g= ） |
+| =my/show-env-variable= | 環境変数の値を表示する |
+| =my/print-build-info= | Emacs のビルド情報を、Markdown の表で =*Build Info*= に出す |
+
+=my/print-build-info= の Commit と Branch は、実行時に問い合わせず、ビルドのときに埋め込まれた
+=emacs-repository-version= と =emacs-repository-branch= から取ります。ソースを更新しても、ビルドしたコミットが出ます。
+この出力は、 =scripts/update_build_info.py= が、 =README.org= の Installation 節のビルド情報の表へ反映します。
 
 #+begin_src emacs-lisp
   ;;; dev/dev-tools.el --- 開発用の補助ツール -*- lexical-binding: t; -*-

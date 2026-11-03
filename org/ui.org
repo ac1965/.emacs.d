@@ -17,11 +17,79 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: ui-modules
 :END:
 
+ui 層は、見た目と操作感の層です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の並びで、
+core の次、auth の前にあります。core には依存できますが、上位の層には依存できません。
+
+*構成*
+
+| モジュール | 責務 | 載せ方 |
+|------------|------|--------|
+| =ui-font= | フォント（等幅、可変ピッチ、絵文字）とリガチャ | =my:modules= |
+| =ui-bundles= | UI バンドルを =core-switches= へ登録する | =my:modules= |
+| =ui-theme-variant= | nano の light / dark の切替と保存 | =my:modules= |
+| =ui-theme= | テーマ、パレット、フェイスの適用 | =my:modules= |
+| =ui-window= | zoom、desktop、winner、tab-bar（用途別のタブ）、popper、行間と余白 | =my:modules= |
+| =ui-utils= | minions、時刻とバッテリー、Treemacs、アイコン、クリップボード、helpful | =my:modules= |
+| =ui-health-modeline= | バッファ数・プロセス数・Eglot のバッファ数の表示 | =my:modules= |
+| =ui-imenu= | imenu-list によるサイドパネル | =my:modules= |
+| =ui-keys= | リーダーキー、Hydra、which-key、キーボード変換、キーの割り当て | =my:modules= |
+| =ui-nano-palette= | Nano のパレット（意味づけされた色） | =ui-theme= が nano 系のときに読む |
+| =ui-nano-modeline= 、 =ui-nano-modeline-items= | Nano のヘッダー行と、その表示項目 | バンドルを選んだときだけ |
+| =ui-doom-modeline= | Doom の modeline のバンドル | バンドルを選んだときだけ |
+| =ui-doom-nano-modeline= | Doom 向けの Nano の modeline のバンドル | バンドルを選んだときだけ |
+| =ui-visual-aids= | pulsar、hl-todo、rainbow-delimiters、indent-bars | =my:modules-extra= |
+| =ui-macos= | macOS 固有の調整 | =my:modules-extra= |
+
+*UI のバンドルの仕組み*
+
+見た目の一式（バンドル）は、 =my:use-ui= で選びます（ =none= 、 =doom= 、 =nano= 、 =doom-nano= ）。 =core-switches= は core 層にあり、
+ui 層のモジュールの名前を知りません。名前を知る =ui-bundles= が、 =core-switches-register= で、選択肢と、有効にする関数と、
+それを持つファイルを登録し、同時に =autoload= を宣言します。バンドルのファイルは、選ばれたときにだけロードされ、
+どちらのモジュールのリストにも載りません。 =nano= と =doom-nano= は、排他的に使います。
+
+*この層の方針*
+
+- *デーモンでも壊れない* — ロード時に =display-graphic-p= で分けず、 =after-make-frame-functions= か、初回のグラフィカルな
+  フレームを待つ共通の窓口（ =core-runtime-run-on-first-graphic-frame= ）を使います。
+- *起動を遅くしない* — pulsar や diff-hl のような重いものは、起動の後のアイドル時に有効にします。
+- *キーの割り当ては 1 か所* — キーのマップは =ui-keys= が作り、他の層は、 depth 90 の =after-init-hook= で、そのマップへ足します。
+
+
 * ui/ui-font.el
 :PROPERTIES:
 :CUSTOM_ID: ui-font
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-font.el
 :END:
+
+フォントの設定です。等幅、可変ピッチ、絵文字のフォントを選び、プログラム用のリガチャを有効にします。
+
+*カスタマイズ変数*
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| =ui-font-default= | =nil= | 等幅のフォントのファミリ。 =nil= なら OS ごとの既定 |
+| =ui-font-variable-pitch= | =nil= | 可変ピッチのフォント。 =nil= なら等幅のフォントと同じ |
+| =ui-font-emoji= | =nil= | 絵文字のフォント。 =nil= なら OS ごとの既定 |
+| =ui-font-size= | 18 | サイズ（ポイント） |
+
+OS ごとの既定は、macOS が =Menlo= と =Apple Color Emoji= 、Linux が =Monospace= と =Noto Color Emoji= 、Windows が =Consolas= と
+=Segoe UI Emoji= です。
+
+*コマンド*
+
+- =ui-font-show-current= — 今の既定のフォントとサイズを、エコーエリアに出します。
+- =ui-font-describe= — 等幅、可変ピッチ、絵文字のフォントを、まとめて表示します（グラフィカルなフレームだけ）。
+
+*適用のしかた*
+
+=ui-font-apply= が、グラフィカルなフレームに、フォントを適用します。通常の起動は =after-init-hook= 、デーモンは
+=after-make-frame-functions= で、フレームごとに呼びます。
+
+*リガチャ*
+
+矢印、等号を重ねた記号、不等号、 =&&= 、 =||= 、 =::= などの記号を、 =prog-mode= で、1 つの文字として描きます。最初のグラフィカルな
+フレームができたときに、 =global-ligature-mode= を一度だけ有効にします（デーモンでも通常の起動でも同じ）。グローバルなモードを
+=prog-mode-hook= に足すと、繰り返し有効にしてしまうので、足しません。
 
 #+begin_src emacs-lisp
   ;;; ui/ui-font.el --- フォント設定 -*- lexical-binding: t; -*-
@@ -180,6 +248,37 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: ui-nano-palette
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-nano-palette.el
 :END:
+
+Nano 風の、意味づけされた色のパレットです。色を使い方（背景、前景、強調、警告など）で名づけ、フェイスへ安全に適用します。
+
+*パレットの変数*
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| =ui-nano-palette-color-background= | =#fafafa= | エディタの背景 |
+| =ui-nano-palette-color-foreground= | =#374151= | 通常の文字 |
+| =ui-nano-palette-color-subtle= | =#e5e7eb= | 控えめな面 |
+| =ui-nano-palette-color-strong= | =#111827= | 強い文字 |
+| =ui-nano-palette-color-muted= | =#9ca3af= | 弱い文字 |
+| =ui-nano-palette-color-salient= | =#2563eb= | 主な強調色 |
+| =ui-nano-palette-color-popout= | =#6b7280= | 2 番目の強調色 |
+| =ui-nano-palette-color-success= | =#10b981= | 成功 |
+| =ui-nano-palette-color-warning= | =#f59e0b= | 警告 |
+| =ui-nano-palette-color-critical= | =#dc2626= | 重大なエラー |
+| =ui-nano-palette-color-info= | =#0284c7= | 情報 |
+| =ui-nano-palette-color-selection= | =#dbeafe= | 選択の背景 |
+| =ui-nano-palette-color-cursor= | =#2563eb= | カーソル |
+
+どれも =defcustom= で、 =personal/= から上書きできます。他のモジュール（ =dev-term= など）も、この変数を読んで色を合わせます。
+
+*設計*
+
+- *最小限のパレット* — 色の種類を増やさず、意味に基づいて使います。UI に一貫性が出ます。
+- *安全なフェイスの適用* — =ui-nano-palette--safe-face= は、存在するフェイスにだけ属性を設定し、設定したフェイスを覚えます。
+  dark に切り替えるとき、テーマが定義していないフェイス（ light の固定色が残る）を、元の定義へ戻すために使います。
+- *冪等* — 何度適用しても、結果は同じです。 =load-theme= のあとと、dirvish をロードしたあとに、適用し直します。
+
+このモジュールの最初のロードは、 =ui-theme= が行います。 =my:use-ui= が nano 系のときだけ読み込みます。
 
 #+NAME: ui-nano-palette
 #+begin_src emacs-lisp
@@ -496,6 +595,14 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-doom-modeline.el
 :END:
 
+Doom の modeline を使うバンドルです。 =my:use-ui= が =doom= のときに、 =core-switches= が =my/ui-enable-doom= を呼びます。
+
+- *アイコン* — nerd-icons を導入します。
+- *modeline の設定* — 高さは 28 です（ =doom-modeline-height= ）。バッファ名は、プロジェクトからのパスを、途中を省いて出します
+  （ =truncate-with-project= ）。マイナーモードは出さず（ =doom-modeline-minor-modes= は =nil= ）、単語数を出します
+  （ =doom-modeline-enable-word-count= ）。
+- *入口* — =my/ui-enable-doom= が、 =doom-modeline-mode= を有効にします。
+
 #+begin_src emacs-lisp
   ;;; ui/ui-doom-modeline.el --- Doom modeline UI バンドル -*- lexical-binding: t; -*-
   ;;
@@ -544,6 +651,15 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: ui-doom-nano-modeline
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-doom-nano-modeline.el
 :END:
+
+Doom の環境向けに移植された Nano の modeline（ =doom-nano-modeline= ）を使うバンドルです。 =my:use-ui= が =doom-nano= のときに、
+=core-switches= が =my/ui-enable-doom-nano= を呼びます。
+
+- 上流の =doom-nano-modeline= は、 =doom-themes= に依存しますが、Doom Emacs 本体には依存しません。 evil の参照は
+  =bound-and-true-p= で守られているので、evil がなくても動きます。
+- modeline の退避と復元は、上流の =doom-nano-modeline-mode= が自分で行うので、Doom の =global-hide-mode-line-mode= は要りません。
+- nano のバンドル（ =ui-nano-modeline= ）とは、排他的に使います。 =my:use-ui= で、どちらか一方だけを選びます。
+- このモジュールは =my:modules= に載せず、 =core-switches= の autoload からだけロードされます。
 
 #+begin_src emacs-lisp
   ;;; ui/ui-doom-nano-modeline.el --- Doom Nano modeline UI バンドル -*- lexical-binding: t; -*-
@@ -602,6 +718,41 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: ui-nano-modeline
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-nano-modeline.el
 :END:
+
+
+Nano の modeline のバンドルです。 =my:use-ui= が =nano= のときに、 =core-switches= が =my/ui-enable-nano= を呼びます。
+標準の modeline を隠し、すべてのバッファに、共通のヘッダー行を出します。
+
+*ヘッダー行に出すもの*
+
+| 位置 | 項目 |
+|------|------|
+| 左 | 状態のアイコン（鍵 / 鉛筆 / ファイル）、ファイルの種類のアイコン、バッファ名、git の情報、ファイルサイズ、総行数 |
+| 右 | 追加の項目（再生中の曲など。 =ui-nano-modeline-extra-function= ）、電源（ =AC 87%= / =BATT 42%= ）、時刻、エンコーディング、IME、行と列、ウィンドウの固定 |
+
+表示項目とそのフェイスは、 =ui-nano-modeline-items= に置きます。ヘッダー行の表示は、 =M-x my/ui-nano-modeline-toggle= で切り替えます。
+
+*この表示内容を、personal ではなくここに置く理由*
+
+表示内容は、特定の利用者のものではなく、UI の仕様だからです。 =personal/= は、他の層を変えないオーバーレイとする契約があり、
+置くのは利用者固有の入力だけです。IME の状態は、 =ui-nano-modeline-ime-function= を通して渡します。
+
+*設計上の判断*
+
+- *再描画の費用は実測した* — 再描画のたびに評価される処理の費用を、nano が有効な実機で測りました。 README.org
+  （1.6 万行、586KB）で、ヘッダー行の全体が 0.21 ms、283 行のファイルで 0.04 ms です。25 万行・8.7MB の巨大なファイルでも、
+  初回が 11.6 ms、2 回目以降は約 2.4 ms で、60fps の予算（16.7 ms）に収まります。支配的なのは総行数の計算で、巨大なファイル
+  でだけ効きます。そのため、キャッシュは入れていません。10MB を超えるファイルを日常的に扱うようになったら、総行数を
+  =buffer-chars-modified-tick= でキャッシュします。
+- *電源は、値を受け取る* — Emacs 標準の =battery= が更新のたびに渡す値を、 =battery-update-functions= で受け取ります。
+  再描画のたびに =pmset= を呼びません。
+- *パーセント記号は 2 つ重ねて書く* — modeline が、パーセント記号を解釈するためです。
+- *アイコンには、フォントを別に指定する* — 状態のフェイスの 1 つで全体を塗ると、アイコンのフォントの指定が消えるためです。
+
+*パレットのロード*
+
+このモジュールは =ui-nano-palette= を =require= しません。 =ui-theme= が、パレットの正式な読み込み口で、読み込まれると、
+=with-eval-after-load= で適用します。他のモジュール（ =dev-term= など）も、同じように反応するだけです。
 
 #+begin_src emacs-lisp
   ;;; ui/ui-nano-modeline.el --- Nano modeline UI バンドル -*- lexical-binding: t; -*-
@@ -1129,6 +1280,32 @@ nano-modeline のヘッダー行に出す表示項目と、そのフェイスの
 :END:
 
 #+NAME: ui-theme
+
+テーマ、パレット、フェイスの適用をまとめたモジュールです。 =my:use-ui= の値で、動きが変わります。
+
+| =my:use-ui= | 動作 |
+|-------------|------|
+| =nano= 、 =doom-nano= | Nano のテーマを読み込み、パレットと、フェイスの調整を適用する |
+| =doom= | doom-themes のテーマ（ =ui-theme-doom-theme= ）を読み込む。Nano のテーマ、パレットは、読まない |
+| =none= | 何もしない（Emacs の既定のテーマのまま） |
+
+=my:use-ui= は、ロード時に決まっています。 =personal/= の設定が =modules.el= より前に走り、 =core-switches= が =ui-theme= より
+前にロードされるためです。
+
+*設計の目標*
+
+- *決定論的な初期化* — 同じ入力からは、同じ結果になります。
+- *デーモンで安全なフレーム処理* — 新しいフレームのたびに、フェイスを適用し直します（ =ui-theme--apply-frame= ）。
+- *テーマの再読み込みに強い* — テーマを切り替えても、パレットの色が適用し直されます（ =enable-theme-functions= ）。
+- *Emacs 30 / 31 への前方互換* — 変数やフックの有無を確かめます。
+
+*ほかのモジュールとの分担*
+
+- Nano の modeline のフェイスの同期は、 =ui-nano-modeline-items= が持ちます。
+- light と dark の保存、復元、切替は、 =ui-theme-variant= が持ちます。
+- 行間と余白は、 =ui-window= が持ちます。
+- 今のテーマの色から決めるタブのフェイスは、 =ui-window= が持ち、このモジュールが =ui-window--apply-tab-faces= を呼びます。
+
 #+begin_src emacs-lisp
   ;;; ui/ui-theme.el --- UI 層のテーマ設定 -*- lexical-binding: t; -*-
   ;;
@@ -1561,6 +1738,64 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 :CUSTOM_ID: ui-window
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-window.el
 :END:
+
+
+ウィンドウの管理と、用途別のタブです。
+
+*構成*
+
+| 機能 | 中身 |
+|------|------|
+| zoom | 選んだウィンドウを、黄金比風に大きくする（サイズ比は 0.62）。dired と treemacs、 =*Messages*= 、 =*Help*= は対象外 |
+| desktop | ウィンドウとバッファの状態を、セッションをまたいで保存する。保存先は =no-littering-var-directory= の =desktop/= で、デーモンではフレームを復元しない |
+| winner | ウィンドウ構成の undo / redo |
+| レイアウトの保存 | =my/save-window-layout= で保存し、 =my/restore-window-layout= で戻す（スロットは 1 つ） |
+| 行間と余白 | 行間は =ui-window-line-spacing= 、グラフィカルなフレームの余白は spacious-padding |
+| popper | ポップアップのバッファ（ =*Messages*= 、 =*Help*= 、 =*compilation*= など）をまとめる |
+| tab-bar | 用途別のタブ |
+
+*キー（ M-SPC w の次）*
+
+| キー | 動作 |
+|------|------|
+| =w= | ace-window でウィンドウを選ぶ |
+| =W= / =D= | ace-window で、選んだウィンドウと入れ替える / 選んだウィンドウを削除する |
+| =r= / =R= | ウィンドウ構成を戻す / やり直す（ =ui-window-undo= / =ui-window-redo= ） |
+| =m= / =M= | ウィンドウ構成を保存 / 復元する |
+| =t= / =x= | 新しいタブ / タブを閉じる |
+| =[= / =]= | 前 / 次のタブ（ =s-[= 、 =s-]= も同じ） |
+| =T= | 名前でタブを選ぶ |
+| =.= | プロジェクトを選んで、新しいタブに開く |
+| =p= / =n= / =P= | ポップアップの出し入れ / 順に切り替え / 通常のウィンドウへ昇格 |
+
+*用途別のタブ*
+
+タブは、用途別の作業台です。バッファを表示すると、そのバッファの用途のタブへ移ります（なければ作ります）。
+
+| タブ | 入るバッファ |
+|------|--------------|
+| コーディング | =prog-mode= 、 =conf-mode= |
+| ドキュメント | =org-mode= 、 =markdown-mode= 、 =text-mode= |
+| Git | magit、 =*vc*= 、 =*ediff*= 、 diff、コミットメッセージなど |
+| スクラッチ | =*scratch*= と、どれにも合わないファイルや Dired |
+
+用途の決め方は、 =ui-window-tab-group-rules= で変えられます（ =personal/user.el= で差し替えます）。
+
+- *移るバッファ* — ファイルを開いたバッファ、Dired、名前の規則に合うバッファ、 =*= で始まらずモードの規則に合うバッファです。
+  =*Help*= や =*compilation*= のような一時バッファは、移しません。 =switch-to-buffer-obey-display-actions= を有効にしているので、
+  =C-x b= や =consult-buffer= でも同じ振る舞いになります。
+- *名前は固定* — タブの名前は、作ったときの用途で決まり、その後は変わりません。別の用途のバッファが入っても、
+  名前は変えず、同じ名前のタブが並ぶのを避けます。
+- *前後のバッファ* — =previous-buffer= と =next-buffer= （ =s-<left>= 、 =s-<right>= ）は、今のタブと同じ用途のバッファだけを巡ります。
+- *消したあとの整理* — バッファを消して、タブの中身が別の用途だけになったら、その用途のタブへ寄せます
+  （あればこのタブを閉じ、なければ名前を直します）。
+- *タブを作っている間は振り分けない* — 最初の =*scratch*= で、スクラッチのタブが増えるのを避けます。
+- *保存と復元* — タブの名前と配置を、 =desktop= に載せて、再起動をまたいで戻します。保存するのは、ファイルと Dired だけです。
+  保存は、タブがいちばん多いフレームから行い、復元は、デーモンでは最初のクライアントのフレームに行います。
+- *履歴* — タブごとに、ウィンドウ構成の履歴を持ちます（ =tab-bar-history-mode= ）。 =w r= / =w R= は、タブバーが有効ならこの履歴で、
+  なければ =winner= で戻します。どちらも、 =zoom-mode= が積むサイズだけの履歴は飛ばします。
+- *見た目* — 色は、現在のテーマから決めます。現在のタブは、アクセント色を背景に 3 割混ぜて、他のタブと区別します。
+  テーマを切り替えると、色も追従します。
 
 #+begin_src emacs-lisp
   ;;; ui/ui-window.el --- ウィンドウ管理の補助 -*- lexical-binding: t; -*-
@@ -2212,6 +2447,20 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-utils.el
 :END:
 
+UI のこまごまとした統合をまとめたモジュールです。UI の中核のポリシーは、意図的に定義しません。
+
+| 項目 | 内容 |
+|------|------|
+| minions | マイナーモードの一覧を、 =⚙= の 1 つにまとめる（ =after-init-hook= で有効） |
+| 時刻 | 30 秒ごとに更新し、日付と時刻を 24 時間制で出す |
+| バッテリー | 残りが 30% 以下で警告、 15% 以下で重大の扱いにする |
+| Treemacs | インデントは 2。見つからないプロジェクトは外す。ファイルの監視と、追従のモードを有効にする |
+| nerd-icons-dired | Dired のバッファにアイコンを出す |
+| pbcopy | macOS のグラフィカルなフレームで、一度だけ有効にする。クリップボードと連携する |
+| helpful | =describe-function= 、 =describe-variable= 、 =describe-key= 、 =describe-command= 、 =describe-symbol= を、helpful に置き換える。 =M-SPC h .= で、ポイントの記号を引く |
+
+helpful は、autoload のコマンドとして用意します。ロード前でも、キーを押せます。
+
 #+begin_src emacs-lisp
   ;;; ui/ui-utils.el --- UI ユーティリティと Treemacs 設定 -*- lexical-binding: t; -*-
   ;;
@@ -2370,6 +2619,11 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 
 ** ui-health-modeline.el — Session Status Display
 
+*表示するもの*
+
+バッファ数、実行中のプロセス数、Eglot が管理するバッファ数（ =LSP:0= のように出る）です。重い計測の仕組みを持ち込まずに、
+Emacs のセッションの負荷と、バックグラウンドの活動が、すぐ分かります。
+
 モードラインに、バッファ数・プロセス数・Eglot が管理するバッファ数を出すだけのモジュール
 です。ただし、書き方には注意が必要です。
 
@@ -2490,6 +2744,14 @@ eglot が読み込まれていて接続が無いときは、管理下のバッ�
 :CUSTOM_ID: ui-imenu
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-imenu.el
 :END:
+
+imenu-list による、シンボルのサイドパネルです。Imenu の意味は変えず、大きなバッファを移動するための、視覚的な索引を足すだけです。
+
+- パネルは左に出し（ =imenu-list-position= ）、幅は 36 桁です（ =imenu-list-size= ）。
+- 開いたとき、パネルへフォーカスを移します（ =imenu-list-focus-after-activation= ）。
+- コマンドは autoload にしてあり、ロード前でも =imenu-list-minor-mode= などを呼べます。
+
+意図的に、設定を最小限にしています。
 
 #+begin_src emacs-lisp
   ;;; ui/ui-imenu.el --- Imenu / アウトラインの UI 統合 -*- lexical-binding: t; -*-
@@ -3405,6 +3667,20 @@ ui 層に置いています。 =o= 、 =O= 、 =z= 、 =q= などの割り当て
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-visual-aids.el
 :END:
 
+控えめな視覚補助です。標準の =my:modules= には含めません。 =personal/user.el= が =my:modules-extra= に加えます。ない場合は、
+このモジュールはロードされず、ほかの設定は完全に動きます。
+
+| 機能 | 中身 |
+|------|------|
+| pulsar | =recenter-top-bottom= 、 =other-window= 、 =next-buffer= 、 =previous-buffer= などのあと、カーソルの位置を一瞬光らせる（遅延 0.04 秒） |
+| hl-todo | =TODO= 、 =FIXME= 、 =NOTE= 、 =HACK= を、色つきで強調する（ =prog-mode= と =text-mode= ） |
+| rainbow-delimiters | 括弧を、深さごとに色分けする（ =prog-mode= ） |
+| indent-bars | インデントのガイドを出す（ =prog-mode= 。tree-sitter 版のモードでは、構文木から深さを補正する） |
+
+pulsar は、起動のプロファイルで 16〜22 ms を占めていました（ =:require t= が、ロード時に即座に =require= していたため）。
+=emacs-startup-hook= から、アイドルタイマーで有効にします。 =pulsar-delay= などの =defcustom= は、 =require= の前に =setopt= すると
+=void-variable= になるので、 =require= の直後に設定します。
+
 #+begin_src emacs-lisp
   ;;; ui/ui-visual-aids.el --- 控えめな視覚補助 -*- lexical-binding: t; -*-
   ;;
@@ -3501,6 +3777,18 @@ ui 層に置いています。 =o= 、 =O= 、 =z= 、 =q= などの割り当て
 :CUSTOM_ID: ui-macos
 :header-args:emacs-lisp: :tangle ../lisp/ui/ui-macos.el
 :END:
+
+macOS 固有の UI の調整です。標準の =my:modules= には含めません。 =personal/user.el= が =my:modules-extra= に加えます。
+macOS 以外のホストでは、これがなくても設定は動きます。すべての設定を =(eq system-type 'darwin)= で守っています。
+
+- *タイトルバー* — 透過のタイトルバー（ =ns-transparent-titlebar= ）と、ネイティブのタイトルバー描画（ =use-title-bar= ）を、
+  新しいフレームの既定にします。
+- *Dock* — Emacs 31 の =system-taskbar-mode= を有効にします。バッジの数、進捗バーの重ね表示、「要注意」のバウンドを制御します。
+- *コンパイル中のスリープ抑止* — コンパイルの開始から終了まで、システムのアイドルスリープを抑えます（画面は眠れます）。
+  ネイティブコンパイルや Emacs のソースのビルドの途中で、マシンが眠らなくなります。
+- *スリープ前の TRAMP* — スリープの直前に、TRAMP の接続を、すべて切ります。復帰したときに、ハングしないようにするためです。
+  接続は、次のアクセスで、必要になったときに張り直します。 =tramp-cleanup-bufferless-connections= は、バッファのない接続だけを
+  切るので、使いません。スリープ前のハンドラには数秒しか与えられず、エラーを出してはいけないので、 =condition-case= で守ります。
 
 #+begin_src emacs-lisp
   ;;; ui/ui-macos.el --- macOS 固有の UI 調整 -*- lexical-binding: t; -*-

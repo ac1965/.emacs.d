@@ -17,11 +17,68 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: core-modules
 :END:
 
+core 層は、ほかのすべての層が頼る、ランタイムの土台です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+並びで、 =early-init.el= の次、ui の前にあります。 =early-init.el= と =lisp/modules.el= が整えたディレクトリや =load-path= を前提にし、
+上位の層には依存しません。「見た目のために core をいじる」を許すと、層の順序が意味を失います。
+
+*構成*
+
+| モジュール | 責務 |
+|------------|------|
+| =core-policy= | 設定ファイルへの =lexical-binding= の自動挿入と、 =trusted-content= の宣言 |
+| =core-gc= | フォーカス喪失とミニバッファ終了を契機とする GC |
+| =core-persistence= | 古いバックアップの削除 |
+| =core-runtime= | OS ごとの修飾キーの変数、一度だけ実行するフック、初回のグラフィカルフレーム向けの補助 |
+| =core-treesit= | tree-sitter の文法の配置と取得元（Emacs 31 の組み込み機能に任せる） |
+| =core-history= | save-place、recentf、savehist、keyfreq |
+| =core-editing= | 構造的編集、undo、ウィンドウ切替、Emacs 31 の編集系の組み込み機能 |
+| =core-autosave= | 自動保存、フォーカス喪失時の保存、世代付きバックアップ |
+| =core-dired= | dired の dirvish への置き換え |
+| =core-switches= | UI のバンドルと LSP のバックエンドを選ぶスイッチ |
+| =core-custom= | =custom-file= の管理 |
+| =core-native= | ネイティブコンパイルの警告の収集と報告 |
+
+ロード順は、 =lisp/modules.el= の =my:modules= の並びです。 =core-native= は core の最後で、ほかの基盤がそろってからロードされます。
+ネイティブコンパイルは非同期で、初期化も =after-init-hook= に遅らせているので、遅いロード順でも安全です。
+
+*この層の方針*
+
+- *副作用を持ち込まない* — とくに =core-runtime= は、ユーザーから見える副作用（キーの割り当てなど）を導入しません。
+  UX は ui 層の責務です。
+- *起動を遅くしない* — 履歴の復元（約 100 ms）や dirvish は、起動の 1 秒後のアイドル時、または最初に使うときまで遅らせます。
+- *層の向きを守る* — たとえば =core-switches= は、UI のバンドルや LSP のバックエンドの名前を知りません。登録簿だけを持ち、
+  上位の層が自分を登録します。
+
+
 * core/core-policy.el
 :PROPERTIES:
 :CUSTOM_ID: core-policy
 :header-args:emacs-lisp: :tangle ../lisp/core/core-policy.el
 :END:
+
+編集の全体のポリシーです。内部の設定ファイルを、安全に、一定の形で扱うための取り決めを置きます。
+
+- *lexical-binding の自動挿入* — =no-littering-var-directory= の下にある Emacs Lisp のファイルを開いたとき、
+  =lexical-binding:= の指定がなければ、先頭に =;;; -*- lexical-binding: t; -*-= の行を入れます
+  （ =my/auto-insert-lexical-binding= ）。
+- *信頼するコンテンツ* — =trusted-content= に、 =lisp/= 、 =personal/= 、 =early-init.el= を宣言します（Emacs 30.1 以降）。
+
+*なぜ trusted-content を宣言するのか*
+
+flymake が Emacs Lisp のバッファで走らせるバイトコンパイルは、マクロの展開と =eval-when-compile= を評価する、つまり
+コードを実行します。信頼できない内容に対しては危険なので、Emacs は =trusted-content-p= が偽のバッファで、このバックエンドを
+無効にして警告を出します。自分で管理している設定は信頼してよいので、宣言しておかないと、 =lisp/= や =personal/= の
+=.el= を編集するたびに、バイトコンパイルのバックエンドが無効になります。
+
+*値の作り方の注意*
+
+- ディレクトリを指す要素は、末尾が =/= で、 =abbreviate-file-name= の形でなければなりません。
+- =trusted-content-p= は、シンボリックリンクを解決した =buffer-file-truename= と比べます。 =~/.emacs.d= がリンクなので、
+  =file-truename= で実体のパスに直してから登録します。
+- =init.el= は、Emacs が無条件に信頼するので、列挙しません。
+- ファイルを訪問していない =*scratch*= は、決して信頼されません。 =:all= だけが例外ですが、docstring が「gaping security hole」と
+  明記しているので、採用しません。
+- =personal/= は =modules.el= より前にロードされます。 =personal/<user>.el= が先に足した要素を消さないよう、既存の値と合流させます。
 
 #+begin_src emacs-lisp
   ;;; core/core-policy.el --- グローバル編集ポリシー -*- lexical-binding: t; -*-
@@ -112,6 +169,41 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: core-native
 :header-args:emacs-lisp: :tangle ../lisp/core/core-native.el
 :END:
+
+ネイティブコンパイルの警告を、収集して、報告するためのモジュールです。
+
+*報告のモード*
+
+=core-native-comp-report-mode= で選びます（ =M-x core-native-set-mode= でも切り替えられます）。
+
+| モード | 動作 |
+|--------|------|
+| =silent= | 警告を出さない（ =native-comp-async-report-warnings-errors= を =silent= ） |
+| =collect= （既定） | 警告を、出さずに溜める。コレクタを =display-warning= に仕掛ける |
+| =verbose= | 警告を、そのまま出す |
+
+環境変数 =CI= が空でないとき、 =core-native-comp-ci-force-verbose= （既定は =t= ）により、モードに関係なく =verbose= になります。
+
+*設定*
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| =core-native-comp-collect-limit= | 2000 | 溜める警告の上限 |
+| =core-native-comp-warn-threshold= | 25 | 溜まった件数がこれを超えたら通知する |
+| =core-native-comp-auto-save-file= | =nil= | 設定すると、終了時に溜めた警告をこのファイルへ保存する |
+| =core-native-comp-collect-min-interval= | 0.0 | 収集の間隔の下限（秒） |
+
+*コマンド*
+
+| コマンド | 動作 |
+|----------|------|
+| =core-native-show-warnings= | 溜めた警告を、 =*native-comp-warnings*= に出す |
+| =core-native-warnings-count= | 溜めた件数を表示する |
+| =core-native-clear-warnings= | 溜めた警告を消す |
+| =core-native-save-warnings= | 溜めた警告を、ファイルへ保存する |
+| =core-native-set-mode= | 報告のモードを切り替える |
+
+件数は =core-native--count= で別に持ち、収集のたびに、リストの長さを数え直さないようにしています。
 
 #+begin_src emacs-lisp
   ;;; core/core-native.el --- ネイティブコンパイルの診断とレポート -*- lexical-binding: t; -*-
@@ -497,6 +589,13 @@ GC の管理は 2 段構えになっています。
 :header-args:emacs-lisp: :tangle ../lisp/core/core-persistence.el
 :END:
 
+バックアップの衛生管理です。 =emacs-startup-hook= で、 =my/delete-old-backups= が、7 日より古いバックアップのファイルを削除します。
+
+- 対象は、 =my:d:var= 以下の =backup/= （ =my:d:var= がなければ =no-littering-var-directory= ）にある、通常のファイルです。
+- 更新時刻が、現在から 7 日より前のものを消します。
+- 手でも、 =M-x my/delete-old-backups= で実行できます。
+- バックアップの世代を作る仕組みは、 =core-autosave= にあります。
+
 #+begin_src emacs-lisp
   ;;; core/core-persistence.el --- バックアップと自動保存の補助 -*- lexical-binding: t; -*-
   ;;
@@ -546,6 +645,27 @@ GC の管理は 2 段構えになっています。
 :END:
 
 *macOS で使用する修飾キー*:
+
+*提供するもの*
+
+- *修飾キーの変数* — OS ごとに、修飾キーの変数を設定します（ =core-runtime-configure-modifiers-p= が =t= のとき）。
+  キーバインドは登録しません。 =after-init-hook= で、 =core-runtime--startup-init= が呼びます。
+
+| OS | 設定 |
+|----|------|
+| macOS | Option を Meta、Command を Super、Control を Control |
+| Windows | 左右の Windows キーを Super |
+| そのほか | 設定しない |
+
+- *一度だけ実行するフック* — =core-runtime-add-hook-once= は、関数をフックに足し、最初に実行された時点で、自分をフックから外します。
+  フラグの変数と =remove-hook= を、各モジュールが持たずに済みます。 Vertico、Corfu などの初期化に使います。
+- *初回のグラフィカルなフレーム* — =core-runtime-run-on-first-graphic-frame= は、最初のグラフィカルなフレームができた
+  1 tick 後に、関数を一度だけ呼びます。デーモン用の共通の窓口です。 =after-make-frame-functions= は、フレームの実体化の
+  途中（色がまだ確定していない状態）で走るので、 =face-foreground= などが =nil= を返し、その =nil= がフェイスに
+  焼き込まれます。そのため、 =run-with-timer= で 1 tick 遅らせます。ターミナルのフレームでは呼ばず、次の
+  グラフィカルなフレームを待ちます。2 枚のフレームが続けて作られても、一度しか呼びません。
+
+*macOS の修飾キーの記号*
 
 |キー|記号|名称|
 |--|-------|----|
@@ -658,6 +778,29 @@ GC の管理は 2 段構えになっています。
 :CUSTOM_ID: core-treesit
 :header-args:emacs-lisp: :tangle ../lisp/core/core-treesit.el
 :END:
+
+tree-sitter の土台です。Emacs 31 の組み込み機能に任せ、このモジュールは、最小限のことだけを宣言します。
+
+*Emacs 31 に任せるもの*
+
+- =treesit-enabled-modes= を =t= にします。文法が存在するすべての tree-sitter のモードが有効になり、モードの remap の表は
+  =treesit-major-mode-remap-alist= から導かれます。
+- =treesit-auto-install-grammar= を =always= にします。ts-mode が実際に有効になったとき、欠けている文法を、確認なしで
+  入れます。確認したければ =ask= 、インストール先を選ばせるなら =ask-dir= にします。
+- =treesit-font-lock-level= は 4 です。
+
+*このモジュールが宣言するもの*
+
+- *文法の置き場* — =treesit-extra-load-path= を、 =no-littering-var-directory= の下の =tree-sitter/= にします。この先頭が、
+  自動インストールの既定の先になります。
+- *文法の取得元* — =treesit-language-source-alist= に、15 の言語（ bash、 c、 css、 dockerfile、 go、 javascript、 jsdoc、
+  json、 markdown、 markdown-inline、 python、 toml、 tsx、 typescript、 yaml ）を、Emacs 31 のキーワード形式で足します。
+  すでにある言語は、上書きしません。
+- *サードパーティのモードの remap* — ts-mode の remap の表を持たない =toml-mode= 、 =json-mode= 、 =yaml-mode= 、 =dockerfile-mode= を、
+  対応する ts-mode へ remap します。対応する文法が、実際に入っているときだけです。
+- *診断* — =M-x core-treesit-report= が、各言語の文法が使えるかを、エコーエリアに出します。
+
+tree-sitter が使えないビルドや、Emacs 31 未満では、実質的に何もしません。
 
 #+begin_src emacs-lisp
   ;;; core/core-treesit.el --- Tree-sitter 基盤層 -*- lexical-binding: t; -*-
@@ -803,6 +946,23 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
 代わりに =after-init-hook= を使うと、パスが完全に確立する前にファイルを読みにいく危険が
 あります。「履歴が復元されない」「なぜか別の場所を見ている」という症状は、たいていこの手の
 順序の問題です。
+
+*設定*
+
+| 対象 | 保存先（ =no-littering-var-directory= の下） | 補足 |
+|------|-----------------------------------------------|------|
+| save-place | =saveplace= | 位置を 300 秒ごとに自動保存する（ Emacs 31 ） |
+| recentf | =recentf= | 最大 100 件。300 秒ごとに自動保存し、メッセージは出さない。拡張子が =completion-ignored-extensions= にあるファイルは除く（ Emacs 31 ） |
+| savehist | =history= | =savehist-additional-variables= は設定しない |
+| keyfreq | =keyfreq= | コマンドの使用回数を記録する。移動や挿入などの、頻繁なコマンドは数えない。集計は =M-x keyfreq-show= |
+
+3 つのモードと keyfreq は、 =core-history--startup-init= がまとめて有効にします。起動の 1 秒後のアイドル時に行います
+（ =core-history--schedule= ）。履歴の保存と復元は、最初の描画に要らず、有効にするのに約 100 ms 掛かるためです。
+有効にする前に開いたファイル（起動の 1 秒以内に限る）は、カーソル位置の復元と、最近のファイルへの記録の対象になりません。
+
+=savehist-additional-variables= を設定しないのは、Emacs 31 の savehist の、履歴ファイルの外部変更のマージを生かすためです
+（複数の Emacs が 1 つの履歴ファイルを共有できます）。
+
 #+begin_src emacs-lisp
   ;;; core/core-history.el --- セッション永続化と autorevert -*- lexical-binding: t; -*-
   ;;
@@ -923,6 +1083,29 @@ save-place、recentf、savehist の 3 つは、 =emacs-startup-hook= でまと�
 
 編集まわりの設定をまとめたモジュールです。構造的編集（paredit・puni）、undo、ウィンドウ切替、
 Emacs 31 で強化された組み込み機能の設定を持ちます。
+
+*設定の一覧*
+
+- *TRAMP* — 永続化のファイルを =no-littering-var-directory= の下に置き、既定のメソッドは =scp= 、詳細度は 3 です。
+- *構造的編集* — Emacs Lisp では paredit を使い、競合する =electric-pair= は、そのバッファで無効にします
+  （paredit は GitHub のミラー =emacsmirror/paredit= から取ります。作者の個人サーバーは、到達できないことがあるためです）。
+  puni は、ミニバッファ以外で、全体で有効です。
+- *括弧* — 対応する括弧を、式の全体で、遅延なしに強調します。コメントと文字列の中では、対応が取れない括弧だけを非強調にします（ Emacs 31 ）。
+- *undo* — undo-fu（リージョンの中でも undo できる）と、 vundo を導入します。
+- *ウィンドウ切替* — ace-window のキーはホームポジションの 9 文字（ =asdfghjkl= ）で、範囲は今のフレームです。背景は暗くします。
+- *選択の拡大* — expreg が、構文木に沿って選択を広げます（ =expreg-expand= と =expreg-contract= 。キーは、 Control と等号、 Control-Meta と等号です）。
+- *そのほか* — text-mode で折り返し、 prog-mode で aggressive-indent、選択範囲を入力で置き換える（ delsel ）、
+  外部で変わったファイルを 2 秒ごとに読み直す（ autorevert 。メッセージなし）、現在行を強調する（ hl-line 、ウィンドウに追従）、
+  hideshow（ =<backtab>= で =hs-cycle= 、 =C-c @ a= で全体の切り替え）、 eldoc（ Emacs Lisp では、docstring つきの表示）。
+- *transient* — 履歴、レベル、値のファイルを、 =no-littering-var-directory= の =transient/= に置きます。
+- *Emacs 31 の設定* — Emacs 31 以上で有効です。
+  - 範囲を選んでいないとき、 =C-w= は、エラーではなく直前の単語を kill します（ =kill-region-dwim= ）。
+  - =delete-pair= が、削除位置にマークを残します。
+  - =C-x C-x= で、リージョンを再ハイライトしません。
+  - help と compilation と messages のバッファは、閉じると kill され、 kill するとレイアウトが戻ります。
+  - =C-h l= は、表示中も内容を更新します。
+- *組み込みのモード* — =repeat-mode= と =global-so-long-mode= （極端に長い行を持つファイルで Emacs が固まるのを防ぐ）を、
+  =after-init-hook= で有効にします。
 
 以前は自動保存（ =core-autosave= ）と dired の dirvish 置き換え（ =core-dired= ）も同じファイルに
 入っていました。419 行に責務の異なる 3 つの話題が同居して読みにくかったため、2026-10-13 に分割して
@@ -1127,6 +1310,20 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
 :END:
 
 自動保存サブシステム（3 機構の合流）の詳細は以下のコードの Commentary を参照してください。
+
+*設定*
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| =core-autosave-interval= | 5 | 入力が止まってから、変更したバッファを保存するまでの秒数 |
+| =core-autosave-save-on-focus-out= | =t= | Emacs からフォーカスが外れたとき、変更したファイルを保存する |
+| =core-autosave-exclude-extensions= | =gpg= 、 =age= 、 =enc= 、 =pem= 、 =p12= 、 =pfx= | 保存しない拡張子 |
+| =core-autosave-exclude-name-patterns= | =nil= | ファイル名（フルパス）に合う正規表現で、保存しないものを決める |
+| =core-autosave-exclude-modes= | =nil= | 保存しないメジャーモード |
+| =core-autosave-exclude-predicates= | =nil= | バッファを受け取り、真を返したら保存しない関数 |
+
+暗号化したファイルや証明書を、自動で保存すると、暗号化したファイルを平文で黙って上書きしたり、途中まで変更したバイナリを
+壊したりするおそれがあるので、既定で除外します。除外のルールは、 =personal/user.el= で =setopt= を使って足せます。
 
 [[file:../svg/05_autosave_flow.svg]]
 
@@ -1334,6 +1531,22 @@ Emacs 31 で強化された組み込み機能の設定を持ちます。
 
 dired を dirvish に置き換えるモジュールです。 =core-editing.el= から分離しました。
 
+*設定*
+
+- dirvish の属性は、サブツリーの状態、VC の状態、git のメッセージ、ファイルサイズです。
+- macOS では、GNU coreutils の =gls= が使えれば、dired の =ls= に使います。
+
+*dirvish を、最初に dired が呼ばれるまで有効にしない理由*
+
+=:global-minor-mode= は =:require t= を伴うので、 =core-dired= のロード時に dirvish が =require= されていました。
+起動のプロファイルで、分割前の =core-editing= 全体の 25〜30 ms の主な原因でした。
+
+pulsar、apheleia、project.el とは違い、dirvish は、 =emacs-startup-hook= とアイドルタイマーでは遅らせられません。
+=dirvish-override-dired-mode= は「 dired を呼んだら、代わりに dirvish を開く」という置き換えなので、ユーザーが最初に
+dired を開く前に、有効になっていなければなりません。固定の秒数のタイマーでは、起動の直後に dired を呼ばれると、間に合いません。
+そこで、 =dired-noselect= に、自己解除型の =:around= のアドバイスを仕込みます。 =dired= 、 =dired-jump= 、 =project-dired= 、
+=find-file= のディレクトリの分岐など、dired を呼ぶほぼすべての経路が、最終的に =dired-noselect= を通るので、1 か所で足ります。
+
 dirvish の有効化は、起動時間を縮めるため、最初に dired が呼ばれる瞬間まで遅延させています。その仕組み
 （ =dired-noselect= への自己解除型 =:around= アドバイス）は以下のコードのコメントを参照してください。
 内部関数は =core-dired--activate= 、 =core-dired--ensure= に改名しました（旧
@@ -1447,6 +1660,30 @@ dirvish の有効化は、起動時間を縮めるため、最初に dired が�
 :END:
 
 ** core-switches.el — LSP/UI Backend Selection
+
+*スイッチ*
+
+| 変数 | 選択肢 | 既定 |
+|------|--------|------|
+| =my:use-ui= | =none= 、 =doom= 、 =nano= 、 =doom-nano= | =none= |
+| =my:use-lsp= | =none= 、 =eglot= 、 =lsp= | =eglot= |
+
+値は、 =personal/<user>.el= が、このモジュールが走る前に設定します。 =none= は、何も有効にしません。
+
+*登録簿*
+
+=core-switches-register= は、種類（ =ui= か =lsp= ）、選択肢、有効にする関数、その関数を持つライブラリ、メッセージに使う名前、
+サードパーティのパッケージ名（任意）を受け取ります。登録と同時に、有効にする関数の =autoload= を宣言します。
+
+| 登録するモジュール | 種類 | 選択肢 |
+|--------------------|------|--------|
+| =dev-lsp-bridge= | =lsp= | =eglot= 、 =lsp= |
+| =ui-bundles= | =ui= | =doom= 、 =nano= 、 =doom-nano= |
+
+*有効にするときの動き*
+
+=after-init-hook= で、 =core-switches--activate= が、選ばれた UI のバンドルと LSP のバックエンドを有効にします。結果は
+メッセージで出します（有効にした／有効にできなかった／見つからない）。未知の選択肢は、メッセージを出して何もしません。
 
 このモジュールは、層の原則を破らずにバックエンドを切り替える、という少し曲芸的なことを
 しています。

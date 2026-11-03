@@ -17,11 +17,44 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: utils-modules
 :END:
 
+utils 層は、ほかのどの層にも属さない、道具や補助のコマンドの層です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+並びで、dev の次、personal の前にあります。下の層には依存できますが、personal には依存できません。
+
+*構成*
+
+| モジュール | 責務 |
+|------------|------|
+| =utils-buffers= | 保存の確認を伴う、バッファの kill |
+| =utils-edit= | 編集の小さなコマンド（再インデント、全体のコピー、行の連結） |
+| =utils-dired= | Dired（dirvish）の =RET= |
+| =utils-ime= | macOS の入力ソースを、必要な場面で英字に切り替え、戻す |
+| =utils-functions= | 設定の再読込、設定ファイルを開く、パスの表示、デバッグの切替 |
+| =utils-lint= | flymake と flycheck の診断 |
+| =utils-diagnostics= | 環境のトラブルシュートと、起動中の Emacs でしかできない確認（ =my/smoketest= ） |
+| =utils-scratch= | =*scratch*= の再生成と、複数の scratch |
+
+ロード順は、上の表の順です（ =lisp/modules.el= の =my:modules= ）。
+
+*キーを、この層が割り当てる理由*
+
+=ui-keys.el= が、この層のコマンドを直接参照すると、ui 層が utils 層に依存してしまい、層の向きに反します。そのため、
+=M-SPC k= （ =my/smart-kill-buffer= ）のような割り当ては、この層のモジュールが、 =after-init-hook= の depth 90 で行います。
+leader のマップは、 =ui-keymap= の処理（ depth 0 ）で作られるので、そのあとに走らせる必要があるためです。
+
+
 * utils/utils-buffers.el
 :PROPERTIES:
 :CUSTOM_ID: utils-buffers
 :header-args:emacs-lisp: :tangle ../lisp/utils/utils-buffers.el
 :END:
+
+バッファを閉じるときの、保存の確認です。
+
+=my/smart-kill-buffer= （ =M-SPC k= ）は、変更したファイルのバッファなら、 =Save buffer ...?= と尋ねます。 =y= なら保存し、
+=n= なら保存せずに、どちらの場合も、バッファは kill します。ファイルを訪問していないバッファ（一時バッファなど）や、
+変更のないバッファは、尋ねずに kill します。
+
+ウィンドウも閉じる =kill-buffer-and-window= （ =C-c k= ）とは別のコマンドです。こちらは、バッファだけを kill します。
 
 #+begin_src emacs-lisp
   ;;; utils/utils-buffers.el --- バッファ管理の補助 -*- lexical-binding: t; -*-
@@ -80,6 +113,14 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/utils/utils-edit.el
 :END:
 
+編集の小さなコマンドです。キーは割り当てません。 =M-x= で呼びます。
+
+| コマンド | 動作 |
+|----------|------|
+| =my/indent-buffer= | バッファ全体を、 =indent-region= で再インデントする |
+| =my/copy-whole-buffer= | バッファ全体を、 kill-ring にコピーする（ =Buffer copied.= と出す） |
+| =my/join-next-line= | 次の行を、今の行の末尾に連結する（ =join-line= ） |
+
 #+begin_src emacs-lisp
   ;;; utils/utils-edit.el --- テキスト編集の補助 -*- lexical-binding: t; -*-
   ;;
@@ -125,6 +166,17 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: utils-dired
 :header-args:emacs-lisp: :tangle ../lisp/utils/utils-dired.el
 :END:
+
+
+Dired（dirvish）での、 =RET= の動きです。 =my/dired-get-file-or-dir= を、 =dired-mode-map= の =RET= に割り当てます。
+
+- ファイルなら、 =find-file= で開きます。
+- ディレクトリなら、既存の dirvish のセッションの中で移動します（ =dirvish-find-file= ）。dirvish が未ロードなら、
+  =dired-find-file= に戻ります。
+
+ディレクトリへ入るのに、 =(dirvish file)= は使いません。 =dirvish= は、全画面の新しいセッションを作るので、今のセッションの履歴と
+レイアウトを捨ててしまいます。 =dirvish-find-file= は、既存のセッションの中で動くので、ディレクトリへ入る操作には、
+こちらが正しい API です。
 
 #+begin_src emacs-lisp
   ;;; utils/utils-dired.el --- Dired ユーティリティ -*- lexical-binding: t; -*-
@@ -643,6 +695,18 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
 :header-args:emacs-lisp: :tangle ../lisp/utils/utils-functions.el
 :END:
 
+雑多な対話的なコマンドです。
+
+| コマンド | 動作 |
+|----------|------|
+| =my/reload-config= | =init.el= を、再起動せずに読み直す（ =load-file= ） |
+| =my/open-emacs-config= | =README.org= を開く（正本の索引） |
+| =my/show-full-path= | 今のバッファのファイルの絶対パスを、エコーエリアに出す |
+| =my/toggle-debug-on-error= | =debug-on-error= を切り替えて、今の状態を報告する |
+
+=my/reload-config= は、生成された =init.el= を読み直すだけです。 Org の正本を直したあとは、先に =make reload= で、
+生成物を作り直します。
+
 #+begin_src emacs-lisp
   ;;; utils/utils-functions.el --- 雑多なユーティリティ関数 -*- lexical-binding: t; -*-
   ;;
@@ -697,6 +761,38 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
 :header-args:emacs-lisp: :tangle ../lisp/utils/utils-lint.el
 :END:
 
+
+診断の表示（flymake と flycheck）です。
+
+*flymake*
+
+- *有効にする場面* — ファイルを訪問している =prog-mode= のバッファで有効にします。ただし、Org から tangle で生成されるファイル
+  （ =early-init.el= 、 =init.el= 、 =lisp/= 、 =personal/= 、 =scripts/= の =.el= ）では、有効にしません
+  （ =utils-lint-generated-file-p= ）。手で編集しないファイルで、編集のたびにバイトコンパイルが走ると、古い検査を捨てる
+  「byte-compile process ... obsolete」の記録が出続けるためです。コンパイルの警告は、 =make check-bytecomp= で見ます。
+- *scratch では有効にしない* — ファイルを訪問していないバッファは、 =trusted-content-p= を満たせません。
+  =elisp-flymake-byte-compile= が、警告を出して、自分で無効になるだけだからです。
+- *表示* — 診断は、行末に短く出します（ =flymake-show-diagnostics-at-end-of-line= は =short= ）。変更がなくなって 0.5 秒後に検査し、
+  印は、左のフリンジに出します。
+
+| キー | コマンド |
+|------|----------|
+| =M-n= / =M-p= | 次 / 前の診断へ移る |
+| =C-c ! l= | このバッファの診断の一覧 |
+| =C-c ! p= | プロジェクトの診断の一覧 |
+
+*flycheck*
+
+導入だけして、グローバルには有効にしません。 =my:use-lsp= で lsp-mode のバックエンドを選んだときに、lsp-mode が期待する診断のバックエンドとして残しています。Eglot（既定）では、flymake が唯一のチェッカーです。
+
+*Python*
+
+=python-mode= と =python-ts-mode= のバッファで、バックエンドを調整します。
+
+- Eglot が管理しているバッファでは、 =python-flymake= を外します（LSP が診断を出すため）。
+- Eglot がなく、外部のチェッカー（ pyflakes、 flake8、 ruff、 pylint ）も =PATH= にないときは、 =python-flymake-command= を =nil= にして、
+  警告を静かに止めます。
+
 #+begin_src emacs-lisp
   ;;; utils/utils-lint.el --- Flycheck/Flymake の補助 -*- lexical-binding: t; -*-
   ;;
@@ -712,7 +808,7 @@ ASCII のソース ID は =utils-ime-ascii-source= で変更できます。既�
   ;; Flycheck と Flymake の診断表示。
   ;;
   ;; 本ファイルの責務:
-  ;; - オンデマンド検査のため flycheck を導入する
+  ;; - flycheck を導入する（グローバルには有効にしない。lsp-mode バックエンドの選択時に、lsp-mode が期待する診断バックエンドとして残す）
   ;; - ファイルを訪問している `prog-mode' バッファで flymake を有効化する。ただし、
   ;;   org から tangle で生成されるファイル（early-init.el、init.el、lisp/、personal/、
   ;;   scripts/ の .el）では有効にしない（`utils-lint-generated-file-p'）。手で編集しない

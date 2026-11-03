@@ -17,11 +17,53 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: authx-modules
 :END:
 
+auth 層は、認証と、資格情報の置き場の層です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+並びで、ui の次、completion の前にあります。この層より上位の層（completion 以降）には依存しません。
+
+*構成*
+
+| モジュール | 責務 |
+|------------|------|
+| =auth-core= | 認証の基盤。 EasyPG（暗号化ファイル）と、 pass による auth-source を有効にする |
+| =auth-gpg= | =~/.authinfo.gpg= と GPG まわりのポリシー。暗号化したストアを、平文より先に参照する |
+| =auth-keychain= | macOS の Keychain を、 auth-source に加える |
+
+ロード順は、上の表の順です（ =lisp/modules.el= の =my:modules= ）。
+
+*資格情報を探す順序*
+
+=auth-source= は、 =auth-sources= の先頭から順に探します。この層は、次の順に並べます。
+
++ =~/.authinfo.gpg= （GPG で暗号化。 =auth-gpg= が管理）
++ =~/.authinfo= （平文のフォールバック。存在するときだけ。 =auth-gpg= が管理）
++ macOS の Keychain（ =auth-keychain= が、有効なときだけ、末尾に足す）
+
+暗号化したストアが、常に優先されます。そこにない資格情報だけが、あとの経路から拾われます。
+
+*この層の方針*
+
+- *任意で、静かに引く* — 必要な外部ツール（ =gpg= 、 =pass= ）がないときは、何もせず、エラーにしません。
+- *診断のコマンドを持つ* — 「キーを書いたのに認識されない」とき、原因がどこにあるかを調べるためです。
+  =auth-source-search= は、 =:host= や =:user= が合わないとき、エラーにせず、何も返さないためです。
+  =M-x my/auth-gpg-verify= と =M-x my/auth-keychain-verify= が、そのためのコマンドです。
+- *この層は、資格情報の取り出しを持たない* — API キーを実際に探して使う処理は、personal 層（ =personal-credentials= ）にあります。
+  この層は、置き場を整え、診断するところまでです。
+
+
 * auth/auth-core.el
 :PROPERTIES:
 :CUSTOM_ID: auth-core
 :header-args:emacs-lisp: :tangle ../lisp/auth/auth-core.el
 :END:
+
+認証の基盤です。 =after-init-hook= で、次の 3 つを行います。
+
+- *環境変数の確認* — =GPG_KEY_ID= が設定されているかを確かめます。なければ警告を出します（ =auth-core-check-env= ）。
+- *EasyPG* — =epa-file= を有効にします。 =.gpg= のファイルを、透過的に暗号化と復号します。
+- *pass* — =auth-source-pass= を有効にします。 =pass= の実行ファイルがあるときだけです。
+
+必要な外部ツールがあるときだけ有効になる、任意の設定です。 =auth-core-enable-p= を =nil= にすると、この 3 つを、まとめて止められます。
+=auth-gpg= と =auth-keychain= は、この後にロードされます。 =epa-file= が先に有効になっている必要があるためです。
 
 #+begin_src emacs-lisp
   ;;; auth/auth-core.el --- 認証ポリシー -*- lexical-binding: t; -*-
@@ -100,6 +142,15 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 =~/.authinfo.gpg= と GPG/EasyPG まわりのポリシーを、ここ一箇所に集約しています。
 
 [[file:../svg/06_auth_resolution.svg]]
+
+*設定*
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| =auth-gpg-file= | =~/.authinfo.gpg= | 主の、GPG で暗号化した netrc 形式のストア |
+| =auth-gpg-fallback-file= | =~/.authinfo= | 平文のフォールバック。暗号化したストアのあとに参照する。本物の秘密は書かない |
+| =auth-gpg-prefer-encrypted= | =t= | =t= のとき、暗号化したストアを =auth-sources= の先頭に置き、平文のフォールバックをその次に置く |
+| =auth-gpg-services= | Anthropic の API | =~/.authinfo.gpg= にあるはずのエントリの、正式な一覧。検証のコマンドが使う |
 
 責務は 3 つです。
 
@@ -361,6 +412,14 @@ machine api.anthropic.com login apikey password sk-ant-<your-key>
 :CUSTOM_ID: auth-keychain
 :header-args:emacs-lisp: :tangle ../lisp/auth/auth-keychain.el
 :END:
+
+*設定*
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| =auth-keychain-enable= | =nil= | =t= のとき、macOS の Keychain を auth-source に足す。 personal 層が、このモジュールのロード前に設定する |
+| =auth-keychain-services= | Anthropic の API | =my/auth-keychain-verify= が確かめる、Keychain のエントリの一覧。 =auth-gpg-services= と同じ内容にして、2 つのバックエンドで、同じ状況が報告されるようにする |
+
 
 ** auth-keychain.el — Design Notes
 

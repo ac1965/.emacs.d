@@ -17,6 +17,44 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: vcs-modules
 :END:
 
+vcs 層は、Git を中心とするバージョン管理の層です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+並びで、orgx の次、dev の前にあります。上位の層（dev、utils、personal）には依存できません。
+
+*構成*
+
+| モジュール | 責務 |
+|------------|------|
+| =vcs-core= | 組み込みの =vc= の設定、競合解決（ =smerge= ）、 =M-SPC g= 以下のキー割り当て |
+| =vcs-magit= | Magit の設定、コミットメッセージの補助、ワークツリーの管理、Ediff の配置 |
+| =vcs-gutter= | diff-hl による、変更箇所のガター表示 |
+| =vcs-forge= | Forge（Issue と Pull Request）と、 =gh= を使った GitHub の認証 |
+
+ロード順は =lisp/modules.el= の =my:modules= の並びどおりで、上の表の順です。 =vcs-core= が先に、
+ほかの 3 つが使う関数の宣言（ =declare-function= ）とキーの割り当てを用意します。
+
+*この層の方針*
+
+- *起動を遅くしない* — Magit と diff-hl は、起動時にロードしません。Magit の全体キーは autoload のコマンドで
+  割り当て、diff-hl はアイドル時に有効にします。ロードに掛かる時間（Magit の全体キーの割り当てで 50〜95 ms、
+  diff-hl で約 80 ms）を、使える状態になるまでの道筋から外すためです。
+- *組み込みと Magit を両立させる* — Emacs 31 の =vc= で足りる操作は組み込みで使えるようにし、Magit も残します。
+  どちらを使い続けるかは、使ってみた実感で決めるためです。
+- *キーは 1 か所の leader に集める* — Git の操作は、 =M-SPC g= の下にまとまっています。 =s c d l b= は
+  =ui-keys.el= 側、残りは =vcs-core= が、 =after-init-hook= の depth 90 で割り当てます。
+
+*キーの一覧*
+
+| キー（ =M-SPC g= の次） | コマンド | 割り当てるモジュール |
+|--------------------------+----------+----------------------|
+| =s= / =c= / =d= / =l= / =b= | status / commit / diff / log / blame | =ui-keys.el= |
+| =f= / =F= / =P= / =B= / =z= | fetch / pull / push / branch / stash | =vcs-core= |
+| =h= | ファイルの履歴（ =magit-log-buffer-file= ） | =vcs-core= |
+| =]= / =[= / =H= | 次 / 前の hunk、hunk を表示（ diff-hl ） | =vcs-core= |
+| =i= / =r= / =N= | Issue 一覧、Pull Request 一覧、 =forge-dispatch= | =vcs-core= |
+| =w= / =W= / =X= | ワークツリーへ切り替え、追加、削除 | =vcs-core= （ =vcs-magit= のコマンド） |
+| =m= | 競合の解決（ =n= / =p= / =u= / =l= / =b= / =a= / =e= / =r= ） | =vcs-core= |
+
+
 * vcs/vcs-core.el
 :PROPERTIES:
 :CUSTOM_ID: vcs-core
@@ -36,6 +74,39 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
 理由は単純で、「Magit をやめられるかどうか」は、思い込みではなく実際に使ってみた実感で判断
 すべきだからです。まず両方を使える状態を作り、それから決める。その順序を守るための構成です。
 やめるか否かの判断を、思い込みではなく実測した経験に基づいて下せるようにするためです。
+
+*このモジュールが設定するもの*
+
+- *組み込みの* =vc= — Emacs 31 以上でだけ有効です（ =:if (>= emacs-major-version 31)= ）。
+  - =vc-allow-rewriting-published-history= は =nil= です。公開済みの履歴を書き換える操作を断ります。
+    Emacs 31 の書き直しで加わった、いちばん価値のある安全装置です。
+  - =vc-async-checkin= と =vc-display-failed-async-commands= は =t= です。チェックインを非同期で行い、
+    失敗は握りつぶさずに表に出します。
+  - =vc-use-incoming-outgoing-prefixes= は =t= です。incoming / outgoing 系のコマンドを、専用の接頭辞で区別します。
+  - =vc-dir-auto-hide-up-to-date= と =vc-dir-save-some-buffers-on-revert= は =t= です。VC Directory から、
+    変更のないファイルを隠し、更新の前に未保存のバッファを保存するか尋ねます。
+  - =vc-resolve-conflicts= は =t= です。マージで競合が残ると、競合の解決（ =smerge= ）を出します。
+  - =log-edit-hook= は =log-edit-show-files= と =log-edit-show-diff= です。コミットの前に、対象のファイルと差分を並べます。
+  - =vc-auto-revert-mode= があれば有効にします。Emacs の外でブランチを切り替えたり、rebase や pull をしても、
+    開いているバッファが読み直されます。
+- *競合の解決* （ =smerge= ） — ファイルを開いたとき、 =<<<<<<<= で始まる行があれば =smerge-mode= を有効にします
+  （ =vcs-core--maybe-enable-smerge= ）。競合のないバッファから =M-SPC g m= を押しても未定義にならないよう、
+  コマンドは =:commands= で autoload にしてあります。
+- *競合解決のキーマップ* — =vcs-core-smerge-map= は =:repeat t= です。 =M-SPC g m= を最初に 1 回押すと、
+  =repeat-mode= が有効なときは、続く =n= （次）、 =p= （前）、 =u= （上を採用）、 =l= （下を採用）、
+  =b= （ベースを採用）、 =a= （両方を採用）、 =e= （ ediff ）、 =r= （細分）を、接頭辞なしで続けて押せます。
+- *キー割り当て* — =vcs-core--bind-keys= が、上の表のキーを =ui-leader-g-map= へ割り当てます。
+  =after-init-hook= の depth 90 に登録するのは、leader のマップを作る =ui-keymap= の処理（depth 0）より
+  後に走らせる必要があるためです。コマンドは、Magit や diff-hl、Forge の autoload です。まだロードしていなくても、
+  キーを押した時点でロードされます。
+
+*注意*
+
+- Emacs 31 未満では、 =vc= の設定が丸ごと無効になります。キーと =smerge= の設定は、バージョンに関係なく有効です。
+- =defun= は =leaf= より前に置いています。 =:hook= に関数名を書くと、 =leaf= がその関数が未定義のとき
+  autoload と =declare-function= を出すため、後ろに置くと「defined multiple times」の警告になります。
+- この層は dev 層に依存してはいけません。 =declare-function= はバイトコンパイルの警告を避けるための宣言で、
+  実体の関数は、各パッケージが autoload で用意します。
 
 #+begin_src emacs-lisp
   ;;; vcs/vcs-core.el --- 組み込み VC のポリシー（Emacs 31） -*- lexical-binding: t; -*-
@@ -193,6 +264,68 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
 :CUSTOM_ID: vcs-magit
 :header-args:emacs-lisp: :tangle ../lisp/vcs/vcs-magit.el
 :END:
+
+Magit の設定と、Magit の上に載せた 2 つの補助（コミットメッセージとワークツリー）をまとめたモジュールです。
+
+*Magit の見え方*
+
+- ステータスは、フレーム全体に表示します（ =magit-display-buffer-fullframe-status-v1= ）。
+  Magit のバッファを閉じる（bury する）と、開く前のウィンドウ構成に戻ります（ =magit-restore-window-configuration= ）。
+- 変更された hunk の中で、変わった単語を強調します（ =magit-diff-refine-hunk= ）。行全体の差分より、
+  何が変わったかが読みやすくなります。
+- コミットメッセージの 1 行目の目安は 72 桁です（ =git-commit-summary-max-length= ）。
+- Ediff の制御パネルは、別のフレームにせず、同じフレームで開きます。nano-modeline や posframe を使う環境で、
+  フレームの管理を増やさないためです。
+
+*起動を遅くしない工夫*
+
+Magit は、自分の autoload が =after-init-hook= に =magit-maybe-define-global-key-bindings= を登録します。
+この関数は、全体キーを割り当てるかどうかを調べるために Magit 本体をロードし、起動に 50〜95 ms 掛かっていました。
+そこで、この登録を外し、同じ 3 つの全体キーを autoload のコマンドで割り当てています
+（ =magit-define-global-key-bindings= が =default= のときと同じ）。
+
+| キー | コマンド |
+|------|----------|
+| =C-x g= | =magit-status= |
+| =C-x M-g= | =magit-dispatch= |
+| =C-c M-g= | =magit-file-dispatch= |
+
+*コミットメッセージの補助*
+
+コミットの件名を =type(scope): 要約= の形にそろえるための、補完と確認です。
+
+- *補完* — コミットメッセージの 1 行目で、まず =type= を補完し（ =feat= 、 =fix= 、 =docs= など）、
+  =type(= の後では =scope= を補完します（ =vcs-magit--commit-capf= ）。 =scope= の候補は、そのリポジトリの
+  直近 200 件のコミットの件名から集めます。この補完は、そのバッファの先頭に置きます（depth -50、バッファローカル）。
+- *確認* — 件名が次のどれにも合わないまま確定しようとすると、 =y-or-n-p= で尋ねます（ =vcs-magit--commit-check= ）。
+  - =type(scope): 要約= 、 =type: 要約= 、 =type(scope)!: 要約= （ =type= は英小文字）
+  - =Merge= または =Revert= で始まる件名
+  - =fixup!= 、 =squash!= 、 =amend!= で始まる件名
+- *カスタマイズ* — =vcs-magit-commit-types= で候補の =type= を変えられます。 =vcs-magit-commit-check= を
+  =nil= にすると、確認をやめます。
+
+*ワークツリーの管理*
+
+ブランチごとに別の作業ディレクトリを持つための、3 つのコマンドです。キーは =M-SPC g w= / =W= / =X= で、
+=vcs-core= が割り当てます。
+
+- =vcs-magit-worktree-add= — ブランチ用のワークツリーを追加します。ブランチがなければ、今の =HEAD= から作ります。
+  対話的に呼ぶと、追加したワークツリーで Magit を開きます。
+- =vcs-magit-worktree-switch= — リポジトリのワークツリーから選んで、そこで Magit を開きます。
+- =vcs-magit-worktree-remove= — ワークツリーを削除します。確認を取り、 =--force= は付けません。
+  未コミットの変更があるワークツリーは、git が拒否します。主のワークツリーは、候補に出ません。
+
+追加先は、リポジトリの隣の =<リポジトリ名>.worktrees/<ブランチ名>= です。ブランチ名の =/= は =-= に置き換えます
+（ =vcs-magit--worktree-dir= ）。Magit のトランジェント（ =magit-worktree= ）を使わず git を直接呼ぶのは、
+トランジェントが毎回ディレクトリを尋ねて、置き場所の規約を持てないためです。
+
+*注意*
+
+- ワークツリーの操作は =process-lines= で git を呼ぶので、git が失敗する（リポジトリの外、同名のブランチ
+  がすでにワークツリーにあるなど）と、エラーになります。
+- コミットメッセージの補助は、 =git-commit-setup-hook= と =git-commit-finish-query-functions= に登録します。
+  Magit のコミット画面だけに効き、 =vc= のコミット（ =C-x v v= ）には効きません。
+
 
 #+NAME: vcs-magit
 #+begin_src emacs-lisp
@@ -391,6 +524,25 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
 :header-args:emacs-lisp: :tangle ../lisp/vcs/vcs-gutter.el
 :END:
 
+diff-hl による、変更箇所のガター（フリンジ）表示です。追加・変更・削除された行が、左端の印で分かります。
+
+*設計のポイント*
+
+- *アイドル時に有効にする* — diff-hl のロードに約 80 ms 掛かるので、起動後の最初の 1 秒のアイドル時に有効にします
+  （ =vcs-gutter--enable-later= ）。使える状態になるまでの道筋から、このコストを外すためです。
+  =global-diff-hl-mode= は、有効にした時点で開いているバッファにも効きます。
+- *未保存の編集も反映する* — =diff-hl-flydiff-mode= を有効にします。保存を待たずに、編集の途中の変更が
+  ガターに出ます。
+- *Dired と Magit にも* — Dired では、変更のあるファイルを =diff-hl-dired-mode= が示します。Magit の
+  更新の前後（ =magit-pre-refresh= / =magit-post-refresh= ）にも、ガターを更新します。
+
+*キー*
+
+hunk の移動と表示は =M-SPC g ]= （次）、 =[= （前）、 =H= （表示）です。割り当ては =vcs-core= で行います。
+diff-hl を起動時にロードしなくなったため、ロードの前にこれらのキーを押しても未定義にならないよう、
+3 つのコマンドを =:commands= で autoload にしています（smoketest の leader キーの検査で見つかりました）。
+
+
 #+begin_src emacs-lisp
   ;;; vcs/vcs-gutter.el --- VCS のガター表示 -*- lexical-binding: t; -*-
   ;;
@@ -450,6 +602,32 @@ Emacs 31 は =vc= の大部分を書き直しました（NEWS のエントリだ
 :CUSTOM_ID: vcs-forge
 :header-args:emacs-lisp: :tangle ../lisp/vcs/vcs-forge.el
 :END:
+
+GitHub / GitLab の Issue と Pull Request を、Magit から扱うための Forge の設定です。Magit が使える状態に
+なってから、Forge をロードします（ =:after magit= ）。キーは =M-SPC g i= （Issue 一覧）、 =r= （Pull Request 一覧）、
+=N= （ =forge-dispatch= ）で、 =vcs-core= が割り当てます。
+
+*GitHub の認証*
+
+Forge が使う ghub は、トークンを auth-source から「ホスト =api.github.com= 、ユーザー =<github.user>^forge= 」で探します。
+通常は、 =~/.authinfo= や pass にトークンを書いて用意しますが、ここでは =gh auth token= が出す、
+ログイン済みのトークンを返します。
+
+- トークンを別の場所に複製しないので、 =gh auth login= と =gh auth refresh= だけで更新できます。
+- =auth-source-search= に =:around= の advice を付けて実現しています（ =vcs-forge--auth-source-via-gh= ）。
+  この advice が答えるのは、ホストが =api.github.com= または =github.com= で、ユーザーが =^forge= か =^ghub= で
+  終わる検索だけです。ほかの検索は、すべて元の =auth-source-search= に渡します。
+- =gh= が使えない（ =executable-find= で見つからない）とき、または未ログインでトークンが空のときも、
+  通常の auth-source の結果に戻ります。
+- トークンの文字列は、ログにもメッセージにも出しません。 =:secret= には、呼ばれたときに値を返す関数を渡します。
+
+*注意*
+
+- トークンは、そのセッションの間、1 回だけ =gh= から取得して覚えます（ =vcs-forge--gh-token= ）。
+  =gh auth refresh= でトークンを替えたあと、起動中の Emacs に反映するには、Emacs を再起動するか、
+  この変数を =nil= に戻します。
+- 認証に =gh= を使うのは、GitHub だけです。GitLab など、ほかのホストは、通常の auth-source の設定が要ります。
+
 
 #+begin_src emacs-lisp
   ;;; vcs/vcs-forge.el --- Magit Forge 統合 -*- lexical-binding: t; -*-

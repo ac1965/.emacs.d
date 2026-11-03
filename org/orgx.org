@@ -17,11 +17,118 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: orgx-modules
 :END:
 
+orgx 層は、Org Mode に関わる設定の層です。 =early-init → core → ui → auth → completion → orgx → vcs → dev → utils → personal= の
+並びで、completion の次、vcs の前にあります。
+
+この層の最大の方針は、 *起動時に Org を読み込まない* ことです。Org は大きく、読み込むと起動後のフィーチャーが
+485 から 566 に増えました（実機で確認）。そのため、設定は =with-eval-after-load 'org= の中に置き、 =org-mode-hook= で
+バッファごとに有効にします。 =defcustom= への =setopt= は、Org の自動読み込みを引き起こすことがあるので、
+=after-init-hook= には置きません。
+
+*構成*
+
+| モジュール | 責務 |
+|------------|------|
+| =orgx-core= | ディレクトリ、TODO、capture、refile、アーカイブ、時間の記録、保存時の tangle の準備 |
+| =orgx-agenda= | agenda ファイルの走査とキャッシュ、日々の agenda、 org-ql |
+| =orgx-visual= | org-modern などによる見た目 |
+| =orgx-extensions= | org-journal、 org-roam、 org-download、 toc-org、 org-cliplink |
+| =orgx-fold= | 折りたたみのコマンド |
+| =orgx-export= | Markdown、Mermaid、Graphviz、LaTeX / PDF（LuaLaTeX-ja） |
+| =orgx-notes-markdown= | Org のディレクトリの下の、軽量な Markdown ノート |
+| =orgx-auto-tangle= | 保存時の、README.org と org/*.org の自動 tangle |
+| =orgx-hugo= | ox-hugo と、ブログ記事の capture テンプレート |
+| =orgx-auto-hugo= | capture の確定時の自動エクスポートと、ブラウザでのプレビュー |
+
+ロード順は、上の表の順です（ =lisp/modules.el= の =my:modules= ）。 =orgx-hugo= を =orgx-core= の後ろに置くのは、 =org= の
+設定のあとに、capture テンプレートを足すためです。
+
+次の 4 つは、 =my:modules= に載せません。 =personal/user.el= が =my:modules-extra= に加えます（ =orgx-roam-ui= は、標準では
+加えません。加えると、起動時に org-roam と org が読み込まれ、Org の遅延ロードの意味がなくなるためです）。
+
+| モジュール | 責務 |
+|------------|------|
+| =orgx-typography= | valign によるテーブルの整列、org-appear による強調マーカーの自動表示 |
+| =orgx-brain= | org-brain による、ノートのマインドマップ表示 |
+| =orgx-citar= | citar による文献の引用 |
+| =orgx-roam-ui= | org-roam のグラフを、ブラウザで表示する |
+
+*キーの一覧*
+
+| キー | コマンド | 割り当てるモジュール |
+|------|----------|----------------------|
+| =M-SPC o A= | 今日の agenda | =orgx-core= |
+| =M-SPC o I= / =O= / =C= | 時間の記録の開始 / 終了 / 今の項目へ移動 | =orgx-core= |
+| =M-SPC o Q= | org-ql の検索 | =orgx-core= |
+| =M-SPC o D= | 今日の日付ノート（ org-roam-dailies ） | =orgx-core= |
+| =M-SPC m f= / =e= / =F= （ Org のバッファ） | サブツリーを折りたたむ / 展開する / 切り替える | =orgx-fold= |
+| =C-c f= / =C-c F= （ Org のバッファ） | 同上（短い別名） | =orgx-fold= |
+| =C-c C-p= （ capture 中） | 現在の項目をブラウザでプレビュー | =orgx-auto-hugo= |
+
+
 * orgx/orgx-core.el
 :PROPERTIES:
 :CUSTOM_ID: orgx-core
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-core.el
 :END:
+
+Org の土台です。ディレクトリの構成、日々の運用の設定、保存時の tangle の準備をまとめています。
+
+*ディレクトリの構成*
+
+| 変数 | 既定の場所 |
+|------|------------|
+| =my:d:org= | =my:d:var= 以下の =org= |
+| =my:d:org-journal= | =my:d:org= 以下の =journal= |
+| =my:d:org-roam= | =my:d:org= 以下の =org-roam= |
+| =my:d:org-pictures= | =my:d:org= 以下の =pictures= |
+| =my:d:org-biblio= | =my:d:org= 以下の =biblio= |
+| =my:f:capture-blog-file= | =my:d:org= 以下の =blog.org= |
+
+これらは =defvar= で定義するので、 =personal/<user>.el= が先に =my:d:org= を設定していれば、その値が使われます
+（ =defvar= は既存の束縛を上書きしません）。派生の変数も、そのベースのパスから導かれます。この順序は意図的なもので、
+維持しなければなりません。ディレクトリがなければ、作ります。
+
+*日々の運用の設定*
+
+- *TODO の状態* — =TODO= 、 =SOMEDAY= 、 =WAITING(w@)= 、 =DONE= 、 =CANCELED(c@)= です。 =WAITING= と =CANCELED= に入るときは、
+  理由を尋ねます。状態の変更のメモは、 =LOGBOOK= のドロワーに入れます（ =org-log-into-drawer= ）。
+- *capture のテンプレート* — =i= （ inbox.org へ 1 行を放り込む最短の入口）、 =t= （ gtd.org の Inbox へ TODO ）、
+  =n= （ notes.org の Notes へ）、 =j= （ journal ）、 =m= （ meetings.org へ会議の記録）です。ブログ記事の =b= は、
+  =orgx-hugo= が加えます。
+- *refile* — ファイル名つきのアウトラインのパスを、一度に補完します（ Vertico 向け）。候補は、今のバッファの 3 階層まで、
+  開いている Org のバッファの 1 階層まで、 agenda のファイルの 3 階層までです。親の見出しを新しく作るときは、確認します。
+- *アーカイブ* — 月ごとのファイル（ =<org>/archive/YYYY-MM.org= ）へ送ります。 =org-archive-subtree= の間だけ
+  =org-archive-location= を束縛するので、ファイルごとの =ARCHIVE= プロパティや =#+ARCHIVE:= が優先されます。
+  =archive= のディレクトリは、agenda の走査の対象外です。
+- *時間の記録* — 履歴を、終了後も残します（ =org-clock-persist= は =history= ）。ゼロ分の記録は消し、記録は =LOGBOOK= の
+  ドロワーに入れます。
+- *操作の既定* — Shift で選択でき（ =org-support-shift-select= ）、 =RET= でリンクをたどります（ =org-return-follows-link= ）。
+- *強調マーカーの境界* — 和文の括弧や句読点（「『（【、。・）を、強調マーカーの前後の文字として認めます
+  （ =org-emphasis-regexp-components= ）。和文の直後に =code= や *bold* を続け、その直後に全角の閉じ括弧や句読点が来ると、
+  既定のままでは強調として認識されないためです。 =scripts/check_emphasis.py= も、同じ文字集合を使います。
+
+*agenda ファイルの 2 段階の設定*
+
+ロード時に、ディレクトリを走査しません。 =org-agenda-files= は 2 段階で設定されます。
+
++ 起動のとき、 =org-agenda-files= を読むコードに備えて、最小限のフォールバック（ =inbox.org= ）を設定します。
++ =after-init-hook= で、 =orgx-agenda-build= のキャッシュ済みの完全なリストに置き換えます。
+
+*保存時の tangle の準備*
+
+- =orgx-core-source-org-p= は、ファイルが、このリポジトリの正本（ =README.org= と =org/*.org= ）かを判定します。
+- 正本のバッファでは、ブロックの字下げを保ちます（ =org-src-preserve-indentation= をバッファローカルに =t= ）。
+  ただし tangle の間だけは、 =nil= にします。 =make tangle= と同じように、ブロックの字下げを取り除くためです。
+
+*そのほか*
+
+- =org-persist-load-all= を、 =after-init-hook= から外します。 Org 標準の挙動で、記録された全ファイルを起動時に開いて検証します。
+  org-roam 配下のファイルの一部が不安定な環境で、これがデーモンのクラッシュの引き金になっていました。
+  =org-element-cache= は、各バッファを開いたときに作られるので、外しても機能は失われません。
+- =org-todo= 、 =org-schedule= 、 =org-deadline= 、 =org-clock-in= 、 =org-clock-out= 、 =org-clock-goto= は、 autoload を用意します。
+  Org を開く前にキーを押すと、「commandp」で落ちるためです（ =make smoketest-daemon= で見つかりました）。
+- キーは =after-init-hook= の depth 90 で割り当てます。leader のマップが、 depth 0 で作られたあとに走らせるためです。
 
 #+begin_src emacs-lisp
   ;;; orgx/orgx-core.el --- Org Mode のコア設定 -*- lexical-binding: t; -*-
@@ -357,6 +464,43 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-agenda.el
 :END:
 
+agenda の対象のファイルを集め、日々使う agenda の画面を定義するモジュールです。
+
+*ファイルの走査とキャッシュ*
+
+=my:d:org= の下を、 =orgx-agenda-build= が走査します。結果は、 =orgx-agenda-cache-ttl= の間（既定は 300 秒）覚えておきます。
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| =orgx-agenda-max-depth= | 3 | たどるディレクトリの深さ |
+| =orgx-agenda-exclude-dirs= | =archive= 、 =daily= 、 =.git= 、 =node_modules= | 走査しないディレクトリ。 =daily= は org-roam の日付ノートで、タスクではなく日誌です |
+| =orgx-agenda-cache-ttl= | 300 | キャッシュを古いとみなすまでの秒数 |
+| =orgx-agenda-skip-dataless= | =t= | macOS で、iCloud が退避したファイルを agenda から外す |
+
+=M-x orgx-agenda-invalidate-cache= で、次の呼び出しで、作り直させます。
+
+*iCloud が退避したファイルへの対処*
+
+iCloud Drive が退避した（ dataless の）ファイルを読もうとすると、ダウンロードを待って、「Read error: Operation canceled」で
+agenda 全体が失敗します。macOS では、 =org-agenda= を開く直前に =stat= で退避済みのファイルを調べ、対象から外します
+（ =orgx-agenda--prune-dataless= ）。外したファイルは読まないので、ダウンロードも起こりません。結果は
+=orgx-agenda-cache-ttl= の間、覚えておきます。起動時には調べません（プロセスを起動するため）。
+
+*日々の agenda*
+
+=M-SPC o A= は、「今日」の画面を開きます（ =orgx-agenda-today= ）。カスタムコマンドは次のとおりです。
+
+| キー | 名前 | 中身 |
+|------|------|------|
+| =d= | 今日 | 今日の agenda（1 日の幅）と、 =WAITING= の一覧 |
+| =w= | 待ち | =WAITING= の項目 |
+| =s= | いつか | =SOMEDAY= の項目 |
+| =i= | Inbox | =inbox.org= の =TODO= |
+
+*構造化検索*
+
+org-ql を導入しています。「今週締切の =WAITING= 」のような条件を、式で書けます。 =M-SPC o Q= で検索します。
+
 #+begin_src emacs-lisp
   ;;; orgx/orgx-agenda.el --- キャッシュ付き Org アジェンダ・スキャナ -*- lexical-binding: t; -*-
   ;;
@@ -561,6 +705,26 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-visual.el
 :END:
 
+Org の見た目を整えるモジュールです。org-modern と、Org の表示に関する変数をまとめています。
+
+*設定する内容*
+
+- *見出し* — 先頭の星を隠し（ =org-hide-leading-stars= ）、インデントして表示します（ =org-startup-indented= ）。タグは
+  整列させず（ =org-auto-align-tags= は =nil= ）、右端へ寄せません（ =org-tags-column= は 0）。
+- *強調* — 強調のマーカーを隠し（ =org-hide-emphasis-markers= ）、 =\alpha= のような記号を、文字に置き換えます
+  （ =org-pretty-entities= ）。
+- *TODO のフェイス* — =TODO= 、 =SOMEDAY= 、 =WAITING= 、 =DONE= 、 =CANCELED= ごとに、背景と前景の色を決めます。
+- *記号* — リスト（ =+= 、 =-= 、 =*= ）、チェックボックス、優先度に、記号を割り当てます。
+- *agenda* — タグを右へ寄せず、区切りの線、時間のグリッド（ 8 時から 20 時まで 2 時間ごと）、今の時刻の線を設定します。
+- *org-modern-indent* — =org-indent= を有効にすると、 src / example のブロックの左の囲み線が消えます。これを再現します。
+  =org-modern-mode= より後に働く必要があるので、フックの深さは 90 です。
+
+*なぜ with-eval-after-load で設定するのか*
+
+変数の設定は、Org が読み込まれた時点で一度だけ（ =orgx-visual--configure-once= ）、 agenda の設定は agenda が読み込まれた
+時点で行います。 =after-init-hook= では行いません。Org の =defcustom= は自動読み込みの対象なので、その時点の =setopt= が、
+Org と org-agenda を起動時に読み込んでしまうためです。モードの有効化（ =org-modern-mode= ）は、 =org-mode= のバッファごとに行います。
+
 #+begin_src emacs-lisp
   ;;; orgx/orgx-visual.el --- Org の視覚的強化 -*- lexical-binding: t; -*-
   ;;
@@ -667,6 +831,29 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: orgx-extensions
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-extensions.el
 :END:
+
+Org の拡張パッケージをまとめたモジュールです。
+
+- *org-journal* — 日誌のディレクトリを =my:d:org-journal= にします。
+- *org-roam* — ノートのディレクトリは =my:d:org-roam= 、DB は、その下の =org-roam.db= です。
+  - ノード検索の表示は、タイトルを広く取り、タグを右に薄く添えます（ Vertico と Marginalia 向け）。
+  - 日付ノート（ =M-SPC o D= ）は、 =daily/= の下に置きます。
+  - DB のコネクタは、 =sqlite-available-p= が真なら =sqlite-builtin= 、そうでなければ =sqlite= に固定します
+    （ Emacs 31.0.50 で、 =sqlitep= の挙動が変わったため）。
+  - ファイルのハッシュの計算でエラーが出ても、そのファイルを飛ばして、同期全体は止めません（ =orgx--org-roam-file-hash-guard= ）。
+  - capture のテンプレートは、ドメインの種別とタグの運用に合わせ、ノードを新しく作るときに、 =:ID:= 、 =:ROAM_REFS:= 、
+    =:STATUS:= の PROPERTIES のドロワーを強制します。タグの語彙や命名の規則は、roam ノート側（ =meta-knowledge-base-conventions= ）が
+    正で、ここにはコードだけを置きます。増減のたびに tangle やコミットが発生するのを避けるためです。
+- *org-download* — 画像の保存先を =my:d:org-pictures= にします。
+- *toc-org* — Org と Markdown で、目次を更新します。
+- *org-cliplink* — クリップボードの URL を、タイトルつきのリンクとして挿入します。
+
+*org-roam の自動同期は、起動時に有効にしない*
+
+=org-roam-db-autosync-mode= を有効にするには org-roam のロードが要り、org-roam は Org を =require= するので、
+起動時に（アイドルタイマーでも）有効にすると、Org の遅延ロードを壊します。代わりに、必要になったときに
+=M-x my/org-roam-autosync-enable= で有効にします。 =org-roam-node-find= などの入口は autoload なので、最初の呼び出しで、
+一度だけ DB が同期されます。常に自動同期が要るときだけ、このコマンドを使います。
 
 #+begin_src emacs-lisp
   ;;; orgx/orgx-extensions.el --- Org Mode の拡張 -*- lexical-binding: t; -*-
@@ -788,6 +975,19 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-fold.el
 :END:
 
+Org のサブツリーを、折りたたむ・展開する・切り替えるコマンドです。Emacs のバージョンの違いを吸収します。
+
+| コマンド | キー（ Org のバッファ） | 動作 |
+|----------|--------------------------|------|
+| =my/org-fold-subtree= | =M-SPC m f= 、 =C-c f= | サブツリーを折りたたむ |
+| =my/org-unfold-subtree= | =M-SPC m e= | サブツリーを展開する |
+| =my/org-toggle-fold= | =M-SPC m F= 、 =C-c F= | サブツリーの折りたたみを切り替える |
+
+=M-SPC= は直接書かず、 =ui-leader-key= を参照します。 =personal/device-*.el= が leader を変えた環境（例: WSL の =C-c SPC= ）にも
+追従するためです。 =C-c f= と =C-c F= は、挿入の状態から片手で使えるように残した、短い別名です。
+
+折りたたまれているかの判定は、 =org-fold-folded-p= があればそれを、なければ（ Emacs 29 未満） =outline-invisible-p= を使います。
+
 #+begin_src emacs-lisp
   ;;; orgx/orgx-fold.el --- Org の折りたたみ補助 -*- lexical-binding: t; -*-
   ;;
@@ -867,6 +1067,39 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :CUSTOM_ID: orgx-export
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-export.el
 :END:
+
+
+Org から、Markdown、Mermaid、Graphviz、LaTeX / PDF へ出力するための設定です。Hugo は =orgx-hugo= が受け持ちます。
+
+*設定する内容*
+
+- *Markdown* — markdown-mode、markdown-preview-mode、edit-indirect を導入します。
+- *Mermaid* — ob-mermaid と、 =mmdc= （ mermaid-cli ）で、Org Babel の言語 =mermaid= を登録します。 =mmdc= は、 =PATH= を探し、
+  なければ =~/.npm-global/bin= も調べます。 =mmdc= がなくても、言語の登録は行います。 =:file= で出力するブロックだけが失敗します。
+- *Graphviz* — =ob-dot= は Org のコアではなく org-contrib の一部で、独立した straight のレシピがありません。
+  =ob-dot= が =load-path= にあるときだけ、有効にします（ =locate-library= で確認）。使うには、Emacs を起動する前に
+  org-contrib を別に入れます。
+- *LaTeX / PDF* — 日本語の文書のために、 =ltjsarticle= のクラスを登録し、PDF の生成を、 Org 標準の 3 回の連続コンパイルではなく、
+  =latexmk= に任せます。
+
+*PDF の作り方*
+
+=latexmk= を、常に呼びます（ =org-latex-pdf-process= ）。オプションは =-synctex= 、 =-halt-on-error= と、出力先の =-output-directory= です。 =~/.latexmkrc= が
+LuaLaTeX-ja を既定にしているので、文書ごとの =#+LATEX_COMPILER= は、PDF を作る段では参照されません。別のエンジンに替えたい
+文書は、 =.tex= 側に latexmk の magic comment（ =% !TEX program= の行で、 =platex= を指定する）を置きます。
+
+*SVG の図の扱い*
+
+SVG の図は、LaTeX の外側で、先に PDF に変換しておきます。
+
+#+begin_example
+for f in svg/*.svg; do rsvg-convert -f pdf -o "${f%.svg}.pdf" "$f"; done
+#+end_example
+
+=svg= パッケージを使わないのは、変換に Inkscape 本体の CLI を要求するためです。 =mactex-no-gui= の環境には Inkscape がなく、
+ビルドが「Inkscape version not detected」で失敗します。 =rsvg-convert= （ =brew install librsvg= ）は、CLI だけで GUI が要りません。
+文書の本体の画像リンクは、 =[[file:foo.svg]]= のままで構いません。 =ox-latex= は、 =*.svg= のリンクを =\includesvg{foo}= に書き換えます。
+=orgx-export--svg-to-pdf-graphics= が、これを =\includegraphics{foo.pdf}= に戻して、先に作った PDF を指します。
 
 #+begin_src emacs-lisp
   ;;; orgx/orgx-export.el --- Org のエクスポート設定 -*- lexical-binding: t; -*-
@@ -1129,6 +1362,31 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-notes-markdown.el
 :END:
 
+Org のディレクトリの下に置く、軽量な Markdown ノートの仕組みです。複雑な知識グラフの枠組みは、意図的に避けています。
+
+*ノートの構造*
+
+ノートは、 =my:d:org= の下の =notes/= （ =my:notes-directory-name= ）に置きます。その下に、ノートブックのディレクトリ
+（ =inbox= 、 =work= 、 =life= 、 =ideas= 、 =archive= 。 =my:notes-default-notebooks= で変えられます）を作ります。
+ノートは =<日時>-<題名のスラッグ>.md= で、先頭に YAML のフロントマター（ =title= 、 =notebook= 、 =tags= 、 =created= 、 =updated= ）を付けます。
+
+*コマンド*
+
+| コマンド | 動作 |
+|----------|------|
+| =my/notes-new-note= | ノートブックと題名を尋ねて、新しいノートを作る |
+| =my/notes-open-root= | ノートのルートを Dired で開く |
+| =my/notes-consult-ripgrep= | ノートの全文を、 =consult-ripgrep= で検索する |
+| =my/markdown-toggle-live-preview= （ =C-c C-p= ） | Markdown のライブプレビューを切り替える |
+
+=consult-notes= も使えます。ノートのディレクトリを、 =Org Notes (MD)= （キー =m= ）として登録しています。
+
+*Markdown の編集*
+
+- =.md= と =README.md= は、 =gfm-mode= で開きます。変換のコマンドは =pandoc= で、コードのブロックは、そのモードで色を付けます。
+- 折り返しと可変幅のフォントを使い、幅 100 桁の中央寄せのレイアウトにします（ =visual-fill-column= ）。
+- 画像は =org-download= で貼り付けます。リンクは =![](...)= の形で、保存先は、そのノートの隣の =./images= です。
+
 #+begin_src emacs-lisp
   ;;; orgx/orgx-notes-markdown.el --- Org 配下の Markdown ノート -*- lexical-binding: t; -*-
   ;;
@@ -1302,6 +1560,17 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 保存時の自動 tangle と、=orgx-auto-hugo.el= が担うキャプチャ確定時の自動エクスポートは、
 どちらも Org 本体を遅延ロードしたまま実現しています。両者の合流点をまとめて図示します。
 
+*動作*
+
+- 対象は、 =orgx-core-source-org-p= が真になるファイル（ =README.org= と =org/*.org= ）だけです。
+- 保存のあと（ =after-save-hook= ）、 =org-babel-tangle= を呼びます。このとき、Babel の実行の確認は求めず
+  （ =org-confirm-babel-evaluate= を =nil= ）、変更のフックは止めます。再帰的な保存のループを防ぐため、バッファローカルな
+  実行中のフラグを使います。
+- エラーになっても、保存は妨げません。メッセージを出すだけです。
+- =org-mode-hook= で、バッファごとに、保存のフックをローカルに登録します。無名の関数ではなく、名前のある関数
+  （ =orgx-auto-tangle--install-hook= ）なのは、 =remove-hook= で外せて、 =eval-buffer= を繰り返しても重複しないためです。
+- =org= や =ob-tangle= は、トップレベルで =require= しません。 Org の遅延ロードを保つためです。
+
 [[file:../svg/10_orgtangle_hugo.svg]]
 
 #+begin_src emacs-lisp
@@ -1403,6 +1672,34 @@ Hugo ブログ（ox-hugo）に関わる設定を 1 つにまとめたモジュ�
 タグを capture の確定前に別のコマンドで設定する運用の個人設定は、このオプションを =nil= にするだけです。
 テンプレートを丸ごと上書きする必要はありません。 =orgx-core.el= の =org= の設定のあとに追加するため、
 =my:modules= では =orgx-core= より後（ =orgx-auto-hugo= の直前）に置いています。
+
+*ブログ記事のテンプレート*
+
+=b= のテンプレートは、 =my:f:capture-blog-file= の =blog= の見出しの下に、 =TODO= の項目を作ります。題名を尋ね、次の
+プロパティを入れます。
+
+| プロパティ | 値 |
+|------------|----|
+| =EXPORT_HUGO_BUNDLE= | 新しい UUID（ページバンドルのディレクトリ名） |
+| =EXPORT_FILE_NAME= | =index= |
+| =EXPORT_HUGO_CUSTOM_FRONT_MATTER= | =:cover ""= |
+| =EXPORT_DATE= | 今の日時 |
+| =EXPORT_HUGO_TAGS= | 尋ねたタグ（ =orgx-hugo-capture-prompt-tags-p= が =t= のときだけ） |
+| =EXPORT_HUGO_CATEGORIES= | 尋ねたカテゴリ |
+| =EXPORT_HUGO_LASTMOD= | 空 |
+
+テンプレートは、 =org= のロード後に、 =org-capture-templates= の末尾へ足します。すでに =b= があれば置き換えるので、
+2 回呼んでも害はありません。
+
+*エクスポートの補助*
+
+- =org-export-dispatch= の前に、 =ox-hugo= を =require= します。ディスパッチのメニューに、Hugo が出るようにするためです。
+- =org-hugo-export-wim-to-md= の実行の間だけ、 =org-agenda-files= を絞ります。
+
+*設定*
+
+=orgx-hugo-capture-prompt-tags-p= を =nil= にすると、タグの行をテンプレートから外します。タグを別の方法で付ける運用
+（たとえば =org-capture-before-finalize-hook= の関数）で、二重に尋ねないためです。ox-hugo のフロントマターは TOML です。
 
 #+NAME: orgx-hugo-el
 #+begin_src emacs-lisp
@@ -1578,6 +1875,34 @@ Hugo ブログ（ox-hugo）に関わる設定を 1 つにまとめたモジュ�
 :CUSTOM_ID: orgx-auto-hugo
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-auto-hugo.el
 :END:
+
+
+ブログ記事の capture を確定したとき、ox-hugo で、すべてのサブツリーを自動でエクスポートします。確定の前には、
+ブラウザで下書きを確かめるプレビューも使えます。
+
+*動作*
+
+- *確定のときだけ* — =org-capture-after-finalize-hook= で、ブログ記事の capture を =C-c C-c= で確定したときだけ
+  エクスポートします。 =C-c C-k= で中断したときは、エクスポートしません（ =org-note-abort= を確かめます）。
+  capture の編集中の自動保存や、手動の保存では、エクスポートしません。
+- *対象の判定* — 直前に保存された位置（ =org-capture-last-stored-marker= ）のバッファが、
+  =my:f:capture-blog-file= かを調べます。インダイレクトバッファは、元のバッファに直して判定します。
+- *再入の防止* — 実行中のフラグで、エクスポートの重複した呼び出しを防ぎます。
+- *遅延ロード* — =ox-hugo= は、エクスポートの直前に =require= します。トップレベルでは =require= しません。
+
+*プレビュー*
+
+capture の途中で =C-c C-p= を押すと、今の項目を、ブラウザでプレビューします（ =orgx-auto-hugo-preview-capture= ）。
+確定はしません。
+
+- 確定（エクスポート）とは独立した、副作用のない下書きの確認です。そのため、ファイルを書き出す
+  =org-hugo-export-wim-to-md= は使わず、 =org-export-as= で、現在の項目だけを文字列として取り出します。ディスクに触れず、
+  =org-hugo-base-dir= の解決にも依存しません。
+- 得られた文字列は、capture のセッションごとに 1 つ用意する、使い捨てのスクラッチのファイルに書き、そのバッファで
+  =markdown-preview-mode= を有効にします。実際のブログの content ディレクトリは、無傷のままです。
+- スクラッチのファイルの置き場所は、capture のセッションのプロパティ（ =org-capture-put= ）に持たせます。確定でも中断でも、
+  capture のバッファは =org-capture-after-finalize-hook= の前後で kill されることがあり、バッファローカルな変数では、
+  後始末のときに参照できないことがあるためです。後始末は、確定のフック（ =orgx-auto-hugo-preview--cleanup= ）で行います。
 
 #+begin_src emacs-lisp
   ;;; orgx/orgx-auto-hugo.el --- キャプチャ確定時の ox-hugo 自動エクスポート -*- lexical-binding: t; -*-
@@ -1807,6 +2132,16 @@ Hugo ブログ（ox-hugo）に関わる設定を 1 つにまとめたモジュ�
 :CUSTOM_ID: orgx-typography
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-typography.el
 :END:
+
+
+Org の文字の見た目を、さらに整えるモジュールです。標準の =my:modules= には含めません。任意の見た目の強化として、
+=personal/user.el= が =my:modules-extra= に加えます。これがなくても、Org の機能は完全です。
+
+- *valign* — テーブルの桁を、ピクセル単位で揃えます。和文と英数字が混ざったテーブルで、桁がずれるのを防ぎます。
+  =org-mode= のバッファごとに有効になります。30 万文字を超える巨大なバッファでは、再描画のコストが無視できないので、無効にします。
+- *org-appear* — カーソルが入ったときだけ、強調のマーカー、リンクの括弧、上付き・下付きのマーカーを表示します
+  （ =org-appear-autoemphasis= 、 =org-appear-autolinks= 、 =org-appear-autosubmarkers= ）。ふだんは、
+  =org-hide-emphasis-markers= のとおり、隠れています。
 
 #+begin_src emacs-lisp
   ;;; orgx/orgx-typography.el --- Org のタイポグラフィ強化 -*- lexical-binding: t; -*-
@@ -2039,6 +2374,14 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-brain.el
 :END:
 
+
+org-brain による、ノートのマインドマップ（ Wiki 風）の表示です。org-roam のバックリンクを中心にしたグラフを、補います。
+標準の =my:modules= には含めません。 =personal/user.el= が =my:modules-extra= に加えます。
+
+- =org-brain-path= を =my:d:org-roam= にします。org-roam と同じノートのディレクトリを、重複なく共有するためです。
+- =my/brain-visualize= で、ポイントの項目（なければ尋ねた項目）を表示します。キーは割り当てません（ =M-x= で呼びます）。
+- 表示のバッファでは、 =j= と =k= で、次と前のボタンへ移ります。
+
 #+begin_src emacs-lisp
   ;;; orgx/orgx-brain.el --- org-brain 知識グラフ -*- lexical-binding: t; -*-
 
@@ -2104,6 +2447,17 @@ rm -rf ~/.emacs.d/.cache/straight/build-*/simple-httpd
 :CUSTOM_ID: orgx-citar
 :header-args:emacs-lisp: :tangle ../lisp/orgx/orgx-citar.el
 :END:
+
+
+文献の引用のためのモジュールです。citar が、Org の引用（ org-cite ）のバックエンドとして、文献のデータベース
+（ CSL-JSON ）の検索、挿入、リンクをたどる操作を担います。 =citar-embark= が、Embark 経由の文脈に応じた操作（開く、引用を挿入）を足します。
+標準の =my:modules= には含めません。 =personal/user.el= が =my:modules-extra= に加えます。
+
+- =org-cite-insert-processor= 、 =org-cite-follow-processor= 、 =org-cite-activate-processor= を、すべて =citar= にそろえます。
+- 文献のデータベースは、 =my:d:org-biblio= の下の =gov-standards.json= です。ホームディレクトリの固定のパスは持ちません。
+- =citar-embark-mode= を有効にします。
+- =citar-bibliography= と =org-cite-global-bibliography= は、 =setopt= で設定します。 =leaf= の =:custom= は、 =(a b c)= の形の値を、
+  複数の変数へ同じ値を配る省略記法と解釈して分解してしまうためです（コーディング規則 6 の例外）。
 
 #+begin_src emacs-lisp
   ;;; orgx/orgx-citar.el --- citar / org-cite による文献引用管理 -*- lexical-binding: t; -*-

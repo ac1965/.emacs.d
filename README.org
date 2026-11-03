@@ -111,7 +111,7 @@ Org 文書（ =README.org= と =org/*.org= ）しか設定の実体がありま�
 
 5. 自分用の設定を =personal/= に合わせます。 =personal/user.el= 、 =personal/device-darwin.el=
    などは本人（ac1965）向けの内容を含む tangle 生成物です。そのまま使わず、
-   README.org の [[file:org/personal.org::#personal-config][Personal Configuration]] 節にある該当ブロックを自分の環境向けに
+   [[file:org/personal.org::#personal-config][org/personal.org]] の該当ブロックを自分の環境向けに
    書き換えてから =make reload= してください。 =personal/= 自体を直接編集しても、
    次の tangle で上書きされます。
 
@@ -123,7 +123,7 @@ Org 文書（ =README.org= と =org/*.org= ）しか設定の実体がありま�
 - =.var/= は履歴などのランタイム状態です。消すと困るので残します。キャッシュ（ =my:d:cache= 、
   リポジトリの外の =$XDG_CACHE_HOME/emacs/= 、なければ =~/.cache/emacs/= ）は消しても
   自動的に作り直されます。
-- 設定を変えるときは、生成物（ =.el= ）ではなく必ず README.org を編集します。
+- 設定を変えるときは、生成物（ =.el= ）ではなく、正本の Org 文書（ =README.org= か、対応する =org/*.org= ）を編集します。
 
 ** Emacs Version Numbers
 :PROPERTIES:
@@ -273,21 +273,27 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 :CUSTOM_ID: layers
 :END:
 
-ここからは各層の責務を順に見ていきます。
+ここからは各層の責務を順に見ていきます。各層のモジュールの一覧、設定値、キー、設計の理由は、対応する Org 文書
+（ =org/<層>.org= ）の先頭と、各モジュールの節にあります。ここでは、層ごとの役割と、守るべき境界を述べます。
 
 *** core
 
-ランタイムの土台です。最下位の機能層で、他のすべての層がこれに依存します。
+ランタイムの土台です。最下位の機能層で、他のすべての層がこれに依存します。詳細は [[file:org/core.org][org/core.org]] です。
 
-責務:
-
-- ネイティブコンパイルの警告の収集・診断・報告（ =core-native= 。 =eln-cache= の配置は =early-init.el= ）
-- Tree-sitter 文法の管理（ =core-treesit= ）
-- 履歴とセッション（ =core-history= ）、古いバックアップの削除（ =core-persistence= ）、
-  自動保存とバックアップ（ =core-autosave= ）、編集まわりの既定（ =core-editing= ）
-- dired の dirvish への置き換え（ =core-dired= ）
-- 明示的な契機での GC（ =core-gc= ）と OS ごとの修飾キー変数・初回フレーム用ヘルパー（ =core-runtime= ）
-- custom-file の管理（ =core-custom= ）と LSP/UI バックエンドの選択（ =core-switches= ）
+| モジュール | 責務 |
+|------------|------|
+| =core-policy= | 設定ファイルへの =lexical-binding= の自動挿入と、 =trusted-content= の宣言 |
+| =core-gc= | フォーカス喪失とミニバッファ終了を契機とする GC |
+| =core-persistence= | 古いバックアップの削除 |
+| =core-runtime= | OS ごとの修飾キーの変数、一度だけ実行するフック、初回のグラフィカルフレーム向けの補助 |
+| =core-treesit= | tree-sitter の文法の配置と取得元（Emacs 31 の組み込み機能に任せる） |
+| =core-history= | save-place、recentf、savehist、keyfreq |
+| =core-editing= | 構造的編集、undo、ウィンドウ切替、Emacs 31 の編集系の組み込み機能 |
+| =core-autosave= | 自動保存、フォーカス喪失時の保存、世代付きバックアップ |
+| =core-dired= | dired の dirvish への置き換え |
+| =core-switches= | UI のバンドルと LSP のバックエンドを選ぶスイッチ |
+| =core-custom= | custom-file の管理 |
+| =core-native= | ネイティブコンパイルの警告の収集と報告（ =eln-cache= の配置は =early-init.el= ） |
 
 *core に入れないもの*
 
@@ -299,42 +305,52 @@ Emacs の設定が壊れるときの典型は、「A を直したら、まった
 
 *** policy
 
-グローバルな編集ポリシーです（core 層の一部としてロードされます）。
+core 層の一部（ =core-policy= ）として、グローバルな編集ポリシーをロードします。
 
-責務:
-
-- 空白・行末空白のルール
-- インデント標準とタブポリシー
-- エディタの安全制約（ =require-final-newline= 等）
+- 設定ファイルに =lexical-binding= の指定がなければ、先頭に挿入する
+- 自分で管理している設定（ =lisp/= 、 =personal/= 、 =early-init.el= ）を =trusted-content= として宣言し、
+  flymake のバイトコンパイルのバックエンドが無効にならないようにする
 
 policy は「どう書くか」を決めるだけの層なので、UI やパッケージ機能を有効化してはいけません。
+空白の整理やインデントの既定は、それぞれの機能を持つモジュール（ =dev-web-core= 、 =core-editing= ）が受け持ちます。
 
 *** ui
 
-見た目と操作感を担当します。
+見た目と操作感を担当します。詳細は [[file:org/ui.org][org/ui.org]] です。
 
-責務:
-
-- テーマとフォント（テーマは =my:use-ui= で決まる。 =nano= / =doom-nano= なら nano、 =doom= なら
-  doom-themes のテーマ、 =none= なら Emacs の既定）
-- ウィンドウ挙動（zoom、winner、popper）と、用途別のタブ（tab-bar。コーディング / ドキュメント / Git /
-  スクラッチ。バッファを開くと、その用途のタブへ移る。 =ui-window= ）
-- UI ヘルパーとリーダーキー基盤
-- UI バンドル（doom / nano / doom-nano）を =core-switches= の登録簿へ登録する（ =ui-bundles= ）
+| モジュール | 責務 | 載せ方 |
+|------------|------|--------|
+| =ui-font= | フォント（等幅、可変ピッチ、絵文字）とリガチャ | =my:modules= |
+| =ui-bundles= | UI バンドル（doom / nano / doom-nano）を =core-switches= の登録簿へ登録する | =my:modules= |
+| =ui-theme-variant= | nano の light / dark の切替と保存 | =my:modules= |
+| =ui-theme= | テーマ、パレット、フェイスの適用。テーマは =my:use-ui= で決まる（ =nano= / =doom-nano= なら nano、 =doom= なら doom-themes のテーマ、 =none= なら Emacs の既定） | =my:modules= |
+| =ui-window= | zoom、desktop、winner、popper、行間と余白、用途別のタブ（tab-bar。コーディング / ドキュメント / Git / スクラッチ。バッファを開くと、その用途のタブへ移る） | =my:modules= |
+| =ui-utils= | minions、時刻とバッテリー、Treemacs、アイコン、クリップボード、helpful | =my:modules= |
+| =ui-health-modeline= | バッファ数・プロセス数・Eglot のバッファ数の表示 | =my:modules= |
+| =ui-imenu= | imenu-list によるサイドパネル | =my:modules= |
+| =ui-keys= | リーダーキー、Hydra、which-key、キーボード変換、キーの割り当て | =my:modules= |
+| =ui-nano-palette= | Nano のパレット（意味づけされた色） | =ui-theme= が nano 系のときに読む |
+| =ui-nano-modeline= 、 =ui-nano-modeline-items= | Nano のヘッダー行と表示項目 | バンドルを選んだときだけ |
+| =ui-doom-modeline= 、 =ui-doom-nano-modeline= | Doom 系の modeline のバンドル | バンドルを選んだときだけ |
+| =ui-visual-aids= 、 =ui-macos= | 控えめな視覚補助、macOS 固有の調整 | =my:modules-extra= |
 
 [[file:svg/emacs_keybindings_cheatsheet.svg]]
 
 *** completion
 
-補完フレームワークとミニバッファの使い心地を担当します。
+補完フレームワークとミニバッファの使い心地を担当します。詳細は [[file:org/completion.org][org/completion.org]] です。
 
-責務:
-
-- ミニバッファ UI（vertico、marginalia）
-- ポップアップ補完（corfu、cape）
-- 検索とナビゲーション（consult、embark）
-- アイコン統合（nerd-icons、kind-icon）
-- Org SRC ブロック内での補完統合
+| モジュール | 責務 |
+|------------|------|
+| =completion-core= | 補完スタイル（orderless + basic）と Emacs 31 の補完エンジンの設定 |
+| =completion-vertico= | ミニバッファ UI（vertico、marginalia、vertico-posframe） |
+| =completion-consult= | 検索とナビゲーション（consult、consult-dir） |
+| =completion-embark= | 候補への文脈依存の操作（embark、wgrep） |
+| =completion-corfu= | ポップアップ補完（corfu、cape、kind-icon、corfu-terminal）と Emacs 31 のインライン表示 |
+| =completion-icons= | アイコン統合（nerd-icons） |
+| =completion-capf= | モード別の CAPF の並びと、カテゴリ別のスタイル |
+| =completion-org-src= | Org のソースブロック内での補完統合 |
+| =completion-lsp= | プロジェクトを切り替えたときの、不要な Eglot サーバの停止 |
 
 *completion-org-src について*
 
@@ -344,7 +360,7 @@ orderless フィルタの適用を、 =org-src-mode-hook= に登録する 4 つ�
 
 *** auth
 
-認証とシークレットの管理です。
+認証とシークレットの管理です。詳細は [[file:org/auth.org][org/auth.org]] です。
 
 責務:
 
@@ -354,7 +370,7 @@ orderless フィルタの適用を、 =org-src-mode-hook= に登録する 4 つ�
 - 環境変数の検証（ =auth-core= 。確かめるのは =GPG_KEY_ID= だけで、無ければ警告する）
 - 診断コマンド（ =my/auth-gpg-verify= 、 =my/auth-gpg-init-template= 、 =my/auth-keychain-verify= ）
 
-auth も ui 層に依存してはいけません。
+auth も ui 層に依存してはいけません。この層は、資格情報の置き場を整えて診断するところまでで、API キーを取り出す処理は personal 層にあります。
 
 *Keychain バックエンドの扱い*
 
@@ -364,8 +380,12 @@ macOS では Keychain バックエンド（ =auth-keychain= ）を、 =personal/
 
 *** orgx
 
-Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 =auth= 、 =completion= のみに
+Org Mode の拡張群です。詳細は [[file:org/orgx.org][org/orgx.org]] です。orgx の全モジュールは =core= 、 =ui= 、 =auth= 、 =completion= のみに
 依存し、 =vcs= や =dev= には依存しません。
+
+orgx の最大の方針は、 *起動時に Org を読み込まない* ことです。設定は =with-eval-after-load 'org= の中に置き、
+=org-mode-hook= でバッファごとに有効にします。 =defcustom= への =setopt= は、Org の自動読み込みを引き起こすことがあるので、
+=after-init-hook= には置きません。
 
 本層は 14 モジュールで構成されます。 =my:modules= に含まれる正規モジュールは 10 です。
 残る 4 つ（ =orgx-typography= 、 =orgx-brain= 、 =orgx-roam-ui= 、 =orgx-citar= ）はオプション
@@ -374,68 +394,22 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
 =my:modules-extra= に含めません（Org を起動時に引き込まないため。理由は当該モジュールと
 =personal/user.el= を参照）。
 
-モジュール別の責務:
-
-- =orgx-core= — Org のディレクトリ構成、 =defvar= によるパス変数、アジェンダの
-  フォールバック（フェーズ 1: =inbox.org= ）、TODO キーワード、refile ターゲット、
-  キャプチャテンプレート（todo / note / journal / meeting。ブログ記事のテンプレートは =orgx-hugo= が追加する）、
-  アーカイブ先、 =after-init-hook= によるアジェンダ再構築（フェーズ 2）
-- =orgx-agenda= — キャッシュ付き再帰スキャンによる =org-agenda-files= の生成（ =orgx-core= が after-init で呼ぶ）
-- =orgx-extensions= — =org-journal= （journal ディレクトリ）、 =org-roam= （DB の
-  配置、コネクタ、 =M-x my/org-roam-autosync-enable= で有効にする autosync（起動時には自動で有効にしない）、
-  file-hash ガードの advice）、
-  =org-download= （画像ディレクトリ）、 =toc-org= 、 =org-cliplink=
-- =orgx-visual= — =org-modern= の表示変数（TODO フェイス、リスト／チェックボックス／
-  優先度の記号、見出しの星）、アジェンダのグリッド、カスタムフェイス、
-  =org-modern-indent= （org-indent 有効時のブロックのブラケット）。設定は
-  =after-init-hook= で一度だけ実行し、 =org-modern-mode= は =org-mode-hook= により
-  バッファ単位で有効化する
-- =orgx-fold= — 折りたたみ／展開／トグルの対話コマンド（ =my/org-fold-subtree= 、
-  =my/org-unfold-subtree= 、 =my/org-toggle-fold= ）。組み込みの =org-fold= を用い、
-  Emacs 29 未満では =outline-invisible-p= にフォールバックします。キーバインドは
-  =M-SPC m= 配下と、 =C-c= のエイリアスです
-- =orgx-export= — =markdown-mode= 、
-  =markdown-preview-mode =、 =edit-indirect= 、 =ob-mermaid= （Babel の mermaid 言語。
-  CLI パスは =orgx-export--mermaid-cli-path= で探索）、 =ob-dot= （Graphviz。
-  オプション扱いで、 =ob-dot= が load-path 上にある場合のみ有効化）、LaTeX/PDF
-  （ =ltjsarticle= クラスを =org-latex-classes= に登録し、PDF 生成は =latexmk=
-  経由で =~/.latexmkrc= の LuaLaTeX-ja デフォルトに委ねる）
-- =orgx-notes-markdown= — =my:d:org= 配下のノートブック形式 Markdown ノート。
-  =pandoc= をバックエンドとする =markdown-mode= / =gfm-mode= 、 =visual-fill-column= 、
-  =consult-notes= 統合（ =consult-notes-file-dir-sources= を =:config= 内の =setopt=
-  で設定）、画像用の  =org-download= 統合。コマンドは =my/notes-new-note= 、
-  =my/notes-open-root= 、 =my/notes-consult-ripgrep=
-- =orgx-auto-tangle= — このリポジトリの Org 文書（ =README.org= と =org/*.org= ）に限り、 =after-save-hook= で =org-babel-tangle=
-  を自動実行します。サードパーティの =org-auto-tangle= パッケージは使わず、
-  =ob-tangle= を直接呼ぶ独自実装です。再帰ループを防ぐため、バッファローカルな
-  実行中フラグでガードしています
-- =orgx-hugo= — Hugo ブログ（ =ox-hugo= ）の設定。 =ox-hugo= の導入（TOML フロントマター）、
-  =org-export-dispatch= の前に =ox-hugo= を =require= するアドバイス（ =C-c C-e= のメニューに
-  Hugo を出すため）、 =org-hugo-export-wim-to-md= の実行中だけ =org-agenda-files= を絞るアドバイス、
-  ブログ記事の capture テンプレート "b"。タグの入力を行うかは =orgx-hugo-capture-prompt-tags-p=
-  で切り替えます。テンプレートは =orgx-core= の =org= の設定のあとに追加します
-- =orgx-auto-hugo= — =org-capture-after-finalize-hook= を契機とする =ox-hugo= の
-  全サブツリー・エクスポート（保存時ではなく =C-c C-c= の確定時に発火）。中断された
-  キャプチャ（ =org-note-abort= ）はスキップし、対象ファイルは確定時に
-  =my:f:capture-blog-file= で判定する（判定は =orgx-auto-hugo-blog-buffer-p= と
-  =orgx-auto-hugo-blog-capture-p= の 2 つの述語に集約してあり、 =personal/personal-hugo.el= も使う）。あわせて =org-capture-mode-map= に
-  =C-c C-p= を割り当て、確定前のエントリを =markdown-preview-mode= で
-  ブラウザプレビューできます（実 content ディレクトリには一切書き込みません）
-- =orgx-typography= — =valign-mode= （ピクセル精度のテーブル整列）と
-  =org-appear-mode= （強調・リンク・上下付き記号の自動表示）。 =personal/user.el=
-  が =my:modules-extra= に追加するオプション拡張
-- =orgx-roam-ui= — =simple-httpd= + =websocket= 上で動く =org-roam-ui= グラフ
-  ビジュアライザ。依存はトップレベルで =straight-use-package= により導入するのみで、
-  =require= はしません（ =org-roam-ui-open= は autoload されるため）。 =simple-httpd= には
-  明示的な =:local-repo= を与え、 =web-server= との local-repo 名の衝突を防いでいます。
-  =my:modules-extra= に加えた場合、モジュールのロード時に依存を導入し、 =org-roam= の
-  ロード後にアイドルタイマー（8 秒）で UI を開きます。ただし既定では、このリストに含めません
-- =orgx-brain= — =my:d:org-roam= をノートディレクトリとして共有する =org-brain=
-  マインドマップビュー。コマンドは =my/brain-visualize=
-- =orgx-citar= — =citar= + =org-cite= による文献引用管理。 =citar-bibliography= は
-  =my:d:org-biblio= （ =my:d:org= 配下）を参照し、ホームディレクトリ直書きの
-  パスをハードコードしません。 =citar-embark= が =embark-act= 経由の文献アクション
-  （開く／挿入など）を追加します
+| モジュール | 責務 |
+|------------|------|
+| =orgx-core= | ディレクトリの構成、TODO、capture、refile、アーカイブ、時間の記録、アジェンダのフォールバック、保存時の tangle の準備 |
+| =orgx-agenda= | キャッシュ付きの走査による =org-agenda-files= の生成と、日々のアジェンダ、org-ql |
+| =orgx-visual= | org-modern などによる見た目。変数の設定は、Org の読み込み後に一度だけ行う |
+| =orgx-extensions= | org-journal、org-roam、org-download、toc-org、org-cliplink |
+| =orgx-fold= | サブツリーの折りたたみ、展開、切り替え |
+| =orgx-export= | Markdown、Mermaid、Graphviz（任意）、LaTeX / PDF（LuaLaTeX-ja） |
+| =orgx-notes-markdown= | Org のディレクトリの下の、軽量な Markdown ノート |
+| =orgx-auto-tangle= | このリポジトリの Org 文書（ =README.org= と =org/*.org= ）に限った、保存時の自動 tangle（独自実装） |
+| =orgx-hugo= | ox-hugo と、ブログ記事の capture テンプレート |
+| =orgx-auto-hugo= | capture の確定時の自動エクスポートと、ブラウザでのプレビュー |
+| =orgx-typography= | valign によるテーブルの整列、org-appear による強調マーカーの自動表示（任意） |
+| =orgx-brain= | org-brain によるマインドマップ表示（任意） |
+| =orgx-citar= | citar による文献の引用（任意） |
+| =orgx-roam-ui= | org-roam のグラフのブラウザ表示（任意。既定では加えない） |
 
 *Org Babel の言語登録について*
 
@@ -451,54 +425,59 @@ Org Mode の拡張群です。orgx の全モジュールは =core= 、 =ui= 、 
 
 *** vcs
 
-バージョン管理の統合です。
+バージョン管理の統合です。詳細は [[file:org/vcs.org][org/vcs.org]] です。
 
-責務:
+| モジュール | 責務 |
+|------------|------|
+| =vcs-core= | 組み込み =vc= のポリシー（非同期チェックイン、公開済み履歴の保護、 =vc-auto-revert-mode= 、VC Directory の整理。 =vc= の設定は Emacs 31 以降のみ）、smerge による競合の解決、 =M-SPC g= 以下のキー |
+| =vcs-magit= | Magit の設定（ステータスの全画面表示、bury 時の構成の復元）、コミットメッセージの補助、ワークツリーの管理、Ediff の配置 |
+| =vcs-gutter= | diff-hl によるガター差分表示 |
+| =vcs-forge= | GitHub / GitLab の Forge 統合と、 =gh= による GitHub の認証 |
 
-- 組み込み =vc= のポリシー（ =vcs-core= ）: 非同期チェックイン、公開済み履歴の保護、
-  =vc-auto-revert-mode= 、VC Directory の整理（ =vc= の設定は Emacs 31 以降のみ）。
-  衝突マーカーを含むファイルでの smerge の自動有効化は、バージョンによらず働く
-- Magit の設定（ =vcs-magit= ）: ステータスの全画面表示、 =bury= 時のウィンドウ構成の復元、
-  Ediff の制御パネルを別フレームにしない設定
-- ガター差分表示（diff-hl）
-- GitHub/GitLab の Forge 統合
+衝突マーカーを含むファイルでの smerge の自動有効化は、バージョンによらず働きます。Magit と diff-hl は、起動時にロードしません
+（Magit の全体キーは autoload のコマンドで割り当て、diff-hl はアイドル時に有効にします）。
 
 vcs は dev 層に依存してはいけません。
 
 *** dev
 
-開発ツールです。
+開発ツールです。詳細は [[file:org/dev.org][org/dev.org]] です。
 
-責務:
+| モジュール | 責務 |
+|------------|------|
+| =dev-lsp-bridge= | LSP バックエンド（eglot / lsp-mode）の切り替えを吸収するファサードと、バックエンドの =core-switches= への登録 |
+| =dev-ai= | AI 支援。Claude Code を呼ぶ =agent-shell= （ =M-SPC a c= ）が主役で、複数ファイルにまたがる作業、コマンドやテストの実行を担う。 =claude= のログインで認証するので、API キーは要らない |
+| =dev-term= | vterm とプロジェクト単位のターミナル切替 |
+| =dev-web-core= | =project.el= 、保存時の空白の整理、EditorConfig |
+| =dev-build= | Makefile の編集、コンパイルのバッファ、ANSI 色 |
+| =dev-format= | apheleia による保存時の自動整形 |
+| =dev-infra-modes= | docker-compose、 =.env= 、TOML のメジャーモード |
+| =dev-docker= | Dockerfile、YAML、docker CLI、TRAMP のコンテナ |
+| =dev-music= | EMMS による音楽プレイヤー統合 |
+| =dev-sql= | PostgreSQL 向けの SQL 編集と整形 |
+| =dev-rest= | restclient と jq による HTTP の試験 |
+| =dev-radare2= | radare2 によるバイナリ解析 |
+| =dev-navigation= | dumb-jump、multiple-cursors、EWW、LSP のシンボル検索、DevDocs、構文木での折りたたみ |
+| =dev-tools= | VS Code で開く、環境変数の表示、Emacs のビルド情報 |
+| =dev-run= | デバッガ（dape）、direnv の環境（envrc）、テストの実行 |
 
-- LSP バックエンド（eglot、lsp-mode）と、その切り替えを吸収するファサード（ =dev-lsp-bridge= ）
-- AI 支援（ =dev-ai= ）。Claude Code を呼ぶ =agent-shell= （ =M-SPC a c= ）が主役で、複数ファイルにまたがる作業、
-  コマンドやテストの実行を担います。 =claude= のログインで認証するので、API キーは要りません
-- ターミナル統合（vterm）
-- コード整形（apheleia）
-- ビルド・Docker・SQL・REST・インフラ系ファイルのモード・プロジェクト基盤・検索／ナビゲーション
-  の補助（ =dev-build= 、 =dev-docker= 、 =dev-sql= 、 =dev-rest= 、 =dev-infra-modes= 、
-  =dev-web-core= 、 =dev-navigation= 、 =dev-tools= ）
-- デバッガ（dape）・direnv の環境（envrc）・テストの実行（ =dev-run= ）
-- radare2 によるバイナリ解析（ =dev-radare2= ）
-- EMMS による音楽プレイヤー統合（ =dev-music= ）
-- osascript による Apple Music の操作（ =dev-apple-music= 。macOS のみ。 =personal/device-darwin.el= が =my:modules-extra= に加える）
-- LSP バックエンドを =core-switches= の登録簿へ登録する（ =dev-lsp-bridge= ）
+具体的な LSP バックエンド（ =dev-lsp-eglot= 、 =dev-lsp-mode= ）は、 =core-switches= が選んだときにだけロードされます。
+osascript による Apple Music の操作（ =dev-apple-music= ）は macOS のみで、 =personal/device-darwin.el= が =my:modules-extra= に加えます。
 
 *** utils
 
-層をまたいで使われる汎用ユーティリティです。
+層をまたいで使われる汎用ユーティリティです。詳細は [[file:org/utils.org][org/utils.org]] です。
 
-モジュール別の責務:
-
-- =utils-buffers= — =my/smart-kill-buffer= （保存してから kill する）
-- =utils-edit= — バッファ全体に対する編集コマンド（整形、コピー、行連結）
-- =utils-dired= — dirvish/dired ナビゲーションのための =RET= ディスパッチ
-- =utils-ime= — macism による入力ソース制御（リーダー／dired・magit-status・ターミナル系／ミニバッファ／修飾キー C- M- s- で英字へ、離脱時は自動復帰）
-- =utils-functions= — 設定のリロード、 =README.org= を開く、デバッグのトグル
-- =utils-lint= — flymake のポリシー。flycheck は lsp-mode の診断バックエンドとしてのみ保持
-- =utils-diagnostics= — =load-path= / feature / 外部実行ファイルの点検
-- =utils-scratch= — =*scratch*= の自動再生成と複数 scratch バッファ
+| モジュール | 責務 |
+|------------|------|
+| =utils-buffers= | =my/smart-kill-buffer= （保存を確認してから kill する） |
+| =utils-edit= | バッファ全体に対する編集コマンド（整形、コピー、行連結） |
+| =utils-dired= | dirvish / dired のための =RET= のディスパッチ |
+| =utils-ime= | macism による入力ソース制御（リーダー、dired・magit-status・ターミナル系・prog-mode、ミニバッファ、範囲選択、修飾キー C- M- s- で英字へ、離脱時は自動復帰） |
+| =utils-functions= | 設定のリロード、 =README.org= を開く、デバッグのトグル |
+| =utils-lint= | flymake のポリシー。flycheck は、lsp-mode バックエンドを選んだときに lsp-mode が期待する診断バックエンドとしてのみ残し、グローバルには有効にしない |
+| =utils-diagnostics= | =load-path= 、feature、外部実行ファイルの点検、モジュールごとの読み込み時間（ =my/modules-report= ）、起動中の Emacs でしかできない確認（ =my/smoketest= ） |
+| =utils-scratch= | =*scratch*= の自動再生成と複数 scratch バッファ |
 
 パス操作と非同期シェルのヘルパーは、2026-07 のデッドコード除去で削除しました（呼び出し箇所が
 一つも無かったためです）。ディレクトリ操作の正式なヘルパーは =early-init.el= で定義される
@@ -506,7 +485,7 @@ vcs は dev 層に依存してはいけません。
 
 *** personal
 
-ユーザー固有のカスタマイズです。
+ユーザー固有のカスタマイズです。詳細は [[file:org/personal.org][org/personal.org]] です。
 
 - 任意（無くてもシステムは動きます）
 - 依存の向きでは最上位です。ただし =user.el= と =<ユーザー名>.el= は =modules.el= より前に読み込まれ、変数の上書きと =my:modules-extra= への追加を行います
@@ -2199,6 +2178,15 @@ digraph personal_override_contract {
 #+begin_src text :tangle ChangeLog :comments no
 2026-11-02  YAMASHITA Takao  <tjy1965@gmail.com>
 
+	* README.org (Layer Definitions): 各層の節を、モジュールの表と、 org/<層>.org への案内に整理し直す。orgx-visual の設定が
+	after-init-hook で行われるという記述（実際は with-eval-after-load）、policy の説明（実際は core-policy の
+	lexical-binding の挿入と trusted-content）、utils-lint の flycheck の説明を、 org/*.org に合わせて直した。
+	* README.org (Clone and First Steps): 設定を変えるときは、README.org だけでなく、対応する org/*.org を編集する旨に直す。
+	* org/dev.org (dev/dev-docker.el): docker-compose のファイルを docker-compose-mode で開く。
+	dev-infra-modes の割り当てが、あとにロードされる dev-docker の yaml-mode に隠れていた。
+	* org/vcs.org, org/completion.org, org/dev.org, org/orgx.org, org/core.org, org/ui.org, org/utils.org,
+	org/auth.org, org/personal.org: 各層と各モジュールの節に、散文の説明（構成の表、設定値、キー、設計の理由、
+	注意点）を書き足す。コードは変えていない。値は、コードを読んで確かめた。
 	* org/ui.org (ui/ui-window.el) (ui-window--step-until-layout-changes): ui-window-undo / ui-window-redo が、
 	zoom-mode が積むサイズだけの履歴を飛ばし、分割やバッファが変わるまで戻す。zoom-mode を有効に
 	すると、ウィンドウを 6 回移動しただけで winner の履歴が 5 つ増え、最後の分割を戻すのに
