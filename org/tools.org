@@ -2067,15 +2067,55 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
         (dev-navigation--maybe-treesit-fold)
         (and (bound-and-true-p treesit-fold-mode)
              (progn (goto-char (point-min)) (treesit-fold-toggle) t))))
-    (smoketest--check "ui: tab-bar はタブが 2 つ以上になるまでバーを出さず、起動時は有効にしない。M-SPC w t / x / [ / ] / T がタブのコマンド"
-      (and (eql tab-bar-show 1)
-           (not (bound-and-true-p tab-bar-mode))
+    (smoketest--check "ui: tab-bar は共有の設定ではタブが 2 つ以上になるまでバーを出さず、起動時は有効にしない（personal の ac1965 は起動時に表示）。M-SPC w t / x / [ / ] / T がタブのコマンド"
+      (and (if (featurep 'ac1965)
+               (and (eq tab-bar-show t) (bound-and-true-p tab-bar-mode))
+             (and (eql tab-bar-show 1) (not (bound-and-true-p tab-bar-mode))))
            (eq (lookup-key ui-leader-w-map (kbd "t")) 'tab-new)
            (eq (lookup-key ui-leader-w-map (kbd "x")) 'tab-close)
            (eq (lookup-key ui-leader-w-map (kbd "[")) 'tab-previous)
            (eq (lookup-key ui-leader-w-map (kbd "]")) 'tab-next)
            (eq (lookup-key ui-leader-w-map (kbd "T")) 'tab-switch)
-           (eq (lookup-key ui-leader-w-map (kbd ".")) 'ui-window-project-tab)))
+           (eq (lookup-key ui-leader-w-map (kbd ".")) 'ui-window-project-tab)
+           (memq 'tab-bar-format-tabs tab-bar-format)
+           (not tab-bar-tab-hints)
+           (eq tab-bar-tab-name-function #'ui-window-tab-name)
+           (equal (ui-window-tab-name) (ui-window--tab-group-for-buffer (current-buffer)))))
+    (smoketest--check "ui: タブは用途別（コーディング / ドキュメント / Git / スクラッチ）。バッファを開くと用途のタブへ移り、`*Help*' などは移さない"
+      (let* ((code (make-temp-file "smoke" nil ".el"))
+             (doc (make-temp-file "smoke" nil ".txt"))
+             (names (lambda () (mapcar (lambda (tb) (alist-get 'name tb))
+                                       (funcall tab-bar-tabs-function))))
+             (current (lambda () (alist-get 'name (assq 'current-tab (funcall tab-bar-tabs-function)))))
+             (code-buf (find-file-noselect code))
+             (doc-buf (find-file-noselect doc))
+             (other (generate-new-buffer "demo-other"))
+             (diff (generate-new-buffer "demo-diff"))
+             (help (get-buffer-create "*Help*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer other (special-mode))
+              (with-current-buffer diff (diff-mode))
+              (tab-bar-mode 1)
+              (let (r1 r2 r3 r4 r5)
+                (switch-to-buffer code-buf)
+                (setq r1 (funcall current))
+                (switch-to-buffer doc-buf)
+                (setq r2 (funcall current))
+                (switch-to-buffer diff)
+                (setq r3 (funcall current))
+                (switch-to-buffer code-buf)
+                (setq r4 (cons (funcall current) (length (funcall names))))
+                (switch-to-buffer help)
+                (setq r5 (funcall current))
+                (and (equal (ui-window--tab-group-for-buffer other) "スクラッチ")
+                     (equal r1 "コーディング") (equal r2 "ドキュメント") (equal r3 "Git")
+                     (equal (car r4) "コーディング")
+                     (<= (cdr r4) 4)
+                     (equal r5 "コーディング"))))
+          (tab-bar-mode -1)
+          (mapc #'kill-buffer (list code-buf doc-buf other diff help))
+          (delete-file code) (delete-file doc))))
     (smoketest--check "ui: helpful が autoload で呼べ、describe-* を置き換え、M-SPC h . がポイント位置の記号"
       (and (eq (command-remapping 'describe-function) 'helpful-callable)
            (eq (command-remapping 'describe-variable) 'helpful-variable)
@@ -2256,9 +2296,9 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
   右下: =make lint= の実行結果。エコーエリアには起動時間が出ます
 - =complete= — elisp バッファで =completion-pre= まで入力し、Corfu のポップアップとゴーストテキストを出します
 - =vertico= — =org/completion.org= の =leaf orderless= の節を背景に、 =M-x describe-= の縦型候補を出します
-- =tabs= — =tab-bar= に 3 つのタブ（ =emacs.d= / =README= / =scripts= ）を作り、タブごとに違う分割を見せます。
-  1 つ目は左に、タブのキーを書いている途中の elisp バッファ（ =tab-= の入力で Corfu が候補を出す）、右上に生成された =ui-window.el= 、右下に =make check-modules= の結果の 3 分割。
-  2 つ目は =README.org= と =org/boot.org= の左右 2 分割。3 つ目は上 1 枚と下 2 枚。撮るのは 1 つ目のタブです
+- =tabs= — =tab-bar= に用途別の 3 つのタブ（ =コーディング= / =ドキュメント= / =Git= ）を作り、タブごとに違う分割を見せます。
+  コーディングは左に、タブのキーを書いている途中の elisp バッファ（ =tab-= の入力で Corfu が候補を出す）、右上に生成された =ui-window.el= 、右下に =make check-modules= の結果の 3 分割。
+  ドキュメントは =README.org= と =org/boot.org= の左右 2 分割。Git は上に =git log= 、下に直近の差分と =git status= の 3 分割。撮るのはコーディングのタブです
 - 合成画像は、dark と light を横に並べます。補完の 2 枚を渡すと、その下に横並びの 1 段として加わります（左が Corfu、右が Vertico）
 
 *設計上の注記*
@@ -2480,6 +2520,19 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
                           (with-current-buffer buffer
                             (save-excursion (forward-line (- (or back 6))) (point)))))))
 
+  (defun demo--show-command (window name command mode)
+    "WINDOW に、COMMAND の出力を読み取り専用のバッファ NAME（メジャーモード MODE）で出す。"
+    (let ((buffer (get-buffer-create name))
+          (default-directory user-emacs-directory))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (shell-command-to-string command)))
+        (funcall mode)
+        (goto-char (point-min))
+        (setq buffer-read-only t))
+      (set-window-buffer window buffer)))
+
   (defun demo--prepare-tabs-edit (window)
     "WINDOW に、タブのキーを書いている途中の elisp バッファを出す。
   末尾は補完の入力途中で、1 文字を足すと Corfu が tab-new / tab-next などを出す。"
@@ -2501,9 +2554,9 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
       (set-window-point window (with-current-buffer buffer (point-max)))))
 
   (defun demo-scene-tabs ()
-    "tab-bar に 3 つのタブを作り、タブごとに違うウィンドウ分割を見せる。
-  1 つ目は 3 分割（Corfu が出ている編集バッファ・生成された .el・make check-modules の結果）、2 つ目は左右 2 分割、
-  3 つ目は上 1 枚と下 2 枚。最後に 1 つ目のタブへ戻して撮る。"
+    "tab-bar に用途別の 3 つのタブ（コーディング / ドキュメント / Git）を作り、タブごとに違うウィンドウ分割を見せる。
+  コーディングは 3 分割（Corfu が出ている編集バッファ・生成された .el・make check-modules の結果）、ドキュメントは左右 2 分割、
+  Git は上 1 枚と下 2 枚（ログ・直近の差分・状態）。最後にコーディングのタブへ戻して撮る。"
     (condition-case err
         (progn
           (make-directory demo-dir t)
@@ -2525,24 +2578,24 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
             (demo--wait-compile)
             (set-window-point bottom (with-current-buffer "*compilation*" (point-max)))
             (with-selected-window bottom (recenter -1))
-            (tab-rename "emacs.d")
+            (tab-rename "コーディング")
             ;; 2 つ目のタブ: 設計と起動の文書を左右に並べる
             (tab-new)
             (delete-other-windows)
             (let ((w (selected-window)))
               (demo--show w "README.org" nil)
               (demo--show (split-window-right) "org/boot.org" "early-init" 2))
-            (tab-rename "README")
-            ;; 3 つ目のタブ: 上に 1 枚、下に 2 枚
+            (tab-rename "ドキュメント")
+            ;; 3 つ目のタブ: 上にログ、下に直近の差分と状態
             (tab-new)
             (delete-other-windows)
             (let* ((top (selected-window))
                    (low (split-window-below (round (* 0.55 (window-total-height top))))))
-              (demo--show top "org/tools.org" "(defun demo-scene-tabs" 2)
-              (demo--show low "scripts/demo-layout.el" "(defun demo-scene-tabs" 2)
-              (demo--show (with-selected-window low (split-window-right))
-                          "org/core.org" nil))
-            (tab-rename "scripts")
+              (demo--show-command top "*demo-git-log*" "git log --oneline -12" #'fundamental-mode)
+              (demo--show-command low "*demo-git-diff*" "git show --stat --format=%B HEAD" #'diff-mode)
+              (demo--show-command (with-selected-window low (split-window-right))
+                                  "*demo-git-status*" "git status --short" #'fundamental-mode))
+            (tab-rename "Git")
             (tab-select 1)
             ;; 左の編集バッファで、最後の 1 文字を入力イベントとして流し、Corfu を実際に起動させる。
             ;; 入力待ちの状態を撮るので、完了マーカーはタイマー（`demo--ready-after'）で書く。
