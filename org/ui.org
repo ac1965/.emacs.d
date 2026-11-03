@@ -1593,6 +1593,7 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;;   バッファを消して、タブの中身が別の用途だけになったら、その用途のタブへ寄せる（あればこのタブを閉じ、
   ;;   なければ名前を直す。`ui-window--tidy-tabs'）。タブを作っている間は振り分けない（最初の *scratch* で
   ;;   スクラッチのタブが増えるのを避ける）。
+  ;;   `previous-buffer' / `next-buffer'（`s-<left>' / `s-<right>'）は、今のタブと同じ用途のバッファだけを巡る。
   ;;   タブごとにウィンドウ構成の履歴を持ち（`tab-bar-history-mode'）、見た目は現在のテーマの
   ;;   色から決め、テーマの切替に追従する（`ui-window--apply-tab-faces'）
   ;; - ポップアップのバッファ（*Messages*、*Help*、*compilation*、*Smoketest* など）を popper で
@@ -1757,6 +1758,16 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
     (let ((value (and (facep face) (face-attribute face attribute nil t))))
       (if (and (stringp value) (not (string-empty-p value))) value fallback)))
 
+  (defun ui-window--blend (color base ratio)
+    "COLOR を BASE に RATIO（0〜1）の割合で混ぜた色を返す。色を解釈できなければ BASE。"
+    (let ((c (color-name-to-rgb color))
+          (b (color-name-to-rgb base)))
+      (if (and c b)
+          (apply #'color-rgb-to-hex
+                 (append (cl-mapcar (lambda (x y) (+ (* ratio x) (* (- 1 ratio) y))) c b)
+                         '(2)))
+        base)))
+
   (defun ui-window--apply-tab-faces (&rest _)
     "tab-bar のフェイスを、現在のテーマの色に合わせて設定する。"
     (let* ((fg (ui-window--face-color 'default :foreground "black"))
@@ -1764,12 +1775,14 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
            (faded (ui-window--face-color 'nano-faded :foreground fg))
            (subtle (ui-window--face-color 'nano-subtle :background bg))
            (accent (and (fboundp 'ui-theme--color)
-                        (ui-theme--color 'ui-nano-palette-color-salient))))
+                        (ui-theme--color 'ui-nano-palette-color-salient)))
+           ;; 今のタブは、アクセント色を背景に 3 割混ぜて、他のタブとはっきり分ける
+           (current (if accent (ui-window--blend accent bg 0.3) subtle)))
       (dolist (spec `((tab-bar
                        :inherit nil :foreground ,fg :background ,bg :box nil)
                       (tab-bar-tab
-                       :inherit nil :foreground ,fg :background ,subtle :weight bold
-                       :box (:line-width (10 . 4) :color ,subtle)
+                       :inherit nil :foreground ,fg :background ,current :weight bold
+                       :box (:line-width (10 . 4) :color ,current)
                        ,@(when accent `(:underline (:color ,accent :position -2))))
                       (tab-bar-tab-inactive
                        :inherit nil :foreground ,faded :background ,bg :weight normal
@@ -1869,9 +1882,20 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
                  (display-buffer-in-tab display-buffer-same-window)
                  (tab-name . ui-window--buffer-tab-name)))
 
+  (defun ui-window--skip-other-group (_window buffer _bury-or-kill)
+    "`switch-to-prev-buffer-skip' 用。BUFFER が今のタブと別の用途なら non-nil（飛ばす）。
+  `previous-buffer' / `next-buffer' が、用途の違うバッファを今のタブへ持ち込まないようにする。
+  タブの名前が用途の名前でないとき（`M-SPC w .' で作ったタブなど）は何も飛ばさない。"
+    (when (bound-and-true-p tab-bar-mode)
+      (let ((tab (alist-get 'name (tab-bar--current-tab-find))))
+        (and (member tab (cons ui-window-tab-group-default
+                               (mapcar #'car ui-window-tab-group-rules)))
+             (not (equal tab (ui-window--tab-group-for-buffer buffer)))))))
+
   (leaf window
     :straight nil
-    :custom ((switch-to-buffer-obey-display-actions . t)))
+    :custom ((switch-to-buffer-obey-display-actions . t)
+             (switch-to-prev-buffer-skip . #'ui-window--skip-other-group)))
 
   (defun ui-window--name-first-tab ()
     "`tab-bar-mode' を有効にしたとき、今のタブにバッファの用途の名前を付ける。"
@@ -1884,9 +1908,15 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 
   (defun ui-window-tab-name ()
     "現在のタブの表示名を返す。用途のタブ名（コーディング / ドキュメント / Git / スクラッチ）を使う。
-  バッファ名はモードラインで分かるので、タブには用途だけを出す。`tab-rename' で付けた名前、
-  `display-buffer-in-tab' が付けた名前が優先される（その場合この関数は呼ばれない）。"
-    (ui-window--tab-group-for-buffer (window-buffer)))
+  バッファ名はモードラインで分かるので、タブには用途だけを出す。タブの名前は、作ったときの用途で
+  決まり、その後は変わらない（今のバッファで毎回決め直すと、`previous-buffer' などで別の用途のバッファを
+  出しただけで、同じ名前のタブが並ぶ）。`tab-rename' で付けた名前、`display-buffer-in-tab' が付けた名前が
+  優先される（その場合この関数は呼ばれない）。`tab-bar-tabs' から呼ばれるので、`tab-bar-tabs' は呼ばず、
+  フレームの `tabs' を直接読む（再帰を避ける）。"
+    (let ((current (seq-find (lambda (tab) (eq (car-safe tab) 'current-tab))
+                             (frame-parameter nil 'tabs))))
+      (or (alist-get 'name current)
+          (ui-window--tab-group-for-buffer (window-buffer)))))
 
   (defun ui-window--tidy-tabs ()
     "今のタブの中身が別の用途だけになっていたら、タブを整理する。
@@ -1897,7 +1927,10 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
       (let* ((groups (delete-dups
                       (mapcar (lambda (win)
                                 (ui-window--tab-group-for-buffer (window-buffer win)))
-                              (window-list nil 'no-minibuf))))
+                              (seq-remove
+                               (lambda (win)
+                                 (string-prefix-p " " (buffer-name (window-buffer win))))
+                               (window-list nil 'no-minibuf)))))
              (group (and (null (cdr groups)) (car groups)))
              (current (alist-get 'name (tab-bar--current-tab-find))))
         (when (and group (not (equal group current)))
