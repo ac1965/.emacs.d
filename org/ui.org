@@ -1756,9 +1756,13 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;; 選択中のタブは subtle 背景・太字・salient 色の下線、他のタブは faded の前景にする。
   ;; `ui-theme--apply-faces' がパレットを適用した後に呼ぶ。tab-bar をロードした直後にも 1 回呼ぶ。
   (defun ui-window--face-color (face attribute fallback)
-    "FACE の ATTRIBUTE の色を返す。文字列でなければ FALLBACK を返す。"
+    "FACE の ATTRIBUTE の色を返す。色として使えなければ FALLBACK を返す。
+  文字列でないもの、空の文字列、実フレームが無いときの \"unspecified-fg\" / \"unspecified-bg\" は使えない。"
     (let ((value (and (facep face) (face-attribute face attribute nil t))))
-      (if (and (stringp value) (not (string-empty-p value))) value fallback)))
+      (if (and (stringp value) (not (string-empty-p value))
+               (not (string-prefix-p "unspecified" value)))
+          value
+        fallback)))
 
   (defun ui-window--blend (color base ratio)
     "COLOR を BASE に RATIO（0〜1）の割合で混ぜた色を返す。色を解釈できなければ BASE。"
@@ -1771,26 +1775,29 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
         base)))
 
   (defun ui-window--apply-tab-faces (&rest _)
-    "tab-bar のフェイスを、現在のテーマの色に合わせて設定する。"
-    (let* ((fg (ui-window--face-color 'default :foreground "black"))
-           (bg (ui-window--face-color 'default :background "white"))
-           (faded (ui-window--face-color 'nano-faded :foreground fg))
-           (subtle (ui-window--face-color 'nano-subtle :background bg))
-           (accent (and (fboundp 'ui-theme--color)
-                        (ui-theme--color 'ui-nano-palette-color-salient)))
-           ;; 今のタブは、アクセント色を背景に 3 割混ぜて、他のタブとはっきり分ける
-           (current (if accent (ui-window--blend accent bg 0.3) subtle)))
-      (dolist (spec `((tab-bar
-                       :inherit nil :foreground ,fg :background ,bg :box nil)
-                      (tab-bar-tab
-                       :inherit nil :foreground ,fg :background ,current :weight bold
-                       :box (:line-width (10 . 4) :color ,current)
-                       ,@(when accent `(:underline (:color ,accent :position -2))))
-                      (tab-bar-tab-inactive
-                       :inherit nil :foreground ,faded :background ,bg :weight normal
-                       :box (:line-width (10 . 4) :color ,bg))))
-        (when (facep (car spec))
-          (apply #'set-face-attribute (car spec) nil (cdr spec))))))
+    "tab-bar のフェイスを、現在のテーマの色に合わせて設定する。
+  デーモンの起動直後など、実フレームが無く色が決まらないときは何もしない（フレームができたとき、
+  `ui-theme--apply-frame' が改めて呼ぶ）。"
+    (let ((fg (ui-window--face-color 'default :foreground nil))
+          (bg (ui-window--face-color 'default :background nil)))
+      (when (and fg bg)
+        (let* ((faded (ui-window--face-color 'nano-faded :foreground fg))
+               (subtle (ui-window--face-color 'nano-subtle :background bg))
+               (accent (and (fboundp 'ui-theme--color)
+                            (ui-theme--color 'ui-nano-palette-color-salient)))
+               ;; 今のタブは、アクセント色を背景に 3 割混ぜて、他のタブとはっきり分ける
+               (current (if accent (ui-window--blend accent bg 0.3) subtle)))
+          (dolist (spec `((tab-bar
+                           :inherit nil :foreground ,fg :background ,bg :box nil)
+                          (tab-bar-tab
+                           :inherit nil :foreground ,fg :background ,current :weight bold
+                           :box (:line-width (10 . 4) :color ,current)
+                           ,@(when accent `(:underline (:color ,accent :position -2))))
+                          (tab-bar-tab-inactive
+                           :inherit nil :foreground ,faded :background ,bg :weight normal
+                           :box (:line-width (10 . 4) :color ,bg))))
+            (when (facep (car spec))
+              (apply #'set-face-attribute (car spec) nil (cdr spec))))))))
 
   (with-eval-after-load 'tab-bar
     (ui-window--apply-tab-faces))
