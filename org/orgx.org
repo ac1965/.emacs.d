@@ -711,6 +711,8 @@ Org の見た目を整えるモジュールです。org-modern と、Org の表�
 
 - *見出し* — 先頭の星を隠し（ =org-hide-leading-stars= ）、インデントして表示します（ =org-startup-indented= ）。タグは
   整列させず（ =org-auto-align-tags= は =nil= ）、右端へ寄せません（ =org-tags-column= は 0）。
+  星を隠すのは =org-hide= フェイスで、Org の既定は白か黒の固定色です。暗い背景では、隠したはずの 2 段目以降の星（ =**= ）が
+  薄く見えるので、 =org-hide= の前景色を、 =default= の背景色に合わせます（ =orgx-visual--sync-org-hide= 。テーマの切り替えでも合わせ直します）。
 - *強調* — 強調のマーカーを隠し（ =org-hide-emphasis-markers= ）、 =\alpha= のような記号を、文字に置き換えます
   （ =org-pretty-entities= ）。
 - *TODO のフェイス* — =TODO= 、 =SOMEDAY= 、 =WAITING= 、 =DONE= 、 =CANCELED= ごとに、背景と前景の色を決めます。
@@ -746,6 +748,7 @@ Org と org-agenda を起動時に読み込んでしまうためです。モー�
   ;; - `org-modern-indent' で、org-indent 有効時に消える src/example ブロックの
   ;;   ブラケット（囲み線）を再現する。`org-modern-mode' より後に有効化する必要が
   ;;   あるため、フックの深さを 90 にする
+  ;; - 見出しの先頭の星を隠す `org-hide' の前景色を、背景色に合わせる
   ;;; Code:
 
   (eval-when-compile (require 'leaf))
@@ -791,9 +794,20 @@ Org と org-agenda を起動時に読み込んでしまうためです。モー�
      org-agenda-current-time-string
      "⭠ now ─────────────────────────────────────────────────"))
 
+  (defun orgx-visual--sync-org-hide (&rest _)
+    "Make the `org-hide' face match the default background.
+`org-hide' is what hides the leading stars of headings; Org's own
+definition uses a fixed white or black, which shows through on other
+backgrounds.  Does nothing while no frame has a real background color."
+    (let ((bg (face-background 'default nil t)))
+      (when (and (facep 'org-hide) (stringp bg)
+                 (not (string-prefix-p "unspecified" bg)))
+        (set-face-attribute 'org-hide nil :foreground bg))))
+
   (defun orgx-visual--enable-mode ()
     "Enable org-modern in the current org-mode buffer."
     (require 'org-modern)
+    (orgx-visual--sync-org-hide)
     (org-modern-mode 1))
 
   (leaf org-modern :straight t)
@@ -808,7 +822,10 @@ Org と org-agenda を起動時に読み込んでしまうためです。モー�
   ;; 起動後のフィーチャーが 485 から 566 に増えるのを確認した）。orgx 層は Org を
   ;; 起動時に読み込まない。
   (with-eval-after-load 'org
-    (orgx-visual--configure-once))
+    (orgx-visual--configure-once)
+    (orgx-visual--sync-org-hide)
+    ;; テーマを切り替えると背景色が変わるので、星を隠す色も合わせ直す。
+    (add-hook 'enable-theme-functions #'orgx-visual--sync-org-hide))
   (with-eval-after-load 'org-agenda
     (orgx-visual--configure-agenda))
   ;; モードの有効化は org-mode バッファごとに実行する。
