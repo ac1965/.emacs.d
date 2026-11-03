@@ -1594,6 +1594,8 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;;   なければ名前を直す。`ui-window--tidy-tabs'）。タブを作っている間は振り分けない（最初の *scratch* で
   ;;   スクラッチのタブが増えるのを避ける）。
   ;;   `previous-buffer' / `next-buffer'（`s-<left>' / `s-<right>'）は、今のタブと同じ用途のバッファだけを巡る。
+  ;;   タブの名前と配置は、`desktop' に載せて再起動をまたいで戻す（`ui-window-saved-tabs'）。保存するのは
+  ;;   ファイルと Dired だけで、ほかのバッファのウィンドウは `*scratch*' に戻る。
   ;;   タブごとにウィンドウ構成の履歴を持ち（`tab-bar-history-mode'）、見た目は現在のテーマの
   ;;   色から決め、テーマの切替に追従する（`ui-window--apply-tab-faces'）
   ;; - ポップアップのバッファ（*Messages*、*Help*、*compilation*、*Smoketest* など）を popper で
@@ -1958,6 +1960,107 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
             (run-with-timer 0 nil #'ui-window--tidy-tabs-run))))
 
   (add-hook 'kill-buffer-hook #'ui-window--tidy-tabs-later)
+
+  ;; タブの保存と復元。`desktop' はフレームの配置までしか保存せず、タブごとの名前と配置は消える。
+  ;; `tab-bar--tab' が持つ `ws'（`window-state-get' の書き出せる形）を、`desktop-globals-to-save'
+  ;; に載せて保存し、`desktop-after-read-hook' で戻す。保存するのはファイルと Dired だけで、
+  ;; ほかのバッファのウィンドウは `*scratch*' に戻る。
+
+  (defvar ui-window-saved-tabs nil
+    "保存したタブの一覧。`desktop' が書き出す。各要素は (NAME CURRENT WS FILES)。
+  FILES は WS に出てくるバッファ名と、そのファイル（またはディレクトリ）の対応表。")
+
+  (defun ui-window--state-buffer-names (state)
+    "STATE（`window-state-get' の書き出せる形）に出てくるバッファ名の一覧を返す。"
+    (let (names)
+      (letrec ((walk (lambda (x)
+                       (when (consp x)
+                         (if (and (eq (car x) 'buffer) (stringp (cadr x)))
+                             (push (cadr x) names)
+                           (while (consp x)
+                             (funcall walk (car x))
+                             (setq x (cdr x))))))))
+        (funcall walk state))
+      (delete-dups names)))
+
+  (defun ui-window--buffer-visit-path (name)
+    "バッファ NAME が訪れているファイルまたは Dired のディレクトリを返す。なければ nil。"
+    (let ((buffer (get-buffer name)))
+      (when buffer
+        (with-current-buffer buffer
+          (cond (buffer-file-name)
+                ((derived-mode-p 'dired-mode)
+                 (let ((dir (if (consp dired-directory) (car dired-directory) dired-directory)))
+                   (and (stringp dir) dir))))))))
+
+  (defun ui-window--collect-tabs (&rest _)
+    "今のタブの一覧を `ui-window-saved-tabs' に集める。`desktop-save' の前に呼ぶ。"
+    (setq ui-window-saved-tabs
+          (when (bound-and-true-p tab-bar-mode)
+            (mapcar
+             (lambda (tab)
+               (let* ((current (eq (car tab) 'current-tab))
+                      (tab (if current (tab-bar--tab) tab))
+                      (ws (alist-get 'ws tab)))
+                 (list (alist-get 'name tab)
+                       current
+                       ws
+                       (delq nil
+                             (mapcar (lambda (name)
+                                       (let ((path (ui-window--buffer-visit-path name)))
+                                         (and path (cons name path))))
+                                     (ui-window--state-buffer-names ws))))))
+             (tab-bar-tabs)))))
+
+  (defun ui-window--visit-saved (files)
+    "FILES（バッファ名とパスの対応表）のうち、実在するものをバッファに開く。"
+    (dolist (entry files)
+      (let ((path (cdr entry)))
+        (when (file-exists-p path)
+          (let ((buffer (if (file-directory-p path)
+                            (dired-noselect path)
+                          (find-file-noselect path))))
+            (unless (equal (buffer-name buffer) (car entry))
+              (with-current-buffer buffer
+                (rename-buffer (car entry) t))))))))
+
+  (defun ui-window--restore-tabs ()
+    "`ui-window-saved-tabs' から、タブの名前と配置を戻す。
+  タブがすでに複数あるとき（手で作った後など）は何もしない。"
+    (when (and ui-window-saved-tabs
+               (or (not (bound-and-true-p tab-bar-mode))
+                   (null (cdr (tab-bar-tabs)))))
+      (condition-case err
+          (let ((saved ui-window-saved-tabs)
+                (ui-window--creating-tab t)
+                (first t)
+                current)
+            (unless (bound-and-true-p tab-bar-mode)
+              (tab-bar-mode 1))
+            (dolist (entry saved)
+              (pcase-let ((`(,name ,is-current ,ws ,files) entry))
+                (ui-window--visit-saved files)
+                (if first (setq first nil) (tab-new))
+                (window-state-put ws (frame-root-window) 'safe)
+                (tab-rename name)
+                (when is-current (setq current name))))
+            (when current
+              (tab-bar-select-tab-by-name current)))
+        (error (message "[ui-window] タブを戻せませんでした: %S" err)))))
+
+  (defun ui-window--restore-tabs-when-ready ()
+    "`desktop-after-read-hook' 用。フレームがあれば今、なければ最初のフレームを作った後に戻す。"
+    (if (or (not (daemonp)) (frame-parameter nil 'window-system))
+        (ui-window--restore-tabs)
+      (letrec ((fn (lambda (_frame)
+                     (remove-hook 'after-make-frame-functions fn)
+                     (run-with-timer 0 nil #'ui-window--restore-tabs))))
+        (add-hook 'after-make-frame-functions fn))))
+
+  (advice-add 'desktop-save :before #'ui-window--collect-tabs)
+  (add-hook 'desktop-after-read-hook #'ui-window--restore-tabs-when-ready)
+  (with-eval-after-load 'desktop
+    (add-to-list 'desktop-globals-to-save 'ui-window-saved-tabs))
 
   (defun ui-window-project-tab ()
     "新しいタブでプロジェクトを選ぶ。
