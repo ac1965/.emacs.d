@@ -1596,7 +1596,10 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   ;;   `previous-buffer' / `next-buffer'（`s-<left>' / `s-<right>'）は、今のタブと同じ用途のバッファだけを巡る。
   ;;   タブの名前と配置は、`desktop' に載せて再起動をまたいで戻す（`ui-window-saved-tabs'）。保存するのは
   ;;   ファイルと Dired だけで、ほかのバッファのウィンドウは `*scratch*' に戻る。
-  ;;   タブごとにウィンドウ構成の履歴を持ち（`tab-bar-history-mode'）、見た目は現在のテーマの
+  ;;   タブごとにウィンドウ構成の履歴を持ち（`tab-bar-history-mode'）、`M-SPC w r' / `w R' は、タブバーが
+  ;;   有効ならその履歴で戻す・やり直す（`ui-window-undo' / `ui-window-redo'。`winner' はフレーム全体の履歴で、
+  ;;   タブの切替まで巻き戻すため）。タブバーが無いときは `winner' を使う。どちらも、`zoom-mode' が積む
+  ;;   サイズだけの履歴は飛ばし、分割やバッファが変わるまで戻す（`ui-window--step-until-layout-changes'）。見た目は現在のテーマの
   ;;   色から決め、テーマの切替に追従する（`ui-window--apply-tab-faces'）
   ;; - ポップアップのバッファ（*Messages*、*Help*、*compilation*、*Smoketest* など）を popper で
   ;;   まとめる。`M-SPC w p' で出し入れ、`w n' で順に切り替え、`w P' で通常のウィンドウへ昇格
@@ -2106,6 +2109,62 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
   (add-hook 'desktop-after-read-hook #'ui-window--restore-tabs-when-ready)
   (with-eval-after-load 'desktop
     (add-to-list 'desktop-globals-to-save 'ui-window-saved-tabs))
+
+  (defun ui-window--layout-signature ()
+    "今のウィンドウの並び方を、サイズを除いて表す値を返す。分割の向きと、各ウィンドウのバッファ名。"
+    (letrec ((walk (lambda (tree)
+                     (if (windowp tree)
+                         (buffer-name (window-buffer tree))
+                       (cons (car tree) (mapcar walk (cddr tree)))))))
+      (funcall walk (car (window-tree)))))
+
+  (defun ui-window--step-until-layout-changes (step)
+    "STEP を、ウィンドウの並び方が変わるまで繰り返す。
+  `zoom-mode' はウィンドウを選ぶたびにサイズを変え、`winner' やタブの履歴にその変化が積まれる。
+  サイズだけが違う履歴は飛ばし、分割やバッファの変化まで一度に戻す。STEP で何も変わらない
+  回が 2 回続いた（履歴の端。タブの履歴は、最初の 1 回が今と同じ構成に戻ることがある）ときと、
+  30 回に達したときは止める。"
+    (let ((signature (ui-window--layout-signature))
+          (count 0)
+          (idle 0))
+      (while (and (< idle 2)
+                  (< count 30)
+                  (equal signature (ui-window--layout-signature)))
+        (let ((before (current-window-configuration)))
+          (funcall step)
+          (setq count (1+ count))
+          (setq idle (if (window-configuration-equal-p before (current-window-configuration))
+                         (1+ idle)
+                       0))))))
+
+  (defun ui-window-undo ()
+    "ウィンドウ構成を 1 つ前に戻す。
+  タブバーが有効なら、そのタブだけの履歴（`tab-bar-history-back'）を使う。`winner' はフレーム全体の
+  履歴なので、タブを切り替えた操作まで巻き戻してしまう。タブバーが無いときは `winner-undo'。
+  どちらも、サイズだけが違う履歴は飛ばす（`ui-window--step-until-layout-changes'）。
+  `winner-undo' は直前のコマンドが `winner-undo' かで、続きの取り消しかを決め、`winner-redo' も
+  それを条件にする。そのため `this-command' を `winner-undo' にして、続けて押したときと
+  `ui-window-redo' が `winner' の規則どおりに動くようにする。"
+    (interactive)
+    (if (and (bound-and-true-p tab-bar-mode) (bound-and-true-p tab-bar-history-mode))
+        (ui-window--step-until-layout-changes #'tab-bar-history-back)
+      (let ((continuing (eq last-command 'winner-undo)))
+        (ui-window--step-until-layout-changes
+         (lambda ()
+           (let ((last-command (if continuing 'winner-undo last-command)))
+             (winner-undo))
+           (setq continuing t)))
+        (setq this-command 'winner-undo))))
+
+  (defun ui-window-redo ()
+    "`ui-window-undo' で戻した構成を、やり直す。タブバーが有効なら `tab-bar-history-forward'、
+  なければ `winner-redo'。タブバーのときは、サイズだけが違う履歴を飛ばす。
+  `winner-redo' は、直前の `winner-undo' の列をまとめて取り消すので、繰り返さない。"
+    (interactive)
+    (if (and (bound-and-true-p tab-bar-mode) (bound-and-true-p tab-bar-history-mode))
+        (ui-window--step-until-layout-changes #'tab-bar-history-forward)
+      (let ((last-command (if (eq last-command 'ui-window-undo) 'winner-undo last-command)))
+        (winner-redo))))
 
   (defun ui-window-project-tab ()
     "新しいタブでプロジェクトを選ぶ。
@@ -3046,8 +3105,10 @@ Emacs 29 以降の API です。
     (ui-keymap-bind 'ui-leader-w-map "o" #'delete-other-windows)
     (ui-keymap-bind 'ui-leader-w-map "=" #'balance-windows)
     (ui-keymap-bind 'ui-leader-w-map "w" #'ace-window)  ; pick window
-    (ui-keymap-bind 'ui-leader-w-map "r" #'winner-undo)  ; undo layout
-    (ui-keymap-bind 'ui-leader-w-map "R" #'winner-redo)  ; redo layout
+    (ui-keymap-bind 'ui-leader-w-map "W" #'ace-swap-window)    ; swap with a picked window
+    (ui-keymap-bind 'ui-leader-w-map "D" #'ace-delete-window)  ; delete a picked window
+    (ui-keymap-bind 'ui-leader-w-map "r" #'ui-window-undo)  ; undo layout (per tab)
+    (ui-keymap-bind 'ui-leader-w-map "R" #'ui-window-redo)  ; redo layout (per tab)
     (ui-keymap-bind 'ui-leader-w-map "m" #'my/save-window-layout)
     (ui-keymap-bind 'ui-leader-w-map "M" #'my/restore-window-layout)
 

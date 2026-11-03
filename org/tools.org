@@ -2150,6 +2150,22 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
           (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b)))
                 (list code-buf (get-file-buffer doc)))
           (delete-file code) (delete-file doc))))
+    (smoketest--check "ui: M-SPC w r / w R は、タブバーが有効ならタブごとの履歴、無効なら winner。w W / w D は ace-window"
+      (let (calls)
+        (cl-letf (((symbol-function 'tab-bar-history-back) (lambda () (push 'tab-back calls)))
+                  ((symbol-function 'tab-bar-history-forward) (lambda () (push 'tab-forward calls)))
+                  ((symbol-function 'winner-undo) (lambda () (push 'winner-undo calls)))
+                  ((symbol-function 'winner-redo) (lambda () (push 'winner-redo calls))))
+          (tab-bar-mode 1)
+          (unwind-protect
+              (progn (ui-window-undo) (ui-window-redo))
+            (tab-bar-mode -1))
+          (ui-window-undo) (ui-window-redo))
+        (and (equal (delete-dups (reverse calls)) '(tab-back tab-forward winner-undo winner-redo))
+             (eq (keymap-lookup ui-leader-w-map "r") #'ui-window-undo)
+             (eq (keymap-lookup ui-leader-w-map "R") #'ui-window-redo)
+             (eq (keymap-lookup ui-leader-w-map "W") #'ace-swap-window)
+             (eq (keymap-lookup ui-leader-w-map "D") #'ace-delete-window))))
     (smoketest--check "ui: helpful が autoload で呼べ、describe-* を置き換え、M-SPC h . がポイント位置の記号"
       (and (eq (command-remapping 'describe-function) 'helpful-callable)
            (eq (command-remapping 'describe-variable) 'helpful-variable)
