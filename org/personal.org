@@ -265,6 +265,8 @@ tangle 先は =README.org= と同じ =.emacs.d/= からの相対パス（ =../= 
 | 自作スクリプト | 置き場を =trusted-content= に足す（flymake の sh / python 用） |
 | モード | =.ps1= は =powershell-mode= 、 =.bas= は =visual-basic-mode= |
 | Keychain | =auth-keychain-enable= を =t= にする |
+| minimap | 右に置く。 prog-mode、org-mode、markdown-mode、text-mode の派生バッファで作る。 =s-\= で入り切りする |
+| 起動時のレイアウト | 左に dirvish（ =dirvish-side= で =user-emacs-directory= を開く）、本文に =*scratch*= 、右に minimap の 3 ペインで起動する。非デーモンは =window-setup-hook= 、デーモンは最初のグラフィカルなフレームで 1 度だけ組む。treemacs は v や z のキーが使えないので使わない |
 | tab-bar | 起動時にタブバーを出す（タブが 1 つでも、出す。共有の設定は、最初のタブを作るまで出さない） |
 
 *キー*
@@ -572,6 +574,85 @@ IME の表示と、ブログの執筆の補助は、それぞれ =personal-ime= 
     (tab-bar-mode 1))
 
   (add-hook 'after-init-hook #'ac1965--show-tab-bar 95)
+
+  ;; ---------------------------------------------------------------------------
+  ;; 起動時の 3 ペイン（左 dirvish / 本文 *scratch* / 右 minimap）
+  ;; ---------------------------------------------------------------------------
+
+  ;;
+  ;; 左は dirvish のサイドウィンドウ（`dirvish-side'。dired は core-dired が dirvish に置き換えている）。
+  ;; treemacs は v や z などのキーが使えないので使わない。minimap はここで宣言する。
+  ;; minimap は `:require nil' で、起動直後のレイアウト構築のときに初めてロードされる。
+  ;; 非デーモンは `window-setup-hook'（フレームの大きさが決まったあと）で組む。
+  ;; デーモンは起動時にフレームが無いので、`(daemonp)' で分岐し、最初のグラフィカルな
+  ;; フレームが作られたときに 1 度だけ、1 tick 遅らせて組む（フレームの状態を参照するため）。
+  ;; 開くディレクトリは `user-emacs-directory'（`dirvish-side' の既定は project のルート）。
+
+  (declare-function dirvish-side "dirvish-side")
+  (declare-function minimap-mode "minimap")
+
+  (leaf minimap
+    :straight t
+    :require nil)
+
+  ;; minimap の既定は左側の表示なので、右に置く。作る対象は prog-mode、org-mode、markdown-mode、
+  ;; text-mode の派生バッファ（既定は prog-mode だけ）。
+  ;; このマシンの *scratch* は fundamental-mode（init.el の `initial-major-mode'）なので、
+  ;; 起動直後はミニマップのウィンドウは出ず、対象のモードのバッファを選んだときに出る。
+  (with-eval-after-load 'minimap
+    (setopt minimap-window-location 'right
+            minimap-major-modes '(prog-mode org-mode markdown-mode text-mode)))
+
+  (defun ac1965/minimap-toggle ()
+    "Toggle `minimap-mode' on and off."
+    (interactive)
+    (require 'minimap)
+    (minimap-mode 'toggle))
+
+  ;; s-\ に割り当てる。標準の Emacs（`emacs -Q'）にも、この設定のほかの層にも、割り当てが無い
+  ;; ことを確認してある（s-m は ui-keys の `make-frame-command' なので使わない）。
+  (defun ac1965--bind-minimap-key ()
+    "Bind s-\\ to `ac1965/minimap-toggle'."
+    (keymap-global-set "s-\\" #'ac1965/minimap-toggle))
+
+  (add-hook 'after-init-hook #'ac1965--bind-minimap-key 90)
+
+  (defun ac1965--startup-layout (&optional frame)
+    "Build the 3-pane layout on FRAME: dirvish side, *scratch*, minimap.
+FRAME defaults to the selected frame.  The *scratch* window is selected at the end."
+    ;; scripts/shot.sh（demo.png の撮影）は DEMO_SCENE を設定して起動する。撮影の画面を
+    ;; 壊さないよう、そのときは組まない。
+    (when (and (not noninteractive)
+               (not (getenv "DEMO_SCENE"))
+               (frame-live-p (or frame (selected-frame))))
+      (with-selected-frame (or frame (selected-frame))
+        ;; 選択中のウィンドウがサイドウィンドウ（復元された dirvish-side など）や専用ウィンドウだと、
+        ;; `delete-other-windows' が "Cannot make side window the only window" で失敗し、
+        ;; `switch-to-buffer' も "Window is dedicated" で失敗する。通常のウィンドウを選び直す。
+        (select-window (or (seq-find (lambda (w)
+                                       (and (not (window-parameter w 'window-side))
+                                            (not (window-dedicated-p w))))
+                                     (window-list nil 'no-minibuf))
+                           (frame-first-window)))
+        (delete-other-windows)
+        (switch-to-buffer "*scratch*")
+        (let ((main (selected-window)))
+          (require 'minimap)
+          (minimap-mode 1)
+          (require 'dirvish-side)
+          (dirvish-side (file-name-as-directory user-emacs-directory))
+          (when (window-live-p main)
+            (select-window main))))))
+
+  (defun ac1965--startup-layout-on-frame (frame)
+    "Schedule `ac1965--startup-layout' once, for the first graphical FRAME (daemon)."
+    (when (display-graphic-p frame)
+      (remove-hook 'after-make-frame-functions #'ac1965--startup-layout-on-frame)
+      (run-with-timer 0 nil #'ac1965--startup-layout frame)))
+
+  (if (daemonp)
+      (add-hook 'after-make-frame-functions #'ac1965--startup-layout-on-frame)
+    (add-hook 'window-setup-hook #'ac1965--startup-layout 95))
 
   ;; ---------------------------------------------------------------------------
   ;; 信頼するコンテンツ（自作スクリプトの置き場）
