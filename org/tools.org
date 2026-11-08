@@ -2080,55 +2080,70 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
            (memq 'tab-bar-format-tabs tab-bar-format)
            (not tab-bar-tab-hints)
            (eq tab-bar-tab-name-function #'ui-window-tab-name)
-           (equal (ui-window-tab-name) (ui-window--tab-group-for-buffer (current-buffer)))))
-    (smoketest--check "ui: タブは用途別（コーディング / ドキュメント / Git / スクラッチ）。バッファを開くと用途のタブへ移り、`*Help*' などは移さない"
-      (let* ((code (make-temp-file "smoke" nil ".el"))
-             (doc (make-temp-file "smoke" nil ".txt"))
+           (equal (ui-window-tab-name) (ui-window--tab-group-for-buffer (window-buffer)))))
+    (smoketest--check "ui: タブはプロジェクト別。バッファを開くとプロジェクトのタブへ移り、プロジェクトの外はホーム。`*Help*' などは移さない"
+      (let* ((root (file-name-as-directory (make-temp-file "smokeproj" t)))
+             (name (file-name-nondirectory (directory-file-name root)))
+             (project-find-functions
+              (list (lambda (dir)
+                      (and (string-prefix-p root (expand-file-name dir))
+                           (cons 'transient root)))))
+             (code (expand-file-name "a.el" root))
+             (doc (expand-file-name "b.txt" root))
+             (out (make-temp-file "smoke" nil ".txt"))
              (names (lambda () (mapcar (lambda (tb) (alist-get 'name tb))
                                        (funcall tab-bar-tabs-function))))
              (current (lambda () (alist-get 'name (assq 'current-tab (funcall tab-bar-tabs-function)))))
-             (code-buf (find-file-noselect code))
-             (doc-buf (find-file-noselect doc))
-             (other (generate-new-buffer "demo-other"))
-             (diff (generate-new-buffer "demo-diff"))
+             (code-buf (progn (write-region "" nil code nil 'silent) (find-file-noselect code)))
+             (doc-buf (progn (write-region "" nil doc nil 'silent) (find-file-noselect doc)))
+             (out-buf (find-file-noselect out))
              (help (get-buffer-create "*Help*")))
         (unwind-protect
             (progn
-              (with-current-buffer other (special-mode))
-              (with-current-buffer diff (diff-mode))
               (tab-bar-mode 1)
               (let (r1 r2 r3 r4 r5)
                 (switch-to-buffer code-buf)
                 (setq r1 (funcall current))
                 (switch-to-buffer doc-buf)
                 (setq r2 (funcall current))
-                (switch-to-buffer diff)
+                (switch-to-buffer out-buf)
                 (setq r3 (funcall current))
                 (switch-to-buffer code-buf)
                 (setq r4 (cons (funcall current) (length (funcall names))))
                 (switch-to-buffer help)
                 (setq r5 (funcall current))
-                (and (equal (ui-window--tab-group-for-buffer other) "スクラッチ")
-                     (equal r1 "コーディング") (equal r2 "ドキュメント") (equal r3 "Git")
-                     (equal (car r4) "コーディング")
-                     (<= (cdr r4) 4)
-                     (equal r5 "コーディング"))))
+                (and (equal (ui-window--tab-group-for-buffer out-buf) ui-window-tab-home)
+                     (equal (ui-window--tab-group-for-buffer (get-buffer "*scratch*")) ui-window-tab-home)
+                     (equal r1 name) (equal r2 name) (equal r3 ui-window-tab-home)
+                     (equal (car r4) name)
+                     (<= (cdr r4) 3)
+                     (equal r5 name))))
           (tab-bar-mode -1)
-          (mapc #'kill-buffer (list code-buf doc-buf other diff help))
-          (delete-file code) (delete-file doc))))
+          (set-frame-parameter nil 'tabs nil)
+          (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b)))
+                (list code-buf doc-buf out-buf help))
+          (delete-directory root t) (delete-file out))))
     (smoketest--check "ui: タブの名前・配置・ファイルが、集めて戻すと復元される（desktop 用）"
-      (let* ((code (make-temp-file "smoke" nil ".el"))
-             (doc (make-temp-file "smoke" nil ".txt"))
-             (code-buf (find-file-noselect code))
-             (doc-buf (find-file-noselect doc))
+      (let* ((root-a (file-name-as-directory (make-temp-file "smokeproja" t)))
+             (root-b (file-name-as-directory (make-temp-file "smokeprojb" t)))
+             (name-b (file-name-nondirectory (directory-file-name root-b)))
+             (project-find-functions
+              (list (lambda (dir)
+                      (let ((d (expand-file-name dir)))
+                        (cond ((string-prefix-p root-a d) (cons 'transient root-a))
+                              ((string-prefix-p root-b d) (cons 'transient root-b)))))))
+             (file-a (expand-file-name "a.el" root-a))
+             (file-b (expand-file-name "b.txt" root-b))
+             (buf-a (progn (write-region "" nil file-a nil 'silent) (find-file-noselect file-a)))
+             (buf-b (progn (write-region "" nil file-b nil 'silent) (find-file-noselect file-b)))
              (saved ui-window-saved-tabs))
         (unwind-protect
             (progn
               (tab-bar-mode 1)
-              (switch-to-buffer code-buf)
-              (switch-to-buffer doc-buf)
+              (switch-to-buffer buf-a)
+              (switch-to-buffer buf-b)
               (with-selected-window (split-window-right)
-                (set-window-buffer nil code-buf))
+                (set-window-buffer nil buf-a))
               (ui-window--collect-tabs)
               (let ((collected ui-window-saved-tabs))
                 ;; 書き出して読み直し（desktop と同じ経路）、タブを 1 つに戻してから復元する。
@@ -2136,20 +2151,20 @@ PREFIX is the key sequence leading to MAP, as a string, for the messages."
                 (tab-bar-mode -1)
                 (set-frame-parameter nil 'tabs nil)
                 (delete-other-windows)
-                (kill-buffer doc-buf)
+                (kill-buffer buf-b)
                 (ui-window--restore-tabs)
                 (and (equal (mapcar #'car collected)
                             (mapcar (lambda (tb) (alist-get 'name tb))
                                     (funcall tab-bar-tabs-function)))
-                     (progn (tab-bar-select-tab-by-name "ドキュメント")
+                     (progn (tab-bar-select-tab-by-name name-b)
                             (= (length (window-list nil 'no-minibuf)) 2))
-                     (buffer-live-p (get-file-buffer doc)))))
+                     (buffer-live-p (get-file-buffer file-b)))))
           (setq ui-window-saved-tabs saved)
           (tab-bar-mode -1)
           (set-frame-parameter nil 'tabs nil)
           (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b)))
-                (list code-buf (get-file-buffer doc)))
-          (delete-file code) (delete-file doc))))
+                (list buf-a (get-file-buffer file-b)))
+          (delete-directory root-a t) (delete-directory root-b t))))
     (smoketest--check "ui: M-SPC w r / w R は、タブバーが有効ならタブごとの履歴、無効なら winner。w W / w D は ace-window"
       (let (calls)
         (cl-letf (((symbol-function 'tab-bar-history-back) (lambda () (push 'tab-back calls)))
@@ -2354,9 +2369,9 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
   右下: =make lint= の実行結果。エコーエリアには起動時間が出ます
 - =complete= — elisp バッファで =completion-pre= まで入力し、Corfu のポップアップとゴーストテキストを出します
 - =vertico= — =org/completion.org= の =leaf orderless= の節を背景に、 =M-x describe-= の縦型候補を出します
-- =tabs= — =tab-bar= に用途別の 3 つのタブ（ =コーディング= / =ドキュメント= / =Git= ）を作り、タブごとに違う分割を見せます。
-  コーディングは左に、タブのキーを書いている途中の elisp バッファ（ =tab-= の入力で Corfu が候補を出す）、右上に生成された =ui-window.el= 、右下に =make check-modules= の結果の 3 分割。
-  ドキュメントは =README.org= と =org/boot.org= の左右 2 分割。Git は上に =git log= 、下に直近の差分と =git status= の 3 分割。撮るのはコーディングのタブです
+- =tabs= — =tab-bar= にプロジェクト別の 2 つのタブ（このリポジトリの名前 / =ホーム= ）を作り、タブごとに違う分割を見せます。
+  プロジェクトのタブは左に、タブのキーを書いている途中の elisp バッファ（ =tab-= の入力で Corfu が候補を出す）、右上に生成された =ui-window.el= 、右下に =make check-modules= の結果の 3 分割。
+  ホームは上に =git log= 、下に直近の差分と =git status= の 3 分割。撮るのはプロジェクトのタブです
 - 合成画像は、dark と light を横に並べます。補完の 2 枚を渡すと、その下に横並びの 1 段として加わります（左が Corfu、右が Vertico）
 
 *設計上の注記*
@@ -2612,9 +2627,10 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
       (set-window-point window (with-current-buffer buffer (point-max)))))
 
   (defun demo-scene-tabs ()
-    "tab-bar に用途別の 3 つのタブ（コーディング / ドキュメント / Git）を作り、タブごとに違うウィンドウ分割を見せる。
-  コーディングは 3 分割（Corfu が出ている編集バッファ・生成された .el・make check-modules の結果）、ドキュメントは左右 2 分割、
-  Git は上 1 枚と下 2 枚（ログ・直近の差分・状態）。最後にコーディングのタブへ戻して撮る。"
+    "tab-bar にプロジェクト別の 2 つのタブ（このリポジトリの名前 / ホーム）を作り、タブごとに違うウィンドウ分割を見せる。
+  プロジェクトのタブは 3 分割（Corfu が出ている編集バッファ・生成された .el・make check-modules の結果）、
+  ホームは上 1 枚と下 2 枚（git のログ・直近の差分・状態）。タブの名前は、実際の振り分けと同じ
+  `ui-window--tab-group-for-buffer' で決める。最後にプロジェクトのタブへ戻して撮る。"
     (condition-case err
         (progn
           (make-directory demo-dir t)
@@ -2636,15 +2652,8 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
             (demo--wait-compile)
             (set-window-point bottom (with-current-buffer "*compilation*" (point-max)))
             (with-selected-window bottom (recenter -1))
-            (tab-rename "コーディング")
-            ;; 2 つ目のタブ: 設計と起動の文書を左右に並べる
-            (tab-new)
-            (delete-other-windows)
-            (let ((w (selected-window)))
-              (demo--show w "README.org" nil)
-              (demo--show (split-window-right) "org/boot.org" "early-init" 2))
-            (tab-rename "ドキュメント")
-            ;; 3 つ目のタブ: 上にログ、下に直近の差分と状態
+            (tab-rename (ui-window--tab-group-for-buffer (window-buffer right)))
+            ;; 2 つ目のタブ: プロジェクトの外の作業台（ホーム）。上にログ、下に直近の差分と状態
             (tab-new)
             (delete-other-windows)
             (let* ((top (selected-window))
@@ -2653,7 +2662,7 @@ python3 scripts/compose.py /tmp/dark.png /tmp/light.png demo.png \\
               (demo--show-command low "*demo-git-diff*" "git show --stat --format=%B HEAD" #'diff-mode)
               (demo--show-command (with-selected-window low (split-window-right))
                                   "*demo-git-status*" "git status --short" #'fundamental-mode))
-            (tab-rename "Git")
+            (tab-rename ui-window-tab-home)
             (tab-select 1)
             ;; 左の編集バッファで、最後の 1 文字を入力イベントとして流し、Corfu を実際に起動させる。
             ;; 入力待ちの状態を撮るので、完了マーカーはタイマー（`demo--ready-after'）で書く。

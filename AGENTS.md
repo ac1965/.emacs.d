@@ -377,6 +377,11 @@ early-init → core → ui → auth → completion → orgx → vcs → dev → 
    `with-eval-after-load` の内側には置かない。
 9. `defcustom` 変数を持つモジュールは、自身の `defgroup` を宣言する。
 10. 公開 `defun` にはすべて docstring を付ける。
+11. docstring の各行は 80 桁を超えない（全角は 2 桁と数える）。超えると `make check-bytecomp` が
+    `docstring wider than 80 characters` の警告で失敗する。長い説明は、文の切れ目で改行する。
+    README のブロックは 2 文字字下げなので、docstring の継続行は字下げを含めて数えず、tangle 後の
+    桁（最上位の式が桁 0）で 80 桁以内にする。`make lint` では見つからないので、docstring を書いたら
+    `make check-bytecomp` で確かめる。
 
 ### Daemon-mode pattern
 
