@@ -1794,6 +1794,9 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 - *タブを作っている間は振り分けない* — 最初の =*scratch*= で、ホームのタブが増えるのを避けます。
 - *保存と復元* — タブの名前と配置を、 =desktop= に載せて、再起動をまたいで戻します。保存するのは、ファイルと Dired だけです。
   保存は、タブがいちばん多いフレームから行い、復元は、デーモンでは最初のクライアントのフレームに行います。
+  タブを選んだときにも、同じ片付けをします（別のタブにいる間にバッファを消すと、戻ったときに代役が出ます）。
+  戻すときに、保存したバッファが消えていると、Emacs は代役の =*Old buffer ...*= （名前の先頭に空白が付く隠しバッファ）を出します。このウィンドウは自動で閉じ、
+  代役のバッファも消します。タブの中がすべて代役なら、そのタブは作りません（最後の 1 つなら =*scratch*= のホームにします）。
 - *履歴* — タブごとに、ウィンドウ構成の履歴を持ちます（ =tab-bar-history-mode= ）。 =w r= / =w R= は、タブバーが有効ならこの履歴で、
   なければ =winner= で戻します。どちらも、 =zoom-mode= が積むサイズだけの履歴は飛ばします。
 - *見た目* — 色は、現在のテーマから決めます。現在のタブは、アクセント色を背景に 3 割混ぜて、他のタブと区別します。
@@ -2286,6 +2289,44 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
               (with-current-buffer buffer
                 (rename-buffer (car entry) t))))))))
 
+  (defun ui-window--lost-buffer-p (buffer)
+    "BUFFER が、消えたバッファの代役（`window-state-put' が出す「 *Old buffer ...*」）なら non-nil。
+名前は先頭に空白が付く（隠しバッファ）。"
+    (string-prefix-p " *Old buffer " (buffer-name buffer)))
+
+  (defun ui-window--drop-lost-windows ()
+    "今のタブから、消えたバッファの代役を出しているウィンドウを閉じる。
+  代役でないウィンドウが残るなら non-nil を返す。すべてが代役のときは、何も閉じずに nil を返す
+  （最後のウィンドウは閉じられない。そのタブをどうするかは、呼び出し側が決める）。"
+    (let* ((windows (window-list nil 'no-minibuf))
+           (real (seq-remove (lambda (win) (ui-window--lost-buffer-p (window-buffer win)))
+                             windows)))
+      (when real
+        (dolist (win windows)
+          (when (and (window-live-p win) (ui-window--lost-buffer-p (window-buffer win)))
+            (delete-window win))))
+      (and real t)))
+
+  (defun ui-window--kill-lost-buffers ()
+    "ウィンドウに出ていない、消えたバッファの代役（*Old buffer ...*）を消す。"
+    (dolist (buffer (buffer-list))
+      (when (and (ui-window--lost-buffer-p buffer)
+                 (not (get-buffer-window buffer t)))
+        (kill-buffer buffer))))
+
+  (defun ui-window--clean-lost-after-select (&rest _)
+    "`tab-bar-tab-post-select-functions' 用。選んだタブの、消えたバッファの代役を片付ける。
+別のタブにいる間にバッファを消すと、そのタブへ戻ったとき、Emacs が代役を出す。代役のウィンドウを閉じ、
+すべてが代役なら `*scratch*' を出して `ui-window--tidy-tabs' でタブを整理し、代役のバッファを消す。"
+    (when (and (bound-and-true-p tab-bar-mode) (not (minibufferp)))
+      (unless (ui-window--drop-lost-windows)
+        (let ((ui-window--creating-tab t))
+          (switch-to-buffer "*scratch*"))
+        (ui-window--tidy-tabs))
+      (ui-window--kill-lost-buffers)))
+
+  (add-hook 'tab-bar-tab-post-select-functions #'ui-window--clean-lost-after-select)
+
   (defun ui-window--restore-tabs (&optional force)
     "`ui-window-saved-tabs' から、タブの名前と配置を戻す。
   タブがすでに複数あるとき（手で作った後など）は何もしない。FORCE が non-nil のときは、
@@ -2310,8 +2351,15 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
                 (ui-window--visit-saved files)
                 (if first (setq first nil) (tab-new))
                 (window-state-put ws (frame-root-window) 'safe)
-                (tab-rename name)
-                (when is-current (setq current name))))
+                (cond ((ui-window--drop-lost-windows)
+                       (tab-rename name)
+                       (when is-current (setq current name)))
+                      ;; 表示するバッファがすべて消えていたタブは、作らない。
+                      ;; 最後の 1 つは閉じられないので、*scratch* を出してホームにする。
+                      ((cdr (tab-bar-tabs)) (tab-close))
+                      (t (switch-to-buffer "*scratch*")
+                         (tab-rename ui-window-tab-home)))))
+            (ui-window--kill-lost-buffers)
             (when current
               (tab-bar-select-tab-by-name current)))
         (error (message "[ui-window] タブを戻せませんでした: %S" err)))))
