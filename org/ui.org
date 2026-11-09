@@ -1765,6 +1765,7 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
 | =t= / =x= | 新しいタブ / タブを閉じる |
 | =[= / =]= | 前 / 次のタブ（ =s-[= 、 =s-]= も同じ） |
 | =T= | 名前でタブを選ぶ |
+| =l= | タブごとにバッファを並べ、選んだバッファのタブへ移る（ =consult= ） |
 | =.= | プロジェクトを選んで、新しいタブに開く |
 | =p= / =n= / =P= | ポップアップの出し入れ / 順に切り替え / 通常のウィンドウへ昇格 |
 
@@ -2466,6 +2467,56 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
           (ui-window--tidy-tabs))
       (quit (tab-close))))
 
+  (declare-function consult--read "consult")
+  (declare-function consult--buffer-state "consult")
+
+  (defun ui-window--tab-candidates ()
+    "タブごとのバッファ名の候補を返す。各候補は、`ui-window-tab' プロパティにタブ名を持つ文字列。
+今のタブはウィンドウのバッファ、ほかのタブは保存した配置（`ws'）のバッファ。生きているバッファだけを
+残し、同じバッファは最初のタブ（今のタブが先）にだけ出す。"
+    (let* ((current (alist-get 'name (tab-bar--current-tab-find)))
+           (tabs (sort (copy-sequence (tab-bar-tabs))
+                       (lambda (a _b) (equal (alist-get 'name a) current))))
+           seen cands)
+      (dolist (tab tabs)
+        (let ((name (alist-get 'name tab)))
+          (dolist (buf (if (equal name current)
+                           (mapcar (lambda (win) (buffer-name (window-buffer win)))
+                                   (window-list nil 'no-minibuf))
+                         (ui-window--state-buffer-names (alist-get 'ws tab))))
+            (when (and (get-buffer buf) (not (member buf seen)))
+              (push buf seen)
+              (push (propertize buf 'ui-window-tab name) cands)))))
+      (nreverse cands)))
+
+  (defun ui-window-consult-tab-buffers ()
+    "タブごとにウィンドウのバッファを並べ、選んだバッファのタブへ移る。
+`consult' でバッファを先に表示（プレビュー）でき、`vertico' ではタブ名がグループ見出しになる。
+選んだバッファがウィンドウに出ていればそのウィンドウを選び、なければ今のウィンドウに出す。"
+    (interactive)
+    (unless (bound-and-true-p tab-bar-mode)
+      (user-error "タブがありません"))
+    (require 'consult)
+    (let* ((cands (ui-window--tab-candidates))
+           (choice (consult--read
+                    cands
+                    :prompt "タブのバッファ: "
+                    :category 'buffer
+                    :require-match t
+                    :sort nil
+                    :group (lambda (cand transform)
+                             (if transform
+                                 cand
+                               (get-text-property 0 'ui-window-tab cand)))
+                    :state (consult--buffer-state)))
+           (tab (get-text-property 0 'ui-window-tab choice)))
+      (unless (equal tab (alist-get 'name (tab-bar--current-tab-find)))
+        (tab-bar-select-tab-by-name tab))
+      (let ((win (get-buffer-window choice)))
+        (if win
+            (select-window win)
+          (switch-to-buffer choice)))))
+
   (defun ui-window--bind-tab-keys ()
     "Bind the tab commands in `ui-leader-w-map' when it exists."
     (when (and (boundp 'ui-leader-w-map) (keymapp ui-leader-w-map))
@@ -2474,7 +2525,8 @@ nano の light / dark の切替、選んだ variant の保存、起動時の復�
       (keymap-set ui-leader-w-map "x" #'tab-close)
       (keymap-set ui-leader-w-map "[" #'tab-previous)
       (keymap-set ui-leader-w-map "]" #'tab-next)
-      (keymap-set ui-leader-w-map "T" #'tab-switch))
+      (keymap-set ui-leader-w-map "T" #'tab-switch)
+      (keymap-set ui-leader-w-map "l" #'ui-window-consult-tab-buffers))
     ;; どの文脈でも使えるよう、前後のタブはグローバルにも割り当てる。macOS 標準のタブ切替
     ;; （Cmd+[ / Cmd+]）と同じ。Org を含め、どのメジャーモードの割り当てとも重ならない
     ;; （M-S-<left> / M-S-<right> は Org の見出しの昇格・降格と重なる）。
