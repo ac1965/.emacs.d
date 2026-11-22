@@ -1093,6 +1093,9 @@ Org から、Markdown、Mermaid、Graphviz、LaTeX / PDF へ出力するため�
 - *Markdown* — markdown-mode、markdown-preview-mode、edit-indirect を導入します。
 - *Mermaid* — ob-mermaid と、 =mmdc= （ mermaid-cli ）で、Org Babel の言語 =mermaid= を登録します。 =mmdc= は、 =PATH= を探し、
   なければ =~/.npm-global/bin= も調べます。 =mmdc= がなくても、言語の登録は行います。 =:file= で出力するブロックだけが失敗します。
+  =mmdc= は内部で Chrome を起動します。 =.emacs.d/puppeteer-config.json= があれば、 =:puppeteer-config-file= の既定値として渡し、
+  導入済みの Chrome を使わせます（ chrome-headless-shell の導入は要りません）。 =:file= のないブロックは、
+  =M-x orgx-export-mermaid-preview= で、PNG にして別ウィンドウに表示できます。
 - *Graphviz* — =ob-dot= は Org のコアではなく org-contrib の一部で、独立した straight のレシピがありません。
   =ob-dot= が =load-path= にあるときだけ、有効にします（ =locate-library= で確認）。使うには、Emacs を起動する前に
   org-contrib を別に入れます。
@@ -1250,7 +1253,21 @@ for f in svg/*.svg; do rsvg-convert -f pdf -o "${f%.svg}.pdf" "$f"; done
         (let ((npm-bin (expand-file-name "~/.npm-global/bin/mmdc")))
           (and (file-executable-p npm-bin) npm-bin))))
 
+  ;; mmdc は内部で Puppeteer 経由の Chrome を起動する。chrome-headless-shell が
+  ;; 未導入の環境では、.emacs.d 直下の puppeteer-config.json（README.org の Makefile の
+  ;; mmd-svg / figures と同じ設定）で、導入済みの Chrome を指す。
+  (defun orgx-export--mermaid-puppeteer-config ()
+    "Return the path of puppeteer-config.json in `user-emacs-directory', or nil.
+  The file points mmdc at an installed Chrome; it is the same file the Makefile
+  targets mmd-svg and figures pass to mmdc with -p."
+    (let ((file (expand-file-name "puppeteer-config.json" user-emacs-directory)))
+      (and (file-readable-p file) file)))
+
   (leaf ob-mermaid :straight t)
+
+  ;; ob-mermaid が定義する変数。ob-mermaid は org のロード後に読むので、バイトコンパイルの
+  ;; ために、ここで特殊変数として宣言だけしておく。
+  (defvar org-babel-default-header-args:mermaid)
 
   (defun orgx-export--register-mermaid ()
     "Load ob-mermaid, locate the mmdc CLI, and register the mermaid Babel language.
@@ -1259,12 +1276,46 @@ for f in svg/*.svg; do rsvg-convert -f pdf -o "${f%.svg}.pdf" "$f"; done
     (require 'ob-mermaid)
     (when-let* ((cli (orgx-export--mermaid-cli-path)))
       (setopt ob-mermaid-cli-path cli))
+    ;; org-babel-default-header-args:mermaid は defvar（コーディング規則 6: setq 系）。
+    ;; 新しいキーを前に足すだけで、ob-mermaid 側の定数リストは書き換えない。冪等。
+    (when-let* ((cfg (orgx-export--mermaid-puppeteer-config)))
+      (setf (alist-get :puppeteer-config-file org-babel-default-header-args:mermaid) cfg))
     (add-to-list 'org-babel-load-languages '(mermaid . t))
     (org-babel-do-load-languages 'org-babel-load-languages
                                  org-babel-load-languages))
 
   (with-eval-after-load 'org
     (orgx-export--register-mermaid))
+
+  ;; org-babel-execute:mermaid は :file が必須で、ないブロックはエラーになる。
+  ;; :file のないブロック（設計書の図など）を確認するための、Babel を通さない表示コマンド。
+  ;; Org を起動時に読み込まないよう、declare-function と関数内の require を使う。
+  ;; 出力は PNG にする（mmdc の SVG は <foreignObject> の HTML ラベルで、Emacs では描けない）。
+  (declare-function org-babel-get-src-block-info "ob-core")
+
+  (defun orgx-export-mermaid-preview ()
+    "Render the mermaid source block at point to a PNG and show it in another window.
+  Works for blocks without a `:file' header argument, which
+  `org-babel-execute:mermaid' rejects.  The buffer is not modified; the PNG is
+  written to `temporary-file-directory'.  mmdc output goes to *orgx-mermaid*."
+    (interactive)
+    (require 'ob-core)
+    (let* ((info (org-babel-get-src-block-info 'light))
+           (mmdc (orgx-export--mermaid-cli-path)))
+      (unless (and info (equal (nth 0 info) "mermaid"))
+        (user-error "Point is not in a mermaid source block"))
+      (unless mmdc
+        (user-error "mmdc not found (npm install -g @mermaid-js/mermaid-cli)"))
+      (let* ((cfg (orgx-export--mermaid-puppeteer-config))
+             (in (make-temp-file "orgx-mermaid-" nil ".mmd" (nth 1 info)))
+             (out (concat (file-name-sans-extension in) ".png"))
+             (status (apply #'call-process mmdc nil (list "*orgx-mermaid*" t) nil
+                            (append (list "-q" "-i" in "-o" out "-s" "2" "-b" "white")
+                                    (when cfg (list "-p" cfg))))))
+        (delete-file in)
+        (if (and (eq status 0) (file-exists-p out))
+            (display-buffer (find-file-noselect out))
+          (user-error "mmdc failed (see *orgx-mermaid* buffer)")))))
 
   ;; ob-dot は独立したパッケージではなく、org-contrib の中の 1 ファイルである。
   ;; straight.el には、あらゆる環境で機能する org-contrib の信頼できるレシピが無い
